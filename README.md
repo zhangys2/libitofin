@@ -147,8 +147,8 @@ repository's issues (the board is the source of truth, not a checked-in file).
 | **L7** | cashflows | fixed / floating / Ibor / overnight coupons and legs, coupon pricers, duration, capped-floored coupons | 🚧 in progress |
 | **L8** | instruments | fixed-rate bonds, vanilla / OIS swaps, swaptions, caps & floors, vanilla options | 🚧 in progress |
 | **L9** | methods | lattices, trees (trinomial + Hull-White), Monte Carlo (path generators + antithetic); finite differences pending | 🚧 in progress |
-| **L10** | models | `CalibratedModel` + `calibrate()`, short-rate (Vasicek, CIR, Hull-White), Heston, calibration helpers | 🚧 in progress |
-| **L11** | engines | analytic European & Heston (Fourier), swaption (Black / Bachelier / Jamshidian), discounting swap / bond, Black cap/floor | 🚧 in progress |
+| **L10** | models | `CalibratedModel` + `calibrate()`, short-rate (Vasicek, CIR, Hull-White), Heston, calibration helpers | ✅ core coverage |
+| **L11** | engines | analytic European & Heston (Fourier), swaption (Black / Bachelier / Jamshidian), discounting swap / bond, Black cap/floor | ✅ core coverage |
 
 **Milestone 1 (done):** a European option prices end-to-end — quote → flat
 yield/vol curves → generalized Black-Scholes process → analytic engine → lazy
