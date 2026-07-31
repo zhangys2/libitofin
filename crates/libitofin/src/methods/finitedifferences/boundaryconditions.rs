@@ -2,7 +2,9 @@
 
 use crate::math::array::Array;
 use crate::methods::finitedifferences::operators::FdmLinearOp;
+use crate::shared::{Shared, shared};
 use crate::types::{Real, Time};
+use std::cell::RefCell;
 
 use super::{BoundaryCondition, BoundarySide};
 
@@ -93,6 +95,60 @@ impl BoundaryCondition for NeumannBoundary {
     }
 
     fn set_time(&self, _t: Time) {}
+}
+
+/// A Dirichlet condition whose value is recomputed at the scheme time.
+pub struct TimeDependentDirichletBoundary {
+    side: BoundarySide,
+    value: Box<dyn Fn(Time) -> Real>,
+    time: RefCell<Time>,
+}
+
+impl TimeDependentDirichletBoundary {
+    /// Creates a condition whose value function receives the current time.
+    pub fn new(
+        side: BoundarySide,
+        value: impl Fn(Time) -> Real + 'static,
+    ) -> Shared<Self> {
+        shared(Self {
+            side,
+            value: Box::new(value),
+            time: RefCell::new(0.0),
+        })
+    }
+
+    fn apply(&self, values: &mut Array) {
+        if values.size() == 0 {
+            return;
+        }
+        let value = (self.value)(*self.time.borrow());
+        match self.side {
+            BoundarySide::Lower => values[0] = value,
+            BoundarySide::Upper => {
+                let last = values.size() - 1;
+                values[last] = value;
+            }
+            BoundarySide::None => {}
+        }
+    }
+}
+
+impl BoundaryCondition for TimeDependentDirichletBoundary {
+    fn apply_before_applying(&self, _op: &mut dyn FdmLinearOp) {}
+
+    fn apply_after_applying(&self, a: &mut Array) {
+        self.apply(a);
+    }
+
+    fn apply_before_solving(&self, _op: &mut dyn FdmLinearOp, _rhs: &mut Array) {}
+
+    fn apply_after_solving(&self, a: &mut Array) {
+        self.apply(a);
+    }
+
+    fn set_time(&self, t: Time) {
+        *self.time.borrow_mut() = t;
+    }
 }
 
 #[cfg(test)]

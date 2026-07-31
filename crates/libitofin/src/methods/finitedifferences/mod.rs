@@ -21,6 +21,8 @@ pub mod stepconditions;
 pub mod utilities;
 
 pub use boundarycondition::{BoundaryCondition, BoundarySide};
-pub use boundaryconditions::{DirichletBoundary, NeumannBoundary};
+pub use boundaryconditions::{
+    DirichletBoundary, NeumannBoundary, TimeDependentDirichletBoundary,
+};
 pub use finitedifferencemodel::FiniteDifferenceModel;
 pub use stepcondition::{NullCondition, StepCondition};
