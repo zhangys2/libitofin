@@ -279,6 +279,8 @@ impl<T: InterestRateIndex> Index for T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexes::index::Index;
+    use crate::patterns::observable::Observer;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
@@ -510,5 +512,24 @@ mod tests {
 
         settings.set_evaluation_date(Date::new(16, Month::June, 2026));
         assert!(flag.borrow().up);
+    }
+
+    #[test]
+    fn clearing_fixings_notifies_the_index() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = settings_on(today);
+        let index = TestRateIndex::euribor(2, settings.clone());
+        let past = Date::new(12, Month::June, 2026);
+        settings.add_fixing(&index.base.name, past, 0.01).unwrap();
+
+        let flag = shared_mut(Flag { up: false });
+        index
+            .base
+            .observable()
+            .register_observer(&(flag.clone() as SharedMut<dyn Observer>));
+
+        index.clear_fixings();
+        assert!(flag.borrow().up);
+        assert!(!index.has_historical_fixing(past));
     }
 }

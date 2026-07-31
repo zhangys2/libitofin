@@ -64,6 +64,12 @@ pub struct GeneralizedBlackScholesProcess {
 /// or stock index paying a continuous dividend yield. Identical to the
 /// generalized process, as in C++ where the subclass adds nothing.
 pub type BlackScholesMertonProcess = GeneralizedBlackScholesProcess;
+/// Thin convenience alias for the generalized Black-Scholes process.
+pub type BlackScholesProcess = GeneralizedBlackScholesProcess;
+/// Thin convenience alias for the generalized Black-Scholes process.
+pub type BlackProcess = GeneralizedBlackScholesProcess;
+/// Thin convenience alias for the generalized Black-Scholes process.
+pub type GarmanKohlagenProcess = GeneralizedBlackScholesProcess;
 
 impl GeneralizedBlackScholesProcess {
     fn assemble(

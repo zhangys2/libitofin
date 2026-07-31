@@ -248,15 +248,27 @@ mod tests {
     //! (`euriborswap.cpp:29-42`), built as a base `SwapIndex` directly.
 
     use super::*;
+    use crate::handle::RelinkableHandle;
     use crate::indexes::ibor::Euribor;
     use crate::interestrate::Compounding;
-    use crate::shared::shared;
+    use crate::patterns::observable::Observer;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
+
+    struct Flag {
+        up: bool,
+    }
+
+    impl Observer for Flag {
+        fn update(&mut self) {
+            self.up = true;
+        }
+    }
 
     fn today() -> Date {
         Date::new(9, Month::October, 2015)
@@ -394,5 +406,54 @@ mod tests {
         assert!(!index.exogenous_discount());
         assert!(index.discounting_term_structure().is_empty());
         assert!(!index.forwarding_term_structure().is_empty());
+    }
+
+    #[test]
+    fn relinking_the_forwarding_or_discount_curve_notifies_observers() {
+        let settings = settings_today();
+        let forwarding: RelinkableHandle<dyn YieldTermStructure> = RelinkableHandle::empty();
+        let discount: RelinkableHandle<dyn YieldTermStructure> = RelinkableHandle::empty();
+        let euribor6m = shared(Euribor::six_months(
+            forwarding.handle(),
+            Shared::clone(&settings),
+        ));
+        let index = SwapIndex::with_exogenous_discount(
+            "EuriborSwapIsdaFixA".into(),
+            Period::new(5, TimeUnit::Years),
+            2,
+            Currency::eur(),
+            Target::new(),
+            Period::new(1, TimeUnit::Years),
+            BusinessDayConvention::ModifiedFollowing,
+            Thirty360::with_convention(Convention::BondBasis),
+            euribor6m,
+            discount.handle(),
+            settings,
+        );
+
+        let flag = shared_mut(Flag { up: false });
+        index
+            .base()
+            .observable()
+            .register_observer(&(flag.clone() as SharedMut<dyn Observer>));
+
+        forwarding.link_to(shared(FlatForward::with_rate(
+            today(),
+            0.05,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        assert!(flag.borrow().up, "forwarding relink must notify observers");
+
+        flag.borrow_mut().up = false;
+        discount.link_to(shared(FlatForward::with_rate(
+            today(),
+            0.04,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        assert!(flag.borrow().up, "discount relink must notify observers");
     }
 }
