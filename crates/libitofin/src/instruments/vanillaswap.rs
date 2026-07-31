@@ -231,12 +231,16 @@ mod tests {
     use crate::indexes::ibor::Euribor;
     use crate::instruments::swap::SwapArguments;
     use crate::interestrate::Compounding;
-    use crate::shared::shared;
+    use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::DiscountingSwapEngine;
+    use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
     use crate::time::schedule::MakeSchedule;
 
@@ -295,6 +299,64 @@ mod tests {
             settings,
         )
         .unwrap()
+    }
+
+    /// The Jamshidian-fixture 5Y swap from `crates/itofin-py/tests/test_vanilla_swap.py`:
+    /// nominal 100, fixed leg annual 15-Jan-2028 -> 15-Jan-2033 at 3% on
+    /// Thirty360(BondBasis), floating leg semiannual Euribor6M on Actual360 with
+    /// zero spread, Payer, priced with a DiscountingSwapEngine on a flat 3%
+    /// curve (Actual365Fixed, continuous, reference 15-Jan-2026).
+    fn readme_swap(swap_type: SwapType) -> VanillaSwap {
+        let reference = Date::new(15, Month::January, 2026);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(reference);
+        let engine_settings = Shared::clone(&settings);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            reference,
+            0.03,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let fixed = MakeSchedule::new()
+            .from(Date::new(15, Month::January, 2028))
+            .to(Date::new(15, Month::January, 2033))
+            .with_frequency(Frequency::Annual)
+            .with_calendar(Target::new())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .build();
+        let floating = MakeSchedule::new()
+            .from(Date::new(15, Month::January, 2028))
+            .to(Date::new(15, Month::January, 2033))
+            .with_frequency(Frequency::Semiannual)
+            .with_calendar(Target::new())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .build();
+        let index = Euribor::six_months(curve.clone(), Shared::clone(&settings));
+        let mut swap = VanillaSwap::new(
+            swap_type,
+            100.0,
+            fixed,
+            0.03,
+            Thirty360::with_convention(Convention::BondBasis),
+            floating,
+            index,
+            0.0,
+            Actual360::new(),
+            None,
+            settings,
+        )
+        .unwrap();
+        let engine = shared_mut(DiscountingSwapEngine::new(
+            curve,
+            Some(false),
+            None,
+            None,
+            engine_settings,
+        ));
+        swap.base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        swap
     }
 
     /// `makeSwap` builds a fixed leg and an ibor leg over the two-period
@@ -397,5 +459,26 @@ mod tests {
         let mut swap = make_swap(SwapType::Payer);
         assert!(swap.fixed_vs_floating_mut().fair_rate().is_err());
         assert!(swap.fixed_vs_floating_mut().fair_spread().is_err());
+    }
+
+    /// The Python README fixture pins both the fair rate and the NPV for the
+    /// Jamshidian swaption underlying swap.
+    #[test]
+    fn python_readme_swap_oracle_matches_the_rust_facade() {
+        const PROBE_FAIR: Rate = 0.03048844643136293;
+        const PROBE_NPV: Rate = 0.21033895380698553;
+
+        let mut swap = readme_swap(SwapType::Payer);
+        assert!(
+            (swap.fixed_vs_floating_mut().fair_rate().unwrap() - PROBE_FAIR).abs()
+                < 1.0e-10,
+            "fair rate mismatch"
+        );
+        assert!(
+            (swap.npv().unwrap() - PROBE_NPV).abs() < 1.0e-10,
+            "NPV mismatch"
+        );
+        assert_eq!(swap.nominal().unwrap(), 100.0);
+        assert_eq!(swap.fixed_rate(), 0.03);
     }
 }
