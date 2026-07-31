@@ -405,4 +405,20 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn adjacent_nodes_recombine_through_shared_children() {
+        let (tree, _process, _grid) = regular_tree();
+
+        for i in 1..STEPS {
+            let mut reachable = std::collections::BTreeSet::new();
+            for index in 0..tree.size(i) {
+                for branch in 0..TrinomialTree::BRANCHES {
+                    reachable.insert(tree.descendant(i, index, branch));
+                }
+            }
+            let expected: std::collections::BTreeSet<Size> = (0..tree.size(i + 1)).collect();
+            assert_eq!(reachable, expected, "slice {i} has a gap in its recombined children");
+        }
+    }
 }
