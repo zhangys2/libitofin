@@ -79,6 +79,22 @@ jobs:
           . .venv/bin/activate
           pytest crates/itofin-py/tests -v
 
+  rust-workspace:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v5
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: run workspace tests
+        run: cargo test --workspace --locked
+
+      - name: build workspace
+        run: cargo build --workspace --locked
+
   pr-labeler:
     name: pr labeler
     runs-on: ubuntu-latest
