@@ -332,7 +332,7 @@ mod tests {
             .with_calendar(Target::new())
             .with_convention(BusinessDayConvention::ModifiedFollowing)
             .build();
-        let index = Euribor::six_months(curve.clone(), Shared::clone(&settings));
+        let index = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
         let mut swap = VanillaSwap::new(
             swap_type,
             100.0,
@@ -478,7 +478,7 @@ mod tests {
             (swap.npv().unwrap() - PROBE_NPV).abs() < 1.0e-10,
             "NPV mismatch"
         );
-        assert_eq!(swap.nominal().unwrap(), 100.0);
-        assert_eq!(swap.fixed_rate(), 0.03);
+        assert_eq!(swap.fixed_vs_floating().nominal().unwrap(), 100.0);
+        assert_eq!(swap.fixed_vs_floating().fixed_rate(), 0.03);
     }
 }
