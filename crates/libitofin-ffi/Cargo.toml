@@ -1,0 +1,12 @@
+[package]
+name = "libitofin-ffi"
+version.workspace = true
+edition.workspace = true
+description = "C ABI for the libitofin QuantLib-compatible core"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+libitofin = { path = "../libitofin" }
