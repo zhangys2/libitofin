@@ -8,7 +8,9 @@ use crate::fail;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::FiniteDifferenceModel;
 use crate::methods::finitedifferences::operators::FdmLinearOpComposite;
-use crate::methods::finitedifferences::schemes::{DouglasScheme, ImplicitEulerScheme};
+use crate::methods::finitedifferences::schemes::{
+    CrankNicolsonScheme, DouglasScheme, ExplicitEulerScheme, ImplicitEulerScheme,
+};
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::FdmBoundaryConditionSet;
 use crate::shared::{Shared, SharedMut, shared};
@@ -106,6 +108,20 @@ impl FdmBackwardSolver {
                     self.condition.stopping_times(),
                 );
                 model.rollback(a, from, to, all_steps, Some(&*self.condition))
+            }
+            FdmSchemeType::ExplicitEuler => {
+                let mut model = FiniteDifferenceModel::new(
+                    ExplicitEulerScheme::new(self.map.clone(), self.bc_set.clone()),
+                    self.condition.stopping_times(),
+                );
+                model.rollback(a, damping_to, to, steps, Some(&*self.condition))
+            }
+            FdmSchemeType::CrankNicolson => {
+                let mut model = FiniteDifferenceModel::new(
+                    CrankNicolsonScheme::new(self.map.clone(), self.bc_set.clone()),
+                    self.condition.stopping_times(),
+                );
+                model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
             unported => fail!(
                 "the {unported:?} scheme is not ported: the backward solver has Douglas and \
@@ -345,7 +361,7 @@ mod tests {
         assert_close(&a, &b);
     }
 
-    /// `cpp:197` fails on an unknown type; the seven families with no scheme
+    /// `cpp:197` fails on an unknown type; the families with no scheme
     /// behind them are named rather than reached, so a caller that asks for one
     /// is told which one it asked for instead of silently getting another.
     #[test]
@@ -354,10 +370,8 @@ mod tests {
             FdmSchemeType::Hundsdorfer,
             FdmSchemeType::CraigSneyd,
             FdmSchemeType::ModifiedCraigSneyd,
-            FdmSchemeType::ExplicitEuler,
             FdmSchemeType::MethodOfLines,
             FdmSchemeType::TrBDF2,
-            FdmSchemeType::CrankNicolson,
         ];
 
         for scheme_type in unported {

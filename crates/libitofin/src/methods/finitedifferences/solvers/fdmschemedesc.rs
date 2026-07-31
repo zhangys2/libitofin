@@ -76,6 +76,16 @@ impl FdmSchemeDesc {
     pub fn implicit_euler() -> Self {
         FdmSchemeDesc::new(FdmSchemeType::ImplicitEuler, 0.0, 0.0)
     }
+
+    /// Fully explicit Euler.
+    pub fn explicit_euler() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::ExplicitEuler, 0.0, 0.0)
+    }
+
+    /// Crank-Nicolson, represented by Douglas with theta = 0.5 in 1-D.
+    pub fn crank_nicolson() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::CrankNicolson, 0.5, 0.0)
+    }
 }
 
 #[cfg(test)]

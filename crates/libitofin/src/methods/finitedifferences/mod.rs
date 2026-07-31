@@ -7,6 +7,7 @@
 //! backward solver that drive them.
 
 mod boundarycondition;
+mod boundaryconditions;
 #[cfg(test)]
 mod cranknicolsondamping_oracle;
 mod finitedifferencemodel;
@@ -20,5 +21,6 @@ pub mod stepconditions;
 pub mod utilities;
 
 pub use boundarycondition::{BoundaryCondition, BoundarySide};
+pub use boundaryconditions::{DirichletBoundary, NeumannBoundary};
 pub use finitedifferencemodel::FiniteDifferenceModel;
 pub use stepcondition::{NullCondition, StepCondition};

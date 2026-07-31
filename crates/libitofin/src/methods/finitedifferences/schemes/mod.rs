@@ -5,13 +5,17 @@
 //! they meet and the two schemes the backward solver of #658 drives.
 
 mod boundaryconditionschemehelper;
+mod cranknicolsonscheme;
 mod douglasscheme;
+mod expliciteulerscheme;
 mod impliciteulerscheme;
 mod scheme;
 #[cfg(test)]
 pub(crate) mod testops;
 
 pub use boundaryconditionschemehelper::BoundaryConditionSchemeHelper;
+pub use cranknicolsonscheme::CrankNicolsonScheme;
 pub use douglasscheme::DouglasScheme;
+pub use expliciteulerscheme::ExplicitEulerScheme;
 pub use impliciteulerscheme::ImplicitEulerScheme;
 pub use scheme::Scheme;
