@@ -64,20 +64,35 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: install maturin and pytest
-        run: pip install --no-cache-dir maturin pytest
-
       - name: build and install the itofin extension module
         run: |
           python -m venv .venv
           . .venv/bin/activate
-          pip install pytest
+          pip install --no-cache-dir -r requirements-dev.txt
           maturin develop -m crates/itofin-py/Cargo.toml
 
       - name: run the pytest oracle
         run: |
           . .venv/bin/activate
           pytest crates/itofin-py/tests -v
+
+  rust-lint:
+    name: Rust fmt and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v5
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   rust-workspace:
     name: Rust workspace
