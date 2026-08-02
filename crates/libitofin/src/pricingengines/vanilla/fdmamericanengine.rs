@@ -118,10 +118,15 @@ impl PricingEngine for FdmAmericanEngine {
         let payoff = *payoff;
 
         let maturity_date = exercise.last_date();
+        let exercise_start_date = exercise.dates()[0];
         let maturity = self.process.time(&maturity_date)?;
         if maturity <= 0.0 {
             fail!("the FDM American engine needs a positive maturity");
         }
+        // Early exercise is only allowed from the exercise window's earliest
+        // date; clamp to the valuation date so a today-starting (or unbounded
+        // `from_latest`) window keeps QuantLib's exercisable-from-t=0 behaviour.
+        let exercise_start = self.process.time(&exercise_start_date)?.max(0.0);
         let spot = self.process.x0()?;
         let strike = payoff.strike();
 
@@ -153,7 +158,7 @@ impl PricingEngine for FdmAmericanEngine {
         let american: Shared<dyn StepCondition> = shared(FdmAmericanStepCondition::new(
             mesher.clone() as Shared<dyn FdmMesher>,
             calculator,
-            0.0,
+            exercise_start,
         ));
         let conditions = shared(FdmStepConditionComposite::new(&[], vec![american]));
 
@@ -376,6 +381,39 @@ mod tests {
         assert!(
             american_npv + 1e-8 >= european_npv,
             "american {american_npv} < european {european_npv}"
+        );
+    }
+
+    #[test]
+    fn restricting_the_exercise_window_lowers_the_american_value() {
+        let market = market();
+        market.set(40.0, 0.0, 0.0488, 0.3);
+        let expiry = today() + time_to_days(0.5833);
+
+        // Exercisable from today (full American early-exercise premium).
+        let mut full = american_option(&market, OptionType::Put, 45.0, expiry);
+        let engine = shared_mut(FdmAmericanEngine::new(Shared::clone(&market.process)))
+            as SharedMut<dyn PricingEngine>;
+        full.base_mut().set_pricing_engine(engine);
+        let full_npv = full.npv().unwrap();
+
+        // Exercisable only at expiry (earliest == latest): no early exercise, so
+        // the value must drop below the fully-American one. If the engine ignored
+        // the window start (the previous hardcoded 0.0) both would be identical.
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Put, 45.0));
+        let exercise: Shared<dyn Exercise> =
+            shared(AmericanExercise::new(expiry, expiry, false).unwrap());
+        let mut forward_start =
+            OneAssetOption::new(payoff, exercise, Shared::clone(&market.settings));
+        let engine = shared_mut(FdmAmericanEngine::new(Shared::clone(&market.process)))
+            as SharedMut<dyn PricingEngine>;
+        forward_start.base_mut().set_pricing_engine(engine);
+        let forward_npv = forward_start.npv().unwrap();
+
+        assert!(
+            full_npv > forward_npv + 1.0e-3,
+            "restricting the exercise window did not lower value: full={full_npv} forward={forward_npv}"
         );
     }
 }
