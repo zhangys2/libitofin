@@ -7,6 +7,7 @@ mod bond;
 mod bonds;
 mod capfloor;
 mod fixedvsfloatingswap;
+mod forwardrateagreement;
 mod futures;
 mod makecapfloor;
 mod makeois;
@@ -20,7 +21,8 @@ mod swaption;
 mod vanillaswap;
 
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
-pub use bonds::FixedRateBond;
+pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
+pub use forwardrateagreement::{ForwardRateAgreement, Position};
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
