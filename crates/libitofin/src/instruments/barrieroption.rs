@@ -196,6 +196,7 @@ impl PricingEngine for AnalyticBarrierEngine {
 
 /// Prices a continuous zero-rebate barrier option.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn barrier_price(
     barrier_type: BarrierType,
     option_type: OptionType,
@@ -207,6 +208,11 @@ pub fn barrier_price(
     vol: Real,
     t: Real,
 ) -> QlResult<Real> {
+    // The reflection adjustment and the Black-Scholes block both divide by the
+    // standard deviation `vol * sqrt(t)`; reject the degenerate zero-vol /
+    // zero-maturity inputs explicitly rather than propagate a NaN.
+    require!(vol > 0.0, "barrier pricing needs a positive volatility");
+    require!(t > 0.0, "barrier pricing needs a positive maturity");
     let vanilla = black_scholes(option_type, spot, strike, r, q, vol, t)?;
     let knocked_out = match barrier_type {
         BarrierType::DownOut | BarrierType::DownIn if spot <= barrier => true,
@@ -328,5 +334,26 @@ mod tests {
         let vanilla = black_scholes(OptionType::Call, 100.0, 100.0, 0.05, 0.0, 0.20, 1.0).unwrap();
         assert!(npv.is_finite() && npv >= 0.0);
         assert!(npv <= vanilla + 1e-8, "barrier {npv} > vanilla {vanilla}");
+    }
+
+    #[test]
+    fn zero_volatility_is_rejected_rather_than_returning_nan() {
+        let err = barrier_price(
+            BarrierType::DownOut,
+            OptionType::Call,
+            100.0,
+            100.0,
+            90.0,
+            0.05,
+            0.0,
+            0.0,
+            1.0,
+        )
+        .unwrap_err();
+        assert!(
+            err.message().contains("positive volatility"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 }
