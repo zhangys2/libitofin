@@ -6,6 +6,7 @@
 mod asianoption;
 mod barrieroption;
 mod bond;
+mod bondforward;
 mod bonds;
 mod capfloor;
 mod fixedvsfloatingswap;
@@ -28,6 +29,7 @@ pub use barrieroption::{
     set_analytic_barrier_engine,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
+pub use bondforward::BondForward;
 pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use fixedvsfloatingswap::{

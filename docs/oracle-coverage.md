@@ -28,13 +28,14 @@ credit.
 | Barrier / Asian | `BarrierOption`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | First analytic slice |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
+| Bond forward | `BondForward` | `ql/instruments/bondforward` | Spot-minus-income; identity-verified vs discounting bond |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
 
 ## Not started (rates+equity desk)
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| Callable / convertible bonds, asset swap, bond forward | `ql/instruments/bonds/`, `assetswap`, `bondforward` | P1 |
+| Callable / convertible bonds, asset swap | `ql/instruments/bonds/`, `assetswap` | P1 |
 | Structured CMS swaps / float-float | `ql/instruments/*cms*`, `floatfloatswap` | P1 |
 | XCCY swaps | `ql/instruments/`, money layer | P1 |
 | Bates / G2 / GSR / LMM | `ql/processes`, `ql/models/marketmodels` | P2 |
