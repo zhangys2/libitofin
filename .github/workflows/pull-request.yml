@@ -88,6 +88,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # itofin-py needs a 3.13+ interpreter for abi3-py313 during clippy.
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
@@ -103,6 +109,12 @@ jobs:
 
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
+
+      # Workspace members include itofin-py (abi3-py313); default runner Python is 3.12.
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
 
       - name: run workspace tests
         run: cargo test --workspace --locked
