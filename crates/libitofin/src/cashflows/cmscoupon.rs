@@ -102,7 +102,15 @@ impl Coupon for CmsCoupon {
     }
 
     fn accrued_amount(&self, date: Date) -> QlResult<Real> {
-        self.base.accrued_amount(date)
+        // Mirror FloatingRateCoupon's accrual window, but resolve the rate
+        // through this coupon's own `rate()` so a CMS coupon with no
+        // convexity-adjusting pricer accrues off the raw swap-index rate
+        // instead of failing with "pricer not set" (as `amount()`/`rate()` do).
+        if date <= self.accrual_start_date() || date > self.coupon_base().payment_date() {
+            Ok(0.0)
+        } else {
+            Ok(self.nominal() * self.rate()? * self.accrued_period(date))
+        }
     }
 }
 
@@ -218,5 +226,58 @@ mod tests {
         // With no convexity-adjusting pricer attached, the public rate() must
         // resolve to the raw swap-index rate (the documented fallback).
         assert_eq!(coupon.rate().unwrap(), coupon.raw_rate().unwrap());
+    }
+
+    #[test]
+    fn cms_accrued_amount_works_without_a_pricer() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            today,
+            0.03,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let ibor = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+        let swap_index = shared(SwapIndex::new(
+            "EuriborSwap".into(),
+            Period::new(10, TimeUnit::Years),
+            2,
+            Currency::eur(),
+            Target::new(),
+            Period::new(1, TimeUnit::Years),
+            BusinessDayConvention::Unadjusted,
+            Thirty360::with_convention(Convention::BondBasis),
+            ibor,
+            Shared::clone(&settings),
+        ));
+        let start = Date::new(15, Month::September, 2026);
+        let end = Date::new(15, Month::December, 2026);
+        let coupon = CmsCoupon::new(
+            end,
+            100.0,
+            start,
+            end,
+            2,
+            Shared::clone(&swap_index),
+            1.0,
+            0.0,
+            start,
+            end,
+            Thirty360::with_convention(Convention::BondBasis),
+            false,
+        )
+        .unwrap();
+
+        // Accrual without a pricer must succeed (not "pricer not set") and match
+        // the raw-rate accrual, consistent with amount()/rate().
+        let mid = Date::new(15, Month::November, 2026);
+        let accrued = coupon.accrued_amount(mid).unwrap();
+        let expected = coupon.nominal() * coupon.raw_rate().unwrap() * coupon.accrued_period(mid);
+        assert!((accrued - expected).abs() < 1e-12, "accrued={accrued}");
+        assert!(accrued > 0.0);
+        assert_eq!(coupon.accrued_amount(start).unwrap(), 0.0);
     }
 }
