@@ -87,9 +87,13 @@ impl Coupon for CmsCoupon {
     }
 
     fn rate(&self) -> QlResult<Rate> {
-        match self.base.rate() {
-            Ok(rate) => Ok(rate),
-            Err(_) => self.raw_rate(),
+        // Only use the raw swap-index rate when no convexity-adjusting pricer is
+        // attached; when one is set, propagate its error instead of masking a
+        // pricer failure with an unadjusted fixing.
+        if self.base.pricer().is_some() {
+            self.base.rate()
+        } else {
+            self.raw_rate()
         }
     }
 
@@ -166,5 +170,53 @@ mod tests {
         let rate = coupon.raw_rate().unwrap();
         assert!(rate.is_finite());
         assert!((rate - 0.03).abs() < 5e-3, "rate={rate}");
+    }
+
+    #[test]
+    fn cms_rate_without_a_pricer_matches_the_raw_rate() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            today,
+            0.03,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let ibor = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+        let swap_index = shared(SwapIndex::new(
+            "EuriborSwap".into(),
+            Period::new(10, TimeUnit::Years),
+            2,
+            Currency::eur(),
+            Target::new(),
+            Period::new(1, TimeUnit::Years),
+            BusinessDayConvention::Unadjusted,
+            Thirty360::with_convention(Convention::BondBasis),
+            ibor,
+            Shared::clone(&settings),
+        ));
+        let start = Date::new(15, Month::September, 2026);
+        let end = Date::new(15, Month::December, 2026);
+        let coupon = CmsCoupon::new(
+            end,
+            100.0,
+            start,
+            end,
+            2,
+            Shared::clone(&swap_index),
+            1.0,
+            0.0,
+            start,
+            end,
+            Thirty360::with_convention(Convention::BondBasis),
+            false,
+        )
+        .unwrap();
+
+        // With no convexity-adjusting pricer attached, the public rate() must
+        // resolve to the raw swap-index rate (the documented fallback).
+        assert_eq!(coupon.rate().unwrap(), coupon.raw_rate().unwrap());
     }
 }
