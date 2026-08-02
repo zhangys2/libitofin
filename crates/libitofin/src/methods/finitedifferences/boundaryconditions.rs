@@ -106,10 +106,7 @@ pub struct TimeDependentDirichletBoundary {
 
 impl TimeDependentDirichletBoundary {
     /// Creates a condition whose value function receives the current time.
-    pub fn new(
-        side: BoundarySide,
-        value: impl Fn(Time) -> Real + 'static,
-    ) -> Shared<Self> {
+    pub fn new(side: BoundarySide, value: impl Fn(Time) -> Real + 'static) -> Shared<Self> {
         shared(Self {
             side,
             value: Box::new(value),

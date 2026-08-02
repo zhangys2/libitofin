@@ -418,7 +418,10 @@ mod tests {
                 }
             }
             let expected: std::collections::BTreeSet<Size> = (0..tree.size(i + 1)).collect();
-            assert_eq!(reachable, expected, "slice {i} has a gap in its recombined children");
+            assert_eq!(
+                reachable, expected,
+                "slice {i} has a gap in its recombined children"
+            );
         }
     }
 }
