@@ -27,6 +27,7 @@ credit.
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | Barrier / Asian | `BarrierOption`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | First analytic slice |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
+| FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
 
 ## Not started (rates+equity desk)
@@ -35,7 +36,7 @@ credit.
 |--------|-------------------|----------|
 | Callable / convertible bonds, asset swap, bond forward | `ql/instruments/bonds/`, `assetswap`, `bondforward` | P1 |
 | Structured CMS swaps / float-float | `ql/instruments/*cms*`, `floatfloatswap` | P1 |
-| FX forward / XCCY | `ql/instruments/`, money layer | P1 |
+| XCCY swaps | `ql/instruments/`, money layer | P1 |
 | Bates / G2 / GSR / LMM | `ql/processes`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |
