@@ -47,7 +47,7 @@ impl FdmBermudanStepCondition {
 
 impl StepCondition for FdmBermudanStepCondition {
     fn apply_to(&self, a: &mut Array, t: Time) {
-        if !self.exercise_times.iter().any(|&et| et == t) {
+        if !self.exercise_times.contains(&t) {
             return;
         }
         assert_eq!(

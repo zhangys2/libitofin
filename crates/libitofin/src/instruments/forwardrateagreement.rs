@@ -72,7 +72,7 @@ impl ForwardRateAgreement {
     }
 
     /// Par-coupon FRA over an explicit maturity date.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
     pub fn with_maturity(
         index: Shared<IborIndex>,
         value_date: Date,
@@ -244,12 +244,14 @@ mod tests {
             Compounding::Continuous,
             Frequency::Annual,
         )) as Shared<dyn YieldTermStructure>);
-        let index = shared(Euribor::new(
-            Period::new(6, TimeUnit::Months),
-            curve.clone(),
-            Shared::clone(&settings),
-        )
-        .unwrap());
+        let index = shared(
+            Euribor::new(
+                Period::new(6, TimeUnit::Months),
+                curve.clone(),
+                Shared::clone(&settings),
+            )
+            .unwrap(),
+        );
         let value = today + 60;
         let mut fra = ForwardRateAgreement::new(
             index,

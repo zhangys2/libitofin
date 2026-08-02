@@ -14,6 +14,7 @@ use crate::instruments::{
     PlainVanillaPayoff, StrikedTypePayoff,
 };
 use crate::math::array::Array;
+use crate::methods::finitedifferences::StepCondition;
 use crate::methods::finitedifferences::meshers::{
     FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
 };
@@ -22,10 +23,7 @@ use crate::methods::finitedifferences::solvers::{FdmBackwardSolver, FdmSchemeDes
 use crate::methods::finitedifferences::stepconditions::{
     FdmAmericanStepCondition, FdmStepConditionComposite,
 };
-use crate::methods::finitedifferences::utilities::{
-    FdmInnerValueCalculator, fdm_log_inner_value,
-};
-use crate::methods::finitedifferences::StepCondition;
+use crate::methods::finitedifferences::utilities::{FdmInnerValueCalculator, fdm_log_inner_value};
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, PricingEngine, Results};
@@ -222,6 +220,7 @@ mod tests {
 
     /// Ju (1999) table values from `americanoption.cpp` `juValues[]`.
     /// Columns: type, strike, spot, q, r, t, vol, value.
+    #[allow(clippy::type_complexity)]
     const JU_VALUES: &[(OptionType, Real, Real, Real, Real, Real, Real, Real)] = &[
         (OptionType::Put, 35.0, 40.0, 0.0, 0.0488, 0.0833, 0.2, 0.006),
         (OptionType::Put, 35.0, 40.0, 0.0, 0.0488, 0.3333, 0.2, 0.201),
@@ -260,11 +259,56 @@ mod tests {
         (OptionType::Call, 100.0, 100.0, 0.07, 0.03, 3.0, 0.4, 20.760),
         (OptionType::Call, 100.0, 110.0, 0.07, 0.03, 3.0, 0.4, 26.440),
         (OptionType::Call, 100.0, 120.0, 0.07, 0.03, 3.0, 0.4, 32.709),
-        (OptionType::Call, 100.0, 80.0, 0.07, 0.00001, 3.0, 0.3, 5.552),
-        (OptionType::Call, 100.0, 90.0, 0.07, 0.00001, 3.0, 0.3, 8.868),
-        (OptionType::Call, 100.0, 100.0, 0.07, 0.00001, 3.0, 0.3, 13.158),
-        (OptionType::Call, 100.0, 110.0, 0.07, 0.00001, 3.0, 0.3, 18.458),
-        (OptionType::Call, 100.0, 120.0, 0.07, 0.00001, 3.0, 0.3, 24.786),
+        (
+            OptionType::Call,
+            100.0,
+            80.0,
+            0.07,
+            0.00001,
+            3.0,
+            0.3,
+            5.552,
+        ),
+        (
+            OptionType::Call,
+            100.0,
+            90.0,
+            0.07,
+            0.00001,
+            3.0,
+            0.3,
+            8.868,
+        ),
+        (
+            OptionType::Call,
+            100.0,
+            100.0,
+            0.07,
+            0.00001,
+            3.0,
+            0.3,
+            13.158,
+        ),
+        (
+            OptionType::Call,
+            100.0,
+            110.0,
+            0.07,
+            0.00001,
+            3.0,
+            0.3,
+            18.458,
+        ),
+        (
+            OptionType::Call,
+            100.0,
+            120.0,
+            0.07,
+            0.00001,
+            3.0,
+            0.3,
+            24.786,
+        ),
         (OptionType::Call, 100.0, 80.0, 0.03, 0.07, 3.0, 0.3, 12.177),
         (OptionType::Call, 100.0, 90.0, 0.03, 0.07, 3.0, 0.3, 17.411),
         (OptionType::Call, 100.0, 100.0, 0.03, 0.07, 3.0, 0.3, 23.402),
@@ -322,12 +366,10 @@ mod tests {
         let payoff: Shared<dyn StrikedTypePayoff> =
             shared(PlainVanillaPayoff::new(OptionType::Put, 40.0));
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
-        let mut european =
-            OneAssetOption::new(payoff, exercise, Shared::clone(&market.settings));
-        let eur_engine =
-            shared_mut(crate::pricingengines::vanilla::AnalyticEuropeanEngine::new(
-                Shared::clone(&market.process),
-            )) as SharedMut<dyn PricingEngine>;
+        let mut european = OneAssetOption::new(payoff, exercise, Shared::clone(&market.settings));
+        let eur_engine = shared_mut(crate::pricingengines::vanilla::AnalyticEuropeanEngine::new(
+            Shared::clone(&market.process),
+        )) as SharedMut<dyn PricingEngine>;
         european.base_mut().set_pricing_engine(eur_engine);
         let european_npv = european.npv().unwrap();
 

@@ -3,6 +3,8 @@
 //! Port of `ql/instruments/`: the payoff subset and the vanilla-option
 //! instruments needed by the European-option slice.
 
+mod asianoption;
+mod barrieroption;
 mod bond;
 mod bonds;
 mod capfloor;
@@ -20,14 +22,19 @@ mod swap;
 mod swaption;
 mod vanillaswap;
 
+pub use asianoption::geometric_average_price_asian;
+pub use barrieroption::{
+    AnalyticBarrierEngine, BarrierArguments, BarrierOption, BarrierType, barrier_price,
+    set_analytic_barrier_engine,
+};
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
-pub use forwardrateagreement::{ForwardRateAgreement, Position};
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
     FixedVsFloatingSwapResults, FloatingArgumentsFn,
 };
+pub use forwardrateagreement::{ForwardRateAgreement, Position};
 pub use futures::FuturesType;
 pub use makecapfloor::MakeCapFloor;
 pub use makeois::MakeOis;

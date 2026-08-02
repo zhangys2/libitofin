@@ -1,8 +1,9 @@
 //! Minimal C ABI for embedding the libitofin core.
 //!
 //! The wrapper intentionally exposes metadata and stable error-code helpers
-//! only. Pricing logic remains in `libitofin`; higher-level C functions can be
-//! added without creating a second implementation of the Rust API.
+//! only. Pricing logic remains in `libitofin`; higher-level C functions (and a
+//! `cbindgen` header) are tracked in `docs/oracle-coverage.md` under P2 and
+//! can be added without creating a second implementation of the Rust API.
 
 use std::ffi::c_char;
 

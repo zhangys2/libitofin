@@ -31,13 +31,7 @@ impl ZeroCouponBond {
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
         let redemption_date = calendar.adjust(maturity_date, payment_convention);
-        let mut bond = Bond::new(
-            settlement_days,
-            calendar,
-            issue_date,
-            Vec::new(),
-            settings,
-        )?;
+        let mut bond = Bond::new(settlement_days, calendar, issue_date, Vec::new(), settings)?;
         bond.set_maturity_date(maturity_date);
         bond.set_single_redemption(face_amount, redemption, redemption_date)?;
         Ok(Self { bond })
