@@ -12,6 +12,21 @@ pip install itofin
 
 Requires Python >= 3.13.
 
+### Develop from this repository
+
+From the repository root:
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+maturin develop -m crates/itofin-py/Cargo.toml
+pytest crates/itofin-py/tests -v
+```
+
+See also the root [README](../../README.md#python-bindings-itofin) and
+[CONTRIBUTING.md](../../CONTRIBUTING.md).
+
 ## Price a European option and its greeks
 
 ```python

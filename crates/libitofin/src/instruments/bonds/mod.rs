@@ -4,5 +4,9 @@
 //! [`Bond`](crate::instruments::Bond) base.
 
 mod fixedratebond;
+mod floatingratebond;
+mod zerocouponbond;
 
 pub use fixedratebond::FixedRateBond;
+pub use floatingratebond::FloatingRateBond;
+pub use zerocouponbond::ZeroCouponBond;

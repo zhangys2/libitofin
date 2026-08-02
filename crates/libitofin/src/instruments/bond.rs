@@ -469,6 +469,27 @@ impl Bond {
         )
     }
 
+    /// Installs a single redemption of `notional * redemption / 100` on `date`
+    /// (the protected `Bond::setSingleRedemption`).
+    ///
+    /// Used by zero-coupon bonds that have no coupon leg.
+    pub(crate) fn set_single_redemption(
+        &mut self,
+        notional: Real,
+        redemption: Real,
+        date: Date,
+    ) -> QlResult<()> {
+        let payment: Shared<dyn CashFlow> =
+            shared(Redemption::new(notional * redemption / 100.0, date)?) as Shared<dyn CashFlow>;
+        self.notionals = vec![notional, 0.0];
+        self.notional_schedule = vec![Date::null(), date];
+        self.redemptions.clear();
+        self.base.register_with(payment.observable());
+        self.cashflows.push(Shared::clone(&payment));
+        self.redemptions.push(payment);
+        Ok(())
+    }
+
     /// Builds the redemption flows from the notional schedule and appends them
     /// to the cash flows (the protected `Bond::addRedemptionsToCashflows`).
     ///

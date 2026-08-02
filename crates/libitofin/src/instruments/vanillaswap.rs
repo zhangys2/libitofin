@@ -470,8 +470,7 @@ mod tests {
 
         let mut swap = readme_swap(SwapType::Payer);
         assert!(
-            (swap.fixed_vs_floating_mut().fair_rate().unwrap() - PROBE_FAIR).abs()
-                < 1.0e-10,
+            (swap.fixed_vs_floating_mut().fair_rate().unwrap() - PROBE_FAIR).abs() < 1.0e-10,
             "fair rate mismatch"
         );
         assert!(

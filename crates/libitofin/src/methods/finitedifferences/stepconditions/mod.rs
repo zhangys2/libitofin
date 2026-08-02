@@ -6,13 +6,16 @@
 //! [`stepcondition`](super::StepCondition) and this directory coexist by
 //! design.
 //!
-//! `FdmStepConditionComposite::vanillaComposite` (`cpp:80-145`) is deferred to
-//! #636: it is the only site of `FdmDividendHandler` (`cpp:104`),
-//! `FdmAmericanStepCondition` (`cpp:130`) and `FdmBermudanStepCondition`
-//! (`cpp:134`), none of which are ported yet.
+//! `FdmStepConditionComposite::vanillaComposite` (`cpp:80-145`) still omits the
+//! dividend handler (`FdmDividendHandler`, `cpp:104`); American and Bermudan
+//! step conditions are ported below.
 
+mod fdmamericanstepcondition;
+mod fdmbermudanstepcondition;
 mod fdmsnapshotcondition;
 mod fdmstepconditioncomposite;
 
+pub use fdmamericanstepcondition::FdmAmericanStepCondition;
+pub use fdmbermudanstepcondition::FdmBermudanStepCondition;
 pub use fdmsnapshotcondition::FdmSnapshotCondition;
 pub use fdmstepconditioncomposite::FdmStepConditionComposite;

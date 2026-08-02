@@ -14,16 +14,14 @@ use crate::methods::finitedifferences::meshers::{
     FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
 };
 use crate::methods::finitedifferences::operators::{FdmBlackScholesOp, FdmLinearOpComposite};
-use crate::methods::finitedifferences::{
-    BoundarySide, TimeDependentDirichletBoundary,
-};
 use crate::methods::finitedifferences::solvers::{FdmBackwardSolver, FdmSchemeDesc};
+use crate::methods::finitedifferences::{BoundarySide, TimeDependentDirichletBoundary};
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
+use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::shared::{Shared, SharedMut, shared, shared_mut};
-use crate::payoff::Payoff;
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size};
 
@@ -140,34 +138,28 @@ impl PricingEngine for FdmEuropeanEngine {
         let mut values = terminal_payoff(&payoff, &locations);
         let lower_spot = locations[0].exp();
         let upper_spot = locations[locations.size() - 1].exp();
-        let lower_boundary = TimeDependentDirichletBoundary::new(
-            BoundarySide::Lower,
-            move |t| {
-                boundary_value(
-                    payoff.option_type(),
-                    lower_spot,
-                    strike,
-                    rate,
-                    dividend_rate,
-                    maturity,
-                    t,
-                )
-            },
-        );
-        let upper_boundary = TimeDependentDirichletBoundary::new(
-            BoundarySide::Upper,
-            move |t| {
-                boundary_value(
-                    payoff.option_type(),
-                    upper_spot,
-                    strike,
-                    rate,
-                    dividend_rate,
-                    maturity,
-                    t,
-                )
-            },
-        );
+        let lower_boundary = TimeDependentDirichletBoundary::new(BoundarySide::Lower, move |t| {
+            boundary_value(
+                payoff.option_type(),
+                lower_spot,
+                strike,
+                rate,
+                dividend_rate,
+                maturity,
+                t,
+            )
+        });
+        let upper_boundary = TimeDependentDirichletBoundary::new(BoundarySide::Upper, move |t| {
+            boundary_value(
+                payoff.option_type(),
+                upper_spot,
+                strike,
+                rate,
+                dividend_rate,
+                maturity,
+                t,
+            )
+        });
 
         let map = shared_mut(FdmBlackScholesOp::new(
             mesher.clone() as Shared<dyn FdmMesher>,
@@ -211,12 +203,12 @@ fn boundary_value(
 ) -> Real {
     let tau = maturity - time;
     match option_type {
-        OptionType::Call => (spot * (-dividend_rate * tau).exp()
-            - strike * (-rate * tau).exp())
-            .max(0.0),
-        OptionType::Put => (strike * (-rate * tau).exp()
-            - spot * (-dividend_rate * tau).exp())
-            .max(0.0),
+        OptionType::Call => {
+            (spot * (-dividend_rate * tau).exp() - strike * (-rate * tau).exp()).max(0.0)
+        }
+        OptionType::Put => {
+            (strike * (-rate * tau).exp() - spot * (-dividend_rate * tau).exp()).max(0.0)
+        }
     }
 }
 

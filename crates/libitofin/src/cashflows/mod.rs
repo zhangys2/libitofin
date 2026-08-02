@@ -9,8 +9,10 @@ mod capflooredcoupon;
 mod capflooredcoupon_oracle;
 #[allow(clippy::module_inception)]
 mod cashflows;
+mod cmscoupon;
 mod coupon;
 mod couponpricer;
+mod digitaliborcoupon;
 mod dividend;
 mod duration;
 mod fixedratecoupon;
@@ -26,8 +28,10 @@ mod simplecashflow;
 
 pub use capflooredcoupon::{CappedFlooredCoupon, CappedFlooredIborCoupon};
 pub use cashflows::CashFlows;
+pub use cmscoupon::CmsCoupon;
 pub use coupon::{Coupon, CouponBase};
 pub use couponpricer::{BlackIborCouponPricer, FloatingRateCouponPricer};
+pub use digitaliborcoupon::DigitalIborCoupon;
 pub use dividend::{Dividend, FixedDividend, FractionalDividend, dividend_vector};
 pub use duration::Duration;
 pub use fixedratecoupon::FixedRateCoupon;
