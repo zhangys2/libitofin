@@ -19,10 +19,7 @@ pub struct ExplicitEulerScheme {
 }
 
 impl ExplicitEulerScheme {
-    pub fn new(
-        map: SharedMut<dyn FdmLinearOpComposite>,
-        bc_set: FdmBoundaryConditionSet,
-    ) -> Self {
+    pub fn new(map: SharedMut<dyn FdmLinearOpComposite>, bc_set: FdmBoundaryConditionSet) -> Self {
         Self {
             dt: None,
             map,
@@ -36,6 +33,7 @@ impl Scheme for ExplicitEulerScheme {
         self.dt = Some(dt);
     }
 
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn step(&mut self, a: &mut Array, t: Time) -> QlResult<()> {
         let Some(dt) = self.dt else {
             fail!("the timestep is not set: call set_step before stepping");
@@ -57,8 +55,8 @@ impl Scheme for ExplicitEulerScheme {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::testops::{assert_close, probe, scaled_composite};
+    use super::*;
 
     #[test]
     fn explicit_step_matches_the_closed_form() {

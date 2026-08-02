@@ -17,10 +17,7 @@ pub struct CrankNicolsonScheme {
 }
 
 impl CrankNicolsonScheme {
-    pub fn new(
-        map: SharedMut<dyn FdmLinearOpComposite>,
-        bc_set: FdmBoundaryConditionSet,
-    ) -> Self {
+    pub fn new(map: SharedMut<dyn FdmLinearOpComposite>, bc_set: FdmBoundaryConditionSet) -> Self {
         Self {
             inner: DouglasScheme::new(0.5, map, bc_set),
         }
@@ -39,8 +36,8 @@ impl Scheme for CrankNicolsonScheme {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::testops::{assert_close, probe, scaled_composite};
+    use super::*;
 
     #[test]
     fn crank_nicolson_matches_douglas_half_theta() {
@@ -49,11 +46,7 @@ mod tests {
         let input = probe(4);
         let mut actual = input.clone();
         scheme.step(&mut actual, 0.25).unwrap();
-        let expected = Array::from_iter(
-            input
-                .iter()
-                .map(|value| value * (1.07 - 0.015) / 0.985),
-        );
+        let expected = Array::from_iter(input.iter().map(|value| value * (1.07 - 0.015) / 0.985));
         assert_close(&actual, &expected);
     }
 }

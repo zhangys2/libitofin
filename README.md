@@ -117,10 +117,11 @@ project re-expresses that core in safe, idiomatic Rust:
 
 - **Memory-safe by construction** — no manual `shared_ptr` cycles or
   use-after-free. The core is single-threaded-mutable during setup, then frozen
-  into immutable snapshots for data-race-free parallel compute (`rayon`).
-- **A clean FFI story** — a single core crate with Python (PyO3) and C-ABI
-  (cbindgen) bindings layered on top, so the same engine is reachable from
-  Python, C, C++, Julia, R, and more.
+  into immutable snapshots; data-race-free parallel compute via `rayon` is the
+  planned snapshot-and-fan-out model (not yet wired into the core crate).
+- **A clean FFI story** — a single core crate with Python (PyO3) bindings
+  shipped today and a growing C-ABI (`cbindgen`) surface, so the same engine is
+  reachable from Python, C, C++, Julia, R, and more.
 - **Faithful numerics** — QuantLib's `test-suite/` (186 `.cpp` files) is the
   porting oracle: a feature is "done" only when the matching tests are ported and
   the Rust output matches the C++ numbers within tolerance.
@@ -197,8 +198,12 @@ Verified end-to-end since then, each against the matching `test-suite/` oracle:
 
 ## Getting started (development)
 
-Requires the toolchain pinned in [`rust-toolchain.toml`](rust-toolchain.toml)
-(Rust 1.96.0, edition 2024); plain `cargo` picks it up automatically.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for PR size, commit style, and oracle
+expectations. Requires the toolchain pinned in
+[`rust-toolchain.toml`](rust-toolchain.toml) (Rust 1.96.0, edition 2024); plain
+`cargo` picks it up automatically.
+
+### Rust
 
 ```sh
 cargo build                          # whole workspace
@@ -208,28 +213,49 @@ cargo test                           # the porting oracle
 cargo test -p libitofin patterns::   # one module
 
 cargo fmt
-cargo clippy --all-targets
+cargo clippy --all-targets -- -D warnings
 ```
 
 A [`pre-commit`](https://pre-commit.com/) config runs `fmt`, `check`, `clippy`,
 `test`, and conventional-commit linting on every commit:
 
 ```sh
+pre-commit install
 pre-commit run --all-files
+```
+
+### Python bindings (`itofin`)
+
+Requires **Python ≥ 3.13**, then a local editable install via maturin (same flow
+as CI):
+
+```sh
+python3.13 -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt  # maturin + pytest (pinned)
+
+maturin develop -m crates/itofin-py/Cargo.toml
+pytest crates/itofin-py/tests -v
+```
+
+### QuantLib reference tree
+
+The `QuantLib/` entry is a **git-ignored local symlink**, not committed — point
+it at a QuantLib checkout to have the reference source and test-suite oracle
+available locally:
+
+```sh
+ln -s /path/to/QuantLib QuantLib
 ```
 
 ## Project layout
 
 ```
 crates/libitofin/       the core library — FFI-agnostic, idiomatic Rust
-crates/libitofin-ffi/   extern "C" + cbindgen → C header          (planned)
+crates/libitofin-ffi/   minimal extern "C" stub (version + errors; full cbindgen API planned)
 crates/itofin-py/       PyO3 + maturin → the `itofin` package       (on PyPI)
 QuantLib/               reference C++ tree + test oracle           (git-ignored symlink)
 ```
-
-The `QuantLib/` entry is a **git-ignored local symlink**, not committed — point
-it at a QuantLib checkout to have the reference source and test-suite oracle
-available locally: `ln -s /path/to/QuantLib QuantLib`.
 
 ## Design principles
 
@@ -239,8 +265,9 @@ available locally: `ln -s /path/to/QuantLib QuantLib`.
   tickets.
 - **Single-threaded-mutable core, snapshot-and-fan-out for parallelism** — the
   observable graph is mutated single-threaded during setup, then frozen into
-  immutable snapshots for `rayon` compute. No `async` in the core (QuantLib does
-  no I/O; market data is user input).
+  immutable snapshots. `rayon` parallel compute is the planned model (not yet
+  wired into the core). No `async` in the core (QuantLib does no I/O; market
+  data is user input).
 - **Fidelity in numerics, usability at API boundaries** — QuantLib is the oracle
   for every number, but the core favours compile-time typing and explicit `Result`
   errors over runtime casts and silent fallbacks; convenience lives in the bindings.

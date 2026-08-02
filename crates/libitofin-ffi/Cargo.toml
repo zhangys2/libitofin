@@ -3,7 +3,7 @@ name = "libitofin-ffi"
 version.workspace = true
 edition.workspace = true
 description = "C ABI for the libitofin QuantLib-compatible core"
-license = "MIT"
+license = "BSD-3-Clause"
 
 [lib]
 crate-type = ["cdylib", "staticlib"]
