@@ -19,6 +19,7 @@
 
 pub mod analytichestonengine;
 pub mod fdmamericanengine;
+pub mod fdmbermudanengine;
 pub mod fdmeuropeanengine;
 pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
@@ -26,6 +27,7 @@ pub mod mcvanillaengine;
 
 pub use analytichestonengine::HestonChf;
 pub use fdmamericanengine::FdmAmericanEngine;
+pub use fdmbermudanengine::FdmBermudanEngine;
 pub use fdmeuropeanengine::FdmEuropeanEngine;
 pub use mceuropeanengine::{EuropeanPathPricer, MCEuropeanEngine, MakeMcEuropeanEngine};
 pub use mceuropeanhestonengine::{
