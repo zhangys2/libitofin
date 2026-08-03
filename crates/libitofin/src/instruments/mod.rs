@@ -8,6 +8,7 @@ mod barrieroption;
 mod bond;
 mod bonds;
 mod capfloor;
+mod cmsswap;
 mod fixedvsfloatingswap;
 mod floatfloatswap;
 mod forwardrateagreement;
@@ -32,6 +33,7 @@ pub use barrieroption::{
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
+pub use cmsswap::CmsSwap;
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
     FixedVsFloatingSwapResults, FloatingArgumentsFn,
