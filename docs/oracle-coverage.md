@@ -22,6 +22,7 @@ credit.
 | Hull–White / short rate | calibration, tree swaption | `shortratemodels.cpp`, swaption suite | Core done |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
+| XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
 | Fixed-rate bonds | `FixedRateBond` + discounting | `bonds.cpp` cached fixed | Done |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
@@ -37,7 +38,6 @@ credit.
 |--------|-------------------|----------|
 | Callable / convertible bonds, asset swap, bond forward | `ql/instruments/bonds/`, `assetswap`, `bondforward` | P1 |
 | Structured CMS swaps | `ql/instruments/*cms*` | P1 |
-| XCCY swaps | `ql/instruments/`, money layer | P1 |
 | Bates / G2 / GSR / LMM | `ql/processes`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |

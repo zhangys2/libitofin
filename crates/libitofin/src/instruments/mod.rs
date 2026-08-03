@@ -22,6 +22,7 @@ mod payoffs;
 mod swap;
 mod swaption;
 mod vanillaswap;
+mod xccybasisswap;
 
 pub use asianoption::geometric_average_price_asian;
 pub use barrieroption::{
@@ -54,3 +55,4 @@ pub use swaption::{
     check_type_and_method_consistency,
 };
 pub use vanillaswap::VanillaSwap;
+pub use xccybasisswap::XccyBasisSwap;
