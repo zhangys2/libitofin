@@ -9,6 +9,7 @@ mod bond;
 mod bonds;
 mod capfloor;
 mod fixedvsfloatingswap;
+mod floatfloatswap;
 mod forwardrateagreement;
 mod futures;
 mod makecapfloor;
@@ -34,6 +35,7 @@ pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
     FixedVsFloatingSwapResults, FloatingArgumentsFn,
 };
+pub use floatfloatswap::FloatFloatSwap;
 pub use forwardrateagreement::{ForwardRateAgreement, Position};
 pub use futures::FuturesType;
 pub use makecapfloor::MakeCapFloor;
