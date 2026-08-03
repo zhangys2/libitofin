@@ -4,6 +4,7 @@
 //! instruments needed by the European-option slice.
 
 mod asianoption;
+mod assetswap;
 mod barrieroption;
 mod bond;
 mod bonds;
@@ -26,6 +27,7 @@ mod vanillaswap;
 mod xccybasisswap;
 
 pub use asianoption::geometric_average_price_asian;
+pub use assetswap::AssetSwap;
 pub use barrieroption::{
     AnalyticBarrierEngine, BarrierArguments, BarrierOption, BarrierType, barrier_price,
     set_analytic_barrier_engine,
