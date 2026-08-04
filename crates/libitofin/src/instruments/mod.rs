@@ -8,6 +8,7 @@ mod assetswap;
 mod barrieroption;
 mod bond;
 mod bonds;
+mod callablebond;
 mod capfloor;
 mod cmsswap;
 mod fixedvsfloatingswap;
@@ -34,6 +35,9 @@ pub use barrieroption::{
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
+pub use callablebond::{
+    Callability, CallabilitySchedule, CallabilityType, CallableBondArguments, CallableFixedRateBond,
+};
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use cmsswap::CmsSwap;
 pub use fixedvsfloatingswap::{
