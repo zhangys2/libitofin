@@ -7,6 +7,9 @@
 
 mod bondfunctions;
 mod discountingbondengine;
+mod discretizedcallablebond;
+mod treecallablebondengine;
 
 pub use bondfunctions::BondFunctions;
 pub use discountingbondengine::DiscountingBondEngine;
+pub use treecallablebondengine::TreeCallableFixedRateBondEngine;
