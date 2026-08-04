@@ -18,6 +18,7 @@
 //!   wrong price.
 
 pub mod analytichestonengine;
+pub mod binomialvanillaengine;
 pub mod fdmamericanengine;
 pub mod fdmbermudanengine;
 pub mod fdmeuropeanengine;
@@ -26,6 +27,7 @@ pub mod mceuropeanhestonengine;
 pub mod mcvanillaengine;
 
 pub use analytichestonengine::HestonChf;
+pub use binomialvanillaengine::BinomialVanillaEngine;
 pub use fdmamericanengine::FdmAmericanEngine;
 pub use fdmbermudanengine::FdmBermudanEngine;
 pub use fdmeuropeanengine::FdmEuropeanEngine;
