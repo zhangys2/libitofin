@@ -28,6 +28,7 @@ credit.
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
+| Asset swap | `AssetSwap` | `ql/instruments/assetswap` | Par asset swap; leg construction per `assetswap.cpp`; identity-verified |
 | Barrier / Asian | `BarrierOption`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | First analytic slice |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
@@ -37,7 +38,7 @@ credit.
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| Callable / convertible bonds, asset swap, bond forward | `ql/instruments/bonds/`, `assetswap`, `bondforward` | P1 |
+| Callable / convertible bonds, bond forward | `ql/instruments/bonds/`, `bondforward` | P1 |
 | Bates / G2 / GSR / LMM | `ql/processes`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |
