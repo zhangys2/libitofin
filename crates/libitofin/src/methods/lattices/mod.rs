@@ -6,11 +6,13 @@
 //! [`Lattice`](lattice::Lattice) is the rollback interface discretized
 //! assets price against.
 
+pub mod binomialtree;
 pub mod lattice;
 pub mod tree;
 pub mod treelattice;
 pub mod trinomialtree;
 
+pub use binomialtree::CoxRossRubinstein;
 pub use lattice::Lattice;
 pub use tree::Tree;
 pub use treelattice::{TreeLattice, TreeLattice1D, TreeLatticeImpl};
