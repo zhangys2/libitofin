@@ -29,7 +29,7 @@ credit.
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
 | Bond forward | `BondForward` (spot-minus-income) | `ql/instruments/bondforward` | Fair-strike NPV≈0; income-free dirty fwd = spot/DF; clean = dirty − AI |
 | Bates (log-normal jumps) | `BatesProcess` / `BatesModel` / `BatesEngine` (Gatheral + `addOnTerm`) | `batesmodel.cpp` `testAnalyticVsBlack` | Tiny λ/δ → Black @ 2e-7; λ→0 ≡ Heston Gatheral |
-| G2++ (affine core) | `G2` (`discountBond` / `discountBondOption` / `φ(t)`) | `ql/models/shortrate/twofactormodels/g2` | Curve reprice at (0,0); independent A/V/σ_P pins; φ closed form |
+| G2++ (affine + European swaption) | `G2` + `G2SwaptionEngine` | `ql/models/shortrate/twofactormodels/g2`, `g2swaptionengine.hpp` | Affine pins; payer⇔−receiver; vol monotonicity; spread correction |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
@@ -44,7 +44,7 @@ credit.
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| G2 engines / process / tree (swaption integral, FdG2) | `g2swaptionengine`, `g2process`, two-factor lattice | P2 |
+| G2 process / tree / FdG2 (Bermudan) | `g2process`, two-factor lattice, `FdG2SwaptionEngine` | P2 |
 | GSR / LMM | `ql/models/shortrate`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |
