@@ -7,6 +7,7 @@ mod asianoption;
 mod assetswap;
 mod barrieroption;
 mod bond;
+mod bondforward;
 mod bonds;
 mod callablebond;
 mod capfloor;
@@ -34,6 +35,7 @@ pub use barrieroption::{
     set_analytic_barrier_engine,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
+pub use bondforward::BondForward;
 pub use bonds::{
     ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond,
     FloatingRateBond, ZeroCouponBond, soft_callability,
