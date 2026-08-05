@@ -10,9 +10,9 @@
 //! `AP_Helper` <-> engine circular dependency: the future integrand (#416) and
 //! engine (#417) both build a [`HestonChf`] from the five params and call it.
 //!
-//! Deferrals (see the type docs):
-//! - the `addOnTerm` virtual hook (`analytichestonengine.hpp:179-181`, base
-//!   returns 0), the Bates jump-diffusion extension point.
+//! The Gatheral `Fj_Helper` path (needed by [`BatesEngine`](super::batesengine::BatesEngine))
+//! is ported with an `add_on_term` hook (base returns 0; Bates overrides).
+//! `BranchCorrection` remains deferred.
 
 use std::any::Any;
 
@@ -270,17 +270,24 @@ impl Integration {
     }
 }
 
-/// The control-variate formula selecting `AP_Helper`'s integrand
-/// (`analytichestonengine.hpp:100-118`, the `AP_Helper`-relevant subset).
+/// Complex-logarithm / control-variate formula
+/// (`analytichestonengine.hpp:100-118`).
 ///
-/// [`AngledContour`](ComplexLogFormula::AngledContour) (issue #416) and
-/// [`AsymptoticChF`](ComplexLogFormula::AsymptoticChF) (issue #426) are ported:
-/// `optimalControlVariate` selects between exactly these two, so both are on the
-/// calibrated oracle path. The remaining three variants are deferred to issue
-/// #418 and fail loud in [`ApHelper::new`] (they are NOT stubbed to a ported
-/// branch: a silent stub would mis-price; #262-class visible omission).
+/// Ported:
+/// - [`Gatheral`](ComplexLogFormula::Gatheral): `Fj_Helper` (Bates / classic
+///   Heston Fourier path).
+/// - [`AngledContour`](ComplexLogFormula::AngledContour) / [`AsymptoticChF`](ComplexLogFormula::AsymptoticChF):
+///   Andersen-Piterbarg `AP_Helper` (default `OptimalCV` engine path).
+///
+/// Deferred (#418): `BranchCorrection`, `AndersenPiterbarg`,
+/// `AndersenPiterbargOptCV`, `AngledContourNoCV`. They fail loud rather than
+/// silently stubbing to a ported branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComplexLogFormula {
+    /// Gatheral form of the characteristic function without control variate.
+    Gatheral,
+    /// Old branch-correction form (deferred).
+    BranchCorrection,
     /// Gatheral form with Andersen-Piterbarg control variate (deferred).
     AndersenPiterbarg,
     /// A slightly better Andersen-Piterbarg control variate (deferred).
@@ -378,10 +385,9 @@ impl ApHelper {
                 (phi, psi)
             }
             other => fail!(
-                "AP_Helper control variate {other:?} is deferred (issue #418): only \
-                 AngledContour (issue #416) and AsymptoticChF (issue #426) are ported; the \
-                 deferred branches are not stubbed to a ported one because optimalControlVariate \
-                 selects between exactly those two"
+                "AP_Helper control variate {other:?} is deferred or not an AP formula \
+                 (issue #418): only AngledContour (issue #416) and AsymptoticChF \
+                 (issue #426) are ported for AP_Helper"
             ),
         };
 
@@ -497,42 +503,227 @@ impl ApHelper {
     }
 }
 
-/// The analytic Heston pricing engine (`analytichestonengine.{hpp,cpp}`),
-/// `integrationOrder` constructor / `OptimalCV` path.
+/// Gatheral `Fj_Helper` integrand (`analytichestonengine.cpp:130-298`).
 ///
-/// Ports `AnalyticHestonEngine(model, integrationOrder)`
-/// (`analytichestonengine.cpp:659-671`): a Gauss-Laguerre [`Integration`] of the
-/// requested order, `cpxLog_ = OptimalCV`, and `alpha_ = -0.5`. It prices a
-/// European [`VanillaOption`](crate::instruments::VanillaOption) carrying a
-/// [`PlainVanillaPayoff`] through the Andersen-Piterbarg control-variate integral
-/// (`priceVanillaPayoff`, `cpp:748-859`, the `OptimalCV` case only).
+/// Integrates the imaginary part of the Heston (plus optional jump) characteristic
+/// function for the probabilities `P1`/`P2`. [`BranchCorrection`] is deferred;
+/// only [`Gatheral`](ComplexLogFormula::Gatheral) is accepted.
+///
+/// `add_on_term(phi, term, j)` is the Bates hook (`addOnTerm`); pass `|_,_,_| 0`
+/// for pure Heston.
+pub struct FjHelper<F>
+where
+    F: Fn(Real, Time, Size) -> Complex,
+{
+    j: Size,
+    kappa: Real,
+    theta: Real,
+    sigma: Real,
+    v0: Real,
+    term: Time,
+    sx: Real,
+    dd: Real,
+    sigma2: Real,
+    rsigma: Real,
+    t0: Real,
+    add_on: F,
+}
+
+impl<F> FjHelper<F>
+where
+    F: Fn(Real, Time, Size) -> Complex,
+{
+    /// `Fj_Helper` constructor (`analytichestonengine.cpp:159-181`).
+    ///
+    /// `ratio` is the dividend/risk-free discount ratio `df = spot/fwd`
+    /// (`cpp:763`); `dd = log(s0) - log(ratio)`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        kappa: Real,
+        theta: Real,
+        sigma: Real,
+        v0: Real,
+        s0: Real,
+        rho: Real,
+        term: Time,
+        strike: Real,
+        ratio: Real,
+        j: Size,
+        add_on: F,
+    ) -> QlResult<Self> {
+        require!(j == 1 || j == 2, "Fj_Helper j must be 1 or 2, got {j}");
+        Ok(FjHelper {
+            j,
+            kappa,
+            theta,
+            sigma,
+            v0,
+            term,
+            sx: strike.ln(),
+            dd: s0.ln() - ratio.ln(),
+            sigma2: sigma * sigma,
+            rsigma: rho * sigma,
+            t0: kappa - if j == 1 { rho * sigma } else { 0.0 },
+            add_on,
+        })
+    }
+
+    /// `operator()(phi)` (`analytichestonengine.cpp:183-298`), Gatheral branch.
+    pub fn evaluate(&self, phi: Real) -> Real {
+        let rpsig = self.rsigma * phi;
+        let t1 = Complex::new(self.t0, -rpsig);
+        let imag_term = if self.j == 1 { 1.0 } else { -1.0 };
+        let d = (t1 * t1 - self.sigma2 * phi * Complex::new(-phi, imag_term)).sqrt();
+        let ex = (-d * self.term).exp();
+        let add_on = (self.add_on)(phi, self.term, self.j);
+
+        if phi != 0.0 {
+            // C++: `std::exp(… + addOnTerm).imag()/phi` (`cpp:202-220`).
+            if self.sigma > 1e-5 {
+                let p = (t1 - d) / (t1 + d);
+                let g = ((Complex::new(1.0, 0.0) - p * ex) / (Complex::new(1.0, 0.0) - p)).ln();
+                (self.v0 * (t1 - d) * (Complex::new(1.0, 0.0) - ex)
+                    / (self.sigma2 * (Complex::new(1.0, 0.0) - ex * p))
+                    + (self.kappa * self.theta) / self.sigma2 * ((t1 - d) * self.term - 2.0 * g)
+                    + Complex::new(0.0, phi * (self.dd - self.sx))
+                    + add_on)
+                    .exp()
+                    .im
+                    / phi
+            } else {
+                let td = phi / (2.0 * t1) * Complex::new(-phi, imag_term);
+                let p = td * self.sigma2 / (t1 + d);
+                let g = p * (Complex::new(1.0, 0.0) - ex);
+                (self.v0 * td * (Complex::new(1.0, 0.0) - ex) / (Complex::new(1.0, 0.0) - p * ex)
+                    + (self.kappa * self.theta) * (td * self.term - 2.0 * g / self.sigma2)
+                    + Complex::new(0.0, phi * (self.dd - self.sx))
+                    + add_on)
+                    .exp()
+                    .im
+                    / phi
+            }
+        } else if self.j == 1 {
+            // l'Hospital at phi -> 0 (`cpp:225-236`)
+            let kmr = self.rsigma - self.kappa;
+            if kmr.abs() > 1e-7 {
+                self.dd - self.sx
+                    + ((kmr * self.term).exp() * self.kappa * self.theta
+                        - self.kappa * self.theta * (kmr * self.term + 1.0))
+                        / (2.0 * kmr * kmr)
+                    - self.v0 * (1.0 - (kmr * self.term).exp()) / (2.0 * kmr)
+            } else {
+                self.dd - self.sx
+                    + 0.25 * self.kappa * self.theta * self.term * self.term
+                    + 0.5 * self.v0 * self.term
+            }
+        } else {
+            self.dd
+                - self.sx
+                - ((-self.kappa * self.term).exp() * self.kappa * self.theta
+                    + self.kappa * self.theta * (self.kappa * self.term - 1.0))
+                    / (2.0 * self.kappa * self.kappa)
+                - self.v0 * (1.0 - (-self.kappa * self.term).exp()) / (2.0 * self.kappa)
+        }
+    }
+}
+
+/// Prices a European plain-vanilla payoff via Gatheral `Fj_Helper`
+/// (`priceVanillaPayoff` Gatheral branch, `cpp:775-802`).
+///
+/// `add_on_term` is the Bates jump CF hook (base Heston: return 0).
+#[allow(clippy::too_many_arguments)]
+pub fn price_vanilla_gatheral<F>(
+    integration: &Integration,
+    kappa: Real,
+    theta: Real,
+    sigma: Real,
+    v0: Real,
+    rho: Real,
+    spot: Real,
+    strike: Real,
+    term: Time,
+    fwd: Real,
+    risk_free_discount: Real,
+    option_type: OptionType,
+    add_on_term: F,
+) -> QlResult<Real>
+where
+    F: Fn(Real, Time, Size) -> Complex + Copy,
+{
+    let dr = risk_free_discount;
+    let df = spot / fwd;
+    let dd = dr / df;
+    let c_inf = (0.2_f64).min((1e-4_f64).max((1.0 - rho * rho).sqrt() / sigma))
+        * (v0 + kappa * theta * term);
+
+    let p1 = integration.calculate(c_inf, {
+        let helper = FjHelper::new(
+            kappa,
+            theta,
+            sigma,
+            v0,
+            spot,
+            rho,
+            term,
+            strike,
+            df,
+            1,
+            add_on_term,
+        )?;
+        move |phi| helper.evaluate(phi)
+    }) / std::f64::consts::PI;
+
+    let p2 = integration.calculate(c_inf, {
+        let helper = FjHelper::new(
+            kappa,
+            theta,
+            sigma,
+            v0,
+            spot,
+            rho,
+            term,
+            strike,
+            df,
+            2,
+            add_on_term,
+        )?;
+        move |phi| helper.evaluate(phi)
+    }) / std::f64::consts::PI;
+
+    Ok(match option_type {
+        OptionType::Call => spot * dd * (p1 + 0.5) - strike * dr * (p2 + 0.5),
+        OptionType::Put => spot * dd * (p1 - 0.5) - strike * dr * (p2 - 0.5),
+    })
+}
+
+/// Zero jump addon for pure Heston Gatheral pricing.
+pub fn heston_zero_add_on(_phi: Real, _t: Time, _j: Size) -> Complex {
+    Complex::new(0.0, 0.0)
+}
+
+/// The analytic Heston pricing engine (`analytichestonengine.{hpp,cpp}`).
+///
+/// Default constructor ports `AnalyticHestonEngine(model, integrationOrder)`
+/// (`analytichestonengine.cpp:659-671`): Gauss-Laguerre, OptimalCV (AP path),
+/// `alpha = -0.5`. [`with_complex_log`](Self::with_complex_log) also accepts
+/// [`Gatheral`](ComplexLogFormula::Gatheral) for the classic Fourier path.
 ///
 /// Follows the [`GenericModelEngine`] precedent (`jamshidianswaptionengine.rs`):
 /// the engine holds the model by [`SharedMut`] and registers as an observer of
-/// its [`CalibratedModel`](crate::models::model::CalibratedModel) observable, so
-/// a parameter or curve change invalidates a priced option.
+/// its [`CalibratedModel`](crate::models::model::CalibratedModel) observable.
 ///
 /// ## Ported vs deferred (visible omissions)
 ///
-/// - Only the `integrationOrder` constructor is ported. The Gauss-Lobatto
-///   `(model, relTolerance, maxEvaluations)` constructor (`cpp:673-685`) and the
-///   explicit `(model, cpxLog, integration, epsilon, alpha)` constructor
-///   (`cpp:687-705`) are deferred with their integration algorithms (issue #418).
-/// - `cpxLog_` is fixed to `OptimalCV`, so [`calculate`](Self::calculate) always
-///   routes through
-///   [`optimal_control_variate`](AnalyticHestonEngine::optimal_control_variate).
-///   The `Gatheral` / `BranchCorrection` `Fj_Helper` case (`cpp:772-802`) is
-///   deferred; only the Andersen-Piterbarg case (`cpp:808-852`) is ported.
-/// - `andersenPiterbargEpsilon_` and the `uM` / `epsilon` integration-limit
-///   machinery (`cpp:812-818`, `1046-1065`) are dead for Gauss-Laguerre (its
-///   `calculate` never calls `maxBound`), so they are omitted (issue #418).
-/// - `evaluations_` / `numberOfEvaluations` (`cpp:721-723`) counts quadrature
-///   evaluations; it feeds no result the oracle reads, so it is deferred (the
-///   count is available on [`Integration::number_of_evaluations`]).
+/// - Gauss-Lobatto constructor deferred (#418).
+/// - `BranchCorrection` and the remaining AP variants deferred (#418).
+/// - `andersenPiterbargEpsilon_` / `uM` omitted for Gauss-Laguerre (#418).
 pub struct AnalyticHestonEngine {
     base: OneAssetOptionEngine,
     model: SharedMut<HestonModel>,
     integration: Integration,
+    cpx_log: ComplexLogFormula,
+    /// `true` means OptimalCV: select AngledContour vs AsymptoticChF at price time.
+    optimal_cv: bool,
     alpha: Real,
 }
 
@@ -557,6 +748,43 @@ impl AnalyticHestonEngine {
             base,
             model,
             integration,
+            cpx_log: ComplexLogFormula::AngledContour, // filled at price time via OptimalCV
+            optimal_cv: true,
+            alpha: -0.5,
+        })
+    }
+
+    /// `AnalyticHestonEngine(model, cpxLog, Integration::gaussLaguerre(order))`
+    /// subset (`analytichestonengine.cpp:689-707`): Gauss-Laguerre with an
+    /// explicit complex-log formula. Accepts [`Gatheral`](ComplexLogFormula::Gatheral)
+    /// or the OptimalCV AP pair (`AngledContour` / `AsymptoticChF`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates quadrature construction failure, or rejects deferred formulas.
+    pub fn with_complex_log(
+        model: SharedMut<HestonModel>,
+        cpx_log: ComplexLogFormula,
+        integration_order: Size,
+    ) -> QlResult<AnalyticHestonEngine> {
+        match cpx_log {
+            ComplexLogFormula::Gatheral
+            | ComplexLogFormula::AngledContour
+            | ComplexLogFormula::AsymptoticChF => {}
+            other => {
+                fail!("AnalyticHestonEngine complex-log formula {other:?} is deferred (issue #418)")
+            }
+        }
+        let integration = Integration::gauss_laguerre(integration_order)?;
+        let base =
+            OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
+        base.register_with(model.borrow().calibrated_model().observable());
+        Ok(AnalyticHestonEngine {
+            base,
+            model,
+            integration,
+            cpx_log,
+            optimal_cv: false,
             alpha: -0.5,
         })
     }
@@ -626,9 +854,8 @@ impl PricingEngine for AnalyticHestonEngine {
     }
 
     /// `calculate` (`analytichestonengine.cpp:861-875`): guards a European
-    /// [`PlainVanillaPayoff`], then `priceVanillaPayoff(payoff, exerciseDate)`
-    /// (`cpp:725-735`, `748-859`) - the forward at the exercise date, the
-    /// maturity time and the risk-free discount, then the OptimalCV assembly.
+    /// [`PlainVanillaPayoff`], then `priceVanillaPayoff` (`cpp:748-859`) —
+    /// Gatheral `Fj_Helper` or OptimalCV / AP assembly.
     fn calculate(&mut self) -> QlResult<()> {
         let arguments = self.base.arguments();
         let Some(exercise) = &arguments.exercise else {
@@ -681,20 +908,41 @@ impl PricingEngine for AnalyticHestonEngine {
             .discount(time, false)?;
 
         let strike = payoff.strike();
-        let c_inf = (1.0 - rho * rho).sqrt() * (v0 + kappa * theta * time) / sigma;
 
-        let final_log =
-            AnalyticHestonEngine::optimal_control_variate(time, v0, kappa, theta, sigma, rho);
-        let chf = HestonChf::new(kappa, theta, sigma, rho, v0);
-        let cv_helper = ApHelper::new(time, fwd, strike, final_log, chf, self.alpha)?;
+        let value = if self.cpx_log == ComplexLogFormula::Gatheral {
+            price_vanilla_gatheral(
+                &self.integration,
+                kappa,
+                theta,
+                sigma,
+                v0,
+                rho,
+                spot,
+                strike,
+                time,
+                fwd,
+                dr,
+                payoff.option_type(),
+                heston_zero_add_on,
+            )?
+        } else {
+            let c_inf = (1.0 - rho * rho).sqrt() * (v0 + kappa * theta * time) / sigma;
+            let final_log = if self.optimal_cv {
+                AnalyticHestonEngine::optimal_control_variate(time, v0, kappa, theta, sigma, rho)
+            } else {
+                self.cpx_log
+            };
+            let chf = HestonChf::new(kappa, theta, sigma, rho, v0);
+            let cv_helper = ApHelper::new(time, fwd, strike, final_log, chf, self.alpha)?;
 
-        let cv_value = cv_helper.control_variate_value()?;
-        let h_cv = fwd / std::f64::consts::PI
-            * self.integration.calculate(c_inf, |u| cv_helper.evaluate(u));
+            let cv_value = cv_helper.control_variate_value()?;
+            let h_cv = fwd / std::f64::consts::PI
+                * self.integration.calculate(c_inf, |u| cv_helper.evaluate(u));
 
-        let value = match payoff.option_type() {
-            OptionType::Call => (cv_value + h_cv) * dr,
-            OptionType::Put => (cv_value + h_cv - (fwd - strike)) * dr,
+            match payoff.option_type() {
+                OptionType::Call => (cv_value + h_cv) * dr,
+                OptionType::Put => (cv_value + h_cv - (fwd - strike)) * dr,
+            }
         };
 
         self.base.results_mut().instrument.value = Some(value);
