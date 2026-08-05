@@ -13,9 +13,7 @@ pub mod swaption;
 pub mod vanilla;
 
 pub use blackcalculator::BlackCalculator;
-pub use bond::{
-    BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule,
-};
+pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{

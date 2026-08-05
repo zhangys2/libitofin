@@ -35,8 +35,8 @@ pub use barrieroption::{
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bonds::{
-    soft_callability, ConvertibleBondArguments, ConvertibleFixedCouponBond,
-    ConvertibleZeroCouponBond, FixedRateBond, FloatingRateBond, ZeroCouponBond,
+    ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond,
+    FloatingRateBond, ZeroCouponBond, soft_callability,
 };
 pub use callablebond::{
     Callability, CallabilitySchedule, CallabilityType, CallableBondArguments, CallableFixedRateBond,

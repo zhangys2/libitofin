@@ -141,11 +141,7 @@ impl Arguments for CallableBondArguments {
 
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn require_field(ok: bool, message: &str) -> QlResult<()> {
-    if ok {
-        Ok(())
-    } else {
-        fail!("{message}")
-    }
+    if ok { Ok(()) } else { fail!("{message}") }
 }
 
 /// A callable / puttable fixed-rate bond.
@@ -361,7 +357,7 @@ mod tests {
     use crate::models::shortrate::HullWhite;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::bond::{DiscountingBondEngine, TreeCallableFixedRateBondEngine};
-    use crate::shared::{shared, shared_mut, SharedMut};
+    use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::target::Target;
