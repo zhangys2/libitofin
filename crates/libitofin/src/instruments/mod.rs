@@ -34,7 +34,10 @@ pub use barrieroption::{
     set_analytic_barrier_engine,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
-pub use bonds::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
+pub use bonds::{
+    ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond,
+    FloatingRateBond, ZeroCouponBond, soft_callability,
+};
 pub use callablebond::{
     Callability, CallabilitySchedule, CallabilityType, CallableBondArguments, CallableFixedRateBond,
 };
