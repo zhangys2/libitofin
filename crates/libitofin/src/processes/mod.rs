@@ -8,11 +8,13 @@
 //! aliases to it for now, and the pluggable discretization objects follow as
 //! noted on [`GeneralizedBlackScholesProcess`].
 
+mod batesprocess;
 mod blackscholesprocess;
 mod hestonprocess;
 mod ornsteinuhlenbeckprocess;
 mod stochasticprocessarray;
 
+pub use batesprocess::BatesProcess;
 pub use blackscholesprocess::{
     BlackProcess, BlackScholesMertonProcess, BlackScholesProcess, GarmanKohlagenProcess,
     GeneralizedBlackScholesProcess,
