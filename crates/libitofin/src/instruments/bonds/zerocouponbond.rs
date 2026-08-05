@@ -46,6 +46,11 @@ impl ZeroCouponBond {
     pub fn bond_mut(&mut self) -> &mut Bond {
         &mut self.bond
     }
+
+    /// Consumes the wrapper and yields its [`Bond`] base.
+    pub fn into_bond(self) -> Bond {
+        self.bond
+    }
 }
 
 #[cfg(test)]

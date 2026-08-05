@@ -39,20 +39,37 @@ pub enum CallabilityType {
 }
 
 /// One call/put right at a date and price (`ql/instruments/callabilityschedule.hpp`).
+///
+/// Soft calls (QuantLib's `SoftCallability`) are represented by a [`Call`](CallabilityType::Call)
+/// with a [`trigger`](Self::trigger): the issuer may call only when the
+/// underlying exceeds `trigger` times the conversion value.
 #[derive(Clone, Debug)]
 pub struct Callability {
     price: BondPrice,
     call_type: CallabilityType,
     date: Date,
+    trigger: Option<Real>,
 }
 
 impl Callability {
-    /// Builds a callability at `date` exercisable at `price`.
+    /// Builds a hard callability at `date` exercisable at `price`.
     pub fn new(price: BondPrice, call_type: CallabilityType, date: Date) -> Self {
         Self {
             price,
             call_type,
             date,
+            trigger: None,
+        }
+    }
+
+    /// Builds a soft call at `date` with soft-call `trigger`
+    /// (`ql/instruments/bonds/convertiblebonds.hpp` `SoftCallability`).
+    pub fn soft(price: BondPrice, date: Date, trigger: Real) -> Self {
+        Self {
+            price,
+            call_type: CallabilityType::Call,
+            date,
+            trigger: Some(trigger),
         }
     }
 
@@ -69,6 +86,11 @@ impl Callability {
     /// The callability date.
     pub fn date(&self) -> Date {
         self.date
+    }
+
+    /// Soft-call trigger multiple of the conversion value, when present.
+    pub fn trigger(&self) -> Option<Real> {
+        self.trigger
     }
 }
 
@@ -119,7 +141,11 @@ impl Arguments for CallableBondArguments {
 
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn require_field(ok: bool, message: &str) -> QlResult<()> {
-    if ok { Ok(()) } else { fail!("{message}") }
+    if ok {
+        Ok(())
+    } else {
+        fail!("{message}")
+    }
 }
 
 /// A callable / puttable fixed-rate bond.
@@ -335,7 +361,7 @@ mod tests {
     use crate::models::shortrate::HullWhite;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::bond::{DiscountingBondEngine, TreeCallableFixedRateBondEngine};
-    use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::shared::{shared, shared_mut, SharedMut};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::target::Target;
