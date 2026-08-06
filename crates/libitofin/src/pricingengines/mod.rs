@@ -18,7 +18,8 @@ pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,
-    BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, JamshidianSwaptionEngine,
+    BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, G2SwaptionEngine,
+    JamshidianSwaptionEngine,
 };
 pub use vanilla::AnalyticEuropeanEngine;
 

@@ -19,10 +19,8 @@
 //!
 //! - `G2::Dynamics` / `dynamics()` (`g2.hpp:118-130`, `g2.cpp:48-51`) and the
 //!   two-factor lattice (`TwoFactorModel::tree`) — numerical path.
-//! - `G2::swaption` / `SwaptionPricingFunction` (`g2.cpp:111-246`) — European
-//!   swaption integral (needs Brent + `SegmentIntegral`); lands with
-//!   `G2SwaptionEngine`.
 //! - `G2Process` (`ql/processes/g2process.*`) — Monte Carlo dynamics.
+//! - FdG2 / Bermudan tree engines (`bermudanswaption.cpp` `testCachedG2Values`).
 //!
 //! ## Divergences from QuantLib
 //!
@@ -39,9 +37,15 @@ use std::rc::Rc;
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
+use crate::instruments::SwapType;
 use crate::interestrate::Compounding;
 use crate::math::array::Array;
+use crate::math::distributions::normal::CumulativeNormalDistribution;
+use crate::math::integrals::Integrator;
+use crate::math::integrals::segment::SegmentIntegral;
 use crate::math::optimization::constraint::{BoundaryConstraint, PositiveConstraint};
+use crate::math::solver1d::Solver1D;
+use crate::math::solvers1d::brent::Brent;
 use crate::models::model::{
     CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel,
     register_with_term_structure,
@@ -53,10 +57,12 @@ use crate::models::shortrate::onefactormodel::AffineModel;
 use crate::option::OptionType;
 use crate::patterns::observable::Observer;
 use crate::pricingengines::blackformula::black_formula;
+use crate::require;
 use crate::shared::{SharedMut, shared_mut};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::date::Date;
 use crate::time::frequency::Frequency;
-use crate::types::{Rate, Real, Time};
+use crate::types::{Rate, Real, Size, Time};
 
 /// Analytical fitting law `φ(t)` (`g2.hpp:155-163`).
 ///
@@ -259,6 +265,212 @@ impl G2 {
         let f = self.discount(bond_maturity)?;
         let k = self.discount(maturity)? * strike;
         black_formula(option_type, k, f, v, 1.0, 0.0)
+    }
+
+    /// European swaption NPV via the one-dimensional integral
+    /// (`G2::swaption`, `g2.cpp:218-246`).
+    ///
+    /// `fixed_rate` should already include any floating-spread correction
+    /// applied by [`G2SwaptionEngine`](crate::pricingengines::swaption::G2SwaptionEngine).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the nominal is missing, the reset/pay date lists are empty, the
+    /// curve discounts fail, or the segment integral fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn swaption(
+        &self,
+        nominal: Real,
+        swap_type: SwapType,
+        floating_reset_dates: &[Date],
+        fixed_pay_dates: &[Date],
+        fixed_rate: Rate,
+        range: Real,
+        intervals: Size,
+    ) -> QlResult<Real> {
+        require!(
+            !floating_reset_dates.is_empty(),
+            "swap has no floating resets"
+        );
+        require!(
+            !fixed_pay_dates.is_empty(),
+            "swap has no fixed payment dates"
+        );
+
+        let curve = self.term_structure().current_link()?;
+        let settlement = curve.reference_date()?;
+        let day_counter = curve.require_day_counter()?;
+        let start = day_counter.year_fraction(settlement, floating_reset_dates[0]);
+        let w = if swap_type == SwapType::Payer {
+            1.0
+        } else {
+            -1.0
+        };
+
+        let fixed_pay_times: Vec<Time> = fixed_pay_dates
+            .iter()
+            .map(|&date| day_counter.year_fraction(settlement, date))
+            .collect();
+
+        let function = SwaptionPricingFunction::new(
+            self.a(),
+            self.sigma(),
+            self.b(),
+            self.eta(),
+            self.rho(),
+            w,
+            start,
+            fixed_pay_times,
+            fixed_rate,
+            self,
+        )?;
+
+        let upper = function.mux() + range * function.sigmax();
+        let lower = function.mux() - range * function.sigmax();
+        let integrator = SegmentIntegral::new(intervals)?;
+        let integral = integrator.integrate(|x| function.evaluate(x), lower, upper)?;
+        Ok(nominal * w * self.discount(start)? * integral)
+    }
+}
+
+/// European swaption integrand (`G2::SwaptionPricingFunction`, `g2.cpp:111-216`).
+struct SwaptionPricingFunction {
+    w: Real,
+    start: Time,
+    t: Vec<Time>,
+    rate: Rate,
+    a_cache: Vec<Real>,
+    ba: Vec<Real>,
+    bb: Vec<Real>,
+    mux: Real,
+    muy: Real,
+    sigmax: Real,
+    sigmay: Real,
+    rhoxy: Real,
+}
+
+impl SwaptionPricingFunction {
+    #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
+    fn new(
+        a: Real,
+        sigma: Real,
+        b: Real,
+        eta: Real,
+        rho: Real,
+        w: Real,
+        start: Time,
+        pay_times: Vec<Time>,
+        fixed_rate: Rate,
+        model: &G2,
+    ) -> QlResult<Self> {
+        let size = pay_times.len();
+        require!(
+            size > 0,
+            "swaption pricing function needs at least one pay time"
+        );
+
+        let sigmax = sigma * (0.5 * (1.0 - (-2.0 * a * start).exp()) / a).sqrt();
+        let sigmay = eta * (0.5 * (1.0 - (-2.0 * b * start).exp()) / b).sqrt();
+        require!(sigmax > 0.0, "G2 swaption sigmax must be positive");
+        require!(sigmay > 0.0, "G2 swaption sigmay must be positive");
+
+        let rhoxy =
+            rho * eta * sigma * (1.0 - (-(a + b) * start).exp()) / ((a + b) * sigmax * sigmay);
+
+        let mut temp = sigma * sigma / (a * a);
+        let mux = -((temp + rho * sigma * eta / (a * b)) * (1.0 - (-a * start).exp())
+            - 0.5 * temp * (1.0 - (-2.0 * a * start).exp())
+            - rho * sigma * eta / (b * (a + b)) * (1.0 - (-(b + a) * start).exp()));
+
+        temp = eta * eta / (b * b);
+        let muy = -((temp + rho * sigma * eta / (a * b)) * (1.0 - (-b * start).exp())
+            - 0.5 * temp * (1.0 - (-2.0 * b * start).exp())
+            - rho * sigma * eta / (a * (a + b)) * (1.0 - (-(b + a) * start).exp()));
+
+        let mut a_cache = Vec::with_capacity(size);
+        let mut ba = Vec::with_capacity(size);
+        let mut bb = Vec::with_capacity(size);
+        for &pay in &pay_times {
+            a_cache.push(model.bond_a(start, pay)?);
+            ba.push(G2::bond_b(a, pay - start));
+            bb.push(G2::bond_b(b, pay - start));
+        }
+
+        Ok(SwaptionPricingFunction {
+            w,
+            start,
+            t: pay_times,
+            rate: fixed_rate,
+            a_cache,
+            ba,
+            bb,
+            mux,
+            muy,
+            sigmax,
+            sigmay,
+            rhoxy,
+        })
+    }
+
+    fn mux(&self) -> Real {
+        self.mux
+    }
+
+    fn sigmax(&self) -> Real {
+        self.sigmax
+    }
+
+    /// `operator()(x)` (`g2.cpp:154-189`).
+    ///
+    /// Panics if the inner Brent root for `y*` fails (C++ throws).
+    fn evaluate(&self, x: Real) -> Real {
+        let phi = CumulativeNormalDistribution::standard();
+        let temp = (x - self.mux) / self.sigmax;
+        let txy = (1.0 - self.rhoxy * self.rhoxy).sqrt();
+        let size = self.t.len();
+
+        let mut lambda = Vec::with_capacity(size);
+        for i in 0..size {
+            let tau = if i == 0 {
+                self.t[0] - self.start
+            } else {
+                self.t[i] - self.t[i - 1]
+            };
+            let c = if i == size - 1 {
+                1.0 + self.rate * tau
+            } else {
+                self.rate * tau
+            };
+            lambda.push(c * self.a_cache[i] * (-self.ba[i] * x).exp());
+        }
+
+        let bb = &self.bb;
+        let solving = |y: Real| {
+            let mut value = 1.0;
+            for i in 0..lambda.len() {
+                value -= lambda[i] * (-bb[i] * y).exp();
+            }
+            value
+        };
+        let search_bound = (10.0 * self.sigmay).max(1.0);
+        let mut solver = Brent::new().with_max_evaluations(1000);
+        let yb = solver
+            .solve_bracketed(solving, 1e-6, 0.0, -search_bound, search_bound)
+            .expect("G2 swaption y* root must exist in the search band");
+
+        let h1 = (yb - self.muy) / (self.sigmay * txy)
+            - self.rhoxy * (x - self.mux) / (self.sigmax * txy);
+        let mut value = phi.value(-self.w * h1);
+
+        for (lambda_i, bb_i) in lambda.iter().zip(self.bb.iter()) {
+            let h2 = h1 + bb_i * self.sigmay * (1.0 - self.rhoxy * self.rhoxy).sqrt();
+            let kappa = -bb_i
+                * (self.muy - 0.5 * txy * txy * self.sigmay * self.sigmay * bb_i
+                    + self.rhoxy * self.sigmay * (x - self.mux) / self.sigmax);
+            value -= lambda_i * kappa.exp() * phi.value(-self.w * h2);
+        }
+
+        (-0.5 * temp * temp).exp() * value / (self.sigmax * (2.0 * std::f64::consts::PI).sqrt())
     }
 }
 
