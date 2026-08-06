@@ -12,25 +12,30 @@
 //!
 //! with analytical fitting parameter `φ(t)` chosen so the model reprices the
 //! input [`YieldTermStructure`]. This slice ports the closed-form affine surface
-//! (`A`, `B`, `V`, `discountBond`, `discountBondOption`) and the `φ(t)` fitting
-//! law.
+//! (`A`, `B`, `V`, `discountBond`, `discountBondOption`), the `φ(t)` fitting
+//! law, and [`G2Dynamics`] / [`G2::dynamics`].
 //!
 //! ## Deferred (omitted, not stubbed)
 //!
-//! - `G2::Dynamics` / `dynamics()` (`g2.hpp:118-130`, `g2.cpp:48-51`) and the
-//!   two-factor lattice (`TwoFactorModel::tree`) — numerical path.
+//! - Two-factor lattice (`TwoFactorModel::tree` / `ShortRateTree`) — numerical
+//!   path.
 //! - FdG2 / Bermudan tree engines (`bermudanswaption.cpp` `testCachedG2Values`).
 //!
-//! The factor process lives at [`crate::processes::G2Process`].
+//! The standalone Monte Carlo factor process lives at
+//! [`crate::processes::G2Process`]. [`TwoFactorShortRateDynamics::process`]
+//! follows QuantLib and returns a
+//! [`StochasticProcessArray`](crate::processes::StochasticProcessArray) of the
+//! two OU factors (instantaneous correlation), not `G2Process`.
 //!
 //! ## Divergences from QuantLib
 //!
 //! - C++ multiply-inherits `TwoFactorModel`, `AffineModel`, and
 //!   `TermStructureConsistentModel`. Here `TwoFactorModel` is collapsed (it only
-//!   forwarded an argument count plus deferred `dynamics`/`tree`); [`G2`] embeds
-//!   a [`CalibratedModel`] and a [`TermStructureConsistentModel`], implements
+//!   forwarded an argument count plus deferred `tree`); [`G2`] embeds a
+//!   [`CalibratedModel`] and a [`TermStructureConsistentModel`], implements
 //!   [`AffineModel`] directly (not [`OneFactorAffineModel`]), and registers with
-//!   the term-structure handle like Hull-White.
+//!   the term-structure handle like Hull-White. Dynamics use
+//!   [`TwoFactorShortRateDynamics`].
 //! - C++'s `FittingParameter` subclass becomes a [`ParameterValue`] wrapped by
 //!   [`TermStructureFittingParameter`], matching the ECIR seam.
 
@@ -55,11 +60,14 @@ use crate::models::parameter::{
     ConstantParameter, NullParameter, Parameter, ParameterValue, TermStructureFittingParameter,
 };
 use crate::models::shortrate::onefactormodel::AffineModel;
+use crate::models::shortrate::twofactormodel::TwoFactorShortRateDynamics;
 use crate::option::OptionType;
 use crate::patterns::observable::Observer;
 use crate::pricingengines::blackformula::black_formula;
+use crate::processes::OrnsteinUhlenbeckProcess;
 use crate::require;
-use crate::shared::{SharedMut, shared_mut};
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
+use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
 use crate::time::frequency::Frequency;
@@ -186,9 +194,27 @@ impl G2 {
 
     /// Analytical fitting parameter `φ(t)` (`g2.hpp:132-180`).
     ///
-    /// Exposed for identity pins (`shortRate(t,0,0) = φ(t)` once dynamics land).
+    /// Exposed for identity pins (`shortRate(t,0,0) = φ(t)`).
     pub fn phi(&self, t: Time) -> Real {
         self.phi.value(t)
+    }
+
+    /// `dynamics()` (`g2.cpp:48-51`): short-rate dynamics `r = φ(t) + x + y`
+    /// with OU factors `(a,σ)` and `(b,η)` correlated by `ρ`.
+    ///
+    /// # Errors
+    ///
+    /// Fails if either factor volatility is negative (OU constructor).
+    pub fn dynamics(&self) -> QlResult<Shared<G2Dynamics>> {
+        G2Dynamics::new(
+            self.phi.clone(),
+            self.a(),
+            self.sigma(),
+            self.b(),
+            self.eta(),
+            self.rho(),
+        )
+        .map(shared)
     }
 
     /// `B(x, t) = (1 − e^{−x t})/x` (`g2.cpp:107-109`).
@@ -331,6 +357,62 @@ impl G2 {
         let integrator = SegmentIntegral::new(intervals)?;
         let integral = integrator.integrate(|x| function.evaluate(x), lower, upper)?;
         Ok(nominal * w * self.discount(start)? * integral)
+    }
+}
+
+/// `G2::Dynamics` (`g2.hpp:118-130`): short rate `r_t = φ(t) + x_t + y_t`.
+pub struct G2Dynamics {
+    fitting: Parameter,
+    x_process: Shared<dyn StochasticProcess1D>,
+    y_process: Shared<dyn StochasticProcess1D>,
+    correlation: Real,
+}
+
+impl G2Dynamics {
+    /// `Dynamics(fitting, a, sigma, b, eta, rho)` (`g2.hpp:120-126`).
+    ///
+    /// # Errors
+    ///
+    /// Fails if `sigma` or `eta` is negative.
+    pub fn new(
+        fitting: Parameter,
+        a: Real,
+        sigma: Real,
+        b: Real,
+        eta: Real,
+        rho: Real,
+    ) -> QlResult<G2Dynamics> {
+        Ok(G2Dynamics {
+            fitting,
+            x_process: shared(OrnsteinUhlenbeckProcess::new(a, sigma, 0.0, 0.0)?)
+                as Shared<dyn StochasticProcess1D>,
+            y_process: shared(OrnsteinUhlenbeckProcess::new(b, eta, 0.0, 0.0)?)
+                as Shared<dyn StochasticProcess1D>,
+            correlation: rho,
+        })
+    }
+
+    /// Fitting drift `φ(t)`.
+    pub fn fitting(&self, t: Time) -> Real {
+        self.fitting.value(t)
+    }
+}
+
+impl TwoFactorShortRateDynamics for G2Dynamics {
+    fn short_rate(&self, t: Time, x: Real, y: Real) -> Rate {
+        self.fitting.value(t) + x + y
+    }
+
+    fn x_process(&self) -> Shared<dyn StochasticProcess1D> {
+        Shared::clone(&self.x_process)
+    }
+
+    fn y_process(&self) -> Shared<dyn StochasticProcess1D> {
+        Shared::clone(&self.y_process)
+    }
+
+    fn correlation(&self) -> Real {
+        self.correlation
     }
 }
 
@@ -720,6 +802,58 @@ mod tests {
                 "t={t}: phi {got} vs {expected}"
             );
         }
+    }
+
+    #[test]
+    fn dynamics_short_rate_is_phi_plus_factors() {
+        use crate::models::shortrate::TwoFactorShortRateDynamics;
+        let m = make_g2(Handle::new(flat(0.03)));
+        let g = m.borrow();
+        let dynamics = g.dynamics().unwrap();
+        for &(t, x, y) in &[(0.0, 0.0, 0.0), (1.0, 0.02, -0.01), (2.5, -0.03, 0.015)] {
+            let expected = g.phi(t) + x + y;
+            let got = dynamics.short_rate(t, x, y);
+            assert!(
+                (got - expected).abs() < 1e-14,
+                "t={t} x={x} y={y}: {got} vs {expected}"
+            );
+        }
+        assert_eq!(dynamics.correlation(), RHO);
+    }
+
+    #[test]
+    fn dynamics_factor_processes_are_zero_level_ou() {
+        use crate::models::shortrate::TwoFactorShortRateDynamics;
+        let m = make_g2(Handle::new(flat(0.03)));
+        let dynamics = m.borrow().dynamics().unwrap();
+        let x = dynamics.x_process();
+        let y = dynamics.y_process();
+        assert_eq!(x.x0().unwrap(), 0.0);
+        assert_eq!(y.x0().unwrap(), 0.0);
+        // Drift at state z is -speed * z for zero-level OU.
+        assert!((x.drift(0.0, 0.05).unwrap() + A * 0.05).abs() < 1e-14);
+        assert!((y.drift(0.0, -0.04).unwrap() + B * (-0.04)).abs() < 1e-14);
+        assert!((x.diffusion(0.0, 0.0).unwrap() - SIGMA).abs() < 1e-15);
+        assert!((y.diffusion(0.0, 0.0).unwrap() - ETA).abs() < 1e-15);
+    }
+
+    #[test]
+    fn dynamics_joint_process_has_instantaneous_correlation() {
+        use crate::models::shortrate::TwoFactorShortRateDynamics;
+        let m = make_g2(Handle::new(flat(0.03)));
+        let dynamics = m.borrow().dynamics().unwrap();
+        let process = dynamics.process().unwrap();
+        assert_eq!(process.size(), 2);
+        let x0 = process.initial_values().unwrap();
+        assert_eq!(x0[0], 0.0);
+        assert_eq!(x0[1], 0.0);
+        let d = process.diffusion(0.0, &x0).unwrap();
+        // StochasticProcessArray uses spectral sqrt of corr; cov = d dᵀ must
+        // recover the instantaneous factor covariance.
+        let cov = &d * &d.transpose();
+        assert!((cov[(0, 0)] - SIGMA * SIGMA).abs() < 1e-12);
+        assert!((cov[(1, 1)] - ETA * ETA).abs() < 1e-12);
+        assert!((cov[(0, 1)] - RHO * SIGMA * ETA).abs() < 1e-12);
     }
 
     #[test]

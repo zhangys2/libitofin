@@ -9,12 +9,14 @@ pub mod extendedcoxingersollross;
 pub mod g2;
 pub mod hullwhite;
 pub mod onefactormodel;
+pub mod twofactormodel;
 pub mod vasicek;
 
 pub use calibrationhelpers::SwaptionHelper;
 pub use coxingersollross::{CoxIngersollRoss, VolatilityConstraint};
 pub use extendedcoxingersollross::ExtendedCoxIngersollRoss;
-pub use g2::G2;
+pub use g2::{G2, G2Dynamics};
 pub use hullwhite::{HullWhite, convexity_bias};
 pub use onefactormodel::{AffineModel, OneFactorAffineModel, ShortRateDynamics, ShortRateTree};
+pub use twofactormodel::TwoFactorShortRateDynamics;
 pub use vasicek::Vasicek;
