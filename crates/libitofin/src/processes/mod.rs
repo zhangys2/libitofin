@@ -10,6 +10,7 @@
 
 mod batesprocess;
 mod blackscholesprocess;
+mod g2process;
 mod hestonprocess;
 mod ornsteinuhlenbeckprocess;
 mod stochasticprocessarray;
@@ -19,6 +20,7 @@ pub use blackscholesprocess::{
     BlackProcess, BlackScholesMertonProcess, BlackScholesProcess, GarmanKohlagenProcess,
     GeneralizedBlackScholesProcess,
 };
+pub use g2process::G2Process;
 pub use hestonprocess::HestonProcess;
 pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
 pub use stochasticprocessarray::StochasticProcessArray;
