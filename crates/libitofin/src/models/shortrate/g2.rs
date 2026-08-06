@@ -19,8 +19,9 @@
 //!
 //! - `G2::Dynamics` / `dynamics()` (`g2.hpp:118-130`, `g2.cpp:48-51`) and the
 //!   two-factor lattice (`TwoFactorModel::tree`) — numerical path.
-//! - `G2Process` (`ql/processes/g2process.*`) — Monte Carlo dynamics.
 //! - FdG2 / Bermudan tree engines (`bermudanswaption.cpp` `testCachedG2Values`).
+//!
+//! The factor process lives at [`crate::processes::G2Process`].
 //!
 //! ## Divergences from QuantLib
 //!
