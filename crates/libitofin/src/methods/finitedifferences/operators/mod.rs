@@ -11,7 +11,9 @@ mod fdmlinearopcomposite;
 mod fdmlinearopiterator;
 mod fdmlinearoplayout;
 mod firstderivativeop;
+mod ninepointlinearop;
 mod secondderivativeop;
+mod secondordermixedderivativeop;
 mod triplebandlinearop;
 
 pub use fdmblackscholesop::FdmBlackScholesOp;
@@ -20,5 +22,7 @@ pub use fdmlinearopcomposite::FdmLinearOpComposite;
 pub use fdmlinearopiterator::FdmLinearOpIterator;
 pub use fdmlinearoplayout::FdmLinearOpLayout;
 pub use firstderivativeop::first_derivative_op;
+pub use ninepointlinearop::{NinePointCoeffs, NinePointLinearOp};
 pub use secondderivativeop::second_derivative_op;
+pub use secondordermixedderivativeop::second_order_mixed_derivative_op;
 pub use triplebandlinearop::TripleBandLinearOp;
