@@ -34,6 +34,7 @@ credit.
 | FdmG2Op | `FdmG2Op` | `fdmg2op.{hpp,cpp}` | apply = dirs + mixed; ρ=0 kills mixed; splitting inverts; φ̄ discount |
 | Fdm2Dim / FdmG2 solvers | `FdmSolverDesc`, `Fdm2DimSolver`, `FdmG2Solver` | `fdm2dimsolver`, `fdmg2solver` | Zero-op preserves payoff; G2 constant→discount-ish; zero payoff→0 |
 | FdmSimpleProcess1dMesher | `fdm_simple_process_1d_mesher` | `fdmsimpleprocess1dmesher` | OU endpoints = quantile evolve; avg = mean of per-t grids; FdG2 layout smoke |
+| FdmAffineModelTermStructure | `FdmAffineModelTermStructure` | `fdmaffinemodeltermstructure` | G2 origin≡curve; factors≡discountBond; setVariable notifies |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
