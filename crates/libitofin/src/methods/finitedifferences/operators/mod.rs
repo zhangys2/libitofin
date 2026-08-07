@@ -6,6 +6,7 @@
 //! [`FdmLinearOp`] contract the operators themselves implement.
 
 mod fdmblackscholesop;
+mod fdmg2op;
 mod fdmlinearop;
 mod fdmlinearopcomposite;
 mod fdmlinearopiterator;
@@ -17,6 +18,7 @@ mod secondordermixedderivativeop;
 mod triplebandlinearop;
 
 pub use fdmblackscholesop::FdmBlackScholesOp;
+pub use fdmg2op::FdmG2Op;
 pub use fdmlinearop::FdmLinearOp;
 pub use fdmlinearopcomposite::FdmLinearOpComposite;
 pub use fdmlinearopiterator::FdmLinearOpIterator;
