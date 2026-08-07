@@ -2,11 +2,13 @@
 //!
 //! Port of `ql/methods/finitedifferences/utilities/`.
 
+mod fdmaffinemodelswapinnervalue;
 mod fdmaffinemodeltermstructure;
 mod fdmboundaryconditionset;
 mod fdminnervaluecalculator;
 mod fdmmesherintegral;
 
+pub use fdmaffinemodelswapinnervalue::FdmAffineModelSwapInnerValue;
 pub use fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
 pub use fdmboundaryconditionset::FdmBoundaryConditionSet;
 pub use fdminnervaluecalculator::{
