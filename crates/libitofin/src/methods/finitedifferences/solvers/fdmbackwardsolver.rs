@@ -9,7 +9,7 @@ use crate::math::array::Array;
 use crate::methods::finitedifferences::FiniteDifferenceModel;
 use crate::methods::finitedifferences::operators::FdmLinearOpComposite;
 use crate::methods::finitedifferences::schemes::{
-    CrankNicolsonScheme, DouglasScheme, ExplicitEulerScheme, ImplicitEulerScheme,
+    CrankNicolsonScheme, DouglasScheme, ExplicitEulerScheme, HundsdorferScheme, ImplicitEulerScheme,
 };
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::FdmBoundaryConditionSet;
@@ -102,6 +102,18 @@ impl FdmBackwardSolver {
                 );
                 model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
+            FdmSchemeType::Hundsdorfer => {
+                let mut model = FiniteDifferenceModel::new(
+                    HundsdorferScheme::new(
+                        self.scheme_desc.theta,
+                        self.scheme_desc.mu,
+                        self.map.clone(),
+                        self.bc_set.clone(),
+                    ),
+                    self.condition.stopping_times(),
+                );
+                model.rollback(a, damping_to, to, steps, Some(&*self.condition))
+            }
             FdmSchemeType::ImplicitEuler => {
                 let mut model = FiniteDifferenceModel::new(
                     ImplicitEulerScheme::new(self.map.clone(), self.bc_set.clone()),
@@ -124,8 +136,8 @@ impl FdmBackwardSolver {
                 model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
             unported => fail!(
-                "the {unported:?} scheme is not ported: the backward solver has Douglas and \
-                 implicit Euler only, the rest wait on #636"
+                "the {unported:?} scheme is not ported: CraigSneyd / ModifiedCraigSneyd / \
+                 MethodOfLines / TrBDF2 wait on later ADI work"
             ),
         }
     }
@@ -367,7 +379,6 @@ mod tests {
     #[test]
     fn every_unported_scheme_type_is_rejected_by_name() {
         let unported = [
-            FdmSchemeType::Hundsdorfer,
             FdmSchemeType::CraigSneyd,
             FdmSchemeType::ModifiedCraigSneyd,
             FdmSchemeType::MethodOfLines,

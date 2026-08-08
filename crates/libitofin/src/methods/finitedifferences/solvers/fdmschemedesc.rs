@@ -36,15 +36,15 @@ pub enum FdmSchemeType {
 ///
 /// The header declares ten factories over these nine types
 /// (`fdmbackwardsolver.cpp:46-78`) - `ModifiedHundsdorfer` (`cpp:62`) is a
-/// second `HundsdorferType` with a different `theta`. Two of the ten are
-/// ported, [`douglas`](Self::douglas) and
-/// [`implicit_euler`](Self::implicit_euler), which are the schemes #657
-/// implements. The other eight - `CrankNicolson`, `CraigSneyd`,
-/// `ModifiedCraigSneyd`, `Hundsdorfer`, `ModifiedHundsdorfer`,
-/// `ExplicitEuler`, `MethodOfLines` and `TrBDF2` - are omitted rather than
-/// accepted and left wrong: every type stays constructible through
-/// [`new`](Self::new), and the rollback of #658 answers a type it has no
-/// scheme for with an error.
+/// second `HundsdorferType` with a different `theta`. Ported factories:
+/// [`douglas`](Self::douglas), [`implicit_euler`](Self::implicit_euler),
+/// [`explicit_euler`](Self::explicit_euler),
+/// [`crank_nicolson`](Self::crank_nicolson),
+/// [`hundsdorfer`](Self::hundsdorfer),
+/// [`modified_hundsdorfer`](Self::modified_hundsdorfer). The remaining
+/// families (`CraigSneyd`, `ModifiedCraigSneyd`, `MethodOfLines`, `TrBDF2`)
+/// stay constructible through [`new`](Self::new) and are rejected by the
+/// backward solver until their schemes land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -85,6 +85,18 @@ impl FdmSchemeDesc {
     /// Crank-Nicolson, represented by Douglas with theta = 0.5 in 1-D.
     pub fn crank_nicolson() -> Self {
         FdmSchemeDesc::new(FdmSchemeType::CrankNicolson, 0.5, 0.0)
+    }
+
+    /// Hundsdorfer–Verwer (`fdmbackwardsolver.cpp:59-61`):
+    /// `θ = ½ + √3/6`, `μ = ½`.
+    pub fn hundsdorfer() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::Hundsdorfer, 0.5 + 3.0_f64.sqrt() / 6.0, 0.5)
+    }
+
+    /// Modified Hundsdorfer (`fdmbackwardsolver.cpp:63-65`): same type with
+    /// `θ = 1 − √2/2`, `μ = ½`.
+    pub fn modified_hundsdorfer() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::Hundsdorfer, 1.0 - 2.0_f64.sqrt() / 2.0, 0.5)
     }
 }
 
@@ -137,5 +149,22 @@ mod tests {
     #[test]
     fn the_two_ported_factories_differ() {
         assert_ne!(FdmSchemeDesc::douglas(), FdmSchemeDesc::implicit_euler());
+    }
+
+    #[test]
+    fn hundsdorfer_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::hundsdorfer();
+        assert_eq!(desc.scheme_type, FdmSchemeType::Hundsdorfer);
+        assert!((desc.theta - (0.5 + 3.0_f64.sqrt() / 6.0)).abs() < 1e-15);
+        assert_eq!(desc.mu, 0.5);
+    }
+
+    #[test]
+    fn modified_hundsdorfer_shares_the_type_with_a_different_theta() {
+        let desc = FdmSchemeDesc::modified_hundsdorfer();
+        assert_eq!(desc.scheme_type, FdmSchemeType::Hundsdorfer);
+        assert!((desc.theta - (1.0 - 2.0_f64.sqrt() / 2.0)).abs() < 1e-15);
+        assert_eq!(desc.mu, 0.5);
+        assert_ne!(desc.theta, FdmSchemeDesc::hundsdorfer().theta);
     }
 }

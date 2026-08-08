@@ -8,6 +8,7 @@ mod boundaryconditionschemehelper;
 mod cranknicolsonscheme;
 mod douglasscheme;
 mod expliciteulerscheme;
+mod hundsdorferscheme;
 mod impliciteulerscheme;
 mod scheme;
 #[cfg(test)]
@@ -17,5 +18,6 @@ pub use boundaryconditionschemehelper::BoundaryConditionSchemeHelper;
 pub use cranknicolsonscheme::CrankNicolsonScheme;
 pub use douglasscheme::DouglasScheme;
 pub use expliciteulerscheme::ExplicitEulerScheme;
+pub use hundsdorferscheme::HundsdorferScheme;
 pub use impliciteulerscheme::ImplicitEulerScheme;
 pub use scheme::Scheme;
