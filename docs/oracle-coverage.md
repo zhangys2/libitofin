@@ -40,6 +40,8 @@ credit.
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | G2 two-factor tree | `TwoFactorShortRateTree` / `G2::tree` | `twofactormodel` / `g2` | discount=exp(-(φ+x+y)dt); root φ-only; product size; builds under analytic φ |
+| TreeG2SwaptionEngine | `TreeG2SwaptionEngine` + date snapping | `treeswaptionengine` / `testCachedG2Values` | cached tree Bermudan @ 5e-3; Bermudan≥European analytic |
+| Tree HW Bermudan (cached) | `TreeSwaptionEngine` + `DiscretizedSwaption` snap | `bermudanswaption.cpp` `testCachedValues` | ITM/ATM/OTM @ 1e-4 (non-par coupons) |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
@@ -54,7 +56,6 @@ credit.
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| G2 tree Bermudan | `TreeSwaptionEngine` for G2 + tree half of `testCachedG2Values` (`G2::tree` landed) | P2 |
 | GSR / LMM | `ql/models/shortrate`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |

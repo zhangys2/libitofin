@@ -475,9 +475,9 @@ mod tests {
         assert!(err.message().contains("American"));
     }
 
-    /// Port of `bermudanswaption.cpp` `testCachedG2Values` — FDM half only.
+    /// Port of `bermudanswaption.cpp` `testCachedG2Values` — FDM half.
     ///
-    /// Tree half deferred until `TreeSwaptionEngine` accepts G2 (`G2::tree` landed).
+    /// Tree half lives on [`TreeG2SwaptionEngine`](super::TreeG2SwaptionEngine).
     /// Expecteds are the at-par coupon branch (`Settings::using_at_par_coupons`
     /// defaults to `true`).
     #[test]
