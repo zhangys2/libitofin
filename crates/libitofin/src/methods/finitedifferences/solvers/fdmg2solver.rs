@@ -48,8 +48,8 @@ impl FdmG2Solver {
     /// `FdmG2Solver(model, solverDesc, schemeDesc)` (`fdmg2solver.cpp:33-38`).
     ///
     /// Registers with the model so parameter / curve changes invalidate the
-    /// cached rollback. Prefer [`FdmSchemeDesc::douglas`] until Hundsdorfer is
-    /// ported (QL's default).
+    /// cached rollback. QL's `FdG2SwaptionEngine` defaults to
+    /// [`FdmSchemeDesc::hundsdorfer`].
     pub fn new(
         model: SharedMut<G2>,
         solver_desc: FdmSolverDesc,

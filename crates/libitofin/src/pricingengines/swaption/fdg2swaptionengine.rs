@@ -8,9 +8,6 @@
 //!
 //! ## Divergences from QuantLib
 //!
-//! - Default scheme is [`FdmSchemeDesc::douglas`] (ported). QL defaults to
-//!   Hundsdorfer, which is not ported yet; pass an explicit descriptor when more
-//!   ADI schemes land.
 //! - `vanillaComposite` is hand-rolled (empty dividends + Bermudan / European),
 //!   matching [`FdmBermudanEngine`](crate::pricingengines::vanilla).
 
@@ -52,10 +49,11 @@ pub struct FdG2SwaptionEngine {
 }
 
 impl FdG2SwaptionEngine {
-    /// QL defaults with Douglas in place of Hundsdorfer:
-    /// `tGrid=100`, `xGrid=50`, `yGrid=50`, `dampingSteps=0`, `invEps=1e-5`.
+    /// QL defaults (`fdg2swaptionengine.hpp:40-45`):
+    /// `tGrid=100`, `xGrid=50`, `yGrid=50`, `dampingSteps=0`, `invEps=1e-5`,
+    /// Hundsdorfer.
     pub fn new(model: SharedMut<G2>) -> FdG2SwaptionEngine {
-        Self::with_params(model, 100, 50, 50, 0, 1e-5, FdmSchemeDesc::douglas())
+        Self::with_params(model, 100, 50, 50, 0, 1e-5, FdmSchemeDesc::hundsdorfer())
     }
 
     /// Full constructor (`fdg2swaptionengine.hpp:40-45`).
@@ -323,7 +321,7 @@ mod tests {
             21,
             0,
             1e-4,
-            FdmSchemeDesc::douglas(),
+            FdmSchemeDesc::hundsdorfer(),
         )) as SharedMut<dyn PricingEngine>;
         swaption.base_mut().set_pricing_engine(engine);
         let npv = swaption.npv().unwrap();
@@ -372,14 +370,12 @@ mod tests {
             31,
             0,
             1e-4,
-            FdmSchemeDesc::douglas(),
+            FdmSchemeDesc::hundsdorfer(),
         )) as SharedMut<dyn PricingEngine>);
 
         assert!(analytic > 0.0 && fd > 0.0, "analytic={analytic} fd={fd}");
-        // Douglas on a moderate grid is a first-order ADI slice, not the QL
-        // Hundsdorfer oracle — keep a loose absolute band.
         assert!(
-            (fd - analytic).abs() < 1.5,
+            (fd - analytic).abs() < 1.0,
             "fd={fd} analytic={analytic} diff={}",
             (fd - analytic).abs()
         );
@@ -413,7 +409,7 @@ mod tests {
                 21,
                 0,
                 1e-4,
-                FdmSchemeDesc::douglas(),
+                FdmSchemeDesc::hundsdorfer(),
             )) as SharedMut<dyn PricingEngine>
         };
 
@@ -465,7 +461,7 @@ mod tests {
             5,
             0,
             1e-4,
-            FdmSchemeDesc::douglas(),
+            FdmSchemeDesc::hundsdorfer(),
         )) as SharedMut<dyn PricingEngine>;
         swaption.base_mut().set_pricing_engine(engine);
         let err = swaption.npv().unwrap_err();
