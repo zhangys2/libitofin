@@ -17,11 +17,9 @@
 //!
 //! ## Deferred (omitted, not stubbed)
 //!
-//! - Two-factor lattice (`TwoFactorModel::tree` / `ShortRateTree`) — numerical
-//!   path (tree half of `bermudanswaption.cpp` `testCachedG2Values`).
-//! - FD Bermudan engine:
-//!   [`FdG2SwaptionEngine`](crate::pricingengines::swaption::FdG2SwaptionEngine)
-//!   (FDM half of that oracle is covered).
+//! - Tree Bermudan swaption engine path (`TreeSwaptionEngine` for G2) — tree
+//!   half of `bermudanswaption.cpp` `testCachedG2Values`. The lattice itself
+//!   ([`G2::tree`] / [`TwoFactorShortRateTree`]) is ported.
 //!
 //! The standalone Monte Carlo factor process lives at
 //! [`crate::processes::G2Process`]. [`TwoFactorShortRateDynamics::process`]
@@ -33,11 +31,12 @@
 //!
 //! - C++ multiply-inherits `TwoFactorModel`, `AffineModel`, and
 //!   `TermStructureConsistentModel`. Here `TwoFactorModel` is collapsed (it only
-//!   forwarded an argument count plus deferred `tree`); [`G2`] embeds a
-//!   [`CalibratedModel`] and a [`TermStructureConsistentModel`], implements
-//!   [`AffineModel`] directly (not [`OneFactorAffineModel`]), and registers with
-//!   the term-structure handle like Hull-White. Dynamics use
-//!   [`TwoFactorShortRateDynamics`].
+//!   forwarded an argument count); [`G2`] embeds a [`CalibratedModel`] and a
+//!   [`TermStructureConsistentModel`], implements [`AffineModel`] directly
+//!   (not [`OneFactorAffineModel`]), and registers with the term-structure
+//!   handle like Hull-White. Dynamics use [`TwoFactorShortRateDynamics`];
+//!   `tree()` returns [`TreeLattice2D`]`<`[`TwoFactorShortRateTree`]`>` rather
+//!   than a CRTP `ShortRateTree` subclass.
 //! - C++'s `FittingParameter` subclass becomes a [`ParameterValue`] wrapped by
 //!   [`TermStructureFittingParameter`], matching the ECIR seam.
 
@@ -54,6 +53,9 @@ use crate::math::integrals::segment::SegmentIntegral;
 use crate::math::optimization::constraint::{BoundaryConstraint, PositiveConstraint};
 use crate::math::solver1d::Solver1D;
 use crate::math::solvers1d::brent::Brent;
+use crate::math::timegrid::TimeGrid;
+use crate::methods::lattices::treelattice2d::TreeLattice2D;
+use crate::methods::lattices::trinomialtree::TrinomialTree;
 use crate::models::model::{
     CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel,
     register_with_term_structure,
@@ -62,7 +64,9 @@ use crate::models::parameter::{
     ConstantParameter, NullParameter, Parameter, ParameterValue, TermStructureFittingParameter,
 };
 use crate::models::shortrate::onefactormodel::AffineModel;
-use crate::models::shortrate::twofactormodel::TwoFactorShortRateDynamics;
+use crate::models::shortrate::twofactormodel::{
+    TwoFactorShortRateDynamics, TwoFactorShortRateTree,
+};
 use crate::option::OptionType;
 use crate::patterns::observable::Observer;
 use crate::pricingengines::blackformula::black_formula;
@@ -217,6 +221,32 @@ impl G2 {
             self.rho(),
         )
         .map(shared)
+    }
+
+    /// `TwoFactorModel::tree(const TimeGrid&)` (`twofactormodel.cpp:29-42`):
+    /// product of two factor trinomials under G2 dynamics, wrapped as a
+    /// [`TreeLattice2D`]. Unlike Hull–White, `φ(t)` is the analytic fitting
+    /// law (no numerical state-price fit).
+    ///
+    /// # Errors
+    ///
+    /// Fails if dynamics/OU construction fails, if either trinomial rejects
+    /// the process/grid, or if the product tree / lattice cannot be built.
+    pub fn tree(&self, grid: TimeGrid) -> QlResult<TreeLattice2D<TwoFactorShortRateTree>> {
+        let dynamics = self.dynamics()?;
+        let tree1 = shared(TrinomialTree::new(
+            dynamics.x_process(),
+            grid.clone(),
+            false,
+        )?);
+        let tree2 = shared(TrinomialTree::new(
+            dynamics.y_process(),
+            grid.clone(),
+            false,
+        )?);
+        let dynamics: Shared<dyn TwoFactorShortRateDynamics> = dynamics;
+        let short_rate_tree = TwoFactorShortRateTree::new(tree1, tree2, dynamics, grid.clone())?;
+        TreeLattice2D::new(short_rate_tree, grid)
     }
 
     /// `B(x, t) = (1 − e^{−x t})/x` (`g2.cpp:107-109`).
@@ -918,6 +948,94 @@ mod tests {
         let g = m.borrow();
         for &t in &[0.5, 1.0, 2.0, 5.0] {
             assert!((g.v(t) - ref_v(t, A, SIGMA, B, ETA, RHO)).abs() < 1e-15);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // TwoFactorShortRateTree / G2::tree
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn tree_builds_with_product_layout_and_abs_rho() {
+        use crate::methods::lattices::{Tree, TwoFactorTree};
+        use crate::models::shortrate::TwoFactorShortRateDynamics;
+
+        let m = make_g2(Handle::new(flat(0.03)));
+        let grid = TimeGrid::new(2.0, 8).unwrap();
+        let lattice = m.borrow().tree(grid).unwrap();
+        let impl_tree = lattice.implementation();
+        let product = impl_tree.two_factor_tree();
+
+        assert_eq!(TwoFactorTree::BRANCHES, 9);
+        assert!((product.rho() - RHO.abs()).abs() < 1e-15);
+        assert_eq!(
+            impl_tree.dynamics().correlation(),
+            m.borrow().dynamics().unwrap().correlation()
+        );
+        for i in 0..product.columns() {
+            assert_eq!(
+                product.size(i),
+                product.tree1().size(i) * product.tree2().size(i)
+            );
+        }
+    }
+
+    #[test]
+    fn tree_discount_matches_phi_plus_factors() {
+        use crate::math::comparison::close;
+        use crate::methods::lattices::{Tree, TreeLatticeImpl};
+
+        let m = make_g2(Handle::new(flat(0.04)));
+        let grid = TimeGrid::new(1.5, 6).unwrap();
+        let lattice = m.borrow().tree(grid.clone()).unwrap();
+        let g = m.borrow();
+        let impl_tree = lattice.implementation();
+        let product = impl_tree.two_factor_tree();
+
+        for i in 0..grid.size() - 1 {
+            for index in 0..product.size(i) {
+                let (x, y) = product.state(i, index);
+                let expected = (-(g.phi(grid[i]) + x + y) * grid.dt(i)).exp();
+                let got = impl_tree.discount(i, index);
+                assert!(
+                    (got - expected).abs() < 1e-14,
+                    "discount({i},{index}): {got} != {expected}"
+                );
+            }
+        }
+
+        // Root node is (0,0): discount depends on φ only.
+        let root = (-g.phi(grid[0]) * grid.dt(0)).exp();
+        assert!((impl_tree.discount(0, 0) - root).abs() < 1e-15);
+        let (x0, y0) = product.state(0, 0);
+        assert!(close(x0, 0.0) && close(y0, 0.0));
+    }
+
+    #[test]
+    fn tree_state_price_mass_discounts() {
+        // Analytic φ does not force a HW-style exact curve reprice on the
+        // discrete tree (unlike numerically fitted Hull–White). Pin that the
+        // Arrow-Debreu mass is finite/positive and declines with maturity.
+        // Individual node weights may go slightly negative under large |ρ|
+        // because the Hull–White correlation correction is not a probability
+        // simplex — that matches QuantLib's lattice2d weights.
+        let m = make_g2(Handle::new(flat(0.05)));
+        let grid = TimeGrid::new(2.0, 10).unwrap();
+        let lattice = m.borrow().tree(grid.clone()).unwrap();
+        let mut prev_sum = f64::INFINITY;
+        for i in 0..grid.size() {
+            let sum: Real = lattice.state_prices(i).iter().sum();
+            assert!(
+                sum > 0.0 && sum.is_finite(),
+                "bad state-price mass at {i}: {sum}"
+            );
+            if i > 0 {
+                assert!(
+                    sum < prev_sum,
+                    "state-price mass should decline: slice {i} {sum} >= {prev_sum}"
+                );
+            }
+            prev_sum = sum;
         }
     }
 }
