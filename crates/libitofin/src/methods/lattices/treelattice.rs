@@ -21,6 +21,8 @@
 //! implements the object-safe [`Lattice`] trait (so an asset can hold a
 //! `Shared<dyn Lattice>`), and adds `grid`/`underlying`. It [`Deref`]s to the
 //! base so state prices and rollback are reachable on the concrete 1D type.
+//! The two-factor counterpart is
+//! [`TreeLattice2D`](crate::methods::lattices::TreeLattice2D).
 //!
 //! Divergences from QuantLib, all deliberate:
 //! - Every driver returns [`QlResult`] (D4/D10) rather than `void`/`Real`.
