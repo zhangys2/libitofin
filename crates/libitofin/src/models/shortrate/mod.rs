@@ -18,5 +18,5 @@ pub use extendedcoxingersollross::ExtendedCoxIngersollRoss;
 pub use g2::{G2, G2Dynamics};
 pub use hullwhite::{HullWhite, convexity_bias};
 pub use onefactormodel::{AffineModel, OneFactorAffineModel, ShortRateDynamics, ShortRateTree};
-pub use twofactormodel::TwoFactorShortRateDynamics;
+pub use twofactormodel::{TwoFactorShortRateDynamics, TwoFactorShortRateTree};
 pub use vasicek::Vasicek;

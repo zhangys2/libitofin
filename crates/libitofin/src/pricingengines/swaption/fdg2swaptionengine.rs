@@ -477,7 +477,7 @@ mod tests {
 
     /// Port of `bermudanswaption.cpp` `testCachedG2Values` — FDM half only.
     ///
-    /// Tree half deferred until `TwoFactorModel::tree` / `TreeLattice2D` land.
+    /// Tree half deferred until `TreeSwaptionEngine` accepts G2 (`G2::tree` landed).
     /// Expecteds are the at-par coupon branch (`Settings::using_at_par_coupons`
     /// defaults to `true`).
     #[test]

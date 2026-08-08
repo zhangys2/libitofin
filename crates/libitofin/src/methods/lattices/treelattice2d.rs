@@ -153,8 +153,9 @@ impl Tree for TwoFactorTree {
 
 /// Two-dimensional tree-based lattice (`lattice2d.hpp:48`): a [`TreeLattice`]
 /// whose state grid is the product of two factor trees. Concrete engines hold
-/// this as a `Shared<dyn Lattice>`; `TwoFactorModel::ShortRateTree` will supply
-/// the [`TreeLatticeImpl`] discount surface in a follow-up.
+/// this as a `Shared<dyn Lattice>`;
+/// [`TwoFactorShortRateTree`](crate::models::shortrate::TwoFactorShortRateTree)
+/// supplies the [`TreeLatticeImpl`] discount surface.
 pub struct TreeLattice2D<I: TreeLatticeImpl> {
     base: TreeLattice<I>,
 }
