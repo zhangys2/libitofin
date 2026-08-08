@@ -38,6 +38,7 @@ credit.
 | FdmAffineModelSwapInnerValue (G2) | `FdmAffineModelSwapInnerValue` | `fdmaffinemodelswapinnervalue` | ATM≈0; deep ITM payer>0; avg=inner; setVariable reuse |
 | FdG2SwaptionEngine | `FdG2SwaptionEngine` (Hundsdorfer default) | `fdg2swaptionengine` / `testCachedG2Values` | ITM European>0; ≈ analytic G2; Bermudan≥European; cached FDM @ 5e-3 |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
+| TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
@@ -52,7 +53,7 @@ credit.
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| G2 tree Bermudan | `TwoFactorModel::tree` / `TreeLattice2D` + tree half of `testCachedG2Values` | P2 |
+| G2 tree Bermudan | `TwoFactorModel::ShortRateTree` / `G2::tree` + tree half of `testCachedG2Values` (`TreeLattice2D` landed) | P2 |
 | GSR / LMM | `ql/models/shortrate`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |

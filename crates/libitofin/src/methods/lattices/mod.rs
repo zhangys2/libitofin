@@ -3,17 +3,20 @@
 //! Port of `ql/methods/lattices/`: recombining trees and the tree-based
 //! lattice engines. [`Tree`] is the single-factor tree contract;
 //! [`TrinomialTree`] is its recombining trinomial realisation;
-//! [`Lattice`](lattice::Lattice) is the rollback interface discretized
-//! assets price against.
+//! [`TwoFactorTree`] / [`TreeLattice2D`] are the two-factor product tree and
+//! lattice wrapper; [`Lattice`](lattice::Lattice) is the rollback interface
+//! discretized assets price against.
 
 pub mod binomialtree;
 pub mod lattice;
 pub mod tree;
 pub mod treelattice;
+pub mod treelattice2d;
 pub mod trinomialtree;
 
 pub use binomialtree::CoxRossRubinstein;
 pub use lattice::Lattice;
 pub use tree::Tree;
 pub use treelattice::{TreeLattice, TreeLattice1D, TreeLatticeImpl};
+pub use treelattice2d::{TreeLattice2D, TwoFactorTree};
 pub use trinomialtree::TrinomialTree;
