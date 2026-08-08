@@ -416,16 +416,12 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // DIAGNOSTIC (NOT a merge gate): QuantLib's only tree-swaption test,
-    // bermudanswaption.cpp:112 testCachedValues. HW(0.048696, 0.0058904),
-    // a 1y-into-5y payer Bermudan on a nominal of 1000, exercisable on each
-    // fixed accrual-start date, TreeSwaptionEngine(model, 50). Cached ITM/
-    // ATM/OTM = 42.2402 / 12.9032 / 2.49758 (the non-par / indexed arm;
-    // usingAtParCoupons = false). Reproduced to a LOOSE band only: the exact
-    // 1e-4 gate needs the deferred date-snapping (which shifts the semiannual
-    // floating resets that fall within a week of the annual exercise dates)
-    // plus near-bit-exact tree detail. A miss here is not a bug (see the
-    // discretizedswaption.rs deferral note); the deltas are printed.
+    // HARD GATE: bermudanswaption.cpp:112 testCachedValues.
+    // HW(0.048696, 0.0058904), 1y-into-5y payer Bermudan, nominal 1000,
+    // TreeSwaptionEngine(model, 50). Cached ITM/ATM/OTM =
+    // 42.2402 / 12.9032 / 2.49758 (non-par / indexed arm;
+    // usingAtParCoupons = false). Date snapping in DiscretizedSwaption unlocks
+    // the QuantLib 1e-4 absolute tolerance.
     // ------------------------------------------------------------------
 
     const BERM_A: Real = 0.048696;
@@ -540,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_bermudan_diagnostic() {
+    fn cached_bermudan_values() {
         let settings = shared(Settings::<Date>::new());
         settings.set_evaluation_date(Date::new(15, Month::February, 2002));
         settings.set_using_at_par_coupons(false);
@@ -571,17 +567,15 @@ mod tests {
             ("ATM", atm_rate, 12.9032),
             ("OTM", 1.2 * atm_rate, 2.49758),
         ];
+        let tol = 1.0e-4;
         for (label, rate, cached) in cases {
             let swap = berm_swap(&settings, &calendar, settlement, &curve, rate);
             let model = HullWhite::new(curve.clone(), BERM_A, BERM_SIGMA).unwrap();
             let npv = berm_swaption_npv(swap, exercise_dates.clone(), model, &settings);
-            let rel = (npv - cached).abs() / cached;
-            eprintln!(
-                "[cached-bermudan diagnostic] {label}: tree {npv:.6} vs cached {cached} (rel {rel:.3e})"
-            );
             assert!(
-                rel < 1.0e-2,
-                "{label}: tree {npv} vs cached {cached} (rel {rel}) outside the loose diagnostic band"
+                (npv - cached).abs() <= tol,
+                "{label}: tree {npv} vs cached {cached}, |diff|={}",
+                (npv - cached).abs()
             );
         }
     }

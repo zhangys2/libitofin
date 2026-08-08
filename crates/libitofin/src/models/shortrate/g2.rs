@@ -15,12 +15,6 @@
 //! (`A`, `B`, `V`, `discountBond`, `discountBondOption`), the `φ(t)` fitting
 //! law, and [`G2Dynamics`] / [`G2::dynamics`].
 //!
-//! ## Deferred (omitted, not stubbed)
-//!
-//! - Tree Bermudan swaption engine path (`TreeSwaptionEngine` for G2) — tree
-//!   half of `bermudanswaption.cpp` `testCachedG2Values`. The lattice itself
-//!   ([`G2::tree`] / [`TwoFactorShortRateTree`]) is ported.
-//!
 //! The standalone Monte Carlo factor process lives at
 //! [`crate::processes::G2Process`]. [`TwoFactorShortRateDynamics::process`]
 //! follows QuantLib and returns a

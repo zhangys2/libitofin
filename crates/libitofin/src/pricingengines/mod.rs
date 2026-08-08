@@ -19,7 +19,7 @@ pub use swap::DiscountingSwapEngine;
 pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,
     BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, FdG2SwaptionEngine, G2SwaptionEngine,
-    JamshidianSwaptionEngine,
+    JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
 pub use vanilla::AnalyticEuropeanEngine;
 
