@@ -139,7 +139,7 @@ impl PricingEngine for DiscountingBondEngine {
 mod tests {
     use super::*;
     use crate::instrument::Instrument;
-    use crate::instruments::FixedRateBond;
+    use crate::instruments::{FixedRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
@@ -159,6 +159,56 @@ mod tests {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
         settings
+    }
+
+    /// `bonds.cpp` testCachedZero (`:751`): three plain zero-coupon government
+    /// bonds over a flat 3% Actual360 curve reproduce the cached clean prices
+    /// to 1e-6.
+    #[test]
+    fn cached_zero_bonds_reproduce_the_c_clean_prices() {
+        let settings = settings_today();
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today(),
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let engine = shared_mut(DiscountingBondEngine::new(
+            discount_curve,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+
+        let cases = [
+            (Date::new(30, Month::November, 2008), 88.551726),
+            (Date::new(30, Month::November, 2007), 91.278949),
+            (Date::new(30, Month::November, 2006), 94.098006),
+        ];
+        let tol = 1.0e-6;
+        for (maturity, cached) in cases {
+            let mut bond = ZeroCouponBond::new(
+                1,
+                UnitedStates::new(Market::GovernmentBond),
+                1_000_000.0,
+                maturity,
+                BusinessDayConvention::ModifiedFollowing,
+                100.0,
+                Some(Date::new(30, Month::November, 2004)),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            bond.bond_mut()
+                .base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            let price = bond.bond_mut().clean_price().unwrap();
+            assert!(
+                (price - cached).abs() <= tol,
+                "maturity {maturity}: clean {price} vs cached {cached} (error {})",
+                (price - cached).abs()
+            );
+        }
     }
 
     /// `bonds.cpp` testCachedFixed, bond1 (`:832`): a fixed-coupon government
