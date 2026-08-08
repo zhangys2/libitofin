@@ -36,7 +36,7 @@ credit.
 | FdmSimpleProcess1dMesher | `fdm_simple_process_1d_mesher` | `fdmsimpleprocess1dmesher` | OU endpoints = quantile evolve; avg = mean of per-t grids; FdG2 layout smoke |
 | FdmAffineModelTermStructure | `FdmAffineModelTermStructure` | `fdmaffinemodeltermstructure` | G2 origin≡curve; factors≡discountBond; setVariable notifies |
 | FdmAffineModelSwapInnerValue (G2) | `FdmAffineModelSwapInnerValue` | `fdmaffinemodelswapinnervalue` | ATM≈0; deep ITM payer>0; avg=inner; setVariable reuse |
-| FdG2SwaptionEngine | `FdG2SwaptionEngine` (Hundsdorfer default) | `fdg2swaptionengine` | ITM European>0; ≈ analytic G2 @ 1.0; Bermudan≥European |
+| FdG2SwaptionEngine | `FdG2SwaptionEngine` (Hundsdorfer default) | `fdg2swaptionengine` / `testCachedG2Values` | ITM European>0; ≈ analytic G2; Bermudan≥European; cached FDM @ 5e-3 |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | Zero / floating bonds | `ZeroCouponBond`, `FloatingRateBond` | bonds suite (extend) | Smoke done; cached oracles follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
@@ -52,7 +52,7 @@ credit.
 
 | Domain | QuantLib location | Priority |
 |--------|-------------------|----------|
-| G2 tree / cached FdG2 oracle | `TwoFactorModel::tree`; `bermudanswaption.cpp` `testCachedG2Values` | P2 |
+| G2 tree Bermudan | `TwoFactorModel::tree` / `TreeLattice2D` + tree half of `testCachedG2Values` | P2 |
 | GSR / LMM | `ql/models/shortrate`, `ql/models/marketmodels` | P2 |
 | Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
 | Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |

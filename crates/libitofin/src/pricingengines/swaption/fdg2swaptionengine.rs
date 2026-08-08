@@ -215,10 +215,14 @@ mod tests {
     use crate::exercise::{BermudanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::indexes::IborIndex;
+    use crate::indexes::InterestRateIndex;
     use crate::indexes::ibor::Euribor;
     use crate::instrument::Instrument;
-    use crate::instruments::{SettlementMethod, SettlementType, SwapType, Swaption, VanillaSwap};
+    use crate::instruments::{
+        FixedVsFloatingSwap, SettlementMethod, SettlementType, SwapType, Swaption, VanillaSwap,
+    };
     use crate::interestrate::Compounding;
+    use crate::pricingengines::swap::DiscountingSwapEngine;
     use crate::pricingengines::swaption::G2SwaptionEngine;
     use crate::settings::Settings;
     use crate::shared::{shared, shared_mut};
@@ -229,8 +233,11 @@ mod tests {
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
     use crate::time::schedule::{MakeSchedule, Schedule};
+    use crate::time::timeunit::TimeUnit;
 
     const NOMINAL: Real = 100.0;
 
@@ -466,5 +473,147 @@ mod tests {
         swaption.base_mut().set_pricing_engine(engine);
         let err = swaption.npv().unwrap_err();
         assert!(err.message().contains("American"));
+    }
+
+    /// Port of `bermudanswaption.cpp` `testCachedG2Values` — FDM half only.
+    ///
+    /// Tree half deferred until `TwoFactorModel::tree` / `TreeLattice2D` land.
+    /// Expecteds are the at-par coupon branch (`Settings::using_at_par_coupons`
+    /// defaults to `true`).
+    #[test]
+    fn cached_g2_fdm_bermudan_values() {
+        let today = Date::new(15, Month::September, 2016);
+        let settlement = Date::new(19, Month::September, 2016);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        assert!(
+            settings.using_at_par_coupons(),
+            "oracle expects the at-par coupon branch"
+        );
+
+        let calendar = Target::new();
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.04875825,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let index: Shared<IborIndex> =
+            shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+
+        let make_swap = |fixed_rate: Real| -> SharedMut<FixedVsFloatingSwap> {
+            let start = calendar.advance_by_period(
+                settlement,
+                Period::new(1, TimeUnit::Years),
+                BusinessDayConvention::Following,
+                false,
+            );
+            let maturity = calendar.advance_by_period(
+                start,
+                Period::new(5, TimeUnit::Years),
+                BusinessDayConvention::Following,
+                false,
+            );
+            let fixed_schedule = MakeSchedule::new()
+                .from(start)
+                .to(maturity)
+                .with_frequency(Frequency::Annual)
+                .with_calendar(calendar.clone())
+                .with_convention(BusinessDayConvention::Unadjusted)
+                .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+                .forwards()
+                .end_of_month(false)
+                .build();
+            let float_schedule = MakeSchedule::new()
+                .from(start)
+                .to(maturity)
+                .with_frequency(Frequency::Semiannual)
+                .with_calendar(calendar.clone())
+                .with_convention(BusinessDayConvention::ModifiedFollowing)
+                .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
+                .forwards()
+                .end_of_month(false)
+                .build();
+            let floating_dc = index.day_counter().clone();
+            shared_mut(
+                VanillaSwap::new(
+                    SwapType::Payer,
+                    1000.0,
+                    fixed_schedule,
+                    fixed_rate,
+                    Thirty360::with_convention(Convention::BondBasis),
+                    float_schedule,
+                    Shared::clone(&index),
+                    0.0,
+                    floating_dc,
+                    None,
+                    Shared::clone(&settings),
+                )
+                .unwrap()
+                .into_fixed_vs_floating(),
+            )
+        };
+
+        let discounting = shared_mut(DiscountingSwapEngine::new(
+            curve.clone(),
+            None,
+            None,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        let atm_swap = make_swap(0.0);
+        atm_swap
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&discounting));
+        let atm_rate = atm_swap.borrow_mut().fair_rate().unwrap();
+
+        let moneyness = [0.5, 0.75, 1.0, 1.25, 1.5];
+        let expected = [103.227, 54.6502, 20.0469, 5.26924, 1.07093];
+        let tol = 0.005;
+
+        let g2 = G2::new(curve, 0.1, 0.01, 0.2, 0.013, -0.5).unwrap();
+        let engine = shared_mut(FdG2SwaptionEngine::with_params(
+            g2,
+            50,
+            75,
+            75,
+            0,
+            1e-3,
+            FdmSchemeDesc::hundsdorfer(),
+        )) as SharedMut<dyn PricingEngine>;
+
+        for (i, &s) in moneyness.iter().enumerate() {
+            let swap = make_swap(s * atm_rate);
+            let exercise_dates: Vec<Date> = swap
+                .borrow()
+                .fixed_leg()
+                .iter()
+                .map(|flow| {
+                    flow.as_coupon()
+                        .expect("fixed leg carries coupons")
+                        .accrual_start_date()
+                })
+                .collect();
+            let mut swaption = Swaption::new(
+                swap,
+                shared(BermudanExercise::new(exercise_dates, false).unwrap())
+                    as Shared<dyn Exercise>,
+                SettlementType::Physical,
+                SettlementMethod::PhysicalOTC,
+                Shared::clone(&settings),
+            );
+            swaption
+                .base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            let got = swaption.npv().unwrap();
+            assert!(
+                (got - expected[i]).abs() <= tol,
+                "moneyness {s}: got {got}, expected {}, |diff|={}",
+                expected[i],
+                (got - expected[i]).abs()
+            );
+        }
     }
 }

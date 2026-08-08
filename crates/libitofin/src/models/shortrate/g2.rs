@@ -18,10 +18,10 @@
 //! ## Deferred (omitted, not stubbed)
 //!
 //! - Two-factor lattice (`TwoFactorModel::tree` / `ShortRateTree`) — numerical
-//!   path.
-//! - `FdG2SwaptionEngine` / Bermudan FD pricing (`bermudanswaption.cpp`
-//!   `testCachedG2Values`). The generator lives at
-//!   [`crate::methods::finitedifferences::operators::FdmG2Op`].
+//!   path (tree half of `bermudanswaption.cpp` `testCachedG2Values`).
+//! - FD Bermudan engine:
+//!   [`FdG2SwaptionEngine`](crate::pricingengines::swaption::FdG2SwaptionEngine)
+//!   (FDM half of that oracle is covered).
 //!
 //! The standalone Monte Carlo factor process lives at
 //! [`crate::processes::G2Process`]. [`TwoFactorShortRateDynamics::process`]
