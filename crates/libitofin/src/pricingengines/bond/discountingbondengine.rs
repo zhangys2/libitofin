@@ -138,12 +138,15 @@ impl PricingEngine for DiscountingBondEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::indexes::IborIndex;
+    use crate::indexes::USDLibor;
     use crate::instrument::Instrument;
-    use crate::instruments::{FixedRateBond, ZeroCouponBond};
+    use crate::instruments::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::time::businessdayconvention::BusinessDayConvention;
+    use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
@@ -209,6 +212,81 @@ mod tests {
                 (price - cached).abs()
             );
         }
+    }
+
+    /// `bonds.cpp` testCachedFloating, bond1 (`:928`): a plain USDLibor6M
+    /// floater over flat 2.5% Actual360 (at-par coupons) reproduces the cached
+    /// clean price 99.874646 to 1e-6.
+    #[test]
+    fn cached_floating_bond1_reproduces_the_c_clean_price() {
+        let settings = settings_today();
+        assert!(
+            settings.using_at_par_coupons(),
+            "oracle expects the at-par coupon branch"
+        );
+
+        let risk_free: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            today(),
+            0.025,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+
+        let index: Shared<IborIndex> = shared(USDLibor::six_months(
+            risk_free.clone(),
+            Shared::clone(&settings),
+        ));
+
+        let schedule = MakeSchedule::new()
+            .from(Date::new(30, Month::November, 2004))
+            .to(Date::new(30, Month::November, 2008))
+            .with_frequency(Frequency::Semiannual)
+            .with_calendar(UnitedStates::new(Market::GovernmentBond))
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
+            .backwards()
+            .end_of_month(false)
+            .build();
+
+        let mut bond = FloatingRateBond::new(
+            1,
+            1_000_000.0,
+            schedule,
+            index,
+            ActualActual::with_convention(Convention::ISMA),
+            BusinessDayConvention::ModifiedFollowing,
+            Some(1),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            100.0,
+            Some(Date::new(30, Month::November, 2004)),
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Following,
+            false,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        let engine = shared_mut(DiscountingBondEngine::new(
+            risk_free,
+            None,
+            Shared::clone(&settings),
+        ));
+        bond.bond_mut()
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+        let price = bond.bond_mut().clean_price().unwrap();
+        assert!(
+            (price - 99.874646).abs() <= 1.0e-6,
+            "clean price {price} vs cached 99.874646 (error {})",
+            (price - 99.874646).abs()
+        );
     }
 
     /// `bonds.cpp` testCachedFixed, bond1 (`:832`): a fixed-coupon government
