@@ -47,6 +47,7 @@ credit.
 | Brazilian NTN-F (Andima) | `BondFunctions` yield clean/dirty + `Business252` | `bonds.cpp` `testBrazilianCached` | six maturities @ 1e-4 |
 | Bond price/yield consistency | `BondFunctions` yield clean/dirty ↔ `yield_rate` | `bonds.cpp` `testYield` | clean/dirty round-trip @ 1e-7 |
 | SA R2048 (date-vector schedule) | `Schedule::with_metadata` + yield dirty | `bonds.cpp` `testBondFromScheduleWithDateVector` | dirty 95.75706 @ 1e-5 |
+| Bond price/ATM rate consistency | `BondFunctions::atm_rate` + `BondPrice` | `bonds.cpp` `testAtmRate` | clean/dirty → coupon @ 1e-7 |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
