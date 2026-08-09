@@ -11,8 +11,9 @@
 //! and off month-end, `Months`/`Years` roll `ModifiedFollowing` and on month-end
 //! (`euriborConvention` / `euriborEOM` in `euribor.cpp`).
 //!
-//! Deferred (separate tickets, per #301): `Euribor365` (the Actual/365 variant),
-//! the daily-tenor `DailyTenor` constructors, and the rest of the Libor family.
+//! Deferred (separate tickets, per #301): `Euribor365` (the Actual/365 variant)
+//! and the daily-tenor `DailyTenor` constructors. Non-EUR Libor lives in
+//! [`Libor`](super::Libor) / [`USDLibor`](super::USDLibor).
 
 use crate::currency::Currency;
 use crate::errors::QlResult;

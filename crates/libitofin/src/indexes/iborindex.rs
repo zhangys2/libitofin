@@ -40,11 +40,19 @@ use crate::{currency::Currency, require};
 /// convention the maturity calculation needs. Built with a possibly empty curve
 /// handle, exactly as the C++ default `Handle<YieldTermStructure> h = {}`
 /// allows; a fixing forecast on an empty handle is an error, not a panic (D4).
+///
+/// Libor-family indexes additionally carry a financial-centre calendar and a
+/// joint (UK Exchange ∪ centre) calendar that override
+/// [`value_date`](InterestRateIndex::value_date) /
+/// [`maturity_date`](InterestRateIndex::maturity_date)
+/// (`ql/indexes/ibor/libor.cpp`).
 pub struct IborIndex {
     base: InterestRateIndexBase,
     convention: BusinessDayConvention,
     end_of_month: bool,
     term_structure: Handle<dyn YieldTermStructure>,
+    financial_center_calendar: Option<Calendar>,
+    joint_calendar: Option<Calendar>,
 }
 
 impl IborIndex {
@@ -67,6 +75,71 @@ impl IborIndex {
         forwarding: Handle<dyn YieldTermStructure>,
         settings: Shared<Settings<Date>>,
     ) -> IborIndex {
+        Self::new_inner(
+            family_name,
+            tenor,
+            settlement_days,
+            currency,
+            fixing_calendar,
+            convention,
+            end_of_month,
+            day_counter,
+            forwarding,
+            settings,
+            None,
+            None,
+        )
+    }
+
+    /// Libor-family constructor: same as [`new`](Self::new) plus the financial-
+    /// centre and joint calendars that drive Libor's value/maturity dates
+    /// (`libor.cpp:59-79`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_joint_calendars(
+        family_name: String,
+        tenor: Period,
+        settlement_days: Natural,
+        currency: Currency,
+        fixing_calendar: Calendar,
+        financial_center_calendar: Calendar,
+        joint_calendar: Calendar,
+        convention: BusinessDayConvention,
+        end_of_month: bool,
+        day_counter: DayCounter,
+        forwarding: Handle<dyn YieldTermStructure>,
+        settings: Shared<Settings<Date>>,
+    ) -> IborIndex {
+        Self::new_inner(
+            family_name,
+            tenor,
+            settlement_days,
+            currency,
+            fixing_calendar,
+            convention,
+            end_of_month,
+            day_counter,
+            forwarding,
+            settings,
+            Some(financial_center_calendar),
+            Some(joint_calendar),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        family_name: String,
+        tenor: Period,
+        settlement_days: Natural,
+        currency: Currency,
+        fixing_calendar: Calendar,
+        convention: BusinessDayConvention,
+        end_of_month: bool,
+        day_counter: DayCounter,
+        forwarding: Handle<dyn YieldTermStructure>,
+        settings: Shared<Settings<Date>>,
+        financial_center_calendar: Option<Calendar>,
+        joint_calendar: Option<Calendar>,
+    ) -> IborIndex {
         let base = InterestRateIndexBase::new(
             family_name,
             tenor,
@@ -82,7 +155,20 @@ impl IborIndex {
             convention,
             end_of_month,
             term_structure: forwarding,
+            financial_center_calendar,
+            joint_calendar,
         }
+    }
+
+    /// The Libor financial-centre calendar, when this index was built as a
+    /// Libor-family joint-calendar index.
+    pub fn financial_center_calendar(&self) -> Option<&Calendar> {
+        self.financial_center_calendar.as_ref()
+    }
+
+    /// The Libor joint calendar (UK Exchange ∪ financial centre), when set.
+    pub fn joint_calendar(&self) -> Option<&Calendar> {
+        self.joint_calendar.as_ref()
     }
 
     /// The convention applied when rolling the value date to maturity.
@@ -110,18 +196,37 @@ impl IborIndex {
     /// [`Settings`], so it shares the original's fixing history (keyed on name)
     /// and evaluation date.
     pub fn clone_with(&self, forwarding: Handle<dyn YieldTermStructure>) -> IborIndex {
-        IborIndex::new(
-            self.family_name().to_string(),
-            self.tenor(),
-            self.fixing_days(),
-            self.currency().clone(),
-            self.fixing_calendar(),
-            self.convention,
-            self.end_of_month,
-            self.day_counter().clone(),
-            forwarding,
-            self.base.settings().clone(),
-        )
+        match (
+            self.financial_center_calendar.clone(),
+            self.joint_calendar.clone(),
+        ) {
+            (Some(financial), Some(joint)) => IborIndex::new_with_joint_calendars(
+                self.family_name().to_string(),
+                self.tenor(),
+                self.fixing_days(),
+                self.currency().clone(),
+                self.fixing_calendar(),
+                financial,
+                joint,
+                self.convention,
+                self.end_of_month,
+                self.day_counter().clone(),
+                forwarding,
+                self.base.settings().clone(),
+            ),
+            _ => IborIndex::new(
+                self.family_name().to_string(),
+                self.tenor(),
+                self.fixing_days(),
+                self.currency().clone(),
+                self.fixing_calendar(),
+                self.convention,
+                self.end_of_month,
+                self.day_counter().clone(),
+                forwarding,
+                self.base.settings().clone(),
+            ),
+        }
     }
 
     /// The simple forward rate over `[d1, d2]` with year fraction `t`, read off
@@ -151,13 +256,43 @@ impl InterestRateIndex for IborIndex {
         &self.base
     }
 
+    /// Libor: joint-calendar advance (`libor.cpp:103-114`); otherwise the
+    /// fixing-calendar advance.
     fn maturity_date(&self, value_date: Date) -> QlResult<Date> {
-        Ok(self.fixing_calendar().advance_by_period(
-            value_date,
-            self.tenor(),
-            self.convention,
-            self.end_of_month,
-        ))
+        let calendar = self
+            .joint_calendar
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| self.fixing_calendar());
+        Ok(
+            calendar.advance_by_period(
+                value_date,
+                self.tenor(),
+                self.convention,
+                self.end_of_month,
+            ),
+        )
+    }
+
+    /// Libor: London advance then joint adjust (`libor.cpp:82-96`); otherwise
+    /// the default fixing-calendar advance.
+    fn value_date(&self, fixing_date: Date) -> QlResult<Date> {
+        require!(
+            self.is_valid_fixing_date(fixing_date),
+            "{fixing_date:?} is not a valid fixing date"
+        );
+        let d = self.fixing_calendar().advance(
+            fixing_date,
+            self.fixing_days() as crate::types::Integer,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        if let Some(joint) = &self.joint_calendar {
+            Ok(joint.adjust(d, BusinessDayConvention::Following))
+        } else {
+            Ok(d)
+        }
     }
 
     fn forecast_fixing(&self, fixing_date: Date) -> QlResult<Rate> {

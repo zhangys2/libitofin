@@ -43,7 +43,7 @@ credit.
 | TreeG2SwaptionEngine | `TreeG2SwaptionEngine` + date snapping | `treeswaptionengine` / `testCachedG2Values` | cached tree Bermudan @ 5e-3; Bermudan≥European analytic |
 | Tree HW Bermudan (cached) | `TreeSwaptionEngine` + `DiscretizedSwaption` snap | `bermudanswaption.cpp` `testCachedValues` | ITM/ATM/OTM @ 1e-4 (non-par coupons) |
 | Zero-coupon bonds (cached) | `ZeroCouponBond` + `DiscountingBondEngine` | `bonds.cpp` `testCachedZero` | three maturities @ 1e-6 |
-| Floating bonds | `FloatingRateBond` | `bonds.cpp` `testCachedFloating` | Smoke/ctor done; cached needs USDLibor |
+| Floating bonds (cached bond1) | `FloatingRateBond` + `USDLibor` / `Libor` | `bonds.cpp` `testCachedFloating` bond1 | plain USDLibor6M @ 1e-6 (99.874646); bond2–4 follow-up |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |

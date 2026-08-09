@@ -162,20 +162,29 @@ impl IborCoupon {
     /// the 3-arg forecast reads (`IborCouponPricer::initializeCachedData`,
     /// `couponpricer.cpp:56-88`).
     ///
-    /// `fixingValueDate` moves the fixing date forward the index's fixing days
-    /// (identical to [`value_date`](InterestRateIndex::value_date)) and
-    /// `fixingMaturityDate` is the index maturity off it. Under the par
-    /// convention a non-in-arrears coupon rolls `fixingEndDate` off its own
-    /// accrual end - back the *coupon's* fixing days to the next fixing date,
-    /// then forward the *index's* fixing days, floored at `fixingValueDate + 1`
-    /// so the estimation period spans at least a day; an indexed coupon (or any
+    /// `fixingValueDate` advances the fixing date on the **fixing calendar**
+    /// by the index's fixing days (`couponpricer.cpp:62-63`) — deliberately
+    /// *not* [`value_date`](InterestRateIndex::value_date), which for Libor
+    /// additionally joint-adjusts. `fixingMaturityDate` is then
+    /// [`maturity_date`](InterestRateIndex::maturity_date) off that start
+    /// (Libor uses the joint calendar there). Under the par convention a
+    /// non-in-arrears coupon rolls `fixingEndDate` off its own accrual end -
+    /// back the *coupon's* fixing days to the next fixing date, then forward
+    /// the *index's* fixing days, floored at `fixingValueDate + 1` so the
+    /// estimation period spans at least a day; an indexed coupon (or any
     /// in-arrears coupon) uses `fixingMaturityDate`. The convention is read
     /// explicitly from [`Settings`](crate::settings::Settings::using_at_par_coupons),
     /// not a global singleton.
     fn forecast_fixing_dates(&self) -> QlResult<(Date, Date, Time)> {
         let index = &self.ibor_index;
         let calendar = index.fixing_calendar();
-        let fixing_value_date = index.value_date(self.fixing_date())?;
+        let fixing_value_date = calendar.advance(
+            self.fixing_date(),
+            index.fixing_days() as Integer,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
         let fixing_maturity_date = index.maturity_date(fixing_value_date)?;
 
         let using_at_par = index.settings().using_at_par_coupons();
