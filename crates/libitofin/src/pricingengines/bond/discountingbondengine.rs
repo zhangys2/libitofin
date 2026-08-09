@@ -141,21 +141,25 @@ mod tests {
     use crate::indexes::index::Index;
     use crate::indexes::{IborIndex, USDLibor};
     use crate::instrument::Instrument;
-    use crate::instruments::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
+    use crate::instruments::{BondPrice, FixedRateBond, FloatingRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
+    use crate::pricingengines::BondFunctions;
+    use crate::quotes::{Quote, SimpleQuote};
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendars::nullcalendar::NullCalendar;
+    use crate::time::calendars::target::Target;
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
+    use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
     use crate::time::schedule::{MakeSchedule, Schedule};
     use crate::time::timeunit::TimeUnit;
-    use crate::types::Spread;
+    use crate::types::{Integer, Spread};
 
     fn today() -> Date {
         Date::new(22, Month::November, 2004)
@@ -499,6 +503,171 @@ mod tests {
             "bond3 stub schedule: clean {price3} vs cached 100.382794 (error {})",
             (price3 - 100.382794).abs()
         );
+    }
+
+    /// `bonds.cpp` testTheoretical (`:387`): engine clean/dirty prices on a
+    /// quote-backed flat Continuous curve match Continuous yield prices to
+    /// 1e-7, and `yield_rate` recovers the quoted rate. Pins a TARGET-adjusted
+    /// evaluation date in place of C++ `Date::todaysDate()`.
+    #[test]
+    fn theoretical_bond_prices_match_continuous_yield_prices() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let max_evaluations = 100usize;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Actual360::new();
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+        let yields = [0.03, 0.04, 0.05, 0.06, 0.07];
+
+        for &length in &lengths {
+            for &coupon in &coupons {
+                for &frequency in &frequencies {
+                    let dated = today;
+                    let issue = dated;
+                    let maturity = calendar.advance(
+                        issue,
+                        length,
+                        TimeUnit::Years,
+                        BusinessDayConvention::Following,
+                        false,
+                    );
+                    let rate = shared(SimpleQuote::new(0.0));
+                    let discount_curve: Handle<dyn YieldTermStructure> =
+                        Handle::new(shared(FlatForward::new(
+                            today,
+                            Handle::new(Shared::clone(&rate) as Shared<dyn Quote>),
+                            bond_day_count.clone(),
+                            Compounding::Continuous,
+                            Frequency::Annual,
+                        )) as Shared<dyn YieldTermStructure>);
+                    let tenor = Period::try_from(frequency).unwrap();
+                    let schedule = Schedule::new(
+                        dated,
+                        maturity,
+                        tenor,
+                        calendar.clone(),
+                        BusinessDayConvention::Unadjusted,
+                        BusinessDayConvention::Unadjusted,
+                        DateGeneration::Backward,
+                        false,
+                        Date::null(),
+                        Date::null(),
+                    );
+                    let mut bond = FixedRateBond::new(
+                        settlement_days,
+                        face_amount,
+                        schedule,
+                        vec![coupon],
+                        bond_day_count.clone(),
+                        BusinessDayConvention::ModifiedFollowing,
+                        100.0,
+                        Some(issue),
+                        None,
+                        None,
+                        NullCalendar::new(),
+                        BusinessDayConvention::Unadjusted,
+                        false,
+                        None,
+                        Shared::clone(&settings),
+                    )
+                    .unwrap();
+                    let engine = shared_mut(DiscountingBondEngine::new(
+                        discount_curve,
+                        None,
+                        Shared::clone(&settings),
+                    )) as SharedMut<dyn PricingEngine>;
+                    bond.bond_mut()
+                        .base_mut()
+                        .set_pricing_engine(SharedMut::clone(&engine));
+
+                    for &m in &yields {
+                        rate.set_value(m);
+
+                        let price = BondFunctions::clean_price_from_yield(
+                            bond.bond(),
+                            m,
+                            bond_day_count.clone(),
+                            Compounding::Continuous,
+                            frequency,
+                            None,
+                        )
+                        .unwrap();
+                        let calculated_price = bond.bond_mut().clean_price().unwrap();
+                        assert!(
+                            (price - calculated_price).abs() <= tolerance,
+                            "clean price mismatch: issue={issue} maturity={maturity} \
+                             coupon={coupon} freq={frequency:?} yield={m} \
+                             expected={price} calculated={calculated_price}"
+                        );
+
+                        let calculated_yield = BondFunctions::yield_rate(
+                            bond.bond(),
+                            BondPrice::Clean(calculated_price),
+                            bond_day_count.clone(),
+                            Compounding::Continuous,
+                            frequency,
+                            Some(bond.bond().settlement_date(None).unwrap()),
+                            Some(tolerance),
+                            Some(max_evaluations),
+                            None,
+                        )
+                        .unwrap();
+                        assert!(
+                            (m - calculated_yield).abs() <= tolerance,
+                            "clean yield recovery failed: issue={issue} maturity={maturity} \
+                             coupon={coupon} freq={frequency:?} yield={m} \
+                             clean={calculated_price} yield'={calculated_yield}"
+                        );
+
+                        let price = BondFunctions::dirty_price_from_yield(
+                            bond.bond(),
+                            m,
+                            bond_day_count.clone(),
+                            Compounding::Continuous,
+                            frequency,
+                            None,
+                        )
+                        .unwrap();
+                        let calculated_price = bond.bond_mut().dirty_price().unwrap();
+                        assert!(
+                            (price - calculated_price).abs() <= tolerance,
+                            "dirty price mismatch: issue={issue} maturity={maturity} \
+                             coupon={coupon} freq={frequency:?} yield={m} \
+                             expected={price} calculated={calculated_price}"
+                        );
+
+                        let calculated_yield = BondFunctions::yield_rate(
+                            bond.bond(),
+                            BondPrice::Dirty(calculated_price),
+                            bond_day_count.clone(),
+                            Compounding::Continuous,
+                            frequency,
+                            Some(bond.bond().settlement_date(None).unwrap()),
+                            Some(tolerance),
+                            Some(max_evaluations),
+                            Some(0.05),
+                        )
+                        .unwrap();
+                        assert!(
+                            (m - calculated_yield).abs() <= tolerance,
+                            "dirty yield recovery failed: issue={issue} maturity={maturity} \
+                             coupon={coupon} freq={frequency:?} yield={m} \
+                             dirty={calculated_price} yield'={calculated_yield}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// An empty discount-curve handle is rejected before any discounting, as
