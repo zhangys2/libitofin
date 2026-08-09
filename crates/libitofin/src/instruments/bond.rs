@@ -23,11 +23,14 @@
 //!   [`accrued_amount`](Bond::accrued_amount) - call [`CashFlows`] directly, the
 //!   port's home for those analytics.
 //! - The price-fed [`Bond::yield_rate`] and [`BondPrice`] land here (#290),
-//!   solver-backed through `BondFunctions`. The engine-priced
-//!   `Bond::yield(dayCounter, ...)` overload, the price-from-yield
-//!   `cleanPrice`/`dirtyPrice`, the coupon-rate and cash-flow-date inspectors,
-//!   `setSingleRedemption` and the `faceAmount` constructor remain follow-up
-//!   work.
+//!   solver-backed through `BondFunctions`. Yield-based
+//!   [`BondFunctions::clean_price_at_yield`] /
+//!   [`BondFunctions::dirty_price_at_yield`] cover the free-function
+//!   `cleanPrice`/`dirtyPrice` path; the engine-priced
+//!   `Bond::yield(dayCounter, ...)` overload, instance
+//!   `Bond::cleanPrice`/`dirtyPrice` from yield, the coupon-rate and
+//!   cash-flow-date inspectors, `setSingleRedemption` and the `faceAmount`
+//!   constructor remain follow-up work.
 
 use std::any::Any;
 

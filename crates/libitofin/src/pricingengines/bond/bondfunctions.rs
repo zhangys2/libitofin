@@ -4,6 +4,8 @@
 //! `ql/pricingengines/bond/bondfunctions.{hpp,cpp}`: the price, accrued, rate
 //! and yield/duration/convexity wrappers that add a tradability guard and
 //! delegate to the matching [`CashFlows`] overload (`bondfunctions.cpp:224-486`).
+//! Yield-based clean/dirty prices (`cleanPrice`/`dirtyPrice` over
+//! [`InterestRate`]) sit alongside the discount-curve overloads.
 //! Each reads the bond's own cash flows and settings rather than a global
 //! evaluation date (D5).
 //!
@@ -308,6 +310,84 @@ impl BondFunctions {
         Ok(bps * 100.0 / notional)
     }
 
+    /// The dirty price per 100 of notional under a flat `yield_rate`
+    /// (`CashFlows::npv * 100 / notional`, `bondfunctions.cpp:310`).
+    ///
+    /// # Errors
+    ///
+    /// The bond must be tradable at the settlement date.
+    pub fn dirty_price_at_yield(
+        bond: &Bond,
+        yield_rate: &InterestRate,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let settlement = Self::settlement_or_eval(bond, settlement)?;
+        let notional = Self::require_tradable(bond, settlement)?;
+        let npv = CashFlows::npv_at_yield(
+            bond.cashflows(),
+            yield_rate,
+            bond.settings(),
+            Some(false),
+            Some(settlement),
+            None,
+        )?;
+        Ok(npv * 100.0 / notional)
+    }
+
+    /// The clean price per 100 of notional under a flat `yield_rate`
+    /// (`dirtyPrice - accruedAmount`, `bondfunctions.cpp:296`).
+    ///
+    /// # Errors
+    ///
+    /// The bond must be tradable at the settlement date.
+    pub fn clean_price_at_yield(
+        bond: &Bond,
+        yield_rate: &InterestRate,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let settlement = Self::settlement_or_eval(bond, settlement)?;
+        let dirty = Self::dirty_price_at_yield(bond, yield_rate, Some(settlement))?;
+        Ok(dirty - bond.accrued_amount(Some(settlement))?)
+    }
+
+    /// Dirty price from a bare yield and its conventions
+    /// (`bondfunctions.cpp:320`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`InterestRate::new`] and [`dirty_price_at_yield`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn dirty_price_from_yield(
+        bond: &Bond,
+        yield_rate: Rate,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let y = InterestRate::new(yield_rate, day_counter, compounding, frequency)?;
+        Self::dirty_price_at_yield(bond, &y, settlement)
+    }
+
+    /// Clean price from a bare yield and its conventions
+    /// (`bondfunctions.cpp:302`).
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`InterestRate::new`] and [`clean_price_at_yield`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn clean_price_from_yield(
+        bond: &Bond,
+        yield_rate: Rate,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let y = InterestRate::new(yield_rate, day_counter, compounding, frequency)?;
+        Self::clean_price_at_yield(bond, &y, settlement)
+    }
+
     fn settlement_or_eval(bond: &Bond, settlement: Option<Date>) -> QlResult<Date> {
         match settlement {
             Some(date) => Ok(date),
@@ -337,11 +417,14 @@ mod tests {
     use crate::termstructures::yields::FlatForward;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendar::Calendar;
+    use crate::time::calendars::brazil::{self, Brazil};
     use crate::time::calendars::unitedstates::{self, UnitedStates};
     use crate::time::date::Month;
     use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
+    use crate::time::daycounters::business252::Business252;
+    use crate::time::daycounters::thirty360::{Convention as Thirty360Convention, Thirty360};
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
     use crate::time::schedule::Schedule;
@@ -482,6 +565,83 @@ mod tests {
         .unwrap();
         let clean = BondFunctions::clean_price(&bond, &discount_curve(), None).unwrap();
         assert!((clean - 100.382794).abs() < 1e-6, "clean price {clean}");
+    }
+
+    /// `bonds.cpp` testBrazilianCached (`:1068`): Andima NTN-F dirty cash prices
+    /// from yield-based `cleanPrice` + accrued, tolerance 1e-4 (Andima truncates
+    /// yields).
+    #[test]
+    fn brazilian_ntn_f_bonds_reproduce_andima_cached_prices() {
+        let today = Date::new(6, Month::June, 2007);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let face_amount = 1000.0;
+        let issue = Date::new(1, Month::January, 2007);
+        let calendar = Brazil::new(brazil::Market::Settlement);
+        let coupon_rate = InterestRate::new(
+            0.1,
+            Thirty360::with_convention(Thirty360Convention::BondBasis),
+            Compounding::Compounded,
+            Frequency::Annual,
+        )
+        .unwrap();
+
+        let cases = [
+            (Date::new(1, Month::January, 2008), 0.114614, 1034.63031372),
+            (Date::new(1, Month::January, 2010), 0.105726, 1030.09919487),
+            (Date::new(1, Month::July, 2010), 0.105328, 1029.98307160),
+            (Date::new(1, Month::January, 2012), 0.104283, 1028.13585068),
+            (Date::new(1, Month::January, 2014), 0.103218, 1028.33383817),
+            (Date::new(1, Month::January, 2017), 0.102948, 1026.19716497),
+        ];
+        let tol = 1.0e-4;
+
+        for (maturity, yield_rate, cached) in cases {
+            let schedule = Schedule::new(
+                Date::new(1, Month::January, 2007),
+                maturity,
+                Period::new(6, TimeUnit::Months),
+                calendar.clone(),
+                BusinessDayConvention::Unadjusted,
+                BusinessDayConvention::Unadjusted,
+                DateGeneration::Backward,
+                false,
+                Date::null(),
+                Date::null(),
+            );
+            let coupons = FixedRateLeg::new(schedule)
+                .with_notional(face_amount)
+                .with_interest_rate(coupon_rate.clone())
+                .with_payment_adjustment(BusinessDayConvention::Following)
+                .build()
+                .unwrap();
+            let bond = Bond::from_coupons(
+                1,
+                calendar.clone(),
+                Some(issue),
+                coupons,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+
+            let clean = BondFunctions::clean_price_from_yield(
+                &bond,
+                yield_rate,
+                Business252::new(),
+                Compounding::Compounded,
+                Frequency::Annual,
+                Some(today),
+            )
+            .unwrap();
+            let accrued = bond.accrued_amount(Some(today)).unwrap();
+            let price = face_amount * (clean + accrued) / 100.0;
+            assert!(
+                (price - cached).abs() <= tol,
+                "maturity {maturity}: dirty cash {price} vs Andima {cached} (error {})",
+                (price - cached).abs()
+            );
+        }
     }
 
     /// A single-rate bond's at-the-money rate is its coupon, and the
