@@ -411,7 +411,7 @@ mod tests {
     use super::*;
     use crate::cashflows::FixedRateLeg;
     use crate::instruments::{Bond, BondPrice, FixedRateBond};
-    use crate::interestrate::Compounding;
+    use crate::interestrate::{Compounding, InterestRate};
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::yields::FlatForward;
@@ -644,6 +644,99 @@ mod tests {
                 (price - cached).abs()
             );
         }
+    }
+
+    /// `bonds.cpp` testBondFromScheduleWithDateVector (`:1415`): South African
+    /// R2048 dirty price 95.75706 @ 1e-5 after rewriting schedule Feb-29 →
+    /// Feb-28 and rebuilding via the date-vector constructor.
+    #[test]
+    fn south_african_r2048_reproduces_the_cached_dirty_price() {
+        let calendar = NullCalendar::new();
+        let settlement_days = 3;
+        let issue = Date::new(29, Month::June, 2012);
+        let today = Date::new(7, Month::September, 2015);
+        let evaluation_date = calendar.adjust(today, BusinessDayConvention::Following);
+        let settlement_date = calendar.advance(
+            evaluation_date,
+            settlement_days as Integer,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(evaluation_date);
+
+        // Maturity on 29 Feb so EOM schedule generation lands on Feb ends;
+        // the bond pays on 28 Feb in every year, leap or not.
+        let maturity = Date::new(29, Month::February, 2048);
+        let schedule = Schedule::new(
+            issue,
+            maturity,
+            Period::new(6, TimeUnit::Months),
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            BusinessDayConvention::Unadjusted,
+            DateGeneration::Backward,
+            true,
+            Date::null(),
+            Date::null(),
+        );
+        let dates: Vec<Date> = schedule
+            .dates()
+            .iter()
+            .copied()
+            .map(|d| {
+                if d.month() == Month::February && d.day_of_month() == 29 {
+                    Date::new(28, Month::February, d.year())
+                } else {
+                    d
+                }
+            })
+            .collect();
+        let schedule = Schedule::with_metadata(
+            dates,
+            schedule.calendar().clone(),
+            schedule.business_day_convention(),
+            Some(schedule.termination_date_business_day_convention()),
+            Some(schedule.tenor()),
+            Some(schedule.rule()),
+            Some(schedule.end_of_month()),
+            schedule.is_regular().to_vec(),
+        );
+        let day_counter = ActualActual::with_schedule(Convention::Bond, schedule.clone());
+        let bond = FixedRateBond::new(
+            0,
+            100.0,
+            schedule,
+            vec![0.0875],
+            day_counter.clone(),
+            BusinessDayConvention::Following,
+            100.0,
+            Some(issue),
+            Some(calendar.clone()),
+            Some(Period::new(10, TimeUnit::Days)),
+            calendar,
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            settings,
+        )
+        .unwrap();
+        let yield_rate = InterestRate::new(
+            0.09185,
+            day_counter,
+            Compounding::Compounded,
+            Frequency::Semiannual,
+        )
+        .unwrap();
+        let price =
+            BondFunctions::dirty_price_at_yield(bond.bond(), &yield_rate, Some(settlement_date))
+                .unwrap();
+        assert!(
+            (price - 95.75706).abs() <= 1.0e-5,
+            "R2048 dirty {price} vs cached 95.75706 (error {})",
+            (price - 95.75706).abs()
+        );
     }
 
     /// `bonds.cpp` testYield (`:95`): clean/dirty price ↔ yield round-trips
