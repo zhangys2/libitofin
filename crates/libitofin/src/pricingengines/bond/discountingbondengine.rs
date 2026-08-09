@@ -391,38 +391,32 @@ mod tests {
         assert_clean(&mut bond4, engine_disc, 98.892055, "bond4 fixing+ex-coupon");
     }
 
-    /// `bonds.cpp` testCachedFixed, bond1 (`:832`): a fixed-coupon government
-    /// bond priced end to end over a flat 3% curve reproduces the cached clean
-    /// price 99.298100 to 1e-6. This is the first bond priced against a real
-    /// C++ number, closing the vertical slice.
-    #[test]
-    fn cached_fixed_bond1_reproduces_the_c_clean_price() {
-        let settings = settings_today();
-
-        let discount_curve: Handle<dyn YieldTermStructure> =
-            Handle::new(shared(FlatForward::with_rate(
-                today(),
-                0.03,
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>);
-
-        let schedule = MakeSchedule::new()
-            .from(Date::new(30, Month::November, 2004))
-            .to(Date::new(30, Month::November, 2008))
+    fn fixed_schedule(from: Date, to: Date, next_to_last: Option<Date>) -> Schedule {
+        let mut maker = MakeSchedule::new()
+            .from(from)
+            .to(to)
             .with_frequency(Frequency::Semiannual)
             .with_calendar(UnitedStates::new(Market::GovernmentBond))
             .with_convention(BusinessDayConvention::Unadjusted)
             .with_termination_date_convention(BusinessDayConvention::Unadjusted)
             .backwards()
-            .build();
+            .end_of_month(false);
+        if let Some(d) = next_to_last {
+            maker = maker.with_next_to_last_date(d);
+        }
+        maker.build()
+    }
 
-        let mut bond = FixedRateBond::new(
+    fn make_fixed_bond(
+        settings: &Shared<Settings<Date>>,
+        schedule: Schedule,
+        coupons: Vec<f64>,
+    ) -> FixedRateBond {
+        FixedRateBond::new(
             1,
             1_000_000.0,
             schedule,
-            vec![0.02875],
+            coupons,
             ActualActual::with_convention(Convention::ISMA),
             BusinessDayConvention::ModifiedFollowing,
             100.0,
@@ -433,24 +427,77 @@ mod tests {
             BusinessDayConvention::Unadjusted,
             false,
             None,
-            Shared::clone(&settings),
+            Shared::clone(settings),
         )
-        .unwrap();
+        .unwrap()
+    }
 
+    /// `bonds.cpp` testCachedFixed (`:831`): three fixed-coupon government
+    /// bonds over a flat 3% Actual360 curve reproduce the cached clean prices
+    /// to 1e-6 (plain, varying coupons, and next-to-last stub schedule).
+    #[test]
+    fn cached_fixed_bonds_reproduce_the_c_clean_prices() {
+        let settings = settings_today();
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today(),
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
         let engine = shared_mut(DiscountingBondEngine::new(
             discount_curve,
             None,
             Shared::clone(&settings),
-        ));
-        bond.bond_mut()
-            .base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        )) as SharedMut<dyn PricingEngine>;
 
-        let price = bond.bond_mut().clean_price().unwrap();
+        let sch = fixed_schedule(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::November, 2008),
+            None,
+        );
+        let coupon_rates = vec![0.02875, 0.03, 0.03125, 0.0325];
+
+        // bond1: plain single coupon
+        let mut bond1 = make_fixed_bond(&settings, sch.clone(), vec![0.02875]);
+        bond1
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let price1 = bond1.bond_mut().clean_price().unwrap();
         assert!(
-            (price - 99.298100).abs() <= 1.0e-6,
-            "clean price {price} vs cached 99.298100 (error {})",
-            (price - 99.298100).abs()
+            (price1 - 99.298100).abs() <= 1.0e-6,
+            "bond1 plain: clean {price1} vs cached 99.298100 (error {})",
+            (price1 - 99.298100).abs()
+        );
+
+        // bond2: varying coupons on the same schedule
+        let mut bond2 = make_fixed_bond(&settings, sch, coupon_rates.clone());
+        bond2
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let price2 = bond2.bond_mut().clean_price().unwrap();
+        assert!(
+            (price2 - 100.334149).abs() <= 1.0e-6,
+            "bond2 varying coupons: clean {price2} vs cached 100.334149 (error {})",
+            (price2 - 100.334149).abs()
+        );
+
+        // bond3: same coupons, schedule to 30-Mar-2009 with next-to-last 30-Nov-2008
+        let sch3 = fixed_schedule(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::March, 2009),
+            Some(Date::new(30, Month::November, 2008)),
+        );
+        let mut bond3 = make_fixed_bond(&settings, sch3, coupon_rates);
+        bond3.bond_mut().base_mut().set_pricing_engine(engine);
+        let price3 = bond3.bond_mut().clean_price().unwrap();
+        assert!(
+            (price3 - 100.382794).abs() <= 1.0e-6,
+            "bond3 stub schedule: clean {price3} vs cached 100.382794 (error {})",
+            (price3 - 100.382794).abs()
         );
     }
 

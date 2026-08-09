@@ -440,6 +440,50 @@ mod tests {
         assert!((clean - 100.334149).abs() < 1e-6, "clean price {clean}");
     }
 
+    /// The stub-schedule bond of `testCachedFixed` bond3 (`:916`, 100.382794
+    /// at 1e-6): varying coupons on a schedule to 30 Mar 2009 with next-to-last
+    /// date 30 Nov 2008.
+    #[test]
+    fn the_stub_schedule_bond_reproduces_its_cached_clean_price() {
+        let unadjusted = BusinessDayConvention::Unadjusted;
+        let schedule = Schedule::new(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::March, 2009),
+            Period::new(6, TimeUnit::Months),
+            us_gov(),
+            unadjusted,
+            unadjusted,
+            DateGeneration::Backward,
+            false,
+            Date::null(),
+            Date::new(30, Month::November, 2008),
+        );
+        let day_counter = ActualActual::with_schedule(Convention::ISMA, schedule.clone());
+        let leg = FixedRateLeg::new(schedule)
+            .with_notional(100.0)
+            .with_coupon_rates(
+                vec![0.02875, 0.03, 0.03125, 0.0325],
+                day_counter,
+                Compounding::Simple,
+                Frequency::Annual,
+            )
+            .unwrap()
+            .with_payment_calendar(us_gov())
+            .with_payment_adjustment(BusinessDayConvention::ModifiedFollowing)
+            .build()
+            .unwrap();
+        let bond = Bond::from_coupons(
+            1,
+            us_gov(),
+            Some(Date::new(30, Month::November, 2004)),
+            leg,
+            settings(),
+        )
+        .unwrap();
+        let clean = BondFunctions::clean_price(&bond, &discount_curve(), None).unwrap();
+        assert!((clean - 100.382794).abs() < 1e-6, "clean price {clean}");
+    }
+
     /// A single-rate bond's at-the-money rate is its coupon, and the
     /// default-price `atmRate` recovers it regardless of the discount curve:
     /// the target NPV is the leg's own, so the numerator and denominator
