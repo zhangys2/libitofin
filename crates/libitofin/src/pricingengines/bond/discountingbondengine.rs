@@ -138,8 +138,8 @@ impl PricingEngine for DiscountingBondEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::indexes::IborIndex;
-    use crate::indexes::USDLibor;
+    use crate::indexes::index::Index;
+    use crate::indexes::{IborIndex, USDLibor};
     use crate::instrument::Instrument;
     use crate::instruments::{FixedRateBond, FloatingRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
@@ -152,7 +152,10 @@ mod tests {
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
     use crate::time::frequency::Frequency;
-    use crate::time::schedule::MakeSchedule;
+    use crate::time::period::Period;
+    use crate::time::schedule::{MakeSchedule, Schedule};
+    use crate::time::timeunit::TimeUnit;
+    use crate::types::Spread;
 
     fn today() -> Date {
         Date::new(22, Month::November, 2004)
@@ -214,43 +217,40 @@ mod tests {
         }
     }
 
-    /// `bonds.cpp` testCachedFloating, bond1 (`:928`): a plain USDLibor6M
-    /// floater over flat 2.5% Actual360 (at-par coupons) reproduces the cached
-    /// clean price 99.874646 to 1e-6.
-    #[test]
-    fn cached_floating_bond1_reproduces_the_c_clean_price() {
-        let settings = settings_today();
-        assert!(
-            settings.using_at_par_coupons(),
-            "oracle expects the at-par coupon branch"
-        );
-
-        let risk_free: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+    fn flat_actual360(rate: f64) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
             today(),
-            0.025,
+            rate,
             Actual360::new(),
             Compounding::Continuous,
             Frequency::Annual,
-        ))
-            as Shared<dyn YieldTermStructure>);
+        )) as Shared<dyn YieldTermStructure>)
+    }
 
-        let index: Shared<IborIndex> = shared(USDLibor::six_months(
-            risk_free.clone(),
-            Shared::clone(&settings),
-        ));
-
-        let schedule = MakeSchedule::new()
-            .from(Date::new(30, Month::November, 2004))
-            .to(Date::new(30, Month::November, 2008))
+    fn floating_schedule(from: Date, to: Date) -> Schedule {
+        MakeSchedule::new()
+            .from(from)
+            .to(to)
             .with_frequency(Frequency::Semiannual)
             .with_calendar(UnitedStates::new(Market::GovernmentBond))
             .with_convention(BusinessDayConvention::ModifiedFollowing)
             .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
             .backwards()
             .end_of_month(false)
-            .build();
+            .build()
+    }
 
-        let mut bond = FloatingRateBond::new(
+    #[allow(clippy::too_many_arguments)]
+    fn make_floating_bond(
+        settings: &Shared<Settings<Date>>,
+        schedule: Schedule,
+        index: Shared<IborIndex>,
+        spreads: Vec<Spread>,
+        issue: Date,
+        ex_coupon_period: Option<Period>,
+        ex_coupon_convention: BusinessDayConvention,
+    ) -> FloatingRateBond {
+        FloatingRateBond::new(
             1,
             1_000_000.0,
             schedule,
@@ -259,34 +259,136 @@ mod tests {
             BusinessDayConvention::ModifiedFollowing,
             Some(1),
             Vec::new(),
-            Vec::new(),
+            spreads,
             Vec::new(),
             Vec::new(),
             100.0,
-            Some(Date::new(30, Month::November, 2004)),
-            None,
+            Some(issue),
+            ex_coupon_period,
             NullCalendar::new(),
-            BusinessDayConvention::Following,
+            ex_coupon_convention,
             false,
-            Shared::clone(&settings),
+            Shared::clone(settings),
         )
-        .unwrap();
+        .unwrap()
+    }
 
-        let engine = shared_mut(DiscountingBondEngine::new(
+    fn assert_clean(
+        bond: &mut FloatingRateBond,
+        engine: SharedMut<dyn PricingEngine>,
+        cached: f64,
+        label: &str,
+    ) {
+        bond.bond_mut().base_mut().set_pricing_engine(engine);
+        let price = bond.bond_mut().clean_price().unwrap();
+        assert!(
+            (price - cached).abs() <= 1.0e-6,
+            "{label}: clean {price} vs cached {cached} (error {})",
+            (price - cached).abs()
+        );
+    }
+
+    /// `bonds.cpp` testCachedFloating (`:928`): USDLibor6M floaters reproduce
+    /// the four cached clean prices to 1e-6 (at-par coupon branch).
+    #[test]
+    fn cached_floating_bonds_reproduce_the_c_clean_prices() {
+        let settings = settings_today();
+        assert!(
+            settings.using_at_par_coupons(),
+            "oracle expects the at-par coupon branch"
+        );
+
+        let risk_free = flat_actual360(0.025);
+        let discount_curve = flat_actual360(0.03);
+        let index: Shared<IborIndex> = shared(USDLibor::six_months(
+            risk_free.clone(),
+            Shared::clone(&settings),
+        ));
+        let sch = floating_schedule(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::November, 2008),
+        );
+        let engine_rf = shared_mut(DiscountingBondEngine::new(
             risk_free,
             None,
             Shared::clone(&settings),
-        ));
-        bond.bond_mut()
-            .base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        )) as SharedMut<dyn PricingEngine>;
+        let engine_disc = shared_mut(DiscountingBondEngine::new(
+            discount_curve,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
 
-        let price = bond.bond_mut().clean_price().unwrap();
-        assert!(
-            (price - 99.874646).abs() <= 1.0e-6,
-            "clean price {price} vs cached 99.874646 (error {})",
-            (price - 99.874646).abs()
+        // bond1: plain, discount = forecast curve
+        let mut bond1 = make_floating_bond(
+            &settings,
+            sch.clone(),
+            Shared::clone(&index),
+            Vec::new(),
+            Date::new(30, Month::November, 2004),
+            None,
+            BusinessDayConvention::Following,
         );
+        assert_clean(
+            &mut bond1,
+            SharedMut::clone(&engine_rf),
+            99.874646,
+            "bond1 plain",
+        );
+
+        // bond2: dual curve (forecast 2.5%, discount 3%)
+        let mut bond2 = make_floating_bond(
+            &settings,
+            sch.clone(),
+            Shared::clone(&index),
+            Vec::new(),
+            Date::new(30, Month::November, 2004),
+            None,
+            BusinessDayConvention::Following,
+        );
+        assert_clean(
+            &mut bond2,
+            SharedMut::clone(&engine_disc),
+            97.955904,
+            "bond2 dual curve",
+        );
+
+        // bond3: varying spreads on the dual-curve engine
+        let spreads = vec![0.001, 0.0012, 0.0014, 0.0016];
+        let mut bond3 = make_floating_bond(
+            &settings,
+            sch,
+            Shared::clone(&index),
+            spreads.clone(),
+            Date::new(30, Month::November, 2004),
+            None,
+            BusinessDayConvention::Following,
+        );
+        assert_clean(
+            &mut bond3,
+            SharedMut::clone(&engine_disc),
+            98.495459,
+            "bond3 spreads",
+        );
+
+        // bond4: earlier schedule, 6D ex-coupon, historical fixing
+        let sch2 = floating_schedule(
+            Date::new(26, Month::November, 2003),
+            Date::new(26, Month::November, 2007),
+        );
+        let mut bond4 = make_floating_bond(
+            &settings,
+            sch2,
+            Shared::clone(&index),
+            spreads,
+            Date::new(29, Month::October, 2004),
+            Some(Period::new(6, TimeUnit::Days)),
+            BusinessDayConvention::Unadjusted,
+        );
+        index
+            .add_fixing(Date::new(25, Month::May, 2004), 0.0402)
+            .unwrap();
+        assert_clean(&mut bond4, engine_disc, 98.892055, "bond4 fixing+ex-coupon");
     }
 
     /// `bonds.cpp` testCachedFixed, bond1 (`:832`): a fixed-coupon government

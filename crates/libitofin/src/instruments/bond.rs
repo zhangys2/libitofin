@@ -308,6 +308,19 @@ impl Bond {
         self.maturity_date = Some(date);
     }
 
+    /// Assigns the coupon leg after an empty [`Bond::new`] (the C++ pattern in
+    /// `FloatingRateBond` / `FixedRateBond`: construct with no coupons so the
+    /// issue-date-vs-first-payment check is skipped, then assign `cashflows_`).
+    ///
+    /// Seasoned floaters can have payment dates before the issue date; C++
+    /// relies on that empty-constructor path rather than relaxing the check.
+    pub(crate) fn set_cashflows(&mut self, cashflows: Leg) {
+        for cashflow in &cashflows {
+            self.base.register_with(cashflow.observable());
+        }
+        self.cashflows = cashflows;
+    }
+
     /// The payment date of the next cash flow after `settlement` (the evaluation
     /// date's settlement date when `None`), or `None` once all flows have paid.
     ///
