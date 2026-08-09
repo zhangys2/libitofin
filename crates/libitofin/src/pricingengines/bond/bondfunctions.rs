@@ -22,6 +22,7 @@
 
 use crate::cashflows::{CashFlows, Duration};
 use crate::errors::QlResult;
+use crate::handle::Handle;
 use crate::instruments::{Bond, BondPrice};
 use crate::interestrate::{Compounding, InterestRate};
 use crate::require;
@@ -29,7 +30,7 @@ use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::frequency::Frequency;
-use crate::types::{Rate, Real, Time};
+use crate::types::{Rate, Real, Spread, Time};
 
 /// Free-function bond analytics over a discount curve.
 pub struct BondFunctions;
@@ -402,6 +403,109 @@ impl BondFunctions {
         Self::clean_price_at_yield(bond, &y, settlement)
     }
 
+    /// The dirty price per 100 of notional on `discount_curve` shifted by a
+    /// parallel zero-rate `z_spread` (`bondfunctions.cpp:507`).
+    ///
+    /// # Errors
+    ///
+    /// The bond must be tradable at the settlement date.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dirty_price_at_z_spread(
+        bond: &Bond,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        z_spread: Spread,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let settlement = Self::settlement_or_eval(bond, settlement)?;
+        let notional = Self::require_tradable(bond, settlement)?;
+        let npv = CashFlows::npv_at_z_spread(
+            bond.cashflows(),
+            discount_curve,
+            z_spread,
+            compounding,
+            frequency,
+            bond.settings(),
+            Some(false),
+            Some(settlement),
+            None,
+        )?;
+        Ok(npv * 100.0 / notional)
+    }
+
+    /// The clean price per 100 of notional on `discount_curve` shifted by a
+    /// parallel zero-rate `z_spread` (`bondfunctions.cpp:492`).
+    ///
+    /// # Errors
+    ///
+    /// The bond must be tradable at the settlement date.
+    #[allow(clippy::too_many_arguments)]
+    pub fn clean_price_at_z_spread(
+        bond: &Bond,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        z_spread: Spread,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        let settlement = Self::settlement_or_eval(bond, settlement)?;
+        let dirty = Self::dirty_price_at_z_spread(
+            bond,
+            discount_curve,
+            z_spread,
+            compounding,
+            frequency,
+            Some(settlement),
+        )?;
+        Ok(dirty - bond.accrued_amount(Some(settlement))?)
+    }
+
+    /// The zero-rate spread that reprices the bond at `price` on
+    /// `discount_curve` (`bondfunctions.cpp:534`).
+    ///
+    /// `accuracy` defaults to `1e-10`, `max_evaluations` to `100` and `guess`
+    /// to `0.0`.
+    ///
+    /// # Errors
+    ///
+    /// The bond must be tradable at the settlement date, and the solve must
+    /// converge.
+    #[allow(clippy::too_many_arguments)]
+    pub fn z_spread(
+        bond: &Bond,
+        price: BondPrice,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+        accuracy: Option<Real>,
+        max_evaluations: Option<usize>,
+        guess: Option<Rate>,
+    ) -> QlResult<Spread> {
+        let settlement = Self::settlement_or_eval(bond, settlement)?;
+        let notional = Self::require_tradable(bond, settlement)?;
+        let mut dirty = price.amount();
+        if matches!(price, BondPrice::Clean(_)) {
+            dirty += bond.accrued_amount(Some(settlement))?;
+        }
+        let npv = dirty * notional / 100.0;
+        CashFlows::z_spread(
+            bond.cashflows(),
+            npv,
+            discount_curve,
+            compounding,
+            frequency,
+            bond.settings(),
+            Some(false),
+            Some(settlement),
+            Some(settlement),
+            accuracy,
+            max_evaluations,
+            guess,
+        )
+    }
+
     fn settlement_or_eval(bond: &Bond, settlement: Option<Date>) -> QlResult<Date> {
         match settlement {
             Some(date) => Ok(date),
@@ -424,11 +528,13 @@ impl BondFunctions {
 mod tests {
     use super::*;
     use crate::cashflows::FixedRateLeg;
+    use crate::handle::Handle;
     use crate::instruments::{Bond, BondPrice, FixedRateBond};
     use crate::interestrate::{Compounding, InterestRate};
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendar::Calendar;
     use crate::time::calendars::brazil::{self, Brazil};
@@ -751,6 +857,183 @@ mod tests {
             "R2048 dirty {price} vs cached 95.75706 (error {})",
             (price - 95.75706).abs()
         );
+    }
+
+    /// `bonds.cpp` testZspread (`:275`): clean/dirty price ↔ z-spread
+    /// round-trips within 1e-7 (reprice relative error when the solved spread
+    /// drifts) over the QuantLib issue/length/coupon/frequency/compounding
+    /// grid on a flat 3% Actual360 curve.
+    #[test]
+    fn bond_price_z_spread_round_trips_consistently() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let max_evaluations = 100usize;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Thirty360::with_convention(Thirty360Convention::BondBasis);
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let issue_months: [Integer; 9] = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+        let spreads = [-0.01, -0.005, 0.0, 0.005, 0.01];
+        let compoundings = [Compounding::Compounded, Compounding::Continuous];
+
+        for &issue_month in &issue_months {
+            for &length in &lengths {
+                for &coupon in &coupons {
+                    for &frequency in &frequencies {
+                        for &compounding in &compoundings {
+                            let dated = calendar.advance(
+                                today,
+                                issue_month,
+                                TimeUnit::Months,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let issue = dated;
+                            let maturity = calendar.advance(
+                                issue,
+                                length,
+                                TimeUnit::Years,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let tenor = Period::try_from(frequency).unwrap();
+                            let schedule = Schedule::new(
+                                dated,
+                                maturity,
+                                tenor,
+                                calendar.clone(),
+                                BusinessDayConvention::Unadjusted,
+                                BusinessDayConvention::Unadjusted,
+                                DateGeneration::Backward,
+                                false,
+                                Date::null(),
+                                Date::null(),
+                            );
+                            let bond = FixedRateBond::new(
+                                settlement_days,
+                                face_amount,
+                                schedule,
+                                vec![coupon],
+                                bond_day_count.clone(),
+                                BusinessDayConvention::ModifiedFollowing,
+                                100.0,
+                                Some(issue),
+                                None,
+                                None,
+                                NullCalendar::new(),
+                                BusinessDayConvention::Unadjusted,
+                                false,
+                                None,
+                                Shared::clone(&settings),
+                            )
+                            .unwrap();
+                            let bond = bond.bond();
+
+                            for &spread in &spreads {
+                                let clean = BondFunctions::clean_price_at_z_spread(
+                                    bond,
+                                    discount_curve.clone(),
+                                    spread,
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::z_spread(
+                                    bond,
+                                    BondPrice::Clean(clean),
+                                    discount_curve.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    None,
+                                )
+                                .unwrap();
+                                if (spread - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::clean_price_at_z_spread(
+                                        bond,
+                                        discount_curve.clone(),
+                                        calculated,
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (clean - price2).abs() / clean;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "clean z-spread round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         spread={spread} compounding={compounding:?} clean={clean} \
+                                         spread'={calculated} clean'={price2} rel={rel}"
+                                    );
+                                }
+
+                                let dirty = BondFunctions::dirty_price_at_z_spread(
+                                    bond,
+                                    discount_curve.clone(),
+                                    spread,
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::z_spread(
+                                    bond,
+                                    BondPrice::Dirty(dirty),
+                                    discount_curve.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    None,
+                                )
+                                .unwrap();
+                                if (spread - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::dirty_price_at_z_spread(
+                                        bond,
+                                        discount_curve.clone(),
+                                        calculated,
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (dirty - price2).abs() / dirty;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "dirty z-spread round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         spread={spread} compounding={compounding:?} dirty={dirty} \
+                                         spread'={calculated} dirty'={price2} rel={rel}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// `bonds.cpp` testYield (`:95`): clean/dirty price ↔ yield round-trips
