@@ -14,13 +14,11 @@
 //!   carries the tradability guard and the `100 / notional` scaling
 //!   (`bond.cpp` delegates the same call to `BondFunctions` in reverse); the
 //!   wrapper here is the free-function surface over it.
-//! - `atmRate` takes no [`BondPrice`]: the type lands with the yield wrappers
-//!   below (#290), but the price-fed curve round trip of `bonds.cpp:241` stays
-//!   a discount-curve follow-up and is unreachable here. The
-//!   port ports the discount-curve `atmRate` at its `price = {}` default,
-//!   whose target NPV is the leg's own; with one coupon rate that recovers the
-//!   coupon exactly for any curve (a curve-independent invariant, not a curve
-//!   oracle - the clean-price tests are the curve oracles).
+//! - `atmRate`'s optional [`BondPrice`] maps C++'s default-constructed
+//!   `Bond::Price{}` (unset) to [`None`]: the target NPV is then the leg's own.
+//!   With one coupon and `price = None` that recovers the coupon for any curve
+//!   (a curve-independent invariant). The price-fed path of `bonds.cpp:241`
+//!   passes `Some(Clean|Dirty)`.
 
 use crate::cashflows::{CashFlows, Duration};
 use crate::errors::QlResult;
@@ -123,7 +121,12 @@ impl BondFunctions {
     }
 
     /// The at-the-money coupon rate that reprices the bond on `discount_curve`
-    /// (`bondfunctions.cpp:280`, at the `price = {}` default).
+    /// (`bondfunctions.cpp:280`).
+    ///
+    /// When `price` is [`None`] (C++'s default-constructed `Bond::Price{}`),
+    /// the target NPV is the leg's own. When set, a clean quote is grossed up
+    /// by accrued interest and scaled from per-100 to the bond's notional
+    /// before the solve.
     ///
     /// # Errors
     ///
@@ -133,9 +136,20 @@ impl BondFunctions {
         bond: &Bond,
         discount_curve: &dyn YieldTermStructure,
         settlement: Option<Date>,
+        price: Option<BondPrice>,
     ) -> QlResult<Rate> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
-        Self::require_tradable(bond, settlement)?;
+        let notional = Self::require_tradable(bond, settlement)?;
+        let target_npv = match price {
+            None => None,
+            Some(quote) => {
+                let mut dirty = quote.amount();
+                if matches!(quote, BondPrice::Clean(_)) {
+                    dirty += bond.accrued_amount(Some(settlement))?;
+                }
+                Some(dirty / 100.0 * notional)
+            }
+        };
         CashFlows::atm_rate(
             bond.cashflows(),
             discount_curve,
@@ -143,7 +157,7 @@ impl BondFunctions {
             Some(false),
             Some(settlement),
             Some(settlement),
-            None,
+            target_npv,
         )
     }
 
@@ -910,19 +924,139 @@ mod tests {
     }
 
     /// A single-rate bond's at-the-money rate is its coupon, and the
-    /// default-price `atmRate` recovers it regardless of the discount curve:
-    /// the target NPV is the leg's own, so the numerator and denominator
-    /// discount factors cancel and the rate is `coupon-leg PV / bps = coupon`
-    /// for any curve. This is a coupon-recovery invariant, not a curve oracle -
-    /// the curve oracles are the two clean-price tests above. The price-fed
-    /// `atmRate` round trip of `bonds.cpp:241` needs the `Bond::Price` argument
-    /// deferred to #290.
+    /// default-price `atmRate` (`price = None`) recovers it regardless of the
+    /// discount curve: the target NPV is the leg's own, so the numerator and
+    /// denominator discount factors cancel and the rate is
+    /// `coupon-leg PV / bps = coupon` for any curve.
     #[test]
     fn the_atm_rate_recovers_the_single_coupon_rate() {
         let bond = plain_bond();
         let curve = discount_curve();
-        let atm = BondFunctions::atm_rate(&bond, &curve, None).unwrap();
+        let atm = BondFunctions::atm_rate(&bond, &curve, None, None).unwrap();
         assert!((atm - 0.02875).abs() < 1e-10, "atm rate {atm}");
+    }
+
+    /// `bonds.cpp` testAtmRate (`:201`): clean/dirty prices on a flat 3%
+    /// Actual360 curve fed into `atmRate` recover the coupon to 1e-7 over the
+    /// issue/length/coupon/frequency grid. C++ prices via
+    /// `DiscountingBondEngine`; the free-function discount-curve prices are the
+    /// same NPV.
+    #[test]
+    fn bond_price_atm_rate_round_trips_consistently() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Thirty360::with_convention(Thirty360Convention::BondBasis);
+        let discount_curve = FlatForward::with_rate(
+            today,
+            0.03,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        );
+        let issue_months: [Integer; 9] = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+
+        for &issue_month in &issue_months {
+            for &length in &lengths {
+                for &coupon in &coupons {
+                    for &frequency in &frequencies {
+                        let dated = calendar.advance(
+                            today,
+                            issue_month,
+                            TimeUnit::Months,
+                            BusinessDayConvention::Following,
+                            false,
+                        );
+                        let issue = dated;
+                        let maturity = calendar.advance(
+                            issue,
+                            length,
+                            TimeUnit::Years,
+                            BusinessDayConvention::Following,
+                            false,
+                        );
+                        let tenor = Period::try_from(frequency).unwrap();
+                        let schedule = Schedule::new(
+                            dated,
+                            maturity,
+                            tenor,
+                            calendar.clone(),
+                            BusinessDayConvention::Unadjusted,
+                            BusinessDayConvention::Unadjusted,
+                            DateGeneration::Backward,
+                            false,
+                            Date::null(),
+                            Date::null(),
+                        );
+                        let bond = FixedRateBond::new(
+                            settlement_days,
+                            face_amount,
+                            schedule,
+                            vec![coupon],
+                            bond_day_count.clone(),
+                            BusinessDayConvention::ModifiedFollowing,
+                            100.0,
+                            Some(issue),
+                            None,
+                            None,
+                            NullCalendar::new(),
+                            BusinessDayConvention::Unadjusted,
+                            false,
+                            None,
+                            Shared::clone(&settings),
+                        )
+                        .unwrap();
+                        let bond = bond.bond();
+                        let settlement = bond.settlement_date(None).unwrap();
+
+                        let clean =
+                            BondFunctions::clean_price(bond, &discount_curve, Some(settlement))
+                                .unwrap();
+                        let atm = BondFunctions::atm_rate(
+                            bond,
+                            &discount_curve,
+                            Some(settlement),
+                            Some(BondPrice::Clean(clean)),
+                        )
+                        .unwrap();
+                        assert!(
+                            (coupon - atm).abs() <= tolerance,
+                            "clean atm round-trip failed: today={today} settlement={settlement} \
+                             issue={issue} maturity={maturity} coupon={coupon} freq={frequency:?} \
+                             clean={clean} atm={atm}"
+                        );
+
+                        let dirty =
+                            BondFunctions::dirty_price(bond, &discount_curve, Some(settlement))
+                                .unwrap();
+                        let atm = BondFunctions::atm_rate(
+                            bond,
+                            &discount_curve,
+                            Some(settlement),
+                            Some(BondPrice::Dirty(dirty)),
+                        )
+                        .unwrap();
+                        assert!(
+                            (coupon - atm).abs() <= tolerance,
+                            "dirty atm round-trip failed: today={today} settlement={settlement} \
+                             issue={issue} maturity={maturity} coupon={coupon} freq={frequency:?} \
+                             dirty={dirty} atm={atm}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// The basis-point value equals the dirty-price change for a one-basis-point
