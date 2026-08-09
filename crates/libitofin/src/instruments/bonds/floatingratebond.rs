@@ -70,7 +70,11 @@ impl FloatingRateBond {
             );
         }
         let cashflows = leg.build()?;
-        let mut bond = Bond::new(settlement_days, calendar, issue_date, cashflows, settings)?;
+        // Match C++ `FloatingRateBond`: construct with an empty leg so the base
+        // issue-date check is skipped (seasoned bonds pay coupons before issue),
+        // then assign cashflows and append the redemption.
+        let mut bond = Bond::new(settlement_days, calendar, issue_date, Vec::new(), settings)?;
+        bond.set_cashflows(cashflows);
         bond.add_redemptions_to_cashflows(&[redemption])?;
         bond.set_maturity_date(maturity);
         require!(!bond.cashflows().is_empty(), "bond with no cashflows!");
