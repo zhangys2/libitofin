@@ -608,4 +608,273 @@ mod tests {
             );
         }
     }
+
+    /// `callablebonds.cpp` `Globals` fixture with a pinned evaluation date
+    /// (C++ uses `Date::todaysDate()`).
+    struct Globals {
+        settings: Shared<Settings<Date>>,
+        calendar: crate::time::calendar::Calendar,
+        rolling: BusinessDayConvention,
+        issue: Date,
+        schedule: Schedule,
+        curve: Handle<dyn YieldTermStructure>,
+    }
+
+    impl Globals {
+        fn new(rate: Real) -> Self {
+            let calendar = Target::new();
+            let today = Date::new(3, Month::June, 2004);
+            let settings = shared(Settings::new());
+            settings.set_evaluation_date(today);
+            let rolling = BusinessDayConvention::ModifiedFollowing;
+            let settlement = calendar.advance(
+                today,
+                2,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false,
+            );
+            let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+            let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+            let schedule = MakeSchedule::new()
+                .from(issue)
+                .to(maturity)
+                .with_calendar(calendar.clone())
+                .with_frequency(Frequency::Semiannual)
+                .with_convention(rolling)
+                .with_termination_date_convention(rolling)
+                .backwards()
+                .build();
+            let curve: Handle<dyn YieldTermStructure> =
+                Handle::new(shared(FlatForward::with_rate(
+                    settlement,
+                    rate,
+                    Actual365Fixed::new(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>);
+            Self {
+                settings,
+                calendar,
+                rolling,
+                issue,
+                schedule,
+                curve,
+            }
+        }
+
+        fn even_years(&self) -> Vec<Date> {
+            (2..10)
+                .step_by(2)
+                .map(|i| {
+                    self.calendar
+                        .advance(self.issue, i, TimeUnit::Years, self.rolling, false)
+                })
+                .collect()
+        }
+
+        fn odd_years(&self) -> Vec<Date> {
+            (1..10)
+                .step_by(2)
+                .map(|i| {
+                    self.calendar
+                        .advance(self.issue, i, TimeUnit::Years, self.rolling, false)
+                })
+                .collect()
+        }
+    }
+
+    /// `callablebonds.cpp` testConsistency (`:224`): callable clean < plain <
+    /// puttable on the HW tree (calls @ 110 even years, puts @ 90 odd years).
+    #[test]
+    fn callable_bond_consistency_orders_call_plain_and_put() {
+        let g = Globals::new(0.032);
+        let model = HullWhite::new(g.curve.clone(), 0.1, 0.01).unwrap();
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+
+        let mut plain = FixedRateBond::new(
+            3,
+            100.0,
+            g.schedule.clone(),
+            vec![0.05],
+            day_counter.clone(),
+            BusinessDayConvention::Following,
+            100.0,
+            Some(g.issue),
+            None,
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        let discounting = shared_mut(DiscountingBondEngine::new(
+            g.curve.clone(),
+            None,
+            Shared::clone(&g.settings),
+        )) as SharedMut<dyn PricingEngine>;
+        plain
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&discounting));
+        let plain_clean = plain.bond_mut().clean_price().unwrap();
+
+        let calls: CallabilitySchedule = g
+            .even_years()
+            .into_iter()
+            .map(|d| Callability::new(BondPrice::Clean(110.0), CallabilityType::Call, d))
+            .collect();
+        let puts: CallabilitySchedule = g
+            .odd_years()
+            .into_iter()
+            .map(|d| Callability::new(BondPrice::Clean(90.0), CallabilityType::Put, d))
+            .collect();
+
+        let tree = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&g.settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+
+        let mut callable = CallableFixedRateBond::new(
+            3,
+            100.0,
+            g.schedule.clone(),
+            vec![0.05],
+            day_counter.clone(),
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            calls,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        callable
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&tree));
+        let callable_clean = callable.clean_price().unwrap();
+
+        let mut puttable = CallableFixedRateBond::new(
+            3,
+            100.0,
+            g.schedule,
+            vec![0.05],
+            day_counter,
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            puts,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        puttable.base_mut().set_pricing_engine(tree);
+        let puttable_clean = puttable.clean_price().unwrap();
+
+        assert!(
+            plain_clean > callable_clean,
+            "plain {plain_clean} should exceed callable {callable_clean}"
+        );
+        assert!(
+            plain_clean < puttable_clean,
+            "plain {plain_clean} should be below puttable {puttable_clean}"
+        );
+    }
+
+    /// `callablebonds.cpp` testDegenerate (`:359`): empty and deeply OTM
+    /// callability schedules reprice the straight fixed bond to 1e-4 on the
+    /// HW tree (zero-coupon path deferred — `CallableZeroCouponBond` not ported).
+    #[test]
+    fn degenerate_callable_fixed_bond_matches_the_straight_bond() {
+        let g = Globals::new(0.034);
+        let model = HullWhite::new(g.curve.clone(), 0.1, 0.01).unwrap();
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let tol = 1.0e-4;
+
+        let mut coupon_bond = FixedRateBond::new(
+            3,
+            100.0,
+            g.schedule.clone(),
+            vec![0.05],
+            day_counter.clone(),
+            BusinessDayConvention::Following,
+            100.0,
+            Some(g.issue),
+            None,
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        let discounting = shared_mut(DiscountingBondEngine::new(
+            g.curve.clone(),
+            None,
+            Shared::clone(&g.settings),
+        )) as SharedMut<dyn PricingEngine>;
+        coupon_bond
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&discounting));
+        let expected = coupon_bond.bond_mut().clean_price().unwrap();
+
+        let tree = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&g.settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+
+        let mut empty = CallableFixedRateBond::new(
+            3,
+            100.0,
+            g.schedule.clone(),
+            vec![0.05],
+            day_counter.clone(),
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            Vec::new(),
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        empty
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&tree));
+        let price = empty.clean_price().unwrap();
+        assert!(
+            (price - expected).abs() <= tol,
+            "empty callability: tree {price} vs straight {expected} (error {})",
+            (price - expected).abs()
+        );
+
+        let mut otm: CallabilitySchedule = g
+            .even_years()
+            .into_iter()
+            .map(|d| Callability::new(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
+            .collect();
+        otm.extend(
+            g.odd_years()
+                .into_iter()
+                .map(|d| Callability::new(BondPrice::Clean(0.0), CallabilityType::Put, d)),
+        );
+        let mut worthless = CallableFixedRateBond::new(
+            3,
+            100.0,
+            g.schedule,
+            vec![0.05],
+            day_counter,
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            otm,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        worthless.base_mut().set_pricing_engine(tree);
+        let price = worthless.clean_price().unwrap();
+        assert!(
+            (price - expected).abs() <= tol,
+            "OTM callability: tree {price} vs straight {expected} (error {})",
+            (price - expected).abs()
+        );
+    }
 }
