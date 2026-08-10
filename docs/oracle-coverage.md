@@ -25,7 +25,7 @@ credit.
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
 | Fixed-rate bonds (cached) | `FixedRateBond` + `DiscountingBondEngine` | `bonds.cpp` `testCachedFixed` | bond1–3 @ 1e-6 (plain / varying coupons / next-to-last stub) |
-| Callable / puttable fixed bonds | `CallableFixedRateBond` + `TreeCallableFixedRateBondEngine` | `callablebonds.cpp` (HW tree) | Tree engine (Hull-White); identity-verified vs straight bond |
+| Callable / puttable fixed bonds (cached) | `CallableFixedRateBond` + `TreeCallableFixedRateBondEngine` | `callablebonds.cpp` `testCached` | HW tree call/put/both @ 1e-8 |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
 | Bond forward | `BondForward` (spot-minus-income) | `ql/instruments/bondforward` | Fair-strike NPV≈0; income-free dirty fwd = spot/DF; clean = dirty − AI |
 | Bates (log-normal jumps) | `BatesProcess` / `BatesModel` / `BatesEngine` (Gatheral + `addOnTerm`) | `batesmodel.cpp` `testAnalyticVsBlack` | Tiny λ/δ → Black @ 2e-7; λ→0 ≡ Heston Gatheral |
