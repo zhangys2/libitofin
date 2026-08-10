@@ -49,6 +49,7 @@ credit.
 | SA R2048 (date-vector schedule) | `Schedule::with_metadata` + yield dirty | `bonds.cpp` `testBondFromScheduleWithDateVector` | dirty 95.75706 @ 1e-5 |
 | Bond price/ATM rate consistency | `BondFunctions::atm_rate` + `BondPrice` | `bonds.cpp` `testAtmRate` | clean/dirty → coupon @ 1e-7 |
 | Bond theoretical price/yield | `DiscountingBondEngine` ↔ Continuous yield | `bonds.cpp` `testTheoretical` | engine ≡ yield price; yield recovery @ 1e-7 |
+| Bond price/z-spread consistency | `BondFunctions` z-spread clean/dirty ↔ solve | `bonds.cpp` `testZspread` | clean/dirty round-trip @ 1e-7 |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
