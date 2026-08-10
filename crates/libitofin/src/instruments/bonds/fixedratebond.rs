@@ -164,6 +164,7 @@ impl FixedRateBond {
 mod tests {
     use super::*;
     use crate::handle::Handle;
+    use crate::instrument::Instrument;
     use crate::interestrate::Compounding;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::bond::DiscountingBondEngine;
