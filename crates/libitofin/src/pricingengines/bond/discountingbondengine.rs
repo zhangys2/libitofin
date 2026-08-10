@@ -153,6 +153,7 @@ mod tests {
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
     use crate::time::dategenerationrule::DateGeneration;
+    use crate::time::daycounter::DayCounter;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
     use crate::time::frequency::Frequency;
@@ -416,12 +417,26 @@ mod tests {
         schedule: Schedule,
         coupons: Vec<f64>,
     ) -> FixedRateBond {
+        make_fixed_bond_with_day_counter(
+            settings,
+            schedule,
+            coupons,
+            ActualActual::with_convention(Convention::ISMA),
+        )
+    }
+
+    fn make_fixed_bond_with_day_counter(
+        settings: &Shared<Settings<Date>>,
+        schedule: Schedule,
+        coupons: Vec<f64>,
+        accrual_day_counter: DayCounter,
+    ) -> FixedRateBond {
         FixedRateBond::new(
             1,
             1_000_000.0,
             schedule,
             coupons,
-            ActualActual::with_convention(Convention::ISMA),
+            accrual_day_counter,
             BusinessDayConvention::ModifiedFollowing,
             100.0,
             Some(Date::new(30, Month::November, 2004)),
@@ -434,6 +449,23 @@ mod tests {
             Shared::clone(settings),
         )
         .unwrap()
+    }
+
+    /// Copy a generated schedule as a date-vector schedule with full meta,
+    /// matching `Schedule(sch.dates(), …, vector<bool>(size-1, true))` in
+    /// `bonds.cpp` `testFixedBondWithGivenDates`.
+    fn schedule_from_given_dates(sch: &Schedule) -> Schedule {
+        let n = sch.dates().len().saturating_sub(1);
+        Schedule::with_metadata(
+            sch.dates().to_vec(),
+            UnitedStates::new(Market::GovernmentBond),
+            BusinessDayConvention::Unadjusted,
+            Some(BusinessDayConvention::Unadjusted),
+            Some(Period::new(6, TimeUnit::Months)),
+            Some(DateGeneration::Backward),
+            Some(false),
+            vec![true; n],
+        )
     }
 
     /// `bonds.cpp` testCachedFixed (`:831`): three fixed-coupon government
@@ -502,6 +534,97 @@ mod tests {
             (price3 - 100.382794).abs() <= 1.0e-6,
             "bond3 stub schedule: clean {price3} vs cached 100.382794 (error {})",
             (price3 - 100.382794).abs()
+        );
+    }
+
+    /// `bonds.cpp` testFixedBondWithGivenDates (`:1493`): a fixed-coupon bond
+    /// built from a rule-generated schedule matches one built from the same
+    /// dates plus meta (`is_regular` all true) to 1e-6 — plain, varying coupons,
+    /// and a next-to-last stub schedule (Actual360 accrual on the stub case).
+    #[test]
+    fn fixed_bond_with_given_dates_matches_generated_schedule() {
+        let settings = settings_today();
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today(),
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let engine = shared_mut(DiscountingBondEngine::new(
+            discount_curve,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        let tol = 1.0e-6;
+
+        let sch1 = fixed_schedule(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::November, 2008),
+            None,
+        );
+        let sch1_copy = schedule_from_given_dates(&sch1);
+        let coupon_rates = vec![0.02875, 0.03, 0.03125, 0.0325];
+
+        let mut bond1 = make_fixed_bond(&settings, sch1.clone(), vec![0.02875]);
+        bond1
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let mut bond1_copy = make_fixed_bond(&settings, sch1_copy.clone(), vec![0.02875]);
+        bond1_copy
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let expected = bond1.bond_mut().clean_price().unwrap();
+        let calculated = bond1_copy.bond_mut().clean_price().unwrap();
+        assert!(
+            (expected - calculated).abs() <= tol,
+            "bond1 plain: generated {expected} vs given-dates {calculated} (error {})",
+            (expected - calculated).abs()
+        );
+
+        let mut bond2 = make_fixed_bond(&settings, sch1, coupon_rates.clone());
+        bond2
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let mut bond2_copy = make_fixed_bond(&settings, sch1_copy, coupon_rates.clone());
+        bond2_copy
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let expected = bond2.bond_mut().clean_price().unwrap();
+        let calculated = bond2_copy.bond_mut().clean_price().unwrap();
+        assert!(
+            (expected - calculated).abs() <= tol,
+            "bond2 varying coupons: generated {expected} vs given-dates {calculated} (error {})",
+            (expected - calculated).abs()
+        );
+
+        let sch3 = fixed_schedule(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::March, 2009),
+            Some(Date::new(30, Month::November, 2008)),
+        );
+        let sch3_copy = schedule_from_given_dates(&sch3);
+        let dc = Actual360::new();
+        let mut bond3 =
+            make_fixed_bond_with_day_counter(&settings, sch3, coupon_rates.clone(), dc.clone());
+        bond3
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let mut bond3_copy =
+            make_fixed_bond_with_day_counter(&settings, sch3_copy, coupon_rates, dc);
+        bond3_copy.bond_mut().base_mut().set_pricing_engine(engine);
+        let expected = bond3.bond_mut().clean_price().unwrap();
+        let calculated = bond3_copy.bond_mut().clean_price().unwrap();
+        assert!(
+            (expected - calculated).abs() <= tol,
+            "bond3 stub Actual360: generated {expected} vs given-dates {calculated} (error {})",
+            (expected - calculated).abs()
         );
     }
 
