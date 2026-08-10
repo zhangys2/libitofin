@@ -670,6 +670,477 @@ mod tests {
         }
     }
 
+    /// `bonds.cpp` testCached (`:503`): market yield↔clean and engine clean↔yield
+    /// cached values for three fixed bonds (schedule ISMA vs bare ISMA) to 1e-6.
+    #[test]
+    fn cached_bond_price_and_yield_values() {
+        let settings = settings_today();
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today(),
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let engine = shared_mut(DiscountingBondEngine::new(
+            discount_curve,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        let tol = 1.0e-6;
+        let freq = Frequency::Semiannual;
+        let face = 1_000_000.0;
+        let settlement_days = 1;
+
+        let assert_close = |got: f64, cached: f64, label: &str| {
+            assert!(
+                (got - cached).abs() <= tol,
+                "{label}: {got} vs cached {cached} (error {})",
+                (got - cached).abs()
+            );
+        };
+
+        // --- bond1: EOM NullCalendar short-first-coupon schedule ---
+        let sch1 = MakeSchedule::new()
+            .from(Date::new(31, Month::October, 2004))
+            .to(Date::new(31, Month::October, 2006))
+            .with_frequency(freq)
+            .with_calendar(NullCalendar::new())
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .backwards()
+            .end_of_month(true)
+            .build();
+        let dc1 = ActualActual::with_schedule(Convention::ISMA, sch1.clone());
+        let dc1_bare = ActualActual::with_convention(Convention::ISMA);
+        let make_bond1 = |day_counter: crate::time::daycounter::DayCounter| {
+            FixedRateBond::new(
+                settlement_days,
+                face,
+                sch1.clone(),
+                vec![0.025],
+                day_counter,
+                BusinessDayConvention::ModifiedFollowing,
+                100.0,
+                Some(Date::new(1, Month::November, 2004)),
+                None,
+                None,
+                NullCalendar::new(),
+                BusinessDayConvention::Unadjusted,
+                false,
+                None,
+                Shared::clone(&settings),
+            )
+            .unwrap()
+        };
+        let mut bond1 = make_bond1(dc1.clone());
+        let mut bond1_bare = make_bond1(dc1_bare.clone());
+        bond1
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        bond1_bare
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+
+        let market_price1 = 99.203125;
+        let market_yield1 = 0.02925;
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond1.bond(),
+                market_yield1,
+                dc1.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.204505,
+            "bond1 schedule yield→clean",
+        );
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond1_bare.bond(),
+                market_yield1,
+                dc1_bare.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.204505,
+            "bond1 bare yield→clean",
+        );
+        let engine_clean1 = bond1.bond_mut().clean_price().unwrap();
+        let engine_clean1_bare = bond1_bare.bond_mut().clean_price().unwrap();
+        assert_close(engine_clean1, 98.943393, "bond1 schedule engine clean");
+        assert_close(engine_clean1_bare, 98.943393, "bond1 bare engine clean");
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1.bond(),
+                BondPrice::Clean(market_price1),
+                dc1.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.029257,
+            "bond1 schedule compounded yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1_bare.bond(),
+                BondPrice::Clean(market_price1),
+                dc1_bare.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.029257,
+            "bond1 bare compounded yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1.bond(),
+                BondPrice::Clean(market_price1),
+                dc1.clone(),
+                Compounding::Continuous,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.029045,
+            "bond1 schedule continuous yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1_bare.bond(),
+                BondPrice::Clean(market_price1),
+                dc1_bare.clone(),
+                Compounding::Continuous,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.029045,
+            "bond1 bare continuous yield",
+        );
+        let settlement1 = bond1.bond().settlement_date(None).unwrap();
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1.bond(),
+                BondPrice::Clean(engine_clean1),
+                dc1,
+                Compounding::Continuous,
+                freq,
+                Some(settlement1),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.030423,
+            "bond1 schedule continuous yield from engine",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond1_bare.bond(),
+                BondPrice::Clean(engine_clean1_bare),
+                dc1_bare,
+                Compounding::Continuous,
+                freq,
+                Some(settlement1),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.030423,
+            "bond1 bare continuous yield from engine",
+        );
+
+        // --- bond2: plain NullCalendar schedule ---
+        let sch2 = MakeSchedule::new()
+            .from(Date::new(15, Month::November, 2004))
+            .to(Date::new(15, Month::November, 2009))
+            .with_frequency(freq)
+            .with_calendar(NullCalendar::new())
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .backwards()
+            .end_of_month(false)
+            .build();
+        let dc2 = ActualActual::with_schedule(Convention::ISMA, sch2.clone());
+        let dc2_bare = ActualActual::with_convention(Convention::ISMA);
+        let make_bond2 = |day_counter: crate::time::daycounter::DayCounter| {
+            FixedRateBond::new(
+                settlement_days,
+                face,
+                sch2.clone(),
+                vec![0.035],
+                day_counter,
+                BusinessDayConvention::ModifiedFollowing,
+                100.0,
+                Some(Date::new(15, Month::November, 2004)),
+                None,
+                None,
+                NullCalendar::new(),
+                BusinessDayConvention::Unadjusted,
+                false,
+                None,
+                Shared::clone(&settings),
+            )
+            .unwrap()
+        };
+        let mut bond2 = make_bond2(dc2.clone());
+        let mut bond2_bare = make_bond2(dc2_bare.clone());
+        bond2
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        bond2_bare
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+
+        let market_price2 = 99.6875;
+        let market_yield2 = 0.03569;
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond2.bond(),
+                market_yield2,
+                dc2.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.687192,
+            "bond2 schedule yield→clean",
+        );
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond2_bare.bond(),
+                market_yield2,
+                dc2_bare.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.687192,
+            "bond2 bare yield→clean",
+        );
+        let engine_clean2 = bond2.bond_mut().clean_price().unwrap();
+        let engine_clean2_bare = bond2_bare.bond_mut().clean_price().unwrap();
+        assert_close(engine_clean2, 101.986794, "bond2 schedule engine clean");
+        assert_close(engine_clean2_bare, 101.986794, "bond2 bare engine clean");
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2.bond(),
+                BondPrice::Clean(market_price2),
+                dc2.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.035689,
+            "bond2 schedule compounded yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2_bare.bond(),
+                BondPrice::Clean(market_price2),
+                dc2_bare.clone(),
+                Compounding::Compounded,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.035689,
+            "bond2 bare compounded yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2.bond(),
+                BondPrice::Clean(market_price2),
+                dc2.clone(),
+                Compounding::Continuous,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.035375,
+            "bond2 schedule continuous yield",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2_bare.bond(),
+                BondPrice::Clean(market_price2),
+                dc2_bare.clone(),
+                Compounding::Continuous,
+                freq,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.035375,
+            "bond2 bare continuous yield",
+        );
+        let settlement2 = bond2.bond().settlement_date(None).unwrap();
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2.bond(),
+                BondPrice::Clean(engine_clean2),
+                dc2,
+                Compounding::Continuous,
+                freq,
+                Some(settlement2),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.030432,
+            "bond2 schedule continuous yield from engine",
+        );
+        assert_close(
+            BondFunctions::yield_rate(
+                bond2_bare.bond(),
+                BondPrice::Clean(engine_clean2_bare),
+                dc2_bare,
+                Compounding::Continuous,
+                freq,
+                Some(settlement2),
+                None,
+                None,
+                None,
+            )
+            .unwrap(),
+            0.030432,
+            "bond2 bare continuous yield from engine",
+        );
+
+        // --- bond3: US GovBond, explicit settlement 30-Nov-2004 ---
+        let sch3 = MakeSchedule::new()
+            .from(Date::new(30, Month::November, 2004))
+            .to(Date::new(30, Month::November, 2006))
+            .with_frequency(freq)
+            .with_calendar(UnitedStates::new(Market::GovernmentBond))
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .backwards()
+            .end_of_month(false)
+            .build();
+        let dc3 = ActualActual::with_schedule(Convention::ISMA, sch3.clone());
+        let dc3_bare = ActualActual::with_convention(Convention::ISMA);
+        let make_bond3 = |day_counter: crate::time::daycounter::DayCounter| {
+            FixedRateBond::new(
+                settlement_days,
+                face,
+                sch3.clone(),
+                vec![0.02875],
+                day_counter,
+                BusinessDayConvention::ModifiedFollowing,
+                100.0,
+                Some(Date::new(30, Month::November, 2004)),
+                None,
+                None,
+                NullCalendar::new(),
+                BusinessDayConvention::Unadjusted,
+                false,
+                None,
+                Shared::clone(&settings),
+            )
+            .unwrap()
+        };
+        let bond3 = make_bond3(dc3.clone());
+        let bond3_bare = make_bond3(dc3_bare.clone());
+        let market_yield3 = 0.02997;
+        let settlement3 = Date::new(30, Month::November, 2004);
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond3.bond(),
+                market_yield3,
+                dc3.clone(),
+                Compounding::Compounded,
+                freq,
+                Some(settlement3),
+            )
+            .unwrap(),
+            99.764759,
+            "bond3 schedule yield→clean @ settle",
+        );
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond3_bare.bond(),
+                market_yield3,
+                dc3_bare.clone(),
+                Compounding::Compounded,
+                freq,
+                Some(settlement3),
+            )
+            .unwrap(),
+            99.764759,
+            "bond3 bare yield→clean @ settle",
+        );
+        // earliest possible settlement equals issue; implicit settle matches
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond3.bond(),
+                market_yield3,
+                dc3,
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.764759,
+            "bond3 schedule yield→clean implicit settle",
+        );
+        assert_close(
+            BondFunctions::clean_price_from_yield(
+                bond3_bare.bond(),
+                market_yield3,
+                dc3_bare,
+                Compounding::Compounded,
+                freq,
+                None,
+            )
+            .unwrap(),
+            99.764759,
+            "bond3 bare yield→clean implicit settle",
+        );
+    }
+
     /// An empty discount-curve handle is rejected before any discounting, as
     /// the C++ `QL_REQUIRE(!discountCurve_.empty(), ...)`.
     #[test]
