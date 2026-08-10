@@ -513,4 +513,99 @@ mod tests {
             "callable {callable} should be strictly below puttable {puttable}"
         );
     }
+
+    /// `callablebonds.cpp` testCached (`:472`): HW-tree clean prices for
+    /// callable / puttable / both schedules reproduce the cached values to
+    /// 1e-8.
+    #[test]
+    fn cached_callable_bond_prices_reproduce_the_c_values() {
+        let calendar = Target::new();
+        let today = Date::new(3, Month::June, 2004);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let settlement = calendar.advance(
+            today,
+            3,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.032,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let model = HullWhite::new(curve, 0.1, 0.01).unwrap();
+
+        let schedule = MakeSchedule::new()
+            .from(issue)
+            .to(maturity)
+            .with_calendar(calendar.clone())
+            .with_frequency(Frequency::Semiannual)
+            .with_convention(rolling)
+            .with_termination_date_convention(rolling)
+            .backwards()
+            .build();
+
+        let mut calls = Vec::new();
+        let mut puts = Vec::new();
+        let mut both = Vec::new();
+        for i in (2..10).step_by(2) {
+            let date = calendar.advance(issue, i, TimeUnit::Years, rolling, false);
+            let exercise = Callability::new(BondPrice::Clean(110.0), CallabilityType::Call, date);
+            calls.push(exercise.clone());
+            both.push(exercise);
+        }
+        for i in (1..10).step_by(2) {
+            let date = calendar.advance(issue, i, TimeUnit::Years, rolling, false);
+            let exercise = Callability::new(BondPrice::Clean(100.0), CallabilityType::Put, date);
+            puts.push(exercise.clone());
+            both.push(exercise);
+        }
+
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let make_bond = |schedule_calls: CallabilitySchedule| {
+            CallableFixedRateBond::new(
+                3,
+                10_000.0,
+                schedule.clone(),
+                vec![0.05],
+                day_counter.clone(),
+                rolling,
+                100.0,
+                Some(issue),
+                schedule_calls,
+                Shared::clone(&settings),
+            )
+            .unwrap()
+        };
+
+        let cases = [
+            (calls, 110.60975477, "callable"),
+            (puts, 115.16559362, "puttable"),
+            (both, 110.97509625, "callable/puttable"),
+        ];
+        let tol = 1.0e-8;
+        for (schedule_calls, cached, label) in cases {
+            let mut bond = make_bond(schedule_calls);
+            bond.base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            let price = bond.clean_price().unwrap();
+            assert!(
+                (price - cached).abs() <= tol,
+                "{label}: clean {price} vs cached {cached} (error {})",
+                (price - cached).abs()
+            );
+        }
+    }
 }
