@@ -502,11 +502,12 @@ impl Instrument for CallableZeroCouponBond {
 mod tests {
     use super::*;
     use crate::handle::Handle;
-    use crate::instruments::FixedRateBond;
+    use crate::instruments::{FixedRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
     use crate::models::shortrate::HullWhite;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::bond::{DiscountingBondEngine, TreeCallableFixedRateBondEngine};
+    use crate::quotes::{Quote, SimpleQuote};
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -935,7 +936,7 @@ mod tests {
 
     /// `callablebonds.cpp` testDegenerate (`:359`): empty and deeply OTM
     /// callability schedules reprice the straight fixed bond to 1e-4 on the
-    /// HW tree (zero-coupon degenerate cases covered separately once exercised).
+    /// HW tree.
     #[test]
     fn degenerate_callable_fixed_bond_matches_the_straight_bond() {
         let g = Globals::new(0.034);
@@ -1026,6 +1027,169 @@ mod tests {
             (price - expected).abs() <= tol,
             "OTM callability: tree {price} vs straight {expected} (error {})",
             (price - expected).abs()
+        );
+    }
+
+    /// `callablebonds.cpp` testDegenerate (`:359`): empty and deeply OTM
+    /// callability schedules reprice the straight zero-coupon bond to 1e-4.
+    #[test]
+    fn degenerate_callable_zero_bond_matches_the_straight_bond() {
+        let g = Globals::new(0.034);
+        let model = HullWhite::new(g.curve.clone(), 0.1, 0.01).unwrap();
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let tol = 1.0e-4;
+
+        let mut zero = ZeroCouponBond::new(
+            3,
+            g.calendar.clone(),
+            100.0,
+            g.maturity,
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        let discounting = shared_mut(DiscountingBondEngine::new(
+            g.curve.clone(),
+            None,
+            Shared::clone(&g.settings),
+        )) as SharedMut<dyn PricingEngine>;
+        zero.bond_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&discounting));
+        let expected = zero.bond_mut().clean_price().unwrap();
+
+        let tree = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&g.settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+
+        let mut empty = CallableZeroCouponBond::new(
+            3,
+            100.0,
+            g.calendar.clone(),
+            g.maturity,
+            day_counter.clone(),
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            Vec::new(),
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        empty.base_mut().set_pricing_engine(SharedMut::clone(&tree));
+        let price = empty.clean_price().unwrap();
+        assert!(
+            (price - expected).abs() <= tol,
+            "empty callability: tree {price} vs straight {expected} (error {})",
+            (price - expected).abs()
+        );
+
+        let mut otm: CallabilitySchedule = g
+            .even_years()
+            .into_iter()
+            .map(|d| Callability::new(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
+            .collect();
+        otm.extend(
+            g.odd_years()
+                .into_iter()
+                .map(|d| Callability::new(BondPrice::Clean(0.0), CallabilityType::Put, d)),
+        );
+        let mut worthless = CallableZeroCouponBond::new(
+            3,
+            100.0,
+            g.calendar.clone(),
+            g.maturity,
+            day_counter,
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            otm,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+        worthless.base_mut().set_pricing_engine(tree);
+        let price = worthless.clean_price().unwrap();
+        assert!(
+            (price - expected).abs() <= tol,
+            "OTM callability: tree {price} vs straight {expected} (error {})",
+            (price - expected).abs()
+        );
+    }
+
+    /// `callablebonds.cpp` testObservability (`:300`): a quote-backed flat
+    /// curve move invalidates the callable zero's cached NPV.
+    #[test]
+    fn callable_zero_bond_observes_the_discount_curve_quote() {
+        let calendar = Target::new();
+        let today = Date::new(3, Month::June, 2004);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let settlement = calendar.advance(
+            today,
+            2,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+
+        let quote = shared(SimpleQuote::new(0.03));
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::new(
+            settlement,
+            Handle::new(Shared::clone(&quote) as Shared<dyn Quote>),
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let model = HullWhite::new(curve, 0.1, 0.01).unwrap();
+
+        let mut callabilities: CallabilitySchedule = (2..10)
+            .step_by(2)
+            .map(|i| {
+                Callability::new(
+                    BondPrice::Clean(110.0),
+                    CallabilityType::Call,
+                    calendar.advance(issue, i, TimeUnit::Years, rolling, false),
+                )
+            })
+            .collect();
+        callabilities.extend((1..10).step_by(2).map(|i| {
+            Callability::new(
+                BondPrice::Clean(90.0),
+                CallabilityType::Put,
+                calendar.advance(issue, i, TimeUnit::Years, rolling, false),
+            )
+        }));
+
+        let mut bond = CallableZeroCouponBond::new(
+            3,
+            100.0,
+            calendar,
+            maturity,
+            Thirty360::with_convention(Convention::BondBasis),
+            rolling,
+            100.0,
+            Some(issue),
+            callabilities,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+        bond.base_mut().set_pricing_engine(engine);
+
+        let original = bond.npv().unwrap();
+        quote.set_value(0.04);
+        let updated = bond.npv().unwrap();
+        assert!(
+            (original - updated).abs() > 1e-10,
+            "callable zero NPV should change when the curve quote moves \
+             (original={original}, updated={updated})"
         );
     }
 
