@@ -266,6 +266,10 @@ impl Coupon for IborCoupon {
         self.base.coupon_base()
     }
 
+    fn fixing_date(&self) -> Option<Date> {
+        Some(IborCoupon::fixing_date(self))
+    }
+
     fn amount(&self) -> QlResult<Real> {
         Ok(self.rate()? * self.accrual_period() * self.nominal())
     }

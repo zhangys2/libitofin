@@ -47,6 +47,7 @@ credit.
 | Tree HW Bermudan (cached) | `TreeSwaptionEngine` + `DiscretizedSwaption` snap | `bermudanswaption.cpp` `testCachedValues` | ITM/ATM/OTM @ 1e-4 (non-par coupons) |
 | Zero-coupon bonds (cached) | `ZeroCouponBond` + `DiscountingBondEngine` | `bonds.cpp` `testCachedZero` | three maturities @ 1e-6 |
 | Floating bonds (cached) | `FloatingRateBond` + `USDLibor` / `Libor` | `bonds.cpp` `testCachedFloating` | bond1–4 @ 1e-6 (plain / dual / spreads / fixing+ex-coupon) |
+| Floating bonds (fixing convention) | `FloatingRateBond` + `AUDLibor` | `bonds.cpp` `testFixingConvention` | Preceding→Fri / Following→Mon for Sat accrual start |
 | Brazilian NTN-F (Andima) | `BondFunctions` yield clean/dirty + `Business252` | `bonds.cpp` `testBrazilianCached` | six maturities @ 1e-4 |
 | Bond price/yield consistency | `BondFunctions` yield clean/dirty ↔ `yield_rate` | `bonds.cpp` `testYield` | clean/dirty round-trip @ 1e-7 |
 | SA R2048 (date-vector schedule) | `Schedule::with_metadata` + yield dirty | `bonds.cpp` `testBondFromScheduleWithDateVector` | dirty 95.75706 @ 1e-5 |
