@@ -28,6 +28,7 @@ credit.
 | Fixed-rate bonds (given dates) | `FixedRateBond` + `Schedule::with_metadata` | `bonds.cpp` `testFixedBondWithGivenDates` | schedule ≡ date-vector copy @ 1e-6 (plain / varying / stub Actual360) |
 | Callable / puttable fixed bonds (cached) | `CallableFixedRateBond` + `TreeCallableFixedRateBondEngine` | `callablebonds.cpp` `testCached` | HW tree call/put/both @ 1e-8 |
 | Callable / puttable fixed bonds (consistency / degenerate) | `CallableFixedRateBond` + HW tree | `callablebonds.cpp` `testConsistency` / `testDegenerate` | call < plain < put; empty/OTM ≡ straight @ 1e-4 |
+| Callable fixed bonds (arbitrary schedule) | `CallableFixedRateBond` + date-vector schedule | `callablebonds.cpp` `testCallableFixedRateBondWithArbitrarySchedule` | HW tree clean price succeeds |
 | Fixed-rate bonds (arbitrary schedule) | `FixedRateBond` + `Schedule::from_dates` | `bonds.cpp` `testFixedRateBondWithArbitrarySchedule` | `NoFrequency`; clean price prices without error |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
 | Bond forward | `BondForward` (spot-minus-income) | `ql/instruments/bondforward` | Fair-strike NPV≈0; income-free dirty fwd = spot/DF; clean = dirty − AI |
@@ -55,6 +56,9 @@ credit.
 | Bond theoretical price/yield | `DiscountingBondEngine` ↔ Continuous yield | `bonds.cpp` `testTheoretical` | engine ≡ yield price; yield recovery @ 1e-7 |
 | Bond price/z-spread consistency | `BondFunctions` z-spread clean/dirty ↔ solve | `bonds.cpp` `testZspread` | clean/dirty round-trip @ 1e-7 |
 | Bond price/yield (cached) | `FixedRateBond` + engine + `BondFunctions` | `bonds.cpp` `testCached` | bond1–3 price/yield @ 1e-6 (schedule vs bare ISMA) |
+| Ex-coupon UK gilt / Australian bond | `BondFunctions` + `CashFlows` yield/duration/convexity | `bonds.cpp` `testExCouponGilt` / `testExCouponAustralianBond` | Bloomberg tables @ 1e-6 / 1e-4–1e-3 |
+| Thirty/360 bond (settle on 31st) | `BondFunctions` yield/Macaulay/convexity/accrued | `bonds.cpp` `testThirty360BondWithSettlementOn31st` | CUSIP 3130A0X70 @ 1e-4 / 1e-3 / 1e-6 |
+| Bond basis-point value | `BondFunctions` / `CashFlows` BPV & YVBP | `bonds.cpp` `testBasisPointValue` | yield 0.041301; BPV/YVBP table @ 1e-6 |
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
