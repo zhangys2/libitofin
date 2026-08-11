@@ -1,10 +1,11 @@
-//! Callable / puttable fixed-rate bond.
+//! Callable / puttable bonds.
 //!
-//! Port of QuantLib's `ql/experimental/callablebonds/callablebond.{hpp,cpp}`
-//! (fixed-rate path). A [`CallableFixedRateBond`] is a fixed-rate bond carrying
-//! a [`CallabilitySchedule`] of European/Bermudan call or put dates; it prices
-//! on a short-rate lattice through
-//! [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine).
+//! Port of QuantLib's `ql/experimental/callablebonds/callablebond.{hpp,cpp}`.
+//! [`CallableFixedRateBond`] and [`CallableZeroCouponBond`] carry a
+//! [`CallabilitySchedule`] of European/Bermudan call or put dates and price on
+//! a short-rate lattice through
+//! [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine)
+//! (C++'s `TreeCallableZeroCouponBondEngine` is the same engine).
 //!
 //! This slice mirrors QuantLib's argument setup (`setupArguments`): coupons and
 //! a par redemption feed the discretized bond, and clean call prices are
@@ -17,11 +18,12 @@ use crate::errors::QlResult;
 use crate::event::event_has_occurred;
 use crate::fail;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
-use crate::instruments::{Bond, BondPrice, BondResults, FixedRateBond};
+use crate::instruments::{Bond, BondPrice, BondResults, FixedRateBond, ZeroCouponBond};
 use crate::pricingengine::{Arguments, Results};
 use crate::settings::Settings;
 use crate::shared::Shared;
 use crate::time::businessdayconvention::BusinessDayConvention;
+use crate::time::calendar::Calendar;
 use crate::time::calendars::nullcalendar::NullCalendar;
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
@@ -142,6 +144,68 @@ impl Arguments for CallableBondArguments {
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 fn require_field(ok: bool, message: &str) -> QlResult<()> {
     if ok { Ok(()) } else { fail!("{message}") }
+}
+
+/// Fills [`CallableBondArguments`] from a bond's cash flows and callability
+/// schedule (`CallableBond::setupArguments`, `callablebond.cpp:410-480`).
+fn fill_callable_bond_arguments(
+    args: &mut CallableBondArguments,
+    bond: &Bond,
+    put_call_schedule: &[Callability],
+    face_amount: Real,
+    settings: &Settings<Date>,
+) -> QlResult<()> {
+    let settlement = bond.settlement_date(None)?;
+    args.settlement_date = Some(settlement);
+    args.face_amount = face_amount;
+
+    let cashflows = bond.cashflows();
+    let count = cashflows.len();
+    let redemption = &cashflows[count - 1];
+    args.redemption = redemption.amount()?;
+    args.redemption_date = Some(redemption.date());
+
+    args.coupon_dates.clear();
+    args.coupon_amounts.clear();
+    for flow in &cashflows[..count - 1] {
+        if !event_has_occurred(flow.date(), settings, Some(settlement), Some(false))? {
+            args.coupon_dates.push(flow.date());
+            args.coupon_amounts.push(flow.amount()?);
+        }
+    }
+
+    args.callability_dates.clear();
+    args.callability_prices.clear();
+    args.callability_types.clear();
+    for callability in put_call_schedule {
+        if event_has_occurred(callability.date(), settings, Some(settlement), Some(false))? {
+            continue;
+        }
+        let call_date = callability.date();
+        args.callability_dates.push(call_date);
+        args.callability_types.push(callability.call_type());
+        let mut price = callability.price().amount();
+        if let BondPrice::Clean(_) = callability.price() {
+            // Convert the clean call price to dirty with the accrued at the
+            // call date (`callablebond.cpp:453-477`).
+            for flow in cashflows {
+                if !event_has_occurred(flow.date(), settings, Some(call_date), Some(false))? {
+                    if let Some(coupon) = flow.as_coupon() {
+                        let accrued = coupon.accrued_amount(call_date)?;
+                        let notional = bond.notional(Some(call_date))?;
+                        if notional != 0.0 {
+                            price += accrued / notional * 100.0;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        args.callability_prices.push(price);
+    }
+
+    args.spread = 0.0;
+    Ok(())
 }
 
 /// A callable / puttable fixed-rate bond.
@@ -274,68 +338,154 @@ impl Instrument for CallableFixedRateBond {
         let Some(args) = (arguments as &mut dyn Any).downcast_mut::<CallableBondArguments>() else {
             fail!("wrong argument type");
         };
-        let bond = self.bond.bond();
-        let settlement = bond.settlement_date(None)?;
-        args.settlement_date = Some(settlement);
-        args.face_amount = self.face_amount;
+        fill_callable_bond_arguments(
+            args,
+            self.bond.bond(),
+            &self.put_call_schedule,
+            self.face_amount,
+            &self.settings,
+        )
+    }
 
-        let cashflows = bond.cashflows();
-        let count = cashflows.len();
-        let redemption = &cashflows[count - 1];
-        args.redemption = redemption.amount()?;
-        args.redemption_date = Some(redemption.date());
-
-        args.coupon_dates.clear();
-        args.coupon_amounts.clear();
-        for flow in &cashflows[..count - 1] {
-            if !event_has_occurred(flow.date(), &self.settings, Some(settlement), Some(false))? {
-                args.coupon_dates.push(flow.date());
-                args.coupon_amounts.push(flow.amount()?);
-            }
-        }
-
-        args.callability_dates.clear();
-        args.callability_prices.clear();
-        args.callability_types.clear();
-        for callability in &self.put_call_schedule {
-            if event_has_occurred(
-                callability.date(),
-                &self.settings,
-                Some(settlement),
-                Some(false),
-            )? {
-                continue;
-            }
-            let call_date = callability.date();
-            args.callability_dates.push(call_date);
-            args.callability_types.push(callability.call_type());
-            let mut price = callability.price().amount();
-            if let BondPrice::Clean(_) = callability.price() {
-                // Convert the clean call price to dirty with the accrued at the
-                // call date (`callablebond.cpp:453-477`).
-                for flow in cashflows {
-                    if !event_has_occurred(
-                        flow.date(),
-                        &self.settings,
-                        Some(call_date),
-                        Some(false),
-                    )? {
-                        if let Some(coupon) = flow.as_coupon() {
-                            let accrued = coupon.accrued_amount(call_date)?;
-                            let notional = bond.notional(Some(call_date))?;
-                            if notional != 0.0 {
-                                price += accrued / notional * 100.0;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-            args.callability_prices.push(price);
-        }
-
-        args.spread = 0.0;
+    fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
+        let Some(results) = (results as &dyn Any).downcast_ref::<BondResults>() else {
+            fail!("wrong result type");
+        };
+        self.settlement_value = results.settlement_value;
+        self.base.store_results(&results.instrument);
         Ok(())
+    }
+}
+
+/// A callable / puttable zero-coupon bond.
+pub struct CallableZeroCouponBond {
+    base: InstrumentBase,
+    bond: ZeroCouponBond,
+    put_call_schedule: CallabilitySchedule,
+    face_amount: Real,
+    settings: Shared<Settings<Date>>,
+    settlement_value: Option<Real>,
+}
+
+impl CallableZeroCouponBond {
+    /// Builds a callable zero-coupon bond (`CallableZeroCouponBond` ctor).
+    ///
+    /// # Errors
+    ///
+    /// Fails if a call/put date is after the bond maturity, or on any bond
+    /// construction error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        settlement_days: Natural,
+        face_amount: Real,
+        calendar: Calendar,
+        maturity_date: Date,
+        _day_counter: DayCounter,
+        payment_convention: BusinessDayConvention,
+        redemption: Real,
+        issue_date: Option<Date>,
+        put_call_schedule: CallabilitySchedule,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<CallableZeroCouponBond> {
+        for callability in &put_call_schedule {
+            if callability.date() > maturity_date {
+                fail!("bond cannot mature before the last call/put date");
+            }
+        }
+        let bond = ZeroCouponBond::new(
+            settlement_days,
+            calendar,
+            face_amount,
+            maturity_date,
+            payment_convention,
+            redemption,
+            issue_date,
+            Shared::clone(&settings),
+        )?;
+        let base = InstrumentBase::new();
+        settings.register_eval_date_observer(&base.observer());
+        Ok(CallableZeroCouponBond {
+            base,
+            bond,
+            put_call_schedule,
+            face_amount,
+            settings,
+            settlement_value: None,
+        })
+    }
+
+    /// The put/call schedule.
+    pub fn callability(&self) -> &CallabilitySchedule {
+        &self.put_call_schedule
+    }
+
+    /// The underlying [`Bond`] base.
+    pub fn bond(&self) -> &Bond {
+        self.bond.bond()
+    }
+
+    /// The theoretical settlement value from the engine.
+    pub fn settlement_value(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        let Some(value) = self.settlement_value else {
+            fail!("settlement value not provided");
+        };
+        Ok(value)
+    }
+
+    /// The theoretical dirty price, per 100 of notional.
+    pub fn dirty_price(&mut self) -> QlResult<Real> {
+        let settlement = self.bond().settlement_date(None)?;
+        let notional = self.bond().notional(Some(settlement))?;
+        if notional == 0.0 {
+            return Ok(0.0);
+        }
+        let value = self.settlement_value()?;
+        Ok(value * 100.0 / notional)
+    }
+
+    /// The theoretical clean price, per 100 of notional.
+    pub fn clean_price(&mut self) -> QlResult<Real> {
+        let settlement = self.bond().settlement_date(None)?;
+        let dirty = self.dirty_price()?;
+        let accrued = self.bond().accrued_amount(Some(settlement))?;
+        Ok(dirty - accrued)
+    }
+}
+
+impl Instrument for CallableZeroCouponBond {
+    fn base(&self) -> &InstrumentBase {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut InstrumentBase {
+        &mut self.base
+    }
+
+    fn is_expired(&self) -> QlResult<bool> {
+        self.bond.bond().is_expired()
+    }
+
+    fn setup_expired(&mut self) {
+        let expired = InstrumentResults {
+            value: Some(0.0),
+            ..InstrumentResults::default()
+        };
+        self.base.store_results(&expired);
+        self.settlement_value = Some(0.0);
+    }
+
+    fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
+        let Some(args) = (arguments as &mut dyn Any).downcast_mut::<CallableBondArguments>() else {
+            fail!("wrong argument type");
+        };
+        fill_callable_bond_arguments(
+            args,
+            self.bond.bond(),
+            &self.put_call_schedule,
+            self.face_amount,
+            &self.settings,
+        )
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
@@ -617,6 +767,7 @@ mod tests {
         calendar: crate::time::calendar::Calendar,
         rolling: BusinessDayConvention,
         issue: Date,
+        maturity: Date,
         schedule: Schedule,
         curve: Handle<dyn YieldTermStructure>,
     }
@@ -659,6 +810,7 @@ mod tests {
                 calendar,
                 rolling,
                 issue,
+                maturity,
                 schedule,
                 curve,
             }
@@ -783,7 +935,7 @@ mod tests {
 
     /// `callablebonds.cpp` testDegenerate (`:359`): empty and deeply OTM
     /// callability schedules reprice the straight fixed bond to 1e-4 on the
-    /// HW tree (zero-coupon path deferred — `CallableZeroCouponBond` not ported).
+    /// HW tree (zero-coupon degenerate cases covered separately once exercised).
     #[test]
     fn degenerate_callable_fixed_bond_matches_the_straight_bond() {
         let g = Globals::new(0.034);
@@ -947,6 +1099,137 @@ mod tests {
         assert!(
             price.is_finite() && price > 0.0,
             "arbitrary-schedule callable clean price should be positive finite, got {price}"
+        );
+    }
+
+    /// `callablebonds.cpp` testInterplay (`:98`): an earlier exercise right
+    /// that is in the money prevents a later opposite right — settlement value
+    /// matches the discounted call/put price to 1e-2.
+    #[test]
+    fn callable_zero_interplay_of_call_and_put() {
+        let g = Globals::new(0.03);
+        let model = HullWhite::new(g.curve.clone(), 0.1, 0.01).unwrap();
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&g.settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let tol = 1.0e-2;
+
+        let make_zero = |callabilities: CallabilitySchedule| {
+            let mut bond = CallableZeroCouponBond::new(
+                3,
+                100.0,
+                g.calendar.clone(),
+                g.maturity,
+                day_counter.clone(),
+                g.rolling,
+                100.0,
+                Some(g.issue),
+                callabilities,
+                Shared::clone(&g.settings),
+            )
+            .unwrap();
+            bond.base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            bond
+        };
+
+        let expected_from = |exercise: &Callability, bond: &mut CallableZeroCouponBond| {
+            let settlement = bond.bond().settlement_date(None).unwrap();
+            let curve = g.curve.current_link().unwrap();
+            let df_call = curve.discount_date(exercise.date(), true).unwrap();
+            let df_settle = curve.discount_date(settlement, true).unwrap();
+            exercise.price().amount() * df_call / df_settle
+        };
+
+        // Case 1: early OTM call blocks a later deep ITM put.
+        let call_y4 = Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Call,
+            g.calendar
+                .advance(g.issue, 4, TimeUnit::Years, g.rolling, false),
+        );
+        let put_y6 = Callability::new(
+            BondPrice::Clean(1000.0),
+            CallabilityType::Put,
+            g.calendar
+                .advance(g.issue, 6, TimeUnit::Years, g.rolling, false),
+        );
+        let mut bond = make_zero(vec![call_y4.clone(), put_y6]);
+        let expected = expected_from(&call_y4, &mut bond);
+        let value = bond.settlement_value().unwrap();
+        assert!(
+            (value - expected).abs() <= tol,
+            "case1 call blocks put: settlement {value} vs expected {expected}"
+        );
+
+        // Case 2: same, with an added later call.
+        let call_y8 = Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Call,
+            g.calendar
+                .advance(g.issue, 8, TimeUnit::Years, g.rolling, false),
+        );
+        let mut bond = make_zero(vec![
+            call_y4.clone(),
+            Callability::new(
+                BondPrice::Clean(1000.0),
+                CallabilityType::Put,
+                g.calendar
+                    .advance(g.issue, 6, TimeUnit::Years, g.rolling, false),
+            ),
+            call_y8,
+        ]);
+        let expected = expected_from(&call_y4, &mut bond);
+        let value = bond.settlement_value().unwrap();
+        assert!(
+            (value - expected).abs() <= tol,
+            "case2 call blocks put (+later call): settlement {value} vs expected {expected}"
+        );
+
+        // Case 3: early ITM put blocks a later deep ITM call.
+        let put_y4 = Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Put,
+            g.calendar
+                .advance(g.issue, 4, TimeUnit::Years, g.rolling, false),
+        );
+        let call_y6 = Callability::new(
+            BondPrice::Clean(10.0),
+            CallabilityType::Call,
+            g.calendar
+                .advance(g.issue, 6, TimeUnit::Years, g.rolling, false),
+        );
+        let mut bond = make_zero(vec![put_y4.clone(), call_y6]);
+        let expected = expected_from(&put_y4, &mut bond);
+        let value = bond.settlement_value().unwrap();
+        assert!(
+            (value - expected).abs() <= tol,
+            "case3 put blocks call: settlement {value} vs expected {expected}"
+        );
+
+        // Case 4: same, with an added later put.
+        let put_y8 = Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Put,
+            g.calendar
+                .advance(g.issue, 8, TimeUnit::Years, g.rolling, false),
+        );
+        let mut bond = make_zero(vec![
+            put_y4.clone(),
+            Callability::new(
+                BondPrice::Clean(10.0),
+                CallabilityType::Call,
+                g.calendar
+                    .advance(g.issue, 6, TimeUnit::Years, g.rolling, false),
+            ),
+            put_y8,
+        ]);
+        let expected = expected_from(&put_y4, &mut bond);
+        let value = bond.settlement_value().unwrap();
+        assert!(
+            (value - expected).abs() <= tol,
+            "case4 put blocks call (+later put): settlement {value} vs expected {expected}"
         );
     }
 }

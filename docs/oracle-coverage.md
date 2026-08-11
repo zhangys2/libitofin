@@ -28,6 +28,7 @@ credit.
 | Fixed-rate bonds (given dates) | `FixedRateBond` + `Schedule::with_metadata` | `bonds.cpp` `testFixedBondWithGivenDates` | schedule ≡ date-vector copy @ 1e-6 (plain / varying / stub Actual360) |
 | Callable / puttable fixed bonds (cached) | `CallableFixedRateBond` + `TreeCallableFixedRateBondEngine` | `callablebonds.cpp` `testCached` | HW tree call/put/both @ 1e-8 |
 | Callable / puttable fixed bonds (consistency / degenerate) | `CallableFixedRateBond` + HW tree | `callablebonds.cpp` `testConsistency` / `testDegenerate` | call < plain < put; empty/OTM ≡ straight @ 1e-4 |
+| Callable zero (call/put interplay) | `CallableZeroCouponBond` + HW tree | `callablebonds.cpp` `testInterplay` | early ITM exercise blocks later opposite right @ 1e-2 |
 | Callable fixed bonds (arbitrary schedule) | `CallableFixedRateBond` + date-vector schedule | `callablebonds.cpp` `testCallableFixedRateBondWithArbitrarySchedule` | HW tree clean price succeeds |
 | Fixed-rate bonds (arbitrary schedule) | `FixedRateBond` + `Schedule::from_dates` | `bonds.cpp` `testFixedRateBondWithArbitrarySchedule` | `NoFrequency`; clean price prices without error |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
