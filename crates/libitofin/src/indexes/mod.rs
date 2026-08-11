@@ -11,7 +11,7 @@ pub mod index;
 pub mod interestrateindex;
 pub mod swapindex;
 
-pub use ibor::{Estr, Euribor, Libor, Sofr, USDLibor};
+pub use ibor::{AUDLibor, Estr, Euribor, Libor, Sofr, USDLibor};
 pub use iborindex::{IborIndex, OvernightIndex};
 pub use index::Index;
 pub use interestrateindex::{InterestRateIndex, InterestRateIndexBase};

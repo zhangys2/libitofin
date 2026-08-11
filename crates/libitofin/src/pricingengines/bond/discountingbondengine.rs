@@ -273,6 +273,7 @@ mod tests {
             NullCalendar::new(),
             ex_coupon_convention,
             false,
+            None,
             Shared::clone(settings),
         )
         .unwrap()
