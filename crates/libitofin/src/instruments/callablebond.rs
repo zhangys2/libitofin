@@ -645,14 +645,14 @@ mod tests {
                 .with_termination_date_convention(rolling)
                 .backwards()
                 .build();
-            let curve: Handle<dyn YieldTermStructure> =
-                Handle::new(shared(FlatForward::with_rate(
-                    settlement,
-                    rate,
-                    Actual365Fixed::new(),
-                    Compounding::Continuous,
-                    Frequency::Annual,
-                )) as Shared<dyn YieldTermStructure>);
+            let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+                settlement,
+                rate,
+                Actual365Fixed::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            ))
+                as Shared<dyn YieldTermStructure>);
             Self {
                 settings,
                 calendar,
@@ -836,9 +836,7 @@ mod tests {
             Shared::clone(&g.settings),
         )
         .unwrap();
-        empty
-            .base_mut()
-            .set_pricing_engine(SharedMut::clone(&tree));
+        empty.base_mut().set_pricing_engine(SharedMut::clone(&tree));
         let price = empty.clean_price().unwrap();
         assert!(
             (price - expected).abs() <= tol,
