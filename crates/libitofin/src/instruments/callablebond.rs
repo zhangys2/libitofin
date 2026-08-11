@@ -365,8 +365,9 @@ mod tests {
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
-    use crate::time::schedule::MakeSchedule;
+    use crate::time::schedule::{MakeSchedule, Schedule};
     use crate::time::timeunit::TimeUnit;
+    use crate::types::Natural;
 
     const FACE: Real = 100.0;
     const COUPON: Real = 0.05;
@@ -873,6 +874,79 @@ mod tests {
             (price - expected).abs() <= tol,
             "OTM callability: tree {price} vs straight {expected} (error {})",
             (price - expected).abs()
+        );
+    }
+
+    /// `callablebonds.cpp` testCallableFixedRateBondWithArbitrarySchedule
+    /// (`:840`): a date-vector schedule with a mid-schedule call prices under
+    /// the HW tree without error.
+    #[test]
+    fn callable_fixed_bond_with_arbitrary_schedule_prices() {
+        let calendar = Target::new();
+        let today = Date::new(10, Month::January, 2020);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let settlement_days: Natural = 2;
+        let settlement = calendar.advance(
+            today,
+            2,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let dates = vec![
+            Date::new(20, Month::February, 2020),
+            Date::new(15, Month::August, 2020),
+            Date::new(25, Month::September, 2021),
+            Date::new(27, Month::January, 2022),
+        ];
+        let schedule = Schedule::with_metadata(
+            dates.clone(),
+            calendar.clone(),
+            BusinessDayConvention::Unadjusted,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        );
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.03,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let model = HullWhite::new(curve, 0.1, 0.01).unwrap();
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+        let callabilities = vec![Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Call,
+            dates[2],
+        )];
+        let mut bond = CallableFixedRateBond::new(
+            settlement_days,
+            100.0,
+            schedule,
+            vec![0.06],
+            Actual365Fixed::new(),
+            rolling,
+            100.0,
+            Some(issue),
+            callabilities,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        bond.base_mut().set_pricing_engine(engine);
+        let price = bond.clean_price().unwrap();
+        assert!(
+            price.is_finite() && price > 0.0,
+            "arbitrary-schedule callable clean price should be positive finite, got {price}"
         );
     }
 }
