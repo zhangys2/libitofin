@@ -41,7 +41,8 @@ pub use bonds::{
     FloatingRateBond, ZeroCouponBond, soft_callability,
 };
 pub use callablebond::{
-    Callability, CallabilitySchedule, CallabilityType, CallableBondArguments, CallableFixedRateBond,
+    Callability, CallabilitySchedule, CallabilityType, CallableBondArguments,
+    CallableFixedRateBond, CallableZeroCouponBond,
 };
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use cmsswap::CmsSwap;
