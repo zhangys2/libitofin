@@ -6,6 +6,7 @@
 //! [`Bond`]: crate::instruments::Bond
 
 mod binomialconvertibleengine;
+mod blackcallablebondengine;
 mod bondfunctions;
 mod discountingbondengine;
 mod discretizedcallablebond;
@@ -13,6 +14,9 @@ pub(crate) mod discretizedconvertible;
 mod treecallablebondengine;
 
 pub use binomialconvertibleengine::BinomialConvertibleEngine;
+pub use blackcallablebondengine::{
+    BlackCallableFixedRateBondEngine, BlackCallableZeroCouponBondEngine,
+};
 pub use bondfunctions::BondFunctions;
 pub use discountingbondengine::DiscountingBondEngine;
 pub use discretizedconvertible::DividendSchedule;
