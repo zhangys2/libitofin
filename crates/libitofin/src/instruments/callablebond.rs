@@ -9,11 +9,14 @@
 //!
 //! This slice mirrors QuantLib's argument setup (`setupArguments`): coupons and
 //! a par redemption feed the discretized bond, and clean call prices are
-//! converted to dirty with the accrued at the call date. Black/implied-vol and
-//! OAS helpers are follow-ups.
+//! converted to dirty with the accrued at the call date. The Black European
+//! engine is in
+//! [`BlackCallableFixedRateBondEngine`](crate::pricingengines::bond::BlackCallableFixedRateBondEngine);
+//! implied-vol and OAS helpers are follow-ups.
 
 use std::any::Any;
 
+use crate::cashflow::Leg;
 use crate::errors::QlResult;
 use crate::event::event_has_occurred;
 use crate::fail;
@@ -27,6 +30,7 @@ use crate::time::calendar::Calendar;
 use crate::time::calendars::nullcalendar::NullCalendar;
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
+use crate::time::frequency::Frequency;
 use crate::time::schedule::Schedule;
 use crate::types::{Natural, Rate, Real, Spread};
 
@@ -100,10 +104,11 @@ impl Callability {
 pub type CallabilitySchedule = Vec<Callability>;
 
 /// Engine arguments for a callable bond (`CallableBond::arguments`).
-#[derive(Default)]
 pub struct CallableBondArguments {
     /// The settlement date.
     pub settlement_date: Option<Date>,
+    /// Full bond cash-flow leg (coupons + redemption), as `Bond::arguments`.
+    pub cashflows: Leg,
     /// Coupon payment dates (redemption excluded).
     pub coupon_dates: Vec<Date>,
     /// Coupon amounts aligned with [`coupon_dates`](Self::coupon_dates).
@@ -114,6 +119,10 @@ pub struct CallableBondArguments {
     pub redemption: Real,
     /// The redemption date.
     pub redemption_date: Option<Date>,
+    /// Accrual / payment day counter (yield and duration convention).
+    pub payment_day_counter: Option<DayCounter>,
+    /// Coupon frequency (`Once` for zeros; Black remaps to Annual).
+    pub frequency: Frequency,
     /// Callability dirty prices (per 100), aligned with the dates/types.
     pub callability_prices: Vec<Real>,
     /// Callability types aligned with the dates/prices.
@@ -122,6 +131,26 @@ pub struct CallableBondArguments {
     pub callability_dates: Vec<Date>,
     /// Continuous spread added to the model (0 unless set by an OAS solve).
     pub spread: Spread,
+}
+
+impl Default for CallableBondArguments {
+    fn default() -> Self {
+        Self {
+            settlement_date: None,
+            cashflows: Vec::new(),
+            coupon_dates: Vec::new(),
+            coupon_amounts: Vec::new(),
+            face_amount: 0.0,
+            redemption: 0.0,
+            redemption_date: None,
+            payment_day_counter: None,
+            frequency: Frequency::NoFrequency,
+            callability_prices: Vec::new(),
+            callability_types: Vec::new(),
+            callability_dates: Vec::new(),
+            spread: 0.0,
+        }
+    }
 }
 
 impl Arguments for CallableBondArguments {
@@ -153,11 +182,16 @@ fn fill_callable_bond_arguments(
     bond: &Bond,
     put_call_schedule: &[Callability],
     face_amount: Real,
+    payment_day_counter: DayCounter,
+    frequency: Frequency,
     settings: &Settings<Date>,
 ) -> QlResult<()> {
     let settlement = bond.settlement_date(None)?;
     args.settlement_date = Some(settlement);
     args.face_amount = face_amount;
+    args.payment_day_counter = Some(payment_day_counter);
+    args.frequency = frequency;
+    args.cashflows = bond.cashflows().clone();
 
     let cashflows = bond.cashflows();
     let count = cashflows.len();
@@ -343,6 +377,8 @@ impl Instrument for CallableFixedRateBond {
             self.bond.bond(),
             &self.put_call_schedule,
             self.face_amount,
+            self.bond.day_counter().clone(),
+            self.bond.frequency(),
             &self.settings,
         )
     }
@@ -363,6 +399,7 @@ pub struct CallableZeroCouponBond {
     bond: ZeroCouponBond,
     put_call_schedule: CallabilitySchedule,
     face_amount: Real,
+    payment_day_counter: DayCounter,
     settings: Shared<Settings<Date>>,
     settlement_value: Option<Real>,
 }
@@ -380,7 +417,7 @@ impl CallableZeroCouponBond {
         face_amount: Real,
         calendar: Calendar,
         maturity_date: Date,
-        _day_counter: DayCounter,
+        day_counter: DayCounter,
         payment_convention: BusinessDayConvention,
         redemption: Real,
         issue_date: Option<Date>,
@@ -409,6 +446,7 @@ impl CallableZeroCouponBond {
             bond,
             put_call_schedule,
             face_amount,
+            payment_day_counter: day_counter,
             settings,
             settlement_value: None,
         })
@@ -484,6 +522,8 @@ impl Instrument for CallableZeroCouponBond {
             self.bond.bond(),
             &self.put_call_schedule,
             self.face_amount,
+            self.payment_day_counter.clone(),
+            Frequency::Once,
             &self.settings,
         )
     }
@@ -506,7 +546,10 @@ mod tests {
     use crate::interestrate::Compounding;
     use crate::models::shortrate::HullWhite;
     use crate::pricingengine::PricingEngine;
-    use crate::pricingengines::bond::{DiscountingBondEngine, TreeCallableFixedRateBondEngine};
+    use crate::pricingengines::bond::{
+        BlackCallableFixedRateBondEngine, BlackCallableZeroCouponBondEngine, DiscountingBondEngine,
+        TreeCallableFixedRateBondEngine,
+    };
     use crate::quotes::{Quote, SimpleQuote};
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
@@ -1394,6 +1437,158 @@ mod tests {
         assert!(
             (value - expected).abs() <= tol,
             "case4 put blocks call (+later put): settlement {value} vs expected {expected}"
+        );
+    }
+
+    /// `callablebonds.cpp` testBlackEngine (`:673`): European callable zero
+    /// under the Black engine reproduces the cached clean price @ 1e-4.
+    #[test]
+    fn black_engine_callable_zero_matches_cached_price() {
+        let calendar = Target::new();
+        let today = Date::new(20, Month::September, 2022);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let settlement = calendar.advance(
+            today,
+            3,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+        let call_date = calendar.advance(issue, 4, TimeUnit::Years, rolling, false);
+
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.03,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+
+        let callabilities = vec![Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Call,
+            call_date,
+        )];
+        let mut bond = CallableZeroCouponBond::new(
+            3,
+            10_000.0,
+            calendar,
+            maturity,
+            Thirty360::with_convention(Convention::BondBasis),
+            rolling,
+            100.0,
+            Some(issue),
+            callabilities,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        let vol = Handle::new(shared(SimpleQuote::new(0.3)) as Shared<dyn Quote>);
+        let engine = shared_mut(BlackCallableZeroCouponBondEngine::new(
+            vol,
+            curve,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        bond.base_mut().set_pricing_engine(engine);
+
+        let cached = 74.54521578;
+        let calculated = bond.clean_price().unwrap();
+        assert!(
+            (calculated - cached).abs() <= 1.0e-4,
+            "Black zero: clean {calculated} vs cached {cached} (error {})",
+            (calculated - cached).abs()
+        );
+    }
+
+    /// `callablebonds.cpp` testBlackEngineDeepInTheMoney (`:783`): deep-ITM
+    /// European call with near-zero vol collapses to the discounted strike.
+    #[test]
+    fn black_engine_deep_itm_collapses_to_discounted_strike() {
+        let calendar = Target::new();
+        let today = Date::new(20, Month::September, 2022);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let settlement = calendar.advance(
+            today,
+            3,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.05,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+
+        let schedule = MakeSchedule::new()
+            .from(issue)
+            .to(maturity)
+            .with_calendar(calendar)
+            .with_frequency(Frequency::Semiannual)
+            .with_convention(rolling)
+            .with_termination_date_convention(rolling)
+            .backwards()
+            .build();
+        let callability_date = schedule.date(6);
+        let strike = 50.0;
+        let callabilities = vec![Callability::new(
+            BondPrice::Clean(strike),
+            CallabilityType::Call,
+            callability_date,
+        )];
+
+        let mut bond = CallableFixedRateBond::new(
+            3,
+            10_000.0,
+            schedule,
+            vec![0.0],
+            Thirty360::with_convention(Convention::BondBasis),
+            rolling,
+            100.0,
+            Some(issue),
+            callabilities,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        let vol = Handle::new(shared(SimpleQuote::new(1.0e-10)) as Shared<dyn Quote>);
+        let engine = shared_mut(BlackCallableFixedRateBondEngine::new(
+            vol,
+            curve.clone(),
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        bond.base_mut().set_pricing_engine(engine);
+
+        let settle = bond.bond().settlement_date(None).unwrap();
+        let expected = strike
+            * curve
+                .current_link()
+                .unwrap()
+                .discount_date(callability_date, true)
+                .unwrap()
+            / curve
+                .current_link()
+                .unwrap()
+                .discount_date(settle, true)
+                .unwrap();
+        let calculated = bond.clean_price().unwrap();
+        assert!(
+            (calculated - expected).abs() <= 1.0e-8,
+            "deep ITM: clean {calculated} vs expected {expected} (error {})",
+            (calculated - expected).abs()
         );
     }
 }
