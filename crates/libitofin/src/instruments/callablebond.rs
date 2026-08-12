@@ -13,7 +13,8 @@
 //! engine is in
 //! [`BlackCallableFixedRateBondEngine`](crate::pricingengines::bond::BlackCallableFixedRateBondEngine);
 //! [`implied_volatility`](CallableFixedRateBond::implied_volatility) inverts it.
-//! OAS helpers are follow-ups.
+//! Tree OAS / clean-price-OAS live on the callable instruments (spread wired
+//! through [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine)).
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -25,6 +26,7 @@ use crate::fail;
 use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::{Bond, BondPrice, BondResults, FixedRateBond, ZeroCouponBond};
+use crate::interestrate::{Compounding, InterestRate};
 use crate::math::solver1d::Solver1D;
 use crate::math::solvers1d::brent::Brent;
 use crate::pricingengine::{Arguments, PricingEngine, Results};
@@ -326,6 +328,206 @@ fn implied_volatility_from(
     }
 }
 
+/// Converts a continuous model spread to a conventional OAS quote
+/// (`callablebond.cpp` `continuousToConv`).
+fn continuous_to_conv(
+    oas: Spread,
+    bond: &Bond,
+    yts: &dyn YieldTermStructure,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+) -> QlResult<Spread> {
+    let maturity = bond.maturity_date()?;
+    let zz = yts
+        .zero_rate_date(
+            maturity,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::NoFrequency,
+            true,
+        )?
+        .rate();
+    let base_rate = InterestRate::new(
+        zz,
+        day_counter.clone(),
+        Compounding::Continuous,
+        Frequency::NoFrequency,
+    )?;
+    let spreaded_rate = InterestRate::new(
+        oas + zz,
+        day_counter.clone(),
+        Compounding::Continuous,
+        Frequency::NoFrequency,
+    )?;
+    let reference = yts.reference_date()?;
+    let br = base_rate
+        .equivalent_rate_between(
+            day_counter.clone(),
+            compounding,
+            frequency,
+            reference,
+            maturity,
+        )?
+        .rate();
+    let sr = spreaded_rate
+        .equivalent_rate_between(day_counter, compounding, frequency, reference, maturity)?
+        .rate();
+    Ok(sr - br)
+}
+
+/// Converts a conventional OAS quote to a continuous model spread
+/// (`callablebond.cpp` `convToContinuous`).
+fn conv_to_continuous(
+    oas: Spread,
+    bond: &Bond,
+    yts: &dyn YieldTermStructure,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+) -> QlResult<Spread> {
+    let maturity = bond.maturity_date()?;
+    let zz = yts
+        .zero_rate_date(maturity, day_counter.clone(), compounding, frequency, true)?
+        .rate();
+    let base_rate = InterestRate::new(zz, day_counter.clone(), compounding, frequency)?;
+    let spreaded_rate = InterestRate::new(oas + zz, day_counter.clone(), compounding, frequency)?;
+    let reference = yts.reference_date()?;
+    let br = base_rate
+        .equivalent_rate_between(
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::NoFrequency,
+            reference,
+            maturity,
+        )?
+        .rate();
+    let sr = spreaded_rate
+        .equivalent_rate_between(
+            day_counter,
+            Compounding::Continuous,
+            Frequency::NoFrequency,
+            reference,
+            maturity,
+        )?
+        .rate();
+    Ok(sr - br)
+}
+
+/// NPV under a continuous short-rate spread on the attached tree engine
+/// (`CallableBond::NPVSpreadHelper`).
+fn npv_at_continuous_spread(
+    instrument: &dyn Instrument,
+    continuous_spread: Spread,
+) -> QlResult<Real> {
+    let Some(engine) = instrument.base().pricing_engine().cloned() else {
+        fail!("null pricing engine");
+    };
+    let mut eng = engine.borrow_mut();
+    instrument.setup_arguments(eng.arguments_mut())?;
+    {
+        let Some(args) =
+            (eng.arguments_mut() as &mut dyn Any).downcast_mut::<CallableBondArguments>()
+        else {
+            fail!("wrong argument type");
+        };
+        args.spread = continuous_spread;
+    }
+    eng.arguments_mut().validate()?;
+    eng.calculate()?;
+    let Some(results) = eng.results().as_instrument_results() else {
+        fail!("no results returned from pricing engine");
+    };
+    let Some(value) = results.value else {
+        fail!("null NPV from pricing engine");
+    };
+    Ok(value)
+}
+
+/// Option-adjusted spread that matches `clean_price` on the attached engine
+/// (`CallableBond::OAS`).
+#[allow(clippy::too_many_arguments)]
+fn oas_from(
+    instrument: &dyn Instrument,
+    bond: &Bond,
+    clean_price: Real,
+    engine_ts: Handle<dyn YieldTermStructure>,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+    settlement: Option<Date>,
+    accuracy: Real,
+    max_iterations: Size,
+    guess: Spread,
+) -> QlResult<Spread> {
+    let settlement = match settlement {
+        Some(date) => date,
+        None => bond.settlement_date(None)?,
+    };
+    let dirty_price = (clean_price + bond.accrued_amount(Some(settlement))?)
+        * bond.notional(Some(settlement))?
+        / 100.0;
+
+    let failure = RefCell::new(None);
+    let objective = |x: Spread| match npv_at_continuous_spread(instrument, x) {
+        Ok(npv) => dirty_price - npv,
+        Err(error) => {
+            failure.borrow_mut().get_or_insert(error);
+            Real::NAN
+        }
+    };
+    let mut solver = Brent::new().with_max_evaluations(max_iterations);
+    let continuous = match solver.solve(objective, accuracy, guess, 0.001) {
+        Ok(root) => root,
+        Err(error) => {
+            if let Some(parked) = failure.into_inner() {
+                return Err(parked);
+            }
+            return Err(error);
+        }
+    };
+    if let Some(error) = failure.into_inner() {
+        return Err(error);
+    }
+
+    continuous_to_conv(
+        continuous,
+        bond,
+        &*engine_ts.current_link()?,
+        day_counter,
+        compounding,
+        frequency,
+    )
+}
+
+/// Clean price implied by a conventional OAS (`CallableBond::cleanPriceOAS`).
+#[allow(clippy::too_many_arguments)]
+fn clean_price_oas_from(
+    instrument: &dyn Instrument,
+    bond: &Bond,
+    oas: Spread,
+    engine_ts: Handle<dyn YieldTermStructure>,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+    settlement: Option<Date>,
+) -> QlResult<Real> {
+    let settlement = match settlement {
+        Some(date) => date,
+        None => bond.settlement_date(None)?,
+    };
+    let continuous = conv_to_continuous(
+        oas,
+        bond,
+        &*engine_ts.current_link()?,
+        day_counter,
+        compounding,
+        frequency,
+    )?;
+    let npv = npv_at_continuous_spread(instrument, continuous)?;
+    Ok(npv * 100.0 / bond.notional(Some(settlement))? - bond.accrued_amount(Some(settlement))?)
+}
+
 /// A callable / puttable fixed-rate bond.
 pub struct CallableFixedRateBond {
     base: InstrumentBase,
@@ -457,6 +659,69 @@ impl CallableFixedRateBond {
             max_evaluations,
             min_vol,
             max_vol,
+        )
+    }
+
+    /// Option-adjusted spread that matches `clean_price` on the attached tree
+    /// engine (`CallableBond::OAS`). Defaults: settlement = bond settlement,
+    /// accuracy `1e-10`, max iterations `100`, guess `0.0`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no engine is attached, the tree cannot price, or Brent cannot
+    /// invert the spread.
+    #[allow(clippy::too_many_arguments)]
+    pub fn oas(
+        &self,
+        clean_price: Real,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+        accuracy: Option<Real>,
+        max_iterations: Option<Size>,
+        guess: Option<Spread>,
+    ) -> QlResult<Spread> {
+        oas_from(
+            self,
+            self.bond(),
+            clean_price,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            settlement,
+            accuracy.unwrap_or(1.0e-10),
+            max_iterations.unwrap_or(100),
+            guess.unwrap_or(0.0),
+        )
+    }
+
+    /// Clean price implied by a conventional `oas` (`CallableBond::cleanPriceOAS`).
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn clean_price_oas(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        clean_price_oas_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            settlement,
         )
     }
 }
@@ -633,6 +898,69 @@ impl CallableZeroCouponBond {
             max_evaluations,
             min_vol,
             max_vol,
+        )
+    }
+
+    /// Option-adjusted spread that matches `clean_price` on the attached tree
+    /// engine (`CallableBond::OAS`). Defaults: settlement = bond settlement,
+    /// accuracy `1e-10`, max iterations `100`, guess `0.0`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when no engine is attached, the tree cannot price, or Brent cannot
+    /// invert the spread.
+    #[allow(clippy::too_many_arguments)]
+    pub fn oas(
+        &self,
+        clean_price: Real,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+        accuracy: Option<Real>,
+        max_iterations: Option<Size>,
+        guess: Option<Spread>,
+    ) -> QlResult<Spread> {
+        oas_from(
+            self,
+            self.bond(),
+            clean_price,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            settlement,
+            accuracy.unwrap_or(1.0e-10),
+            max_iterations.unwrap_or(100),
+            guess.unwrap_or(0.0),
+        )
+    }
+
+    /// Clean price implied by a conventional `oas` (`CallableBond::cleanPriceOAS`).
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn clean_price_oas(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        settlement: Option<Date>,
+    ) -> QlResult<Real> {
+        clean_price_oas_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            settlement,
         )
     }
 }
@@ -1796,6 +2124,135 @@ mod tests {
             (clean - clean_target.amount()).abs() <= 1.0e-4,
             "implied clean: price {clean} vs target {} (vol {volatility})",
             clean_target.amount()
+        );
+    }
+
+    /// `callablebonds.cpp` testCallableBondOasWithDifferentNotinals (`:881`):
+    /// OAS and cleanPriceOAS are independent of face amount.
+    #[test]
+    fn oas_is_independent_of_notional() {
+        let calendar = Target::new();
+        let today = Date::new(10, Month::January, 2020);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let settlement_days = 2;
+        let rolling = BusinessDayConvention::ModifiedFollowing;
+        let settlement = calendar.advance(
+            today,
+            settlement_days as i32,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+        let maturity = calendar.advance(issue, 10, TimeUnit::Years, rolling, false);
+        let day_counter = Actual365Fixed::new();
+        let compounding = Compounding::Compounded;
+        let frequency = Frequency::Semiannual;
+
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.03,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let model = HullWhite::new(curve.clone(), 0.1, 0.01).unwrap();
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+
+        let schedule = MakeSchedule::new()
+            .from(issue)
+            .to(maturity)
+            .with_calendar(calendar)
+            .with_frequency(frequency)
+            .with_convention(rolling)
+            .with_termination_date_convention(rolling)
+            .backwards()
+            .build();
+        let first_call = schedule.date(schedule.len() - 5);
+        let last_call = schedule.date(schedule.len() - 2);
+        let call_dates = schedule.after(first_call).until(last_call);
+        let call_schedule: CallabilitySchedule = call_dates
+            .dates()
+            .iter()
+            .copied()
+            .map(|d| Callability::new(BondPrice::Clean(100.0), CallabilityType::Call, d))
+            .collect();
+
+        let accrual = Actual365Fixed::new();
+        let make_bond = |face: Real| {
+            let mut bond = CallableFixedRateBond::new(
+                settlement_days,
+                face,
+                schedule.clone(),
+                vec![0.055],
+                accrual.clone(),
+                rolling,
+                100.0,
+                Some(issue),
+                call_schedule.clone(),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            bond.base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            bond
+        };
+
+        let bond100 = make_bond(100.0);
+        let bond25 = make_bond(25.0);
+        let clean_price = 96.0;
+        let oas100 = bond100
+            .oas(
+                clean_price,
+                curve.clone(),
+                day_counter.clone(),
+                compounding,
+                frequency,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let oas25 = bond25
+            .oas(
+                clean_price,
+                curve.clone(),
+                day_counter.clone(),
+                compounding,
+                frequency,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            oas100, oas25,
+            "OAS must match across notionals: 100 -> {oas100}, 25 -> {oas25}"
+        );
+
+        let oas = 0.0300;
+        let clean100 = bond100
+            .clean_price_oas(
+                oas,
+                curve.clone(),
+                day_counter.clone(),
+                compounding,
+                frequency,
+                None,
+            )
+            .unwrap();
+        let clean25 = bond25
+            .clean_price_oas(oas, curve, day_counter, compounding, frequency, None)
+            .unwrap();
+        assert_eq!(
+            clean100, clean25,
+            "cleanPriceOAS must match across notionals: 100 -> {clean100}, 25 -> {clean25}"
         );
     }
 }

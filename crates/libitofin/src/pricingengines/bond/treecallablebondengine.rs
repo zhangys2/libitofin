@@ -101,9 +101,14 @@ impl PricingEngine for TreeCallableFixedRateBondEngine {
 
         let times = bond.mandatory_times();
         let grid = TimeGrid::with_mandatory_times(&times, self.time_steps)?;
+        let spread = self.base.arguments().spread;
         let lattice: Shared<dyn Lattice> = {
             let model = self.model.borrow();
-            shared(model.tree(grid)?)
+            let lattice = model.tree(grid)?;
+            if spread != 0.0 {
+                lattice.implementation().set_spread(spread);
+            }
+            shared(lattice)
         };
 
         let redemption_time = day_counter.year_fraction(reference_date, redemption_date);
