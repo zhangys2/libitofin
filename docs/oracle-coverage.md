@@ -31,6 +31,7 @@ credit.
 | Callable zero (degenerate / observability) | `CallableZeroCouponBond` + HW tree | `callablebonds.cpp` `testDegenerate` / `testObservability` | empty/OTM ≡ straight @ 1e-4; quote move updates NPV |
 | Callable zero (call/put interplay) | `CallableZeroCouponBond` + HW tree | `callablebonds.cpp` `testInterplay` | early ITM exercise blocks later opposite right @ 1e-2 |
 | European callable (Black engine) | `BlackCallableFixedRateBondEngine` / zero alias | `callablebonds.cpp` `testBlackEngine` / `testBlackEngineDeepInTheMoney` | zero clean 74.54521578 @ 1e-4; deep-ITM → discounted strike @ 1e-8 |
+| European callable (implied vol) | `CallableFixedRateBond::implied_volatility` | `callablebonds.cpp` `testImpliedVol` | dirty/clean 78.50 round-trip @ 1e-4 |
 | Callable fixed bonds (arbitrary schedule) | `CallableFixedRateBond` + date-vector schedule | `callablebonds.cpp` `testCallableFixedRateBondWithArbitrarySchedule` | HW tree clean price succeeds |
 | Fixed-rate bonds (arbitrary schedule) | `FixedRateBond` + `Schedule::from_dates` | `bonds.cpp` `testFixedRateBondWithArbitrarySchedule` | `NoFrequency`; clean price prices without error |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |

@@ -12,19 +12,27 @@
 //! converted to dirty with the accrued at the call date. The Black European
 //! engine is in
 //! [`BlackCallableFixedRateBondEngine`](crate::pricingengines::bond::BlackCallableFixedRateBondEngine);
-//! implied-vol and OAS helpers are follow-ups.
+//! [`implied_volatility`](CallableFixedRateBond::implied_volatility) inverts it.
+//! OAS helpers are follow-ups.
 
 use std::any::Any;
+use std::cell::RefCell;
 
 use crate::cashflow::Leg;
 use crate::errors::QlResult;
 use crate::event::event_has_occurred;
 use crate::fail;
+use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::{Bond, BondPrice, BondResults, FixedRateBond, ZeroCouponBond};
-use crate::pricingengine::{Arguments, Results};
+use crate::math::solver1d::Solver1D;
+use crate::math::solvers1d::brent::Brent;
+use crate::pricingengine::{Arguments, PricingEngine, Results};
+use crate::pricingengines::bond::BlackCallableFixedRateBondEngine;
+use crate::quotes::{Quote, SimpleQuote};
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, shared};
+use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::businessdayconvention::BusinessDayConvention;
 use crate::time::calendar::Calendar;
 use crate::time::calendars::nullcalendar::NullCalendar;
@@ -32,7 +40,7 @@ use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::frequency::Frequency;
 use crate::time::schedule::Schedule;
-use crate::types::{Natural, Rate, Real, Spread};
+use crate::types::{Natural, Rate, Real, Size, Spread, Volatility};
 
 /// Whether a callability is a call (issuer's right to redeem) or a put
 /// (holder's right to sell back).
@@ -242,6 +250,82 @@ fn fill_callable_bond_arguments(
     Ok(())
 }
 
+/// Black implied forward yield volatility (`CallableBond::impliedVolatility`).
+///
+/// Inverts [`BlackCallableFixedRateBondEngine`] so the settlement value matches
+/// `target_price` (clean quotes are converted to dirty with accrued).
+#[allow(clippy::too_many_arguments)]
+fn implied_volatility_from(
+    instrument: &dyn Instrument,
+    bond: &Bond,
+    face_amount: Real,
+    target_price: BondPrice,
+    discount_curve: Handle<dyn YieldTermStructure>,
+    settings: Shared<Settings<Date>>,
+    accuracy: Real,
+    max_evaluations: Size,
+    min_vol: Volatility,
+    max_vol: Volatility,
+) -> QlResult<Volatility> {
+    if instrument.is_expired()? {
+        fail!("instrument expired");
+    }
+
+    let dirty_target = match target_price {
+        BondPrice::Dirty(amount) => amount,
+        BondPrice::Clean(amount) => amount + bond.accrued_amount(None)?,
+    };
+    let target_value = dirty_target * face_amount / 100.0;
+
+    let vol = shared(SimpleQuote::new(0.0));
+    let mut engine = BlackCallableFixedRateBondEngine::new(
+        Handle::new(Shared::clone(&vol) as Shared<dyn Quote>),
+        discount_curve,
+        settings,
+    );
+    instrument.setup_arguments(engine.arguments_mut())?;
+    engine.arguments_mut().validate()?;
+
+    let failure = RefCell::new(None);
+    let objective = |x: Volatility| {
+        vol.set_value(x);
+        match engine.calculate() {
+            Ok(()) => {
+                let Some(results) = (engine.results() as &dyn Any).downcast_ref::<BondResults>()
+                else {
+                    failure.borrow_mut().get_or_insert_with(|| {
+                        crate::errors::QlError::new("wrong result type", file!(), line!())
+                    });
+                    return Real::NAN;
+                };
+                let Some(settlement) = results.settlement_value else {
+                    failure.borrow_mut().get_or_insert_with(|| {
+                        crate::errors::QlError::new(
+                            "settlement value not provided",
+                            file!(),
+                            line!(),
+                        )
+                    });
+                    return Real::NAN;
+                };
+                settlement - target_value
+            }
+            Err(error) => {
+                failure.borrow_mut().get_or_insert(error);
+                Real::NAN
+            }
+        }
+    };
+
+    let guess = 0.5 * (min_vol + max_vol);
+    let mut solver = Brent::new().with_max_evaluations(max_evaluations);
+    let root = solver.solve_bracketed(objective, accuracy, guess, min_vol, max_vol);
+    match failure.into_inner() {
+        Some(error) => Err(error),
+        None => root,
+    }
+}
+
 /// A callable / puttable fixed-rate bond.
 pub struct CallableFixedRateBond {
     base: InstrumentBase,
@@ -343,6 +427,37 @@ impl CallableFixedRateBond {
         let dirty = self.dirty_price()?;
         let accrued = self.bond().accrued_amount(Some(settlement))?;
         Ok(dirty - accrued)
+    }
+
+    /// Black implied forward yield volatility for a European put/call schedule
+    /// (`CallableBond::impliedVolatility`).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the bond is expired, arguments are incomplete, or Brent cannot
+    /// invert the Black engine onto `target_price`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        target_price: BondPrice,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+    ) -> QlResult<Volatility> {
+        implied_volatility_from(
+            self,
+            self.bond(),
+            self.face_amount,
+            target_price,
+            discount_curve,
+            Shared::clone(&self.settings),
+            accuracy,
+            max_evaluations,
+            min_vol,
+            max_vol,
+        )
     }
 }
 
@@ -488,6 +603,37 @@ impl CallableZeroCouponBond {
         let dirty = self.dirty_price()?;
         let accrued = self.bond().accrued_amount(Some(settlement))?;
         Ok(dirty - accrued)
+    }
+
+    /// Black implied forward yield volatility for a European put/call schedule
+    /// (`CallableBond::impliedVolatility`).
+    ///
+    /// # Errors
+    ///
+    /// Fails when the bond is expired, arguments are incomplete, or Brent cannot
+    /// invert the Black engine onto `target_price`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        target_price: BondPrice,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+    ) -> QlResult<Volatility> {
+        implied_volatility_from(
+            self,
+            self.bond(),
+            self.face_amount,
+            target_price,
+            discount_curve,
+            Shared::clone(&self.settings),
+            accuracy,
+            max_evaluations,
+            min_vol,
+            max_vol,
+        )
     }
 }
 
@@ -1589,6 +1735,67 @@ mod tests {
             (calculated - expected).abs() <= 1.0e-8,
             "deep ITM: clean {calculated} vs expected {expected} (error {})",
             (calculated - expected).abs()
+        );
+    }
+
+    /// `callablebonds.cpp` testImpliedVol (`:711`): Black implied yield vol
+    /// round-trips dirty and clean target prices @ 1e-4.
+    #[test]
+    fn implied_vol_round_trips_dirty_and_clean_targets() {
+        let g = Globals::new(0.03);
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let callabilities = vec![Callability::new(
+            BondPrice::Clean(100.0),
+            CallabilityType::Call,
+            g.schedule.date(8),
+        )];
+        let mut bond = CallableFixedRateBond::new(
+            3,
+            10_000.0,
+            g.schedule.clone(),
+            vec![0.01],
+            day_counter,
+            g.rolling,
+            100.0,
+            Some(g.issue),
+            callabilities,
+            Shared::clone(&g.settings),
+        )
+        .unwrap();
+
+        let dirty_target = BondPrice::Dirty(78.50);
+        let volatility = bond
+            .implied_volatility(dirty_target, g.curve.clone(), 1e-8, 200, 1e-4, 1.0)
+            .unwrap();
+        let engine = shared_mut(BlackCallableFixedRateBondEngine::new(
+            Handle::new(shared(SimpleQuote::new(volatility)) as Shared<dyn Quote>),
+            g.curve.clone(),
+            Shared::clone(&g.settings),
+        )) as SharedMut<dyn PricingEngine>;
+        bond.base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine));
+        let dirty = bond.dirty_price().unwrap();
+        assert!(
+            (dirty - dirty_target.amount()).abs() <= 1.0e-4,
+            "implied dirty: price {dirty} vs target {} (vol {volatility})",
+            dirty_target.amount()
+        );
+
+        let clean_target = BondPrice::Clean(78.50);
+        let volatility = bond
+            .implied_volatility(clean_target, g.curve.clone(), 1e-8, 200, 1e-4, 1.0)
+            .unwrap();
+        let engine = shared_mut(BlackCallableFixedRateBondEngine::new(
+            Handle::new(shared(SimpleQuote::new(volatility)) as Shared<dyn Quote>),
+            g.curve.clone(),
+            Shared::clone(&g.settings),
+        )) as SharedMut<dyn PricingEngine>;
+        bond.base_mut().set_pricing_engine(engine);
+        let clean = bond.clean_price().unwrap();
+        assert!(
+            (clean - clean_target.amount()).abs() <= 1.0e-4,
+            "implied clean: price {clean} vs target {} (vol {volatility})",
+            clean_target.amount()
         );
     }
 }
