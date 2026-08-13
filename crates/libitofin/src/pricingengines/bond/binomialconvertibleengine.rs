@@ -226,12 +226,14 @@ impl PricingEngine for BinomialConvertibleEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cashflow::CashFlow;
+    use crate::cashflows::{Dividend, FixedDividend, SimpleCashFlow};
     use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::{
-        ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond, PlainVanillaPayoff,
-        StrikedTypePayoff, VanillaOption, ZeroCouponBond,
+        ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond,
+        FixedRateBond, PlainVanillaPayoff, StrikedTypePayoff, VanillaOption, ZeroCouponBond,
     };
     use crate::option::OptionType;
     use crate::pricingengines::bond::DiscountingBondEngine;
@@ -667,6 +669,81 @@ mod tests {
         assert!(
             (calculated - expected).abs() < tolerance,
             "zero convertible {calculated} vs discounted redemption + call {expected}"
+        );
+    }
+
+    #[test]
+    fn dividends_spanning_settlement_keep_only_future_amounts() {
+        // QuantLib convertiblebonds.cpp `testDividendsSpanningSettlementDate`:
+        // a dividend on or before bond settlement is dropped; a later fixed
+        // dividend is stored as amount × risk-free discount.
+        let v = vars();
+        let calendar = Target::new();
+        let settlement = calendar.advance(
+            v.today,
+            v.settlement_days as i32,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let before_settlement = calendar.advance(
+            v.today,
+            1,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let after_settlement = calendar.advance(
+            settlement,
+            1,
+            TimeUnit::Years,
+            BusinessDayConvention::Following,
+            false,
+        );
+
+        let mut args = ConvertibleBondArguments::default();
+        args.exercise =
+            Some(shared(EuropeanExercise::new(v.maturity_date)) as Shared<dyn Exercise>);
+        args.conversion_ratio = v.conversion_ratio;
+        args.cashflows.push(
+            shared(SimpleCashFlow::new(v.redemption, v.maturity_date).unwrap())
+                as Shared<dyn CashFlow>,
+        );
+        args.issue_date = Some(v.issue_date);
+        args.settlement_date = Some(settlement);
+        args.settlement_days = v.settlement_days as u32;
+        args.redemption = v.redemption;
+
+        let future_amount = 10.0;
+        let dividends: DividendSchedule = vec![
+            shared(FixedDividend::new(1.0, before_settlement)) as Shared<dyn Dividend>,
+            shared(FixedDividend::new(future_amount, after_settlement)) as Shared<dyn Dividend>,
+        ];
+
+        let convertible = DiscretizedConvertible::new(
+            args,
+            Shared::clone(&v.process),
+            dividends,
+            v.credit_spread.current_link().unwrap().value().unwrap(),
+            0.05,
+            0.5,
+            0.5,
+            0.01,
+            &TimeGrid::default(),
+        )
+        .unwrap();
+
+        let expected = future_amount
+            * v.risk_free
+                .current_link()
+                .unwrap()
+                .discount_date(after_settlement, false)
+                .unwrap();
+        assert_eq!(convertible.dividend_values().size(), 1);
+        let calculated = convertible.dividend_values()[0];
+        assert!(
+            (calculated - expected).abs() <= 1.0e-12 * expected.abs(),
+            "dividend PV {calculated} vs {expected}"
         );
     }
 }
