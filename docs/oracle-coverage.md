@@ -39,6 +39,7 @@ credit.
 | Callable fixed bonds (arbitrary schedule) | `CallableFixedRateBond` + date-vector schedule | `callablebonds.cpp` `testCallableFixedRateBondWithArbitrarySchedule` | HW tree clean price succeeds |
 | Fixed-rate bonds (arbitrary schedule) | `FixedRateBond` + `Schedule::from_dates` | `bonds.cpp` `testFixedRateBondWithArbitrarySchedule` | `NoFrequency`; clean price prices without error |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
+| Convertible bonds (vs vanilla option) | `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` / `BinomialVanillaEngine` (CRR) | `convertiblebonds.cpp` `testOption` | zero, no credit spread ≡ discounted redemption + ratio × call @ 5e-2 (2001 steps) |
 | Bond forward | `BondForward` (spot-minus-income) | `ql/instruments/bondforward` | Fair-strike NPV≈0; income-free dirty fwd = spot/DF; clean = dirty − AI |
 | Bates (log-normal jumps) | `BatesProcess` / `BatesModel` / `BatesEngine` (Gatheral + `addOnTerm`) | `batesmodel.cpp` `testAnalyticVsBlack` | Tiny λ/δ → Black @ 2e-7; λ→0 ≡ Heston Gatheral |
 | G2++ (affine + swaption + process + dynamics) | `G2` / `G2Dynamics` + `G2SwaptionEngine` + `G2Process` | `g2`, `g2swaptionengine`, `g2process`, `twofactormodel` | Affine pins; payer⇔−receiver; `r=φ+x+y`; joint OU array cov |

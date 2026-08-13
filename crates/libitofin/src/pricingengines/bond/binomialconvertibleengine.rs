@@ -230,9 +230,12 @@ mod tests {
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::{
-        ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond, ZeroCouponBond,
+        ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond, PlainVanillaPayoff,
+        StrikedTypePayoff, VanillaOption, ZeroCouponBond,
     };
+    use crate::option::OptionType;
     use crate::pricingengines::bond::DiscountingBondEngine;
+    use crate::pricingengines::vanilla::BinomialVanillaEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
@@ -590,5 +593,80 @@ mod tests {
             "ATM convertible {conv} should exceed the straight bond {bond}"
         );
         let _ = v.today;
+    }
+
+    #[test]
+    fn zero_coupon_convertible_matches_vanilla_call() {
+        // QuantLib convertiblebonds.cpp `testOption`: a European zero-coupon
+        // convertible with a vanishing credit spread is discounted redemption
+        // plus conversion-ratio times a vanilla call (strike = redemption /
+        // conversion ratio). Settlement is T+0 so the bond and option share
+        // the same discounting origin.
+        let v = vars();
+        let settlement_days = 0u32;
+        let time_steps = 2001usize;
+        let credit_spread = Handle::new(shared(SimpleQuote::new(0.0)) as Shared<dyn Quote>);
+        let engine = shared_mut(
+            BinomialConvertibleEngine::new(
+                Shared::clone(&v.process),
+                time_steps,
+                credit_spread,
+                Vec::new(),
+            )
+            .unwrap(),
+        );
+        let vanilla_engine =
+            shared_mut(BinomialVanillaEngine::new(Shared::clone(&v.process), time_steps).unwrap());
+
+        let conversion_strike = v.redemption / v.conversion_ratio;
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, conversion_strike));
+        let eu_exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(v.maturity_date));
+
+        let schedule = MakeSchedule::new()
+            .from(v.issue_date)
+            .to(v.maturity_date)
+            .with_frequency(Frequency::Once)
+            .with_calendar(Target::new())
+            .backwards()
+            .build();
+        let mut eu_zero = ConvertibleZeroCouponBond::new(
+            Shared::clone(&eu_exercise),
+            v.conversion_ratio,
+            Vec::new(),
+            v.issue_date,
+            settlement_days,
+            Actual360::new(),
+            schedule,
+            v.redemption,
+            Shared::clone(&v.settings),
+        )
+        .unwrap();
+        eu_zero
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+        let mut eu_option = VanillaOption::new(
+            payoff,
+            Shared::clone(&eu_exercise),
+            Shared::clone(&v.settings),
+        );
+        eu_option
+            .base_mut()
+            .set_pricing_engine(vanilla_engine as SharedMut<dyn PricingEngine>);
+
+        let discount = v
+            .risk_free
+            .current_link()
+            .unwrap()
+            .discount_date(v.maturity_date, false)
+            .unwrap();
+        let expected = v.redemption * discount + v.conversion_ratio * eu_option.npv().unwrap();
+        let calculated = eu_zero.npv().unwrap();
+        let tolerance = 5.0e-2;
+        assert!(
+            (calculated - expected).abs() < tolerance,
+            "zero convertible {calculated} vs discounted redemption + call {expected}"
+        );
     }
 }
