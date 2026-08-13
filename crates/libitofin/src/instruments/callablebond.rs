@@ -16,6 +16,8 @@
 //! Tree OAS / clean-price-OAS / effective duration and convexity live on the
 //! callable instruments (spread wired through
 //! [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine)).
+//! Clean call prices use indenture accrued (GitHub issue #2236) so OAS stays
+//! continuous through an ex-coupon window.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -42,6 +44,7 @@ use crate::time::calendars::nullcalendar::NullCalendar;
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::frequency::Frequency;
+use crate::time::period::Period;
 use crate::time::schedule::Schedule;
 use crate::types::{Natural, Rate, Real, Size, Spread, Volatility};
 
@@ -213,7 +216,9 @@ fn fill_callable_bond_arguments(
     args.coupon_dates.clear();
     args.coupon_amounts.clear();
     for flow in &cashflows[..count - 1] {
-        if !event_has_occurred(flow.date(), settings, Some(settlement), Some(false))? {
+        if !flow.has_occurred(settings, Some(settlement), Some(false))?
+            && !flow.trading_ex_coupon(settings, Some(settlement))?
+        {
             args.coupon_dates.push(flow.date());
             args.coupon_amounts.push(flow.amount()?);
         }
@@ -231,12 +236,17 @@ fn fill_callable_bond_arguments(
         args.callability_types.push(callability.call_type());
         let mut price = callability.price().amount();
         if let BondPrice::Clean(_) = callability.price() {
-            // Convert the clean call price to dirty with the accrued at the
-            // call date (`callablebond.cpp:453-477`).
+            // Convert the clean call price to dirty with indenture accrued at
+            // the call date (`callablebond.cpp:453-477`, GitHub issue #2236):
+            // if the coupon already trades ex-coupon, undo the market negative
+            // accrued by adding the full coupon amount back.
             for flow in cashflows {
                 if !event_has_occurred(flow.date(), settings, Some(call_date), Some(false))? {
                     if let Some(coupon) = flow.as_coupon() {
-                        let accrued = coupon.accrued_amount(call_date)?;
+                        let mut accrued = coupon.accrued_amount(call_date)?;
+                        if coupon.trades_ex_coupon_on(call_date) {
+                            accrued += flow.amount()?;
+                        }
                         let notional = bond.notional(Some(call_date))?;
                         if notional != 0.0 {
                             price += accrued / notional * 100.0;
@@ -661,6 +671,47 @@ impl CallableFixedRateBond {
         put_call_schedule: CallabilitySchedule,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<CallableFixedRateBond> {
+        Self::with_ex_coupon(
+            settlement_days,
+            face_amount,
+            schedule,
+            coupons,
+            accrual_day_counter,
+            payment_convention,
+            redemption,
+            issue_date,
+            put_call_schedule,
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            settings,
+        )
+    }
+
+    /// Builds a callable fixed-rate bond with an ex-coupon period
+    /// (`CallableFixedRateBond` ctor trailing arguments).
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_ex_coupon(
+        settlement_days: Natural,
+        face_amount: Real,
+        schedule: Schedule,
+        coupons: Vec<Rate>,
+        accrual_day_counter: DayCounter,
+        payment_convention: BusinessDayConvention,
+        redemption: Real,
+        issue_date: Option<Date>,
+        put_call_schedule: CallabilitySchedule,
+        ex_coupon_period: Option<Period>,
+        ex_coupon_calendar: Calendar,
+        ex_coupon_convention: BusinessDayConvention,
+        ex_coupon_end_of_month: bool,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<CallableFixedRateBond> {
         let maturity = schedule.end_date();
         for callability in &put_call_schedule {
             if callability.date() > maturity {
@@ -677,10 +728,10 @@ impl CallableFixedRateBond {
             redemption,
             issue_date,
             None,
-            None,
-            NullCalendar::new(),
-            BusinessDayConvention::Unadjusted,
-            false,
+            ex_coupon_period,
+            ex_coupon_calendar,
+            ex_coupon_convention,
+            ex_coupon_end_of_month,
             None,
             Shared::clone(&settings),
         )?;
@@ -2777,5 +2828,106 @@ mod tests {
             );
             prev_oas = oas;
         }
+    }
+
+    /// `callablebonds.cpp` testOasContinuityThroughExCouponWindow (`:953`):
+    /// OAS stays within 50 bps as the call date walks through the ex-coupon
+    /// window (GitHub issue #2236).
+    #[test]
+    fn oas_is_continuous_through_the_ex_coupon_window() {
+        let today = Date::new(31, Month::January, 2024);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let calendar = UnitedStates::new(Market::Nyse);
+        let dc = Thirty360::with_convention(Convention::BondBasis);
+        let bdc = BusinessDayConvention::Unadjusted;
+        let frequency = Frequency::Quarterly;
+        let ex_coupon_period = Period::new(14, TimeUnit::Days);
+        let issue = today;
+        let maturity = Date::new(31, Month::January, 2029);
+
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            today,
+            0.04,
+            dc.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let model = HullWhite::new(curve.clone(), 0.1, 0.01).unwrap();
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(model, 100, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+
+        let schedule = MakeSchedule::new()
+            .from(issue)
+            .to(maturity)
+            .with_frequency(frequency)
+            .with_calendar(calendar)
+            .with_convention(bdc)
+            .with_termination_date_convention(bdc)
+            .backwards()
+            .end_of_month(true)
+            .build();
+        let first_payment = schedule.date(1);
+        let ex_coupon_date = first_payment - 14;
+        let sweep_start = ex_coupon_date - 7;
+        let sweep_end = first_payment + 7;
+
+        let mut max_oas = f64::NEG_INFINITY;
+        let mut min_oas = f64::INFINITY;
+        let mut call_date = sweep_start;
+        while call_date <= sweep_end {
+            let callabilities = vec![Callability::new(
+                BondPrice::Clean(100.0),
+                CallabilityType::Call,
+                call_date,
+            )];
+            let mut bond = CallableFixedRateBond::with_ex_coupon(
+                0,
+                100.0,
+                schedule.clone(),
+                vec![0.06],
+                dc.clone(),
+                bdc,
+                100.0,
+                Some(issue),
+                callabilities,
+                Some(ex_coupon_period),
+                NullCalendar::new(),
+                BusinessDayConvention::Unadjusted,
+                false,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            bond.base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            let oas_bps = bond
+                .oas(
+                    100.0,
+                    curve.clone(),
+                    dc.clone(),
+                    Compounding::Compounded,
+                    frequency,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap()
+                * 10_000.0;
+            max_oas = max_oas.max(oas_bps);
+            min_oas = min_oas.min(oas_bps);
+            call_date += 1;
+        }
+
+        let range = max_oas - min_oas;
+        let tolerance = 50.0;
+        assert!(
+            range <= tolerance,
+            "OAS discontinuity across ex-coupon window: min {min_oas} bps, max {max_oas} bps, \
+             range {range} bps (sweep {sweep_start} to {sweep_end})"
+        );
     }
 }
