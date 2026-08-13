@@ -13,8 +13,9 @@
 //! engine is in
 //! [`BlackCallableFixedRateBondEngine`](crate::pricingengines::bond::BlackCallableFixedRateBondEngine);
 //! [`implied_volatility`](CallableFixedRateBond::implied_volatility) inverts it.
-//! Tree OAS / clean-price-OAS live on the callable instruments (spread wired
-//! through [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine)).
+//! Tree OAS / clean-price-OAS / effective duration and convexity live on the
+//! callable instruments (spread wired through
+//! [`TreeCallableFixedRateBondEngine`](crate::pricingengines::bond::TreeCallableFixedRateBondEngine)).
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -528,6 +529,108 @@ fn clean_price_oas_from(
     Ok(npv * 100.0 / bond.notional(Some(settlement))? - bond.accrued_amount(Some(settlement))?)
 }
 
+/// Dirty-price finite-difference duration of a conventional OAS
+/// (`CallableBond::effectiveDuration`).
+#[allow(clippy::too_many_arguments)]
+fn effective_duration_from(
+    instrument: &dyn Instrument,
+    bond: &Bond,
+    oas: Spread,
+    engine_ts: Handle<dyn YieldTermStructure>,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+    bump: Real,
+) -> QlResult<Real> {
+    let p = clean_price_oas_from(
+        instrument,
+        bond,
+        oas,
+        engine_ts.clone(),
+        day_counter.clone(),
+        compounding,
+        frequency,
+        None,
+    )?;
+    let p_up = clean_price_oas_from(
+        instrument,
+        bond,
+        oas + bump,
+        engine_ts.clone(),
+        day_counter.clone(),
+        compounding,
+        frequency,
+        None,
+    )?;
+    let p_down = clean_price_oas_from(
+        instrument,
+        bond,
+        oas - bump,
+        engine_ts,
+        day_counter,
+        compounding,
+        frequency,
+        None,
+    )?;
+    let dirty = p + bond.accrued_amount(None)?;
+    if dirty == 0.0 {
+        Ok(0.0)
+    } else {
+        Ok((p_down - p_up) / (2.0 * dirty * bump))
+    }
+}
+
+/// Dirty-price finite-difference convexity of a conventional OAS
+/// (`CallableBond::effectiveConvexity`).
+#[allow(clippy::too_many_arguments)]
+fn effective_convexity_from(
+    instrument: &dyn Instrument,
+    bond: &Bond,
+    oas: Spread,
+    engine_ts: Handle<dyn YieldTermStructure>,
+    day_counter: DayCounter,
+    compounding: Compounding,
+    frequency: Frequency,
+    bump: Real,
+) -> QlResult<Real> {
+    let p = clean_price_oas_from(
+        instrument,
+        bond,
+        oas,
+        engine_ts.clone(),
+        day_counter.clone(),
+        compounding,
+        frequency,
+        None,
+    )?;
+    let p_up = clean_price_oas_from(
+        instrument,
+        bond,
+        oas + bump,
+        engine_ts.clone(),
+        day_counter.clone(),
+        compounding,
+        frequency,
+        None,
+    )?;
+    let p_down = clean_price_oas_from(
+        instrument,
+        bond,
+        oas - bump,
+        engine_ts,
+        day_counter,
+        compounding,
+        frequency,
+        None,
+    )?;
+    let dirty = p + bond.accrued_amount(None)?;
+    if dirty == 0.0 {
+        Ok(0.0)
+    } else {
+        Ok((p_up + p_down - 2.0 * p) / (bump * bump * dirty))
+    }
+}
+
 /// A callable / puttable fixed-rate bond.
 pub struct CallableFixedRateBond {
     base: InstrumentBase,
@@ -722,6 +825,62 @@ impl CallableFixedRateBond {
             compounding,
             frequency,
             settlement,
+        )
+    }
+
+    /// Effective duration of a conventional `oas` via a dirty-price bump
+    /// (`CallableBond::effectiveDuration`). `bump` defaults to `2e-4`.
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn effective_duration(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        bump: Option<Real>,
+    ) -> QlResult<Real> {
+        effective_duration_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            bump.unwrap_or(2.0e-4),
+        )
+    }
+
+    /// Effective convexity of a conventional `oas` via a dirty-price bump
+    /// (`CallableBond::effectiveConvexity`). `bump` defaults to `2e-4`.
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn effective_convexity(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        bump: Option<Real>,
+    ) -> QlResult<Real> {
+        effective_convexity_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            bump.unwrap_or(2.0e-4),
         )
     }
 }
@@ -963,6 +1122,62 @@ impl CallableZeroCouponBond {
             settlement,
         )
     }
+
+    /// Effective duration of a conventional `oas` via a dirty-price bump
+    /// (`CallableBond::effectiveDuration`). `bump` defaults to `2e-4`.
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn effective_duration(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        bump: Option<Real>,
+    ) -> QlResult<Real> {
+        effective_duration_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            bump.unwrap_or(2.0e-4),
+        )
+    }
+
+    /// Effective convexity of a conventional `oas` via a dirty-price bump
+    /// (`CallableBond::effectiveConvexity`). `bump` defaults to `2e-4`.
+    ///
+    /// # Errors
+    ///
+    /// As [`oas`](Self::oas).
+    #[allow(clippy::too_many_arguments)]
+    pub fn effective_convexity(
+        &self,
+        oas: Spread,
+        engine_ts: Handle<dyn YieldTermStructure>,
+        day_counter: DayCounter,
+        compounding: Compounding,
+        frequency: Frequency,
+        bump: Option<Real>,
+    ) -> QlResult<Real> {
+        effective_convexity_from(
+            self,
+            self.bond(),
+            oas,
+            engine_ts,
+            day_counter,
+            compounding,
+            frequency,
+            bump.unwrap_or(2.0e-4),
+        )
+    }
 }
 
 impl Instrument for CallableZeroCouponBond {
@@ -1029,10 +1244,12 @@ mod tests {
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::target::Target;
+    use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
     use crate::time::schedule::{MakeSchedule, Schedule};
     use crate::time::timeunit::TimeUnit;
     use crate::types::Natural;
@@ -2253,6 +2470,179 @@ mod tests {
         assert_eq!(
             clean100, clean25,
             "cleanPriceOAS must match across notionals: 100 -> {clean100}, 25 -> {clean25}"
+        );
+    }
+
+    /// `callablebonds.cpp` testEffectiveDurationAndConvexity (`:1049`):
+    /// dirty-price finite differences match `effectiveDuration` /
+    /// `effectiveConvexity`, and differ from a clean-price denominator.
+    #[test]
+    fn effective_duration_and_convexity_use_dirty_price() {
+        let settlement_date = Date::new(30, Month::November, 2023);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(settlement_date);
+
+        let effective = Date::new(20, Month::May, 2021);
+        let maturity = Date::new(1, Month::June, 2029);
+        let first_coupon = Date::new(1, Month::December, 2021);
+        let calendar = UnitedStates::new(Market::GovernmentBond);
+        let day_count = Thirty360::with_convention(Convention::ISDA);
+
+        let schedule = MakeSchedule::new()
+            .from(effective)
+            .to(maturity)
+            .with_tenor(Period::new(6, TimeUnit::Months))
+            .with_calendar(calendar.clone())
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .backwards()
+            .end_of_month(true)
+            .with_first_date(first_coupon)
+            .build();
+
+        let call_schedule = vec![
+            Callability::new(
+                BondPrice::Clean(102.438),
+                CallabilityType::Call,
+                Date::new(1, Month::June, 2024),
+            ),
+            Callability::new(
+                BondPrice::Clean(101.219),
+                CallabilityType::Call,
+                Date::new(1, Month::June, 2025),
+            ),
+            Callability::new(
+                BondPrice::Clean(100.0),
+                CallabilityType::Call,
+                Date::new(1, Month::June, 2026),
+            ),
+            Callability::new(
+                BondPrice::Clean(100.0),
+                CallabilityType::Call,
+                Date::new(1, Month::June, 2029),
+            ),
+        ];
+
+        let mut bond = CallableFixedRateBond::new(
+            2,
+            100.0,
+            schedule,
+            vec![0.04875],
+            day_count.clone(),
+            BusinessDayConvention::Unadjusted,
+            100.0,
+            Some(effective),
+            call_schedule,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        let flat: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::moving_with_rate(
+                2,
+                calendar,
+                0.05,
+                day_count.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+                Shared::clone(&settings),
+            )) as Shared<dyn YieldTermStructure>);
+        let hw = HullWhite::new(flat.clone(), 0.03, 0.012).unwrap();
+        let grid_steps = ((maturity - settlement_date) / 30) as usize;
+        let engine = shared_mut(
+            TreeCallableFixedRateBondEngine::new(hw, grid_steps, Shared::clone(&settings)).unwrap(),
+        ) as SharedMut<dyn PricingEngine>;
+        bond.base_mut().set_pricing_engine(engine);
+
+        let compounding = Compounding::Compounded;
+        let frequency = Frequency::Semiannual;
+        let oas = bond
+            .oas(
+                70.926,
+                flat.clone(),
+                day_count.clone(),
+                compounding,
+                frequency,
+                Some(settlement_date),
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let shift = 0.001;
+        let eff_dur = bond
+            .effective_duration(
+                oas,
+                flat.clone(),
+                day_count.clone(),
+                compounding,
+                frequency,
+                Some(shift),
+            )
+            .unwrap();
+        let eff_conv = bond
+            .effective_convexity(
+                oas,
+                flat.clone(),
+                day_count.clone(),
+                compounding,
+                frequency,
+                Some(shift),
+            )
+            .unwrap();
+
+        let accrued = bond.bond().accrued_amount(Some(settlement_date)).unwrap();
+        let p0 = bond
+            .clean_price_oas(
+                oas,
+                flat.clone(),
+                day_count.clone(),
+                compounding,
+                frequency,
+                Some(settlement_date),
+            )
+            .unwrap()
+            + accrued;
+        let p_up = bond
+            .clean_price_oas(
+                oas + shift,
+                flat.clone(),
+                day_count.clone(),
+                compounding,
+                frequency,
+                Some(settlement_date),
+            )
+            .unwrap()
+            + accrued;
+        let p_down = bond
+            .clean_price_oas(
+                oas - shift,
+                flat,
+                day_count,
+                compounding,
+                frequency,
+                Some(settlement_date),
+            )
+            .unwrap()
+            + accrued;
+
+        let expected_dur = (p_down - p_up) / (2.0 * p0 * shift);
+        let expected_conv = (p_down + p_up - 2.0 * p0) / (p0 * shift * shift);
+        let incorrect_dur = (p_down - p_up) / (2.0 * (p0 - accrued) * shift);
+
+        // Boost `CHECK_CLOSE(..., 1e-4)` is a 1e-4 percent relative tolerance.
+        let rel = 1.0e-6;
+        assert!(
+            (eff_dur - expected_dur).abs() <= expected_dur.abs() * rel,
+            "effective duration {eff_dur} vs expected {expected_dur}"
+        );
+        assert!(
+            (eff_conv - expected_conv).abs() <= expected_conv.abs() * rel,
+            "effective convexity {eff_conv} vs expected {expected_conv}"
+        );
+        assert!(
+            (eff_dur - incorrect_dur).abs() > 0.01,
+            "duration {eff_dur} should differ from clean-denominator {incorrect_dur}"
         );
     }
 }
