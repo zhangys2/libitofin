@@ -9,8 +9,10 @@
 use crate::discretizedasset::{CouponAdjustment, DiscretizedAsset, DiscretizedAssetBase};
 use crate::errors::QlResult;
 use crate::instruments::{CallabilityType, CallableBondArguments};
+use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
 
 /// A week, used to snap call dates to a nearly coincident coupon date.
@@ -60,11 +62,26 @@ impl DiscretizedCallableFixedRateBond {
                 {
                     // Snap the call to the coupon date; the coupon must then be
                     // applied *before* the call in post-order, so tag it `Pre`,
-                    // and rescale the price by the missing discount (spread 0).
+                    // and rescale the price by the missing discount (including
+                    // any OAS spread on the short rate).
                     call_time = coupon_time;
                     coupon_adjustments[j] = CouponAdjustment::Pre;
-                    let df_call = curve.discount_date(call_date, true)?;
-                    let df_coupon = curve.discount_date(coupon_date, true)?;
+                    let spread = args.spread;
+                    let df_incl_spread = |date| -> QlResult<Real> {
+                        let t = curve.time_from_reference(date)?;
+                        let z = curve
+                            .zero_rate_date(
+                                date,
+                                curve.require_day_counter()?,
+                                Compounding::Continuous,
+                                Frequency::NoFrequency,
+                                true,
+                            )?
+                            .rate();
+                        Ok((-(z + spread) * t).exp())
+                    };
+                    let df_call = df_incl_spread(call_date)?;
+                    let df_coupon = df_incl_spread(coupon_date)?;
                     adjusted[i] *= df_call / df_coupon;
                     break;
                 }

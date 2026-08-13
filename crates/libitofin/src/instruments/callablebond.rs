@@ -1231,6 +1231,7 @@ impl Instrument for CallableZeroCouponBond {
 mod tests {
     use super::*;
     use crate::handle::Handle;
+    use crate::instrument::Instrument;
     use crate::instruments::{FixedRateBond, ZeroCouponBond};
     use crate::interestrate::Compounding;
     use crate::models::shortrate::HullWhite;
@@ -2644,5 +2645,137 @@ mod tests {
             (eff_dur - incorrect_dur).abs() > 0.01,
             "duration {eff_dur} should differ from clean-denominator {incorrect_dur}"
         );
+    }
+
+    /// `callablebonds.cpp` testSnappingExerciseDate2ClosestCouponDate (`:571`):
+    /// a call within a week of a coupon snaps so the callable NPV matches the
+    /// truncated straight bond @ 1e-10, and OAS falls as the call date moves.
+    #[test]
+    fn snapping_exercise_date_to_closest_coupon_matches_truncated_bond() {
+        let today = Date::new(18, Month::May, 2021);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let calendar = UnitedStates::new(Market::FederalReserve);
+        let accrual = Thirty360::with_convention(Convention::USA);
+        let frequency = Frequency::Semiannual;
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            today,
+            0.02,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+
+        let settlement_days = 2;
+        let settlement = Date::new(20, Month::May, 2021);
+        let coupon = 0.05;
+        let face = 100.0;
+        let maturity = Date::new(14, Month::February, 2026);
+        let issue = settlement - 2 * 366;
+        let schedule = MakeSchedule::new()
+            .from(issue)
+            .to(maturity)
+            .with_frequency(frequency)
+            .with_calendar(calendar.clone())
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .backwards()
+            .end_of_month(false)
+            .build();
+        let coupons = vec![coupon; schedule.len() - 1];
+
+        let initial_call = Date::new(14, Month::February, 2022);
+        let tolerance = 1.0e-10;
+        let mut prev_oas = 0.0266;
+        let expected_oas_step = 0.00005;
+
+        for i in -10..11 {
+            let call_date = initial_call + i;
+            if !calendar.is_business_day(call_date) {
+                continue;
+            }
+
+            let callabilities = vec![Callability::new(
+                BondPrice::Clean(face),
+                CallabilityType::Call,
+                call_date,
+            )];
+            let mut callable = CallableFixedRateBond::new(
+                settlement_days,
+                face,
+                schedule.clone(),
+                coupons.clone(),
+                accrual.clone(),
+                BusinessDayConvention::Following,
+                face,
+                Some(issue),
+                callabilities,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            let model = HullWhite::new(curve.clone(), 1.0e-12, 0.003).unwrap();
+            let tree = shared_mut(
+                TreeCallableFixedRateBondEngine::new(model, 40, Shared::clone(&settings)).unwrap(),
+            ) as SharedMut<dyn PricingEngine>;
+            callable.base_mut().set_pricing_engine(tree);
+
+            let truncated = schedule.until(call_date);
+            let mut straight = FixedRateBond::new(
+                settlement_days,
+                face,
+                truncated,
+                coupons.clone(),
+                accrual.clone(),
+                BusinessDayConvention::Following,
+                face,
+                Some(issue),
+                None,
+                None,
+                NullCalendar::new(),
+                BusinessDayConvention::Unadjusted,
+                false,
+                None,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            let discounting = shared_mut(DiscountingBondEngine::new(
+                curve.clone(),
+                None,
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>;
+            straight
+                .bond_mut()
+                .base_mut()
+                .set_pricing_engine(discounting);
+
+            let npv_callable = callable.npv().unwrap();
+            let npv_straight = straight.bond_mut().npv().unwrap();
+            assert!(
+                (npv_callable - npv_straight).abs() <= tolerance,
+                "snap NPV at {call_date}: callable {npv_callable} vs truncated {npv_straight}"
+            );
+
+            let clean = callable.clean_price().unwrap() - 2.0;
+            let oas = callable
+                .oas(
+                    clean,
+                    curve.clone(),
+                    accrual.clone(),
+                    Compounding::Continuous,
+                    frequency,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert!(
+                prev_oas - oas >= expected_oas_step,
+                "OAS at {call_date}: {oas} should fall from {prev_oas} by at least {expected_oas_step}"
+            );
+            prev_oas = oas;
+        }
     }
 }

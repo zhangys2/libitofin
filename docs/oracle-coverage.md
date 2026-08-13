@@ -34,6 +34,7 @@ credit.
 | European callable (implied vol) | `CallableFixedRateBond::implied_volatility` | `callablebonds.cpp` `testImpliedVol` | dirty/clean 78.50 round-trip @ 1e-4 |
 | Callable OAS (notional invariance) | `CallableFixedRateBond::oas` / `clean_price_oas` + HW tree spread | `callablebonds.cpp` `testCallableBondOasWithDifferentNotinals` | OAS & cleanPriceOAS identical for face 100 vs 25 |
 | Callable OAS (effective duration / convexity) | `effective_duration` / `effective_convexity` | `callablebonds.cpp` `testEffectiveDurationAndConvexity` | dirty-price FD @ 1e-4%; ≠ clean-denominator |
+| Callable snap-to-coupon | HW tree snap + OAS | `callablebonds.cpp` `testSnappingExerciseDate2ClosestCouponDate` | callable NPV ≡ truncated straight @ 1e-10; OAS falls with later call |
 | Callable fixed bonds (arbitrary schedule) | `CallableFixedRateBond` + date-vector schedule | `callablebonds.cpp` `testCallableFixedRateBondWithArbitrarySchedule` | HW tree clean price succeeds |
 | Fixed-rate bonds (arbitrary schedule) | `FixedRateBond` + `Schedule::from_dates` | `bonds.cpp` `testFixedRateBondWithArbitrarySchedule` | `NoFrequency`; clean price prices without error |
 | Convertible bonds (TF binomial) | `ConvertibleFixedCouponBond` / `ConvertibleZeroCouponBond` + `BinomialConvertibleEngine` (CRR) | `convertiblebonds.cpp` `testBond` | OTM ≈ credit-spread vanilla @ 1e-2 / 2e-2 (1001 steps); ATM exceeds straight bond |
