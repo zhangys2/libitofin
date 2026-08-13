@@ -35,6 +35,7 @@ pub struct DiscretizedConvertible {
     conversion_probability: Array,
     spread_adjusted_rate: Array,
     /// Discounted dividend amounts (exposed for oracle tests).
+    #[allow(dead_code)]
     dividend_values: Array,
     stopping_times: Vec<Time>,
     callability_times: Vec<Time>,
@@ -158,6 +159,7 @@ impl DiscretizedConvertible {
     }
 
     /// Present values of future dividends as of the process reference.
+    #[allow(dead_code)]
     pub fn dividend_values(&self) -> &Array {
         &self.dividend_values
     }

@@ -701,18 +701,19 @@ mod tests {
             false,
         );
 
-        let mut args = ConvertibleBondArguments::default();
-        args.exercise =
-            Some(shared(EuropeanExercise::new(v.maturity_date)) as Shared<dyn Exercise>);
-        args.conversion_ratio = v.conversion_ratio;
-        args.cashflows.push(
-            shared(SimpleCashFlow::new(v.redemption, v.maturity_date).unwrap())
-                as Shared<dyn CashFlow>,
-        );
-        args.issue_date = Some(v.issue_date);
-        args.settlement_date = Some(settlement);
-        args.settlement_days = v.settlement_days as u32;
-        args.redemption = v.redemption;
+        let args = ConvertibleBondArguments {
+            exercise: Some(shared(EuropeanExercise::new(v.maturity_date)) as Shared<dyn Exercise>),
+            conversion_ratio: v.conversion_ratio,
+            cashflows: vec![
+                shared(SimpleCashFlow::new(v.redemption, v.maturity_date).unwrap())
+                    as Shared<dyn CashFlow>,
+            ],
+            issue_date: Some(v.issue_date),
+            settlement_date: Some(settlement),
+            settlement_days: v.settlement_days as u32,
+            redemption: v.redemption,
+            ..ConvertibleBondArguments::default()
+        };
 
         let future_amount = 10.0;
         let dividends: DividendSchedule = vec![
