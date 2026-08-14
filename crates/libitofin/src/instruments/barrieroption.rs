@@ -279,18 +279,26 @@ pub fn set_analytic_barrier_engine(
 mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
-    use crate::handle::Handle;
+    use crate::handle::{Handle, RelinkableHandle};
+    use crate::instrument::Instrument;
+    use crate::instruments::{StrikedTypePayoff, VanillaOption};
     use crate::interestrate::Compounding;
+    use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
-    use crate::shared::shared;
+    use crate::shared::{shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::nullcalendar::NullCalendar;
+    use crate::time::calendars::target::Target;
     use crate::time::date::Month;
+    use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::business252::Business252;
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
 
     #[test]
     fn down_out_call_is_below_vanilla() {
@@ -355,5 +363,95 @@ mod tests {
             "unexpected error: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn knock_in_plus_knock_out_replicates_european() {
+        // QuantLib barrieroption.cpp `testParity`: a DownIn plus a DownOut at
+        // the same barrier/strike replicate a European call @ 1e-7, including
+        // after relinking the vol surface onto a Business/252 TARGET counter.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let flat = |rate: Real, day_counter: crate::time::daycounter::DayCounter| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                day_counter,
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let vol = RelinkableHandle::new(shared(BlackConstantVol::new(
+            today,
+            Some(NullCalendar::new()),
+            0.20,
+            dc.clone(),
+        )) as Shared<dyn BlackVolTermStructure>);
+        let process = shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            flat(0.0, dc.clone()),
+            flat(0.01, dc),
+            vol.handle(),
+        ));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(6, TimeUnit::Months),
+        ));
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 100.0);
+        let mut knock_in = BarrierOption::new(
+            BarrierType::DownIn,
+            90.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let mut knock_out = BarrierOption::new(
+            BarrierType::DownOut,
+            90.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let barrier_engine = shared_mut(AnalyticBarrierEngine::new(Shared::clone(&process)))
+            as SharedMut<dyn PricingEngine>;
+        knock_in
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&barrier_engine));
+        knock_out.base_mut().set_pricing_engine(barrier_engine);
+
+        let mut european = VanillaOption::new(
+            shared(payoff) as Shared<dyn StrikedTypePayoff>,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        );
+        european
+            .base_mut()
+            .set_pricing_engine(
+                shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)))
+                    as SharedMut<dyn PricingEngine>,
+            );
+
+        let check = |knock_in: &mut BarrierOption,
+                     knock_out: &mut BarrierOption,
+                     european: &mut VanillaOption| {
+            let replicated = knock_in.npv().unwrap() + knock_out.npv().unwrap();
+            let expected = european.npv().unwrap();
+            assert!(
+                (replicated - expected).abs() <= 1.0e-7,
+                "knock-in+out {replicated} vs european {expected}"
+            );
+        };
+        check(&mut knock_in, &mut knock_out, &mut european);
+
+        vol.link_to(shared(BlackConstantVol::new(
+            today,
+            Some(NullCalendar::new()),
+            0.20,
+            Business252::with_calendar(Target::new()),
+        )) as Shared<dyn BlackVolTermStructure>);
+        check(&mut knock_in, &mut knock_out, &mut european);
     }
 }
