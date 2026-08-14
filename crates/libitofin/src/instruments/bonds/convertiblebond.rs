@@ -5,10 +5,9 @@
 //! soft calls). Pricing is supplied by
 //! [`BinomialConvertibleEngine`](crate::pricingengines::bond::BinomialConvertibleEngine).
 //!
-//! Zero- and fixed-coupon convertibles are covered here. A floating-rate
-//! convertible follows when needed. As in QuantLib, most inherited bond yield /
-//! dirty-price helpers refer to the underlying plain-vanilla bond and ignore
-//! convertibility.
+//! Zero-, fixed-, and floating-coupon convertibles are covered here. As in
+//! QuantLib, most inherited bond yield / dirty-price helpers refer to the
+//! underlying plain-vanilla bond and ignore convertibility.
 
 use std::any::Any;
 
@@ -17,10 +16,12 @@ use crate::errors::QlResult;
 use crate::event::event_has_occurred;
 use crate::exercise::Exercise;
 use crate::fail;
+use crate::indexes::IborIndex;
+use crate::indexes::index::Index;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::{
     Bond, BondPrice, BondResults, Callability, CallabilitySchedule, CallabilityType, FixedRateBond,
-    ZeroCouponBond,
+    FloatingRateBond, ZeroCouponBond,
 };
 use crate::pricingengine::{Arguments, Results};
 use crate::settings::Settings;
@@ -32,7 +33,7 @@ use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::period::Period;
 use crate::time::schedule::Schedule;
-use crate::types::{Natural, Rate, Real};
+use crate::types::{Natural, Rate, Real, Spread};
 
 /// Soft callability (`SoftCallability` in QuantLib): a call with a trigger.
 pub fn soft_callability(price: BondPrice, date: Date, trigger: Real) -> Callability {
@@ -415,6 +416,159 @@ impl ConvertibleZeroCouponBond {
 }
 
 impl Instrument for ConvertibleZeroCouponBond {
+    fn base(&self) -> &InstrumentBase {
+        &self.inner.instrument
+    }
+
+    fn base_mut(&mut self) -> &mut InstrumentBase {
+        &mut self.inner.instrument
+    }
+
+    fn is_expired(&self) -> QlResult<bool> {
+        self.inner.bond.is_expired()
+    }
+
+    fn setup_expired(&mut self) {
+        let expired = InstrumentResults {
+            value: Some(0.0),
+            ..InstrumentResults::default()
+        };
+        self.inner.instrument.store_results(&expired);
+        self.inner.settlement_value = Some(0.0);
+    }
+
+    fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
+        self.inner.setup_arguments(arguments)
+    }
+
+    fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
+        self.inner.fetch_results(results)
+    }
+}
+
+/// A convertible floating-rate bond (`ConvertibleFloatingRateBond`).
+pub struct ConvertibleFloatingRateBond {
+    inner: ConvertibleBondBase,
+}
+
+impl ConvertibleFloatingRateBond {
+    /// Builds a convertible floating-rate bond. Notionals are forced to 100, as
+    /// in QuantLib.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        exercise: Shared<dyn Exercise>,
+        conversion_ratio: Real,
+        callability: CallabilitySchedule,
+        issue_date: Date,
+        settlement_days: Natural,
+        index: Shared<IborIndex>,
+        fixing_days: Natural,
+        spreads: Vec<Spread>,
+        day_counter: DayCounter,
+        schedule: Schedule,
+        redemption: Real,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_ex_coupon(
+            exercise,
+            conversion_ratio,
+            callability,
+            issue_date,
+            settlement_days,
+            index,
+            fixing_days,
+            spreads,
+            day_counter,
+            schedule,
+            redemption,
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            settings,
+        )
+    }
+
+    /// Builds a convertible floating-rate bond with an optional ex-coupon period.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_ex_coupon(
+        exercise: Shared<dyn Exercise>,
+        conversion_ratio: Real,
+        callability: CallabilitySchedule,
+        issue_date: Date,
+        settlement_days: Natural,
+        index: Shared<IborIndex>,
+        fixing_days: Natural,
+        spreads: Vec<Spread>,
+        day_counter: DayCounter,
+        schedule: Schedule,
+        redemption: Real,
+        ex_coupon_period: Option<Period>,
+        ex_coupon_calendar: Calendar,
+        ex_coupon_convention: BusinessDayConvention,
+        ex_coupon_end_of_month: bool,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        let payment_convention = schedule.business_day_convention();
+        let floating = FloatingRateBond::new(
+            settlement_days,
+            100.0,
+            schedule,
+            Shared::clone(&index),
+            day_counter,
+            payment_convention,
+            Some(fixing_days),
+            Vec::new(),
+            spreads,
+            Vec::new(),
+            Vec::new(),
+            redemption,
+            Some(issue_date),
+            ex_coupon_period,
+            ex_coupon_calendar,
+            ex_coupon_convention,
+            ex_coupon_end_of_month,
+            None,
+            Shared::clone(&settings),
+        )?;
+        let inner = ConvertibleBondBase::new(
+            exercise,
+            conversion_ratio,
+            callability,
+            floating.into_bond(),
+            redemption,
+            settings,
+        )?;
+        inner.instrument.register_with(index.observable());
+        Ok(Self { inner })
+    }
+
+    /// Conversion ratio (shares per 100 face).
+    pub fn conversion_ratio(&self) -> Real {
+        self.inner.conversion_ratio
+    }
+
+    /// Call/put schedule.
+    pub fn callability(&self) -> &CallabilitySchedule {
+        &self.inner.callability
+    }
+
+    /// Underlying bond cash-flow view.
+    pub fn bond(&self) -> &Bond {
+        &self.inner.bond
+    }
+
+    /// Theoretical settlement value from the engine.
+    pub fn settlement_value(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        let Some(value) = self.inner.settlement_value else {
+            fail!("settlement value not provided");
+        };
+        Ok(value)
+    }
+}
+
+impl Instrument for ConvertibleFloatingRateBond {
     fn base(&self) -> &InstrumentBase {
         &self.inner.instrument
     }

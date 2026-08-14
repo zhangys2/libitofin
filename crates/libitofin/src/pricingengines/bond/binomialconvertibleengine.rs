@@ -230,10 +230,12 @@ mod tests {
     use crate::cashflows::{Dividend, FixedDividend, SimpleCashFlow};
     use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
+    use crate::indexes::Euribor;
     use crate::instrument::Instrument;
     use crate::instruments::{
-        ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond,
-        FixedRateBond, PlainVanillaPayoff, StrikedTypePayoff, VanillaOption, ZeroCouponBond,
+        ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleFloatingRateBond,
+        ConvertibleZeroCouponBond, FixedRateBond, FloatingRateBond, PlainVanillaPayoff,
+        StrikedTypePayoff, VanillaOption, ZeroCouponBond,
     };
     use crate::math::interpolations::flat::BackwardFlat;
     use crate::option::OptionType;
@@ -252,11 +254,12 @@ mod tests {
     use crate::time::calendars::target::Target;
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::{Date, Month};
+    use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
-    use crate::time::schedule::MakeSchedule;
+    use crate::time::schedule::{MakeSchedule, Schedule};
     use crate::time::timeunit::TimeUnit;
 
     struct Vars {
@@ -511,7 +514,7 @@ mod tests {
         fixed
             .bond_mut()
             .base_mut()
-            .set_pricing_engine(bond_engine as SharedMut<dyn PricingEngine>);
+            .set_pricing_engine(SharedMut::clone(&bond_engine) as SharedMut<dyn PricingEngine>);
         let expected_fixed = fixed.bond_mut().settlement_value().unwrap();
         let tol_fixed = 2.0e-2;
         let eu_fixed_npv = eu_fixed.npv().unwrap();
@@ -523,6 +526,102 @@ mod tests {
         assert!(
             (am_fixed_npv - expected_fixed).abs() < tol_fixed,
             "am fixed convertible {am_fixed_npv} vs vanilla {expected_fixed}"
+        );
+
+        // Floating-rate
+        let calendar = Target::new();
+        let fixing_days = calendar.business_days_between(v.today, v.issue_date, true, false) as u32;
+        let index = shared(Euribor::one_year(
+            discount_curve(&v),
+            Shared::clone(&v.settings),
+        ));
+        let spreads = Vec::new();
+        let mut eu_floating = ConvertibleFloatingRateBond::new(
+            Shared::clone(&eu_exercise),
+            conversion_ratio,
+            Vec::new(),
+            v.issue_date,
+            v.settlement_days as u32,
+            Shared::clone(&index),
+            fixing_days,
+            spreads.clone(),
+            Actual360::new(),
+            fixed_schedule.clone(),
+            v.redemption,
+            Shared::clone(&v.settings),
+        )
+        .unwrap();
+        eu_floating
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>);
+        let mut am_floating = ConvertibleFloatingRateBond::new(
+            Shared::clone(&am_exercise),
+            conversion_ratio,
+            Vec::new(),
+            v.issue_date,
+            v.settlement_days as u32,
+            Shared::clone(&index),
+            fixing_days,
+            spreads.clone(),
+            Actual360::new(),
+            fixed_schedule,
+            v.redemption,
+            Shared::clone(&v.settings),
+        )
+        .unwrap();
+        am_floating
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>);
+
+        let float_schedule = Schedule::new(
+            v.issue_date,
+            v.maturity_date,
+            Period::new(1, TimeUnit::Years),
+            calendar,
+            BusinessDayConvention::Following,
+            BusinessDayConvention::Following,
+            DateGeneration::Backward,
+            false,
+            Date::null(),
+            Date::null(),
+        );
+        let mut floating = FloatingRateBond::new(
+            v.settlement_days as u32,
+            100.0,
+            float_schedule,
+            index,
+            Actual360::new(),
+            BusinessDayConvention::Following,
+            Some(fixing_days),
+            vec![1.0],
+            spreads,
+            Vec::new(),
+            Vec::new(),
+            v.redemption,
+            Some(v.issue_date),
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            Shared::clone(&v.settings),
+        )
+        .unwrap();
+        floating
+            .bond_mut()
+            .base_mut()
+            .set_pricing_engine(bond_engine as SharedMut<dyn PricingEngine>);
+        let expected_float = floating.bond_mut().settlement_value().unwrap();
+        let tol_float = 2.0e-2;
+        let eu_float_npv = eu_floating.npv().unwrap();
+        let am_float_npv = am_floating.npv().unwrap();
+        assert!(
+            (eu_float_npv - expected_float).abs() < tol_float,
+            "eu floating convertible {eu_float_npv} vs vanilla {expected_float}"
+        );
+        assert!(
+            (am_float_npv - expected_float).abs() < tol_float,
+            "am floating convertible {am_float_npv} vs vanilla {expected_float}"
         );
     }
 
