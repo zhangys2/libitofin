@@ -235,23 +235,27 @@ mod tests {
         ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond,
         FixedRateBond, PlainVanillaPayoff, StrikedTypePayoff, VanillaOption, ZeroCouponBond,
     };
+    use crate::math::interpolations::flat::BackwardFlat;
     use crate::option::OptionType;
     use crate::pricingengines::bond::DiscountingBondEngine;
     use crate::pricingengines::vanilla::BinomialVanillaEngine;
-    use crate::processes::BlackScholesMertonProcess;
+    use crate::processes::{BlackProcess, BlackScholesMertonProcess};
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::BlackConstantVol;
     use crate::termstructures::volatility::BlackVolTermStructure;
-    use crate::termstructures::yields::{FlatForward, ZeroSpreadedTermStructure};
+    use crate::termstructures::yields::{FlatForward, ForwardCurve, ZeroSpreadedTermStructure};
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendars::NullCalendar;
     use crate::time::calendars::target::Target;
+    use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
     use crate::time::schedule::MakeSchedule;
     use crate::time::timeunit::TimeUnit;
 
@@ -745,6 +749,126 @@ mod tests {
         assert!(
             (calculated - expected).abs() <= 1.0e-12 * expected.abs(),
             "dividend PV {calculated} vs {expected}"
+        );
+    }
+
+    #[test]
+    fn known_regression_detects_tree_overflow() {
+        // QuantLib convertiblebonds.cpp `testRegression`: a historically
+        // overflowing CRR tree must fail with an Error rather than returning
+        // Inf. Evaluation is 24 Dec 2008; the process is Black (q = r) with
+        // a ~2168% constant vol.
+        let today = Date::new(23, Month::December, 2008);
+        let tomorrow = today + 1;
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(tomorrow);
+
+        let dates = vec![
+            Date::new(29, Month::December, 2008),
+            Date::new(5, Month::January, 2009),
+            Date::new(29, Month::January, 2009),
+            Date::new(27, Month::February, 2009),
+            Date::new(30, Month::March, 2009),
+            Date::new(29, Month::June, 2009),
+            Date::new(29, Month::December, 2009),
+            Date::new(29, Month::December, 2010),
+            Date::new(29, Month::December, 2011),
+            Date::new(31, Month::December, 2012),
+            Date::new(30, Month::December, 2013),
+            Date::new(29, Month::December, 2014),
+            Date::new(29, Month::December, 2015),
+            Date::new(29, Month::December, 2016),
+            Date::new(29, Month::December, 2017),
+            Date::new(31, Month::December, 2018),
+            Date::new(30, Month::December, 2019),
+            Date::new(29, Month::December, 2020),
+            Date::new(29, Month::December, 2021),
+            Date::new(29, Month::December, 2022),
+            Date::new(29, Month::December, 2023),
+            Date::new(29, Month::December, 2028),
+            Date::new(29, Month::December, 2033),
+            Date::new(29, Month::December, 2038),
+            Date::new(31, Month::December, 2199),
+        ];
+        let forwards = vec![
+            0.002_599_934_280_0,
+            0.002_599_934_280_0,
+            0.005_312_327_550_0,
+            0.019_704_959_872_1,
+            0.022_052_484_529_6,
+            0.021_707_639_564_3,
+            0.023_034_962_747_8,
+            0.008_763_164_747_6,
+            0.021_908_429_949_9,
+            0.024_479_876_621_9,
+            0.026_788_549_845_6,
+            0.026_692_286_756_2,
+            0.027_105_212_638_6,
+            0.026_882_989_164_8,
+            0.026_459_474_449_8,
+            0.027_345_036_742_4,
+            0.029_485_261_474_9,
+            0.028_555_611_971_9,
+            0.030_555_776_465_9,
+            0.029_224_473_842_2,
+            0.026_391_700_419_4,
+            0.023_962_697_024_3,
+            0.021_641_710_809_0,
+            0.022_834_383_842_2,
+            0.022_834_383_842_2,
+        ];
+        let risk_free: Handle<dyn YieldTermStructure> = Handle::new(shared(
+            ForwardCurve::new(dates, forwards, Actual360::new(), BackwardFlat).unwrap(),
+        )
+            as Shared<dyn YieldTermStructure>);
+        // QuantLib `BlackProcess(u, r, sigma)` sets q = r.
+        let process = shared(BlackProcess::new(
+            Handle::new(shared(SimpleQuote::new(2.908_438_281_879_744_3)) as Shared<dyn Quote>),
+            risk_free.clone(),
+            risk_free,
+            Handle::new(shared(BlackConstantVol::new(
+                tomorrow,
+                Some(NullCalendar::new()),
+                21.685_235_548_092_248,
+                Thirty360::with_convention(Convention::BondBasis),
+            )) as Shared<dyn BlackVolTermStructure>),
+        ));
+        let spread =
+            Handle::new(shared(SimpleQuote::new(0.114_987_006_780_128_74)) as Shared<dyn Quote>);
+
+        let issue_date = Date::new(23, Month::July, 2008);
+        let maturity_date = Date::new(1, Month::August, 2013);
+        let calendar = UnitedStates::new(Market::GovernmentBond);
+        let schedule = MakeSchedule::new()
+            .from(issue_date)
+            .to(maturity_date)
+            .with_tenor(Period::new(6, TimeUnit::Months))
+            .with_calendar(calendar)
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .build();
+        let coupons = vec![0.05; schedule.len().saturating_sub(1)];
+        let mut bond = ConvertibleFixedCouponBond::new(
+            shared(EuropeanExercise::new(maturity_date)) as Shared<dyn Exercise>,
+            100.0 / 20.3175,
+            Vec::new(),
+            issue_date,
+            3,
+            coupons,
+            Thirty360::with_convention(Convention::BondBasis),
+            schedule,
+            100.0,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        bond.base_mut().set_pricing_engine(shared_mut(
+            BinomialConvertibleEngine::new(process, 600, spread, Vec::new()).unwrap(),
+        ) as SharedMut<dyn PricingEngine>);
+
+        let err = bond.npv().expect_err("INF result was not detected");
+        assert!(
+            err.message().contains("overflow") || err.message().contains("finite"),
+            "expected overflow Error, got: {}",
+            err.message()
         );
     }
 }
