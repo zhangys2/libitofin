@@ -9,8 +9,8 @@ mod floatingratebond;
 mod zerocouponbond;
 
 pub use convertiblebond::{
-    ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleZeroCouponBond,
-    soft_callability,
+    ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleFloatingRateBond,
+    ConvertibleZeroCouponBond, soft_callability,
 };
 pub use fixedratebond::FixedRateBond;
 pub use floatingratebond::FloatingRateBond;
