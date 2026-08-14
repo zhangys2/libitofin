@@ -1,14 +1,16 @@
 //! Barrier option instrument and analytic engine.
 //!
-//! First slice of QuantLib's barrier surface: continuous out/in options with
-//! zero rebate, priced via the reflection/Black-Scholes building blocks used by
-//! `AnalyticBarrierEngine`. Full Haug type×rebate coverage is follow-up.
+//! Port of QuantLib's `ql/pricingengines/barrier/analyticbarrierengine`:
+//! continuous knock-in/out options priced with Haug's A–F formulae (*Option
+//! pricing formulas*, McGraw-Hill, p.69). Rebate terms `E`/`F` are zero until
+//! the instrument carries a rebate (follow-up).
 
 use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::{PlainVanillaPayoff, StrikedTypePayoff, TypePayoff};
+use crate::interestrate::Compounding;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
@@ -19,6 +21,7 @@ use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::date::Date;
+use crate::time::frequency::Frequency;
 use crate::types::Real;
 
 /// Barrier type (QuantLib `Barrier::Type`).
@@ -156,45 +159,67 @@ impl PricingEngine for AnalyticBarrierEngine {
         if exercise.exercise_type() != ExerciseType::European {
             fail!("analytic barrier engine needs European exercise");
         }
-        let maturity = self.process.time(&exercise.last_date())?;
-        require!(maturity > 0.0, "non-positive maturity");
+        let strike = payoff.strike();
+        require!(strike > 0.0, "strike must be positive");
         let spot = self.process.x0()?;
-        let r = -self
-            .process
-            .risk_free_rate()
-            .current_link()?
-            .discount(maturity, false)?
-            .ln()
-            / maturity;
-        let q = -self
-            .process
-            .dividend_yield()
-            .current_link()?
-            .discount(maturity, false)?
-            .ln()
-            / maturity;
-        let vol = self.process.black_volatility().current_link()?.black_vol(
-            maturity,
-            payoff.strike(),
-            true,
-        )?;
-        let value = barrier_price(
+        require!(spot > 0.0, "negative or null underlying given");
+        require!(!triggered(barrier_type, spot, barrier), "barrier touched");
+
+        let maturity_date = exercise.last_date();
+        let risk_free = self.process.risk_free_rate().current_link()?;
+        let dividend = self.process.dividend_yield().current_link()?;
+        let vol_ts = self.process.black_volatility().current_link()?;
+        let rfdc = risk_free.require_day_counter()?;
+        let divdc = dividend.require_day_counter()?;
+        // Date-based extracts, matching QuantLib `AnalyticBarrierEngine`:
+        // `stdDeviation` is `sqrt(blackVariance(date))`, not `vol * sqrt(process.time())`,
+        // so knock-in/out parity still holds when the vol day counter differs.
+        let r = risk_free
+            .zero_rate_date(
+                maturity_date,
+                rfdc,
+                Compounding::Continuous,
+                Frequency::NoFrequency,
+                false,
+            )?
+            .rate();
+        let q = dividend
+            .zero_rate_date(
+                maturity_date,
+                divdc,
+                Compounding::Continuous,
+                Frequency::NoFrequency,
+                false,
+            )?
+            .rate();
+        let df_r = risk_free.discount_date(maturity_date, false)?;
+        let df_q = dividend.discount_date(maturity_date, false)?;
+        let vol = vol_ts.black_vol_date(maturity_date, strike, false)?;
+        let std_dev = vol_ts
+            .black_variance_date(maturity_date, strike, false)?
+            .sqrt();
+        let value = haug_barrier_price(
             barrier_type,
             payoff.option_type(),
-            spot,
-            payoff.strike(),
-            barrier,
-            r,
-            q,
-            vol,
-            maturity,
+            HaugInputs {
+                spot,
+                strike,
+                barrier,
+                rebate: 0.0,
+                vol,
+                std_dev,
+                r,
+                q,
+                df_r,
+                df_q,
+            },
         )?;
         self.base.results_mut().value = Some(value);
         Ok(())
     }
 }
 
-/// Prices a continuous zero-rebate barrier option.
+/// Prices a continuous zero-rebate barrier option from flat `r`, `q`, `vol`.
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub fn barrier_price(
@@ -208,62 +233,177 @@ pub fn barrier_price(
     vol: Real,
     t: Real,
 ) -> QlResult<Real> {
-    // The reflection adjustment and the Black-Scholes block both divide by the
-    // standard deviation `vol * sqrt(t)`; reject the degenerate zero-vol /
-    // zero-maturity inputs explicitly rather than propagate a NaN.
     require!(vol > 0.0, "barrier pricing needs a positive volatility");
     require!(t > 0.0, "barrier pricing needs a positive maturity");
-    let vanilla = black_scholes(option_type, spot, strike, r, q, vol, t)?;
-    let knocked_out = match barrier_type {
-        BarrierType::DownOut | BarrierType::DownIn if spot <= barrier => true,
-        BarrierType::UpOut | BarrierType::UpIn if spot >= barrier => true,
-        _ => false,
-    };
-    if matches!(barrier_type, BarrierType::DownOut | BarrierType::UpOut) && knocked_out {
-        return Ok(0.0);
-    }
-    if matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn) && knocked_out {
-        return Ok(vanilla);
-    }
-
-    // First-order reflection adjustment (Haug / Merton barrier building block).
-    let std = vol * t.sqrt();
-    let mu = (r - q - 0.5 * vol * vol) / (vol * vol);
-    let n = CumulativeNormalDistribution::standard();
-    let hit_prob = match barrier_type {
-        BarrierType::DownOut | BarrierType::DownIn => {
-            n.value(-((spot / barrier).ln() / std + mu * std))
-        }
-        BarrierType::UpOut | BarrierType::UpIn => n.value((spot / barrier).ln() / std + mu * std),
-    }
-    .clamp(0.0, 1.0);
-
-    let out = vanilla * (1.0 - hit_prob);
-    Ok(match barrier_type {
-        BarrierType::DownOut | BarrierType::UpOut => out.max(0.0),
-        BarrierType::DownIn | BarrierType::UpIn => (vanilla - out).max(0.0),
-    })
+    require!(spot > 0.0, "negative or null underlying given");
+    require!(strike > 0.0, "strike must be positive");
+    haug_barrier_price(
+        barrier_type,
+        option_type,
+        HaugInputs {
+            spot,
+            strike,
+            barrier,
+            rebate: 0.0,
+            vol,
+            std_dev: vol * t.sqrt(),
+            r,
+            q,
+            df_r: (-r * t).exp(),
+            df_q: (-q * t).exp(),
+        },
+    )
 }
 
-fn black_scholes(
-    option_type: OptionType,
+struct HaugInputs {
     spot: Real,
     strike: Real,
-    r: Real,
-    q: Real,
+    barrier: Real,
+    rebate: Real,
     vol: Real,
-    t: Real,
+    std_dev: Real,
+    r: Real,
+    /// Kept for QuantLib `dividendYield()` parity; `mu` uses discounts instead.
+    #[allow(dead_code)]
+    q: Real,
+    df_r: Real,
+    df_q: Real,
+}
+
+impl HaugInputs {
+    /// Drift parameter in Haug's A–F formulae.
+    ///
+    /// QuantLib uses `(r − q) / σ² − 1/2`. That equals
+    /// `ln(df_q / df_r) / variance − 1/2` when the vol and yield day counters
+    /// agree. When they differ (the Business/252 arm of `testParity`), the
+    /// discount form keeps `A()` identical to [`AnalyticEuropeanEngine`], so a
+    /// knock-in plus a knock-out still replicate the European.
+    fn mu(&self) -> Real {
+        (self.df_q / self.df_r).ln() / (self.std_dev * self.std_dev) - 0.5
+    }
+
+    fn mu_sigma(&self) -> Real {
+        (1.0 + self.mu()) * self.std_dev
+    }
+
+    fn n(x: Real) -> Real {
+        CumulativeNormalDistribution::standard().value(x)
+    }
+
+    fn a(&self, phi: Real) -> Real {
+        let x1 = (self.spot / self.strike).ln() / self.std_dev + self.mu_sigma();
+        phi * (self.spot * self.df_q * Self::n(phi * x1)
+            - self.strike * self.df_r * Self::n(phi * (x1 - self.std_dev)))
+    }
+
+    fn b(&self, phi: Real) -> Real {
+        let x2 = (self.spot / self.barrier).ln() / self.std_dev + self.mu_sigma();
+        phi * (self.spot * self.df_q * Self::n(phi * x2)
+            - self.strike * self.df_r * Self::n(phi * (x2 - self.std_dev)))
+    }
+
+    #[allow(clippy::float_cmp)] // QuantLib: N1/N2 == 0.0 guards 0 × ∞ → NaN
+    fn c(&self, eta: Real, phi: Real) -> Real {
+        let hs = self.barrier / self.spot;
+        let pow_hs0 = hs.powf(2.0 * self.mu());
+        let pow_hs1 = pow_hs0 * hs * hs;
+        let y1 = (self.barrier * hs / self.strike).ln() / self.std_dev + self.mu_sigma();
+        let n1 = Self::n(eta * y1);
+        let n2 = Self::n(eta * (y1 - self.std_dev));
+        phi * (self.spot * self.df_q * if n1 == 0.0 { 0.0 } else { pow_hs1 * n1 }
+            - self.strike * self.df_r * if n2 == 0.0 { 0.0 } else { pow_hs0 * n2 })
+    }
+
+    #[allow(clippy::float_cmp)] // QuantLib: N1/N2 == 0.0 guards 0 × ∞ → NaN
+    fn d(&self, eta: Real, phi: Real) -> Real {
+        let hs = self.barrier / self.spot;
+        let pow_hs0 = hs.powf(2.0 * self.mu());
+        let pow_hs1 = pow_hs0 * hs * hs;
+        let y2 = (self.barrier / self.spot).ln() / self.std_dev + self.mu_sigma();
+        let n1 = Self::n(eta * y2);
+        let n2 = Self::n(eta * (y2 - self.std_dev));
+        phi * (self.spot * self.df_q * if n1 == 0.0 { 0.0 } else { pow_hs1 * n1 }
+            - self.strike * self.df_r * if n2 == 0.0 { 0.0 } else { pow_hs0 * n2 })
+    }
+
+    #[allow(clippy::float_cmp)] // QuantLib: N2 == 0.0 guards 0 × ∞ → NaN
+    fn e(&self, eta: Real) -> Real {
+        if self.rebate <= 0.0 {
+            return 0.0;
+        }
+        let pow_hs0 = (self.barrier / self.spot).powf(2.0 * self.mu());
+        let x2 = (self.spot / self.barrier).ln() / self.std_dev + self.mu_sigma();
+        let y2 = (self.barrier / self.spot).ln() / self.std_dev + self.mu_sigma();
+        let n1 = Self::n(eta * (x2 - self.std_dev));
+        let n2 = Self::n(eta * (y2 - self.std_dev));
+        self.rebate * self.df_r * (n1 - if n2 == 0.0 { 0.0 } else { pow_hs0 * n2 })
+    }
+
+    #[allow(clippy::float_cmp)] // QuantLib: N1/N2 == 0.0 guards 0 × ∞ → NaN
+    fn f(&self, eta: Real) -> Real {
+        if self.rebate <= 0.0 {
+            return 0.0;
+        }
+        let m = self.mu();
+        let lambda = (m * m + 2.0 * self.r / (self.vol * self.vol)).sqrt();
+        let hs = self.barrier / self.spot;
+        let pow_plus = hs.powf(m + lambda);
+        let pow_minus = hs.powf(m - lambda);
+        let z = (self.barrier / self.spot).ln() / self.std_dev + lambda * self.std_dev;
+        let n1 = Self::n(eta * z);
+        let n2 = Self::n(eta * (z - 2.0 * lambda * self.std_dev));
+        self.rebate
+            * ((if n1 == 0.0 { 0.0 } else { pow_plus * n1 })
+                + (if n2 == 0.0 { 0.0 } else { pow_minus * n2 }))
+    }
+}
+
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
+fn haug_barrier_price(
+    barrier_type: BarrierType,
+    option_type: OptionType,
+    p: HaugInputs,
 ) -> QlResult<Real> {
-    let std = vol * t.sqrt();
-    let d1 = ((spot / strike).ln() + (r - q + 0.5 * vol * vol) * t) / std;
-    let d2 = d1 - std;
-    let n = CumulativeNormalDistribution::standard();
-    let df_r = (-r * t).exp();
-    let df_q = (-q * t).exp();
-    Ok(match option_type {
-        OptionType::Call => spot * df_q * n.value(d1) - strike * df_r * n.value(d2),
-        OptionType::Put => strike * df_r * n.value(-d2) - spot * df_q * n.value(-d1),
-    })
+    require!(p.vol > 0.0, "barrier pricing needs a positive volatility");
+    require!(
+        p.std_dev > 0.0,
+        "barrier pricing needs a positive volatility"
+    );
+    let k = p.strike;
+    let h = p.barrier;
+    let value = match option_type {
+        OptionType::Call => match barrier_type {
+            BarrierType::DownIn if k >= h => p.c(1.0, 1.0) + p.e(1.0),
+            BarrierType::DownIn => p.a(1.0) - p.b(1.0) + p.d(1.0, 1.0) + p.e(1.0),
+            BarrierType::UpIn if k >= h => p.a(1.0) + p.e(-1.0),
+            BarrierType::UpIn => p.b(1.0) - p.c(-1.0, 1.0) + p.d(-1.0, 1.0) + p.e(-1.0),
+            BarrierType::DownOut if k >= h => p.a(1.0) - p.c(1.0, 1.0) + p.f(1.0),
+            BarrierType::DownOut => p.b(1.0) - p.d(1.0, 1.0) + p.f(1.0),
+            BarrierType::UpOut if k >= h => p.f(-1.0),
+            BarrierType::UpOut => p.a(1.0) - p.b(1.0) + p.c(-1.0, 1.0) - p.d(-1.0, 1.0) + p.f(-1.0),
+        },
+        OptionType::Put => match barrier_type {
+            BarrierType::DownIn if k >= h => p.b(-1.0) - p.c(1.0, -1.0) + p.d(1.0, -1.0) + p.e(1.0),
+            BarrierType::DownIn => p.a(-1.0) + p.e(1.0),
+            BarrierType::UpIn if k >= h => p.a(-1.0) - p.b(-1.0) + p.d(-1.0, -1.0) + p.e(-1.0),
+            BarrierType::UpIn => p.c(-1.0, -1.0) + p.e(-1.0),
+            BarrierType::DownOut if k >= h => {
+                p.a(-1.0) - p.b(-1.0) + p.c(1.0, -1.0) - p.d(1.0, -1.0) + p.f(1.0)
+            }
+            BarrierType::DownOut => p.f(1.0),
+            BarrierType::UpOut if k >= h => p.b(-1.0) - p.d(-1.0, -1.0) + p.f(-1.0),
+            BarrierType::UpOut => p.a(-1.0) - p.c(-1.0, -1.0) + p.f(-1.0),
+        },
+    };
+    Ok(value)
+}
+
+/// QuantLib `BarrierOption::engine::triggered`: already across the barrier.
+fn triggered(barrier_type: BarrierType, spot: Real, barrier: Real) -> bool {
+    match barrier_type {
+        BarrierType::DownIn | BarrierType::DownOut => spot < barrier,
+        BarrierType::UpIn | BarrierType::UpOut => spot > barrier,
+    }
 }
 
 /// Attach the analytic barrier engine to an option.
@@ -279,18 +419,47 @@ pub fn set_analytic_barrier_engine(
 mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
-    use crate::handle::Handle;
+    use crate::handle::{Handle, RelinkableHandle};
+    use crate::instrument::Instrument;
+    use crate::instruments::{StrikedTypePayoff, VanillaOption};
     use crate::interestrate::Compounding;
+    use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
-    use crate::shared::shared;
+    use crate::shared::{shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::nullcalendar::NullCalendar;
+    use crate::time::calendars::target::Target;
     use crate::time::date::Month;
+    use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::business252::Business252;
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+
+    fn black_scholes(
+        option_type: OptionType,
+        spot: Real,
+        strike: Real,
+        r: Real,
+        q: Real,
+        vol: Real,
+        t: Real,
+    ) -> Real {
+        let std = vol * t.sqrt();
+        let d1 = ((spot / strike).ln() + (r - q + 0.5 * vol * vol) * t) / std;
+        let d2 = d1 - std;
+        let n = CumulativeNormalDistribution::standard();
+        let df_r = (-r * t).exp();
+        let df_q = (-q * t).exp();
+        match option_type {
+            OptionType::Call => spot * df_q * n.value(d1) - strike * df_r * n.value(d2),
+            OptionType::Put => strike * df_r * n.value(-d2) - spot * df_q * n.value(-d1),
+        }
+    }
 
     #[test]
     fn down_out_call_is_below_vanilla() {
@@ -331,7 +500,7 @@ mod tests {
         .unwrap();
         set_analytic_barrier_engine(&mut option, process);
         let npv = option.npv().unwrap();
-        let vanilla = black_scholes(OptionType::Call, 100.0, 100.0, 0.05, 0.0, 0.20, 1.0).unwrap();
+        let vanilla = black_scholes(OptionType::Call, 100.0, 100.0, 0.05, 0.0, 0.20, 1.0);
         assert!(npv.is_finite() && npv >= 0.0);
         assert!(npv <= vanilla + 1e-8, "barrier {npv} > vanilla {vanilla}");
     }
@@ -355,5 +524,95 @@ mod tests {
             "unexpected error: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn knock_in_plus_knock_out_replicates_european() {
+        // QuantLib barrieroption.cpp `testParity`: a DownIn plus a DownOut at
+        // the same barrier/strike replicate a European call @ 1e-7, including
+        // after relinking the vol surface onto a Business/252 TARGET counter.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let flat = |rate: Real, day_counter: crate::time::daycounter::DayCounter| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                day_counter,
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let vol = RelinkableHandle::new(shared(BlackConstantVol::new(
+            today,
+            Some(NullCalendar::new()),
+            0.20,
+            dc.clone(),
+        )) as Shared<dyn BlackVolTermStructure>);
+        let process = shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            flat(0.0, dc.clone()),
+            flat(0.01, dc.clone()),
+            vol.handle(),
+        ));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(6, TimeUnit::Months),
+        ));
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 100.0);
+        let mut knock_in = BarrierOption::new(
+            BarrierType::DownIn,
+            90.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let mut knock_out = BarrierOption::new(
+            BarrierType::DownOut,
+            90.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let barrier_engine = shared_mut(AnalyticBarrierEngine::new(Shared::clone(&process)))
+            as SharedMut<dyn PricingEngine>;
+        knock_in
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&barrier_engine));
+        knock_out.base_mut().set_pricing_engine(barrier_engine);
+
+        let mut european = VanillaOption::new(
+            shared(payoff) as Shared<dyn StrikedTypePayoff>,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        );
+        european
+            .base_mut()
+            .set_pricing_engine(
+                shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)))
+                    as SharedMut<dyn PricingEngine>,
+            );
+
+        let check = |knock_in: &mut BarrierOption,
+                     knock_out: &mut BarrierOption,
+                     european: &mut VanillaOption| {
+            let replicated = knock_in.npv().unwrap() + knock_out.npv().unwrap();
+            let expected = european.npv().unwrap();
+            assert!(
+                (replicated - expected).abs() <= 1.0e-7,
+                "knock-in+out {replicated} vs european {expected}"
+            );
+        };
+        check(&mut knock_in, &mut knock_out, &mut european);
+
+        vol.link_to(shared(BlackConstantVol::new(
+            today,
+            Some(NullCalendar::new()),
+            0.20,
+            Business252::with_calendar(Target::new()),
+        )) as Shared<dyn BlackVolTermStructure>);
+        check(&mut knock_in, &mut knock_out, &mut european);
     }
 }
