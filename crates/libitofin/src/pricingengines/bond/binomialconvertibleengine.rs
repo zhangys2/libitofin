@@ -496,7 +496,7 @@ mod tests {
         let mut fixed = FixedRateBond::new(
             v.settlement_days as u32,
             100.0,
-            fixed_schedule,
+            fixed_schedule.clone(),
             coupons,
             Actual360::new(),
             BusinessDayConvention::Following,
