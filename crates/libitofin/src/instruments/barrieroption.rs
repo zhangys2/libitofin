@@ -2,8 +2,7 @@
 //!
 //! Port of QuantLib's `ql/pricingengines/barrier/analyticbarrierengine`:
 //! continuous knock-in/out options priced with Haug's A–F formulae (*Option
-//! pricing formulas*, McGraw-Hill, p.69). Rebate terms `E`/`F` are zero until
-//! the instrument carries a rebate (follow-up).
+//! pricing formulas*, McGraw-Hill, p.69), including cash rebate terms `E`/`F`.
 
 use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
@@ -39,16 +38,30 @@ pub struct BarrierOption {
     settings: Shared<Settings<Date>>,
     barrier_type: BarrierType,
     barrier: Real,
+    rebate: Real,
     payoff: PlainVanillaPayoff,
     exercise: Shared<dyn Exercise>,
 }
 
 impl BarrierOption {
     /// Builds a zero-rebate barrier option.
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     pub fn new(
         barrier_type: BarrierType,
         barrier: Real,
+        payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_rebate(barrier_type, barrier, 0.0, payoff, exercise, settings)
+    }
+
+    /// Builds a barrier option with a cash rebate paid if the barrier is hit
+    /// (knock-out) or never hit (knock-in), matching QuantLib's constructor.
+    #[allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments)]
+    pub fn with_rebate(
+        barrier_type: BarrierType,
+        barrier: Real,
+        rebate: Real,
         payoff: PlainVanillaPayoff,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
@@ -61,6 +74,7 @@ impl BarrierOption {
             settings,
             barrier_type,
             barrier,
+            rebate,
             payoff,
             exercise,
         })
@@ -71,6 +85,9 @@ impl BarrierOption {
     }
     pub fn barrier(&self) -> Real {
         self.barrier
+    }
+    pub fn rebate(&self) -> Real {
+        self.rebate
     }
 }
 
@@ -91,6 +108,7 @@ impl Instrument for BarrierOption {
         };
         args.barrier_type = Some(self.barrier_type);
         args.barrier = Some(self.barrier);
+        args.rebate = Some(self.rebate);
         args.payoff = Some(self.payoff);
         args.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
@@ -102,6 +120,7 @@ impl Instrument for BarrierOption {
 pub struct BarrierArguments {
     pub barrier_type: Option<BarrierType>,
     pub barrier: Option<Real>,
+    pub rebate: Option<Real>,
     pub payoff: Option<PlainVanillaPayoff>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
@@ -110,6 +129,7 @@ impl Arguments for BarrierArguments {
     fn validate(&self) -> QlResult<()> {
         require!(self.barrier_type.is_some(), "no barrier type");
         require!(self.barrier.is_some(), "no barrier");
+        require!(self.rebate.is_some(), "no rebate");
         require!(self.payoff.is_some(), "no payoff");
         require!(self.exercise.is_some(), "no exercise");
         Ok(())
@@ -118,7 +138,7 @@ impl Arguments for BarrierArguments {
 
 type BarrierEngineBase = GenericEngine<BarrierArguments, InstrumentResults>;
 
-/// Analytic continuous barrier engine (zero rebate).
+/// Analytic continuous barrier engine (Haug A–F, including rebate).
 pub struct AnalyticBarrierEngine {
     base: BarrierEngineBase,
     process: Shared<GeneralizedBlackScholesProcess>,
@@ -154,6 +174,7 @@ impl PricingEngine for AnalyticBarrierEngine {
         let args = self.base.arguments();
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
+        let rebate = args.rebate.expect("validated");
         let payoff = args.payoff.expect("validated");
         let exercise = args.exercise.as_ref().expect("validated");
         if exercise.exercise_type() != ExerciseType::European {
@@ -205,7 +226,7 @@ impl PricingEngine for AnalyticBarrierEngine {
                 spot,
                 strike,
                 barrier,
-                rebate: 0.0,
+                rebate,
                 vol,
                 std_dev,
                 r,
@@ -771,6 +792,137 @@ mod tests {
             assert!(
                 error <= 1.0e-4,
                 "put-call symmetry failed: put {put_value} vs {scaled} * call {call_value} (error {error})"
+            );
+        }
+    }
+
+    #[test]
+    fn european_haug_values() {
+        // QuantLib barrieroption.cpp `testHaugValues` European rows (Haug 1998
+        // p.72). Analytic engine only; American / FD / binomial stay follow-up.
+        // Constants shared by every published row: rebate 3, S=100, q=0.04,
+        // r=0.08, t=0.50, tolerance 1e-4.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let time_to_days = |t: Real| (t * 360.0).round() as i32;
+
+        type Row = (BarrierType, Real, OptionType, Real, Real, Real);
+        #[rustfmt::skip]
+        const HAUG: &[Row] = &[
+            // barrierType, barrier, type, strike, vol, result
+            (BarrierType::DownOut,  95.0, OptionType::Call,  90.0, 0.25,  9.0246),
+            (BarrierType::DownOut,  95.0, OptionType::Call, 100.0, 0.25,  6.7924),
+            (BarrierType::DownOut,  95.0, OptionType::Call, 110.0, 0.25,  4.8759),
+            (BarrierType::DownOut, 100.0, OptionType::Call,  90.0, 0.25,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Call, 100.0, 0.25,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Call, 110.0, 0.25,  3.0000),
+            (BarrierType::UpOut,   105.0, OptionType::Call,  90.0, 0.25,  2.6789),
+            (BarrierType::UpOut,   105.0, OptionType::Call, 100.0, 0.25,  2.3580),
+            (BarrierType::UpOut,   105.0, OptionType::Call, 110.0, 0.25,  2.3453),
+            (BarrierType::DownIn,   95.0, OptionType::Call,  90.0, 0.25,  7.7627),
+            (BarrierType::DownIn,   95.0, OptionType::Call, 100.0, 0.25,  4.0109),
+            (BarrierType::DownIn,   95.0, OptionType::Call, 110.0, 0.25,  2.0576),
+            (BarrierType::DownIn,  100.0, OptionType::Call,  90.0, 0.25, 13.8333),
+            (BarrierType::DownIn,  100.0, OptionType::Call, 100.0, 0.25,  7.8494),
+            (BarrierType::DownIn,  100.0, OptionType::Call, 110.0, 0.25,  3.9795),
+            (BarrierType::UpIn,    105.0, OptionType::Call,  90.0, 0.25, 14.1112),
+            (BarrierType::UpIn,    105.0, OptionType::Call, 100.0, 0.25,  8.4482),
+            (BarrierType::UpIn,    105.0, OptionType::Call, 110.0, 0.25,  4.5910),
+            (BarrierType::DownOut,  95.0, OptionType::Call,  90.0, 0.30,  8.8334),
+            (BarrierType::DownOut,  95.0, OptionType::Call, 100.0, 0.30,  7.0285),
+            (BarrierType::DownOut,  95.0, OptionType::Call, 110.0, 0.30,  5.4137),
+            (BarrierType::DownOut, 100.0, OptionType::Call,  90.0, 0.30,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Call, 100.0, 0.30,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Call, 110.0, 0.30,  3.0000),
+            (BarrierType::UpOut,   105.0, OptionType::Call,  90.0, 0.30,  2.6341),
+            (BarrierType::UpOut,   105.0, OptionType::Call, 100.0, 0.30,  2.4389),
+            (BarrierType::UpOut,   105.0, OptionType::Call, 110.0, 0.30,  2.4315),
+            (BarrierType::DownIn,   95.0, OptionType::Call,  90.0, 0.30,  9.0093),
+            (BarrierType::DownIn,   95.0, OptionType::Call, 100.0, 0.30,  5.1370),
+            (BarrierType::DownIn,   95.0, OptionType::Call, 110.0, 0.30,  2.8517),
+            (BarrierType::DownIn,  100.0, OptionType::Call,  90.0, 0.30, 14.8816),
+            (BarrierType::DownIn,  100.0, OptionType::Call, 100.0, 0.30,  9.2045),
+            (BarrierType::DownIn,  100.0, OptionType::Call, 110.0, 0.30,  5.3043),
+            (BarrierType::UpIn,    105.0, OptionType::Call,  90.0, 0.30, 15.2098),
+            (BarrierType::UpIn,    105.0, OptionType::Call, 100.0, 0.30,  9.7278),
+            (BarrierType::UpIn,    105.0, OptionType::Call, 110.0, 0.30,  5.8350),
+            (BarrierType::DownOut,  95.0, OptionType::Put,   90.0, 0.25,  2.2798),
+            (BarrierType::DownOut,  95.0, OptionType::Put,  100.0, 0.25,  2.2947),
+            (BarrierType::DownOut,  95.0, OptionType::Put,  110.0, 0.25,  2.6252),
+            (BarrierType::DownOut, 100.0, OptionType::Put,   90.0, 0.25,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Put,  100.0, 0.25,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Put,  110.0, 0.25,  3.0000),
+            (BarrierType::UpOut,   105.0, OptionType::Put,   90.0, 0.25,  3.7760),
+            (BarrierType::UpOut,   105.0, OptionType::Put,  100.0, 0.25,  5.4932),
+            (BarrierType::UpOut,   105.0, OptionType::Put,  110.0, 0.25,  7.5187),
+            (BarrierType::DownIn,   95.0, OptionType::Put,   90.0, 0.25,  2.9586),
+            (BarrierType::DownIn,   95.0, OptionType::Put,  100.0, 0.25,  6.5677),
+            (BarrierType::DownIn,   95.0, OptionType::Put,  110.0, 0.25, 11.9752),
+            (BarrierType::DownIn,  100.0, OptionType::Put,   90.0, 0.25,  2.2845),
+            (BarrierType::DownIn,  100.0, OptionType::Put,  100.0, 0.25,  5.9085),
+            (BarrierType::DownIn,  100.0, OptionType::Put,  110.0, 0.25, 11.6465),
+            (BarrierType::UpIn,    105.0, OptionType::Put,   90.0, 0.25,  1.4653),
+            (BarrierType::UpIn,    105.0, OptionType::Put,  100.0, 0.25,  3.3721),
+            (BarrierType::UpIn,    105.0, OptionType::Put,  110.0, 0.25,  7.0846),
+            (BarrierType::DownOut,  95.0, OptionType::Put,   90.0, 0.30,  2.4170),
+            (BarrierType::DownOut,  95.0, OptionType::Put,  100.0, 0.30,  2.4258),
+            (BarrierType::DownOut,  95.0, OptionType::Put,  110.0, 0.30,  2.6246),
+            (BarrierType::DownOut, 100.0, OptionType::Put,   90.0, 0.30,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Put,  100.0, 0.30,  3.0000),
+            (BarrierType::DownOut, 100.0, OptionType::Put,  110.0, 0.30,  3.0000),
+            (BarrierType::UpOut,   105.0, OptionType::Put,   90.0, 0.30,  4.2293),
+            (BarrierType::UpOut,   105.0, OptionType::Put,  100.0, 0.30,  5.8032),
+            (BarrierType::UpOut,   105.0, OptionType::Put,  110.0, 0.30,  7.5649),
+            (BarrierType::DownIn,   95.0, OptionType::Put,   90.0, 0.30,  3.8769),
+            (BarrierType::DownIn,   95.0, OptionType::Put,  100.0, 0.30,  7.7989),
+            (BarrierType::DownIn,   95.0, OptionType::Put,  110.0, 0.30, 13.3078),
+            (BarrierType::DownIn,  100.0, OptionType::Put,   90.0, 0.30,  3.3328),
+            (BarrierType::DownIn,  100.0, OptionType::Put,  100.0, 0.30,  7.2636),
+            (BarrierType::DownIn,  100.0, OptionType::Put,  110.0, 0.30, 12.9713),
+            (BarrierType::UpIn,    105.0, OptionType::Put,   90.0, 0.30,  2.0658),
+            (BarrierType::UpIn,    105.0, OptionType::Put,  100.0, 0.30,  4.4226),
+            (BarrierType::UpIn,    105.0, OptionType::Put,  110.0, 0.30,  8.3686),
+        ];
+
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        for &(barrier_type, barrier, option_type, strike, vol, expected) in HAUG {
+            let process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+                flat(0.04),
+                flat(0.08),
+                Handle::new(shared(BlackConstantVol::new(
+                    today,
+                    Some(NullCalendar::new()),
+                    vol,
+                    dc.clone(),
+                )) as Shared<dyn BlackVolTermStructure>),
+            ));
+            let mut option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                3.0,
+                PlainVanillaPayoff::new(option_type, strike),
+                shared(EuropeanExercise::new(today + time_to_days(0.50))),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_analytic_barrier_engine(&mut option, process);
+            let calculated = option.npv().unwrap();
+            let error = (calculated - expected).abs();
+            assert!(
+                error <= 1.0e-4,
+                "{barrier_type:?} {option_type:?} H={barrier} K={strike} v={vol}: \
+                 {calculated} vs Haug {expected} (error {error})"
             );
         }
     }
