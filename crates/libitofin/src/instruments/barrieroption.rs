@@ -615,4 +615,163 @@ mod tests {
         )) as Shared<dyn BlackVolTermStructure>);
         check(&mut knock_in, &mut knock_out, &mut european);
     }
+
+    #[test]
+    fn put_call_symmetry_for_knock_out() {
+        // QuantLib barrieroption.cpp `testPutCallSymmetry`: a knock-out call
+        // and the inverted-strike/barrier put (rates swapped) replicate @ 1e-4.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let spot_price = 100.0;
+        let r = 0.01;
+        let underlying = Handle::new(shared(SimpleQuote::new(spot_price)) as Shared<dyn Quote>);
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let vol = Handle::new(shared(BlackConstantVol::new(
+            today,
+            Some(NullCalendar::new()),
+            0.25,
+            dc.clone(),
+        )) as Shared<dyn BlackVolTermStructure>);
+        let process_call = shared(BlackScholesMertonProcess::new(
+            underlying.clone(),
+            flat(0.0),
+            flat(r),
+            vol.clone(),
+        ));
+        let process_put = shared(BlackScholesMertonProcess::new(
+            underlying,
+            flat(r),
+            flat(0.0),
+            vol,
+        ));
+        let call_engine =
+            shared_mut(AnalyticBarrierEngine::new(process_call)) as SharedMut<dyn PricingEngine>;
+        let put_engine =
+            shared_mut(AnalyticBarrierEngine::new(process_put)) as SharedMut<dyn PricingEngine>;
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 360));
+
+        // (call strike, call barrier, call type, put strike, put barrier, put type)
+        let cases = [
+            (
+                90.0,
+                95.0,
+                BarrierType::DownOut,
+                111.11111,
+                105.26315,
+                BarrierType::UpOut,
+            ),
+            (
+                95.0,
+                95.0,
+                BarrierType::DownOut,
+                105.26315,
+                105.26315,
+                BarrierType::UpOut,
+            ),
+            (
+                100.0,
+                95.0,
+                BarrierType::DownOut,
+                100.0,
+                105.26315,
+                BarrierType::UpOut,
+            ),
+            (
+                105.0,
+                95.0,
+                BarrierType::DownOut,
+                95.23809,
+                105.26315,
+                BarrierType::UpOut,
+            ),
+            (
+                110.0,
+                95.0,
+                BarrierType::DownOut,
+                90.90909,
+                105.26315,
+                BarrierType::UpOut,
+            ),
+            (
+                90.0,
+                120.0,
+                BarrierType::UpOut,
+                111.11111,
+                83.33333,
+                BarrierType::DownOut,
+            ),
+            (
+                95.0,
+                120.0,
+                BarrierType::UpOut,
+                105.26315,
+                83.33333,
+                BarrierType::DownOut,
+            ),
+            (
+                100.0,
+                120.0,
+                BarrierType::UpOut,
+                100.0,
+                83.33333,
+                BarrierType::DownOut,
+            ),
+            (
+                105.0,
+                120.0,
+                BarrierType::UpOut,
+                95.23809,
+                83.33333,
+                BarrierType::DownOut,
+            ),
+            (
+                110.0,
+                120.0,
+                BarrierType::UpOut,
+                90.90909,
+                83.33333,
+                BarrierType::DownOut,
+            ),
+        ];
+        for (call_strike, call_barrier, call_type, put_strike, put_barrier, put_type) in cases {
+            let mut call = BarrierOption::new(
+                call_type,
+                call_barrier,
+                PlainVanillaPayoff::new(OptionType::Call, call_strike),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            let mut put = BarrierOption::new(
+                put_type,
+                put_barrier,
+                PlainVanillaPayoff::new(OptionType::Put, put_strike),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            call.base_mut()
+                .set_pricing_engine(SharedMut::clone(&call_engine));
+            put.base_mut()
+                .set_pricing_engine(SharedMut::clone(&put_engine));
+            let put_value = put.npv().unwrap();
+            let call_value = call.npv().unwrap();
+            let scaled = (put_strike / spot_price) * call_value;
+            let error = (put_value - scaled).abs();
+            assert!(
+                error <= 1.0e-4,
+                "put-call symmetry failed: put {put_value} vs {scaled} * call {call_value} (error {error})"
+            );
+        }
+    }
 }
