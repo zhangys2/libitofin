@@ -926,4 +926,107 @@ mod tests {
             );
         }
     }
+
+    fn flat_bs_process(
+        today: Date,
+        spot: Real,
+        q: Real,
+        r: Real,
+        vol: Real,
+        dc: crate::time::daycounter::DayCounter,
+    ) -> Shared<BlackScholesMertonProcess> {
+        shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(spot)) as Shared<dyn Quote>),
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                q,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                r,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(BlackConstantVol::new(
+                today,
+                Some(NullCalendar::new()),
+                vol,
+                dc,
+            )) as Shared<dyn BlackVolTermStructure>),
+        ))
+    }
+
+    #[test]
+    fn babsiri_knock_in_calls() {
+        // QuantLib barrieroption.cpp `testBabsiriValues` analytic arm
+        // (El Babsiri–Noel, Journal of Derivatives, Winter 1998). MC follow-up.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 360));
+        #[rustfmt::skip]
+        let cases = [
+            // type, vol, strike, barrier, call value
+            (BarrierType::DownIn, 0.10, 100.0,  90.0,  0.07187),
+            (BarrierType::DownIn, 0.15, 100.0,  90.0,  0.60638),
+            (BarrierType::DownIn, 0.20, 100.0,  90.0,  1.64005),
+            (BarrierType::DownIn, 0.25, 100.0,  90.0,  2.98495),
+            (BarrierType::DownIn, 0.30, 100.0,  90.0,  4.50952),
+            (BarrierType::UpIn,   0.10, 100.0, 110.0,  4.79148),
+            (BarrierType::UpIn,   0.15, 100.0, 110.0,  7.08268),
+            (BarrierType::UpIn,   0.20, 100.0, 110.0,  9.11008),
+            (BarrierType::UpIn,   0.25, 100.0, 110.0, 11.06148),
+            (BarrierType::UpIn,   0.30, 100.0, 110.0, 12.98351),
+        ];
+        for (barrier_type, vol, strike, barrier, expected) in cases {
+            let process = flat_bs_process(today, 100.0, 0.02, 0.05, vol, dc.clone());
+            let mut option = BarrierOption::new(
+                barrier_type,
+                barrier,
+                PlainVanillaPayoff::new(OptionType::Call, strike),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_analytic_barrier_engine(&mut option, process);
+            let calculated = option.npv().unwrap();
+            let error = (calculated - expected).abs();
+            assert!(
+                error <= 1.0e-5,
+                "{barrier_type:?} K={strike} H={barrier} v={vol}: \
+                 {calculated} vs Babsiri {expected} (error {error})"
+            );
+        }
+    }
+
+    #[test]
+    fn beaglehole_down_out_call() {
+        // QuantLib barrieroption.cpp `testBeagleholeValues` analytic arm
+        // (Beaglehole–Dybvig–Zhou, FAJ Jan/Feb 1997). MC follow-up.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let process = flat_bs_process(today, 50.0, 0.0, 1.1_f64.ln(), 0.50, Actual360::new());
+        let mut option = BarrierOption::new(
+            BarrierType::DownOut,
+            45.0,
+            PlainVanillaPayoff::new(OptionType::Call, 50.0),
+            shared(EuropeanExercise::new(today + 360)),
+            settings,
+        )
+        .unwrap();
+        set_analytic_barrier_engine(&mut option, process);
+        let calculated = option.npv().unwrap();
+        let expected = 5.477;
+        let error = (calculated - expected).abs();
+        assert!(
+            error <= 1.0e-3,
+            "DownOut K=50 H=45: {calculated} vs Beaglehole {expected} (error {error})"
+        );
+    }
 }
