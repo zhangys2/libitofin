@@ -403,4 +403,63 @@ mod tests {
             }
         }
     }
+
+    /// `barrieroption.cpp` `testDividendBarrierOptionWithDividendsPastMaturity`
+    /// (FD Black–Scholes arm; Heston follow-up).
+    #[test]
+    fn past_maturity_dividends_do_not_change_npv() {
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        let process = flat_bs_process(today, 100.0, 0.0, 0.05, 0.02);
+        let dividends =
+            dividend_vector(&[today + Period::new(18, TimeUnit::Months)], &[30.0]).unwrap();
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 105.0);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+        let cases = [(BarrierType::DownOut, 90.0), (BarrierType::UpOut, 110.0)];
+        for (barrier_type, barrier) in cases {
+            let mut without = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_black_scholes_barrier_engine(
+                &mut without,
+                shared_mut(FdBlackScholesBarrierEngine::new(Shared::clone(&process))),
+            );
+            let without_npv = without.npv().unwrap();
+
+            let mut with_div = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_black_scholes_barrier_engine(
+                &mut with_div,
+                shared_mut(FdBlackScholesBarrierEngine::with_dividends(
+                    Shared::clone(&process),
+                    dividends.clone(),
+                )),
+            );
+            let with_npv = with_div.npv().unwrap();
+            let diff = (with_npv - without_npv).abs();
+            eprintln!(
+                "{barrier_type:?} H={barrier}: without={without_npv:.12} \
+                 with={with_npv:.12} diff={diff:.2e}"
+            );
+            assert!(
+                diff <= 1e-12,
+                "{barrier_type:?} H={barrier}: {with_npv} vs {without_npv} (diff {diff})"
+            );
+        }
+    }
 }

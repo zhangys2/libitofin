@@ -19,6 +19,7 @@ use crate::math::solvers1d::brent::Brent;
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
+use crate::pricingengines::{DividendSchedule, FdBlackScholesBarrierEngine};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::quotes::{Quote, SimpleQuote};
 use crate::require;
@@ -98,8 +99,8 @@ impl BarrierOption {
     }
 
     /// Black implied volatility such that the analytic barrier price equals
-    /// `target_value` (`BarrierOption::impliedVolatility`, no-dividend arm).
-    /// Discrete-dividend inversion (FD engine) is follow-up.
+    /// `target_value` (`BarrierOption::impliedVolatility` with an empty
+    /// dividend schedule).
     ///
     /// QuantLib defaults: `max_evaluations = 100`, `min_vol = 1e-7`,
     /// `max_vol = 4.0`.
@@ -108,6 +109,34 @@ impl BarrierOption {
         &self,
         target_value: Real,
         process: Shared<GeneralizedBlackScholesProcess>,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+    ) -> QlResult<Volatility> {
+        self.implied_volatility_with_dividends(
+            target_value,
+            process,
+            Vec::new(),
+            accuracy,
+            max_evaluations,
+            min_vol,
+            max_vol,
+        )
+    }
+
+    /// Black implied volatility such that the barrier price equals
+    /// `target_value` (`BarrierOption::impliedVolatility` with dividends).
+    ///
+    /// Empty `dividends` uses [`AnalyticBarrierEngine`]; a non-empty schedule
+    /// uses [`FdBlackScholesBarrierEngine`] with QuantLib's default 100×100
+    /// Douglas grid.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility_with_dividends(
+        &self,
+        target_value: Real,
+        process: Shared<GeneralizedBlackScholesProcess>,
+        dividends: DividendSchedule,
         accuracy: Real,
         max_evaluations: Size,
         min_vol: Volatility,
@@ -128,13 +157,45 @@ impl BarrierOption {
             Handle::new(Shared::clone(&vol) as Shared<dyn Quote>),
             src_vol.require_day_counter()?,
         );
-        let cloned = GeneralizedBlackScholesProcess::new(
+        let cloned = shared(GeneralizedBlackScholesProcess::new(
             process.state_variable(),
             process.dividend_yield(),
             process.risk_free_rate(),
             Handle::new(shared(vol_ts) as Shared<dyn BlackVolTermStructure>),
-        );
-        let mut engine = AnalyticBarrierEngine::new(shared(cloned));
+        ));
+        if dividends.is_empty() {
+            self.solve_implied_volatility(
+                target_value,
+                vol,
+                AnalyticBarrierEngine::new(cloned),
+                accuracy,
+                max_evaluations,
+                min_vol,
+                max_vol,
+            )
+        } else {
+            self.solve_implied_volatility(
+                target_value,
+                vol,
+                FdBlackScholesBarrierEngine::with_dividends(cloned, dividends),
+                accuracy,
+                max_evaluations,
+                min_vol,
+                max_vol,
+            )
+        }
+    }
+
+    fn solve_implied_volatility(
+        &self,
+        target_value: Real,
+        vol: Shared<SimpleQuote>,
+        mut engine: impl PricingEngine,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+    ) -> QlResult<Volatility> {
         self.setup_arguments(engine.arguments_mut())?;
         engine.arguments_mut().validate()?;
 
@@ -524,11 +585,13 @@ pub fn set_analytic_barrier_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cashflows::dividend_vector;
     use crate::exercise::EuropeanExercise;
     use crate::handle::{Handle, RelinkableHandle};
     use crate::instrument::Instrument;
     use crate::instruments::{StrikedTypePayoff, VanillaOption};
     use crate::interestrate::Compounding;
+    use crate::pricingengines::set_fd_black_scholes_barrier_engine;
     use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
@@ -1193,7 +1256,6 @@ mod tests {
     #[test]
     fn implied_volatility_reproduces_target_without_dividends() {
         // QuantLib barrieroption.cpp `testImpliedVolatility` no-dividend arm.
-        // Discrete-dividend / FdBlackScholesBarrierEngine inversion is follow-up.
         let today = Date::new(11, Month::February, 2018);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
@@ -1236,6 +1298,79 @@ mod tests {
             set_analytic_barrier_engine(&mut check, priced);
             let calculated = check.npv().unwrap();
             let error = (calculated - target).abs();
+            assert!(
+                error <= 1.0e-5,
+                "{barrier_type:?} H={barrier}: NPV {calculated} vs target {target} \
+                 (implied vol {implied}, error {error})"
+            );
+        }
+    }
+
+    #[test]
+    fn implied_volatility_reproduces_target_with_dividends() {
+        // QuantLib barrieroption.cpp `testImpliedVolatility` discrete-dividend arm.
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual365Fixed::new();
+        let process = flat_bs_process(today, 100.0, 0.0, 0.05, 0.0, dc.clone());
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(1, TimeUnit::Years),
+        ));
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 105.0);
+        let dividends =
+            dividend_vector(&[today + Period::new(6, TimeUnit::Months)], &[10.0]).unwrap();
+        #[rustfmt::skip]
+        let cases = [
+            (BarrierType::DownOut,  90.0, 8.0),
+            (BarrierType::UpOut,   110.0, 12.0),
+            (BarrierType::DownIn,   90.0, 9.0),
+            (BarrierType::UpIn,    110.0, 8.0),
+        ];
+        for (barrier_type, barrier, target) in cases {
+            let option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            let implied = option
+                .implied_volatility_with_dividends(
+                    target,
+                    Shared::clone(&process),
+                    dividends.clone(),
+                    1e-6,
+                    100,
+                    1e-7,
+                    4.0,
+                )
+                .unwrap();
+            let priced = flat_bs_process(today, 100.0, 0.0, 0.05, implied, dc.clone());
+            let mut check = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_black_scholes_barrier_engine(
+                &mut check,
+                shared_mut(FdBlackScholesBarrierEngine::with_dividends(
+                    priced,
+                    dividends.clone(),
+                )),
+            );
+            let calculated = check.npv().unwrap();
+            let error = (calculated - target).abs();
+            eprintln!(
+                "{barrier_type:?} H={barrier}: implied={implied:.8} NPV={calculated:.8} \
+                 target={target} error={error:.2e}"
+            );
             assert!(
                 error <= 1.0e-5,
                 "{barrier_type:?} H={barrier}: NPV {calculated} vs target {target} \
