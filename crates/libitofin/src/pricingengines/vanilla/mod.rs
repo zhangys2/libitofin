@@ -20,6 +20,7 @@
 pub mod analytichestonengine;
 pub mod batesengine;
 pub mod binomialvanillaengine;
+pub mod fdblackscholesvanillaengine;
 pub mod fdmamericanengine;
 pub mod fdmbermudanengine;
 pub mod fdmeuropeanengine;
@@ -30,6 +31,7 @@ pub mod mcvanillaengine;
 pub use analytichestonengine::HestonChf;
 pub use batesengine::BatesEngine;
 pub use binomialvanillaengine::BinomialVanillaEngine;
+pub use fdblackscholesvanillaengine::FdBlackScholesVanillaEngine;
 pub use fdmamericanengine::FdmAmericanEngine;
 pub use fdmbermudanengine::FdmBermudanEngine;
 pub use fdmeuropeanengine::FdmEuropeanEngine;
