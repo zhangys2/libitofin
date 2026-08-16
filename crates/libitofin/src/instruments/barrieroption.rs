@@ -25,7 +25,6 @@ use crate::require;
 use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
-use crate::termstructures::TermStructure;
 use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
 use crate::time::date::Date;
 use crate::time::frequency::Frequency;
