@@ -3,10 +3,17 @@
 //! Port of `ql/methods/finitedifferences/stepconditions/fdmstepconditioncomposite.hpp:43`
 //! and its `.cpp`.
 
-use super::FdmSnapshotCondition;
+use super::{FdmAmericanStepCondition, FdmBermudanStepCondition, FdmSnapshotCondition};
+use crate::cashflows::Dividend;
+use crate::errors::QlResult;
+use crate::exercise::{Exercise, ExerciseType};
 use crate::math::array::Array;
 use crate::methods::finitedifferences::StepCondition;
+use crate::methods::finitedifferences::meshers::FdmMesher;
+use crate::methods::finitedifferences::utilities::{FdmDividendHandler, FdmInnerValueCalculator};
 use crate::shared::{Shared, shared};
+use crate::time::date::Date;
+use crate::time::daycounter::DayCounter;
 use crate::types::{Real, Time};
 
 /// The step conditions of one solver, applied in order at every step.
@@ -62,6 +69,80 @@ impl FdmStepConditionComposite {
             &stopping_times,
             vec![composite, snapshot],
         ))
+    }
+
+    /// `FdmStepConditionComposite::vanillaComposite` (`cpp:80-145`).
+    ///
+    /// Wires discrete cash dividends (filtered to `[ref_date, maturity]`) and
+    /// the American / Bermudan early-exercise condition. European exercise
+    /// adds no extra condition.
+    pub fn vanilla_composite(
+        cash_flow: &[Shared<dyn Dividend>],
+        exercise: &dyn Exercise,
+        mesher: Shared<dyn FdmMesher>,
+        calculator: Shared<dyn FdmInnerValueCalculator>,
+        ref_date: Date,
+        day_counter: DayCounter,
+    ) -> QlResult<Shared<FdmStepConditionComposite>> {
+        let mut stopping_times = Vec::new();
+        let mut step_conditions: Vec<Shared<dyn StepCondition>> = Vec::new();
+
+        if !cash_flow.is_empty() {
+            let maturity_date = exercise.last_date();
+            let dividends: Vec<Shared<dyn Dividend>> = cash_flow
+                .iter()
+                .filter(|div| div.date() >= ref_date && div.date() <= maturity_date)
+                .cloned()
+                .collect();
+
+            let dividend_condition = shared(FdmDividendHandler::new(
+                &dividends,
+                Shared::clone(&mesher),
+                ref_date,
+                day_counter.clone(),
+                0,
+            )?);
+            step_conditions.push(Shared::clone(&dividend_condition) as Shared<dyn StepCondition>);
+
+            let maturity_time = day_counter.year_fraction(ref_date, exercise.last_date());
+            let mut dividend_times = dividend_condition.dividend_times().to_vec();
+            for t in &mut dividend_times {
+                *t = (*t).min(maturity_time);
+            }
+            stopping_times.push(dividend_times.clone());
+            for t in &mut dividend_times {
+                *t = (*t + 1e-5).min(maturity_time);
+            }
+            stopping_times.push(dividend_times);
+        }
+
+        match exercise.exercise_type() {
+            ExerciseType::American => {
+                let exercise_start = day_counter.year_fraction(ref_date, exercise.dates()[0]);
+                step_conditions.push(shared(FdmAmericanStepCondition::new(
+                    mesher,
+                    calculator,
+                    exercise_start,
+                )) as Shared<dyn StepCondition>);
+            }
+            ExerciseType::Bermudan => {
+                let bermudan = shared(FdmBermudanStepCondition::new(
+                    exercise.dates(),
+                    ref_date,
+                    &day_counter,
+                    mesher,
+                    calculator,
+                ));
+                stopping_times.push(bermudan.exercise_times().to_vec());
+                step_conditions.push(bermudan as Shared<dyn StepCondition>);
+            }
+            ExerciseType::European => {}
+        }
+
+        Ok(shared(FdmStepConditionComposite::new(
+            &stopping_times,
+            step_conditions,
+        )))
     }
 }
 
@@ -189,5 +270,56 @@ mod tests {
 
         assert_eq!(values[0], 3.0);
         assert_eq!(*log.borrow(), vec!["only:0.5".to_string()]);
+    }
+
+    #[test]
+    fn vanilla_composite_clamps_dividend_times_and_adds_the_smoother() {
+        use crate::cashflows::FixedDividend;
+        use crate::exercise::EuropeanExercise;
+        use crate::methods::finitedifferences::meshers::{FdmMesher, UniformGridMesher};
+        use crate::methods::finitedifferences::operators::{
+            FdmLinearOpIterator, FdmLinearOpLayout,
+        };
+        use crate::methods::finitedifferences::utilities::FdmInnerValueCalculator;
+        use crate::time::date::Month;
+        use crate::time::daycounters::actual365fixed::Actual365Fixed;
+
+        struct ZeroCalc;
+        impl FdmInnerValueCalculator for ZeroCalc {
+            fn inner_value(&self, _iter: &FdmLinearOpIterator, _t: Time) -> Real {
+                0.0
+            }
+            fn avg_inner_value(&self, iter: &FdmLinearOpIterator, t: Time) -> Real {
+                self.inner_value(iter, t)
+            }
+        }
+
+        let today = Date::new(11, Month::February, 2018);
+        let dc = Actual365Fixed::new();
+        let maturity = Date::new(11, Month::February, 2019);
+        let div_date = Date::new(11, Month::August, 2018);
+        let layout = shared(FdmLinearOpLayout::new(vec![5]));
+        let mesher: Shared<dyn FdmMesher> =
+            shared(UniformGridMesher::new(layout, &[(80.0_f64.ln(), 120.0_f64.ln())]).unwrap());
+        let exercise = EuropeanExercise::new(maturity);
+        let cash: Vec<Shared<dyn Dividend>> = vec![shared(FixedDividend::new(30.0, div_date))];
+        let composite = FdmStepConditionComposite::vanilla_composite(
+            &cash,
+            &exercise,
+            mesher,
+            shared(ZeroCalc),
+            today,
+            dc.clone(),
+        )
+        .unwrap();
+
+        let t = dc.year_fraction(today, div_date);
+        let times = composite.stopping_times();
+        assert!(times.iter().any(|&x| (x - t).abs() < 1e-14), "{times:?}");
+        assert!(
+            times.iter().any(|&x| (x - (t + 1e-5)).abs() < 1e-14),
+            "{times:?}"
+        );
+        assert_eq!(composite.conditions().len(), 1);
     }
 }

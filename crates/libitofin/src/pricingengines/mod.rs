@@ -13,7 +13,9 @@ pub mod swap;
 pub mod swaption;
 pub mod vanilla;
 
-pub use barrier::{FdBlackScholesBarrierEngine, set_fd_black_scholes_barrier_engine};
+pub use barrier::{
+    FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine, set_fd_black_scholes_barrier_engine,
+};
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
@@ -24,6 +26,7 @@ pub use swaption::{
     JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
 pub use vanilla::AnalyticEuropeanEngine;
+pub use vanilla::FdBlackScholesVanillaEngine;
 
 pub use blackformula::{
     black_formula, black_formula_asset_itm_probability, black_formula_cash_itm_probability,

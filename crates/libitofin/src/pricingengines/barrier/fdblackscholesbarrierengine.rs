@@ -1,16 +1,17 @@
-//! Finite-difference Black–Scholes engine for European knock-out barriers.
+//! Finite-difference Black–Scholes engine for European barrier options.
 //!
-//! Port of `ql/pricingengines/barrier/fdblackscholesbarrierengine.{hpp,cpp}`
-//! through the knock-out path (`calculate` steps 1–5). Knock-in barriers
-//! (`cpp` step 6: vanilla + rebate option − out-value) need
-//! `FdBlackScholesVanillaEngine` and `FdBlackScholesRebateEngine` and are
-//! follow-up.
+//! Port of `ql/pricingengines/barrier/fdblackscholesbarrierengine.{hpp,cpp}`.
+//! Knock-out uses steps 1–5 (mesher pinned at `ln(H)`, Dirichlet rebate,
+//! dividend handler). Knock-in is step 6: vanilla + rebate − out-value.
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::fail;
 use crate::instrument::{Instrument, InstrumentResults};
 use crate::instruments::{BarrierArguments, BarrierType, StrikedTypePayoff};
+use crate::pricingengines::vanilla::FdBlackScholesVanillaEngine;
+
+use super::fdblackscholesrebateengine::FdBlackScholesRebateEngine;
 use crate::methods::finitedifferences::meshers::{
     FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
 };
@@ -122,16 +123,8 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
         let rebate = args.rebate.expect("validated");
-
-        match barrier_type {
-            BarrierType::DownIn | BarrierType::UpIn => {
-                fail!(
-                    "FdBlackScholesBarrierEngine knock-in path \
-                     (vanilla − out + rebate) is follow-up"
-                );
-            }
-            BarrierType::DownOut | BarrierType::UpOut => {}
-        }
+        let exercise = Shared::clone(exercise);
+        let is_in = matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn);
 
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
@@ -222,12 +215,48 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
             solver_desc,
             self.scheme_desc,
         )?;
-        self.base.results_mut().value = Some(solver.value_at(spot)?);
+        let mut value = solver.value_at(spot)?;
+        if is_in {
+            let vanilla = {
+                let mut engine = FdBlackScholesVanillaEngine::with_params(
+                    Shared::clone(&self.process),
+                    self.dividends.clone(),
+                    self.t_grid,
+                    self.x_grid,
+                    0,
+                    self.scheme_desc,
+                );
+                engine.price(
+                    shared(payoff) as Shared<dyn StrikedTypePayoff>,
+                    Shared::clone(&exercise),
+                )?
+            };
+            let rebate_x_grid = self.x_grid / 5;
+            let rebate_x_grid = rebate_x_grid.max(50);
+            let rebate_damping = if self.damping_steps > 0 {
+                1.min(self.damping_steps / 2)
+            } else {
+                0
+            };
+            let rebate_npv = {
+                let mut engine = FdBlackScholesRebateEngine::with_params(
+                    Shared::clone(&self.process),
+                    self.dividends.clone(),
+                    self.t_grid,
+                    rebate_x_grid,
+                    rebate_damping,
+                    self.scheme_desc,
+                );
+                engine.price(barrier_type, barrier, rebate, payoff, exercise)?
+            };
+            value = vanilla + rebate_npv - value;
+        }
+        self.base.results_mut().value = Some(value);
         Ok(())
     }
 }
 
-fn triggered(barrier_type: BarrierType, spot: Real, barrier: Real) -> bool {
+pub(crate) fn triggered(barrier_type: BarrierType, spot: Real, barrier: Real) -> bool {
     match barrier_type {
         BarrierType::DownIn | BarrierType::DownOut => spot < barrier,
         BarrierType::UpIn | BarrierType::UpOut => spot > barrier,
@@ -297,10 +326,10 @@ mod tests {
         ))
     }
 
-    /// `barrieroption.cpp` `testDividendBarrierOption` knock-out arms
+    /// `barrieroption.cpp` `testDividendBarrierOption`
     /// (Douglas / Crank–Nicolson / Hundsdorfer) @ `relTol = 2e-4`.
     #[test]
-    fn dividend_knock_out_matches_quantlib_oracle() {
+    fn dividend_barrier_matches_quantlib_oracle() {
         let today = Date::new(11, Month::February, 2018);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
@@ -327,6 +356,8 @@ mod tests {
         let cases = [
             (BarrierType::DownOut, 80.0, expected_down_out),
             (BarrierType::UpOut, 120.0, expected_up_out),
+            (BarrierType::DownIn, 80.0, 29.154),
+            (BarrierType::UpIn, 120.0, 4.765),
         ];
         let schemes = [
             FdmSchemeDesc::douglas(),
@@ -371,29 +402,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn knock_in_is_rejected_until_the_vanilla_decomposition_lands() {
-        let today = Date::new(11, Month::February, 2018);
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today);
-        let process = flat_bs_process(today, 100.0, 0.0, 0.05, 0.20);
-        let mut option = BarrierOption::new(
-            BarrierType::DownIn,
-            90.0,
-            PlainVanillaPayoff::new(OptionType::Put, 105.0),
-            shared(EuropeanExercise::new(
-                today + Period::new(1, TimeUnit::Years),
-            )),
-            settings,
-        )
-        .unwrap();
-        set_fd_black_scholes_barrier_engine(
-            &mut option,
-            shared_mut(FdBlackScholesBarrierEngine::new(process)),
-        );
-        let err = option.npv().unwrap_err();
-        assert!(err.message().contains("knock-in"));
     }
 }
