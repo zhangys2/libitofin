@@ -4,24 +4,32 @@
 //! continuous knock-in/out options priced with Haug's A–F formulae (*Option
 //! pricing formulas*, McGraw-Hill, p.69), including cash rebate terms `E`/`F`.
 
+use std::cell::RefCell;
+
 use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
+use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::{PlainVanillaPayoff, StrikedTypePayoff, TypePayoff};
 use crate::interestrate::Compounding;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
+use crate::math::solver1d::Solver1D;
+use crate::math::solvers1d::brent::Brent;
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
+use crate::quotes::{Quote, SimpleQuote};
 use crate::require;
 use crate::settings::Settings;
-use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
+use crate::termstructures::TermStructure;
+use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
 use crate::time::date::Date;
 use crate::time::frequency::Frequency;
-use crate::types::Real;
+use crate::types::{Real, Size, Volatility};
 
 /// Barrier type (QuantLib `Barrier::Type`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +96,84 @@ impl BarrierOption {
     }
     pub fn rebate(&self) -> Real {
         self.rebate
+    }
+
+    /// Black implied volatility such that the analytic barrier price equals
+    /// `target_value` (`BarrierOption::impliedVolatility`, no-dividend arm).
+    /// Discrete-dividend inversion (FD engine) is follow-up.
+    ///
+    /// QuantLib defaults: `max_evaluations = 100`, `min_vol = 1e-7`,
+    /// `max_vol = 4.0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        target_value: Real,
+        process: Shared<GeneralizedBlackScholesProcess>,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+    ) -> QlResult<Volatility> {
+        if self.is_expired()? {
+            fail!("option expired");
+        }
+        if self.exercise.exercise_type() != ExerciseType::European {
+            fail!("engine not available for non-European barrier option");
+        }
+
+        let src_vol = process.black_volatility().current_link()?;
+        let vol = shared(SimpleQuote::new(0.0));
+        let vol_ts = BlackConstantVol::with_quote(
+            src_vol.reference_date()?,
+            src_vol.calendar(),
+            Handle::new(Shared::clone(&vol) as Shared<dyn Quote>),
+            src_vol.require_day_counter()?,
+        );
+        let cloned = GeneralizedBlackScholesProcess::new(
+            process.state_variable(),
+            process.dividend_yield(),
+            process.risk_free_rate(),
+            Handle::new(shared(vol_ts) as Shared<dyn BlackVolTermStructure>),
+        );
+        let mut engine = AnalyticBarrierEngine::new(shared(cloned));
+        self.setup_arguments(engine.arguments_mut())?;
+        engine.arguments_mut().validate()?;
+
+        let failure = RefCell::new(None);
+        let objective = |x: Volatility| {
+            vol.set_value(x);
+            match engine.calculate() {
+                Ok(()) => match engine
+                    .results()
+                    .as_instrument_results()
+                    .and_then(|r| r.value)
+                {
+                    Some(value) => value - target_value,
+                    None => {
+                        failure.borrow_mut().get_or_insert_with(|| {
+                            crate::errors::QlError::new(
+                                "no results returned from pricing engine",
+                                file!(),
+                                line!(),
+                            )
+                        });
+                        Real::NAN
+                    }
+                },
+                Err(error) => {
+                    failure.borrow_mut().get_or_insert(error);
+                    Real::NAN
+                }
+            }
+        };
+
+        let guess = 0.5 * (min_vol + max_vol);
+        let mut solver = Brent::new().with_max_evaluations(max_evaluations);
+        let root = solver.solve_bracketed(objective, accuracy, guess, min_vol, max_vol);
+        match failure.into_inner() {
+            Some(error) => Err(error),
+            None => root,
+        }
     }
 }
 
@@ -1101,6 +1187,60 @@ mod tests {
                 calculated.is_finite() && error <= 0.5,
                 "{barrier_type:?} {option_type:?} K={strike} H={barrier} r={r} q={q}: \
                  {calculated} vs {expected} (error {error})"
+            );
+        }
+    }
+
+    #[test]
+    fn implied_volatility_reproduces_target_without_dividends() {
+        // QuantLib barrieroption.cpp `testImpliedVolatility` no-dividend arm.
+        // Discrete-dividend / FdBlackScholesBarrierEngine inversion is follow-up.
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual365Fixed::new();
+        let process = flat_bs_process(today, 100.0, 0.0, 0.05, 0.0, dc.clone());
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(1, TimeUnit::Years),
+        ));
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 105.0);
+        #[rustfmt::skip]
+        let cases = [
+            (BarrierType::DownOut,  90.0, 1.0),
+            (BarrierType::UpOut,   110.0, 1.0),
+            (BarrierType::DownIn,   90.0, 5.0),
+            (BarrierType::UpIn,    110.0, 5.0),
+        ];
+        for (barrier_type, barrier, target) in cases {
+            let option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            let implied = option
+                .implied_volatility(target, Shared::clone(&process), 1e-6, 100, 1e-7, 4.0)
+                .unwrap();
+            let priced = flat_bs_process(today, 100.0, 0.0, 0.05, implied, dc.clone());
+            let mut check = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_analytic_barrier_engine(&mut check, priced);
+            let calculated = check.npv().unwrap();
+            let error = (calculated - target).abs();
+            assert!(
+                error <= 1.0e-5,
+                "{barrier_type:?} H={barrier}: NPV {calculated} vs target {target} \
+                 (implied vol {implied}, error {error})"
             );
         }
     }
