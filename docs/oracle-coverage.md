@@ -79,6 +79,7 @@ credit.
 | Barrier put-call symmetry | `AnalyticBarrierEngine` | `barrieroption.cpp` `testPutCallSymmetry` | inverted knock-out put ≡ scaled call @ 1e-4 (DownOut/UpOut pairs) |
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3; American/FD/binomial follow-up) |
 | Barrier Babsiri / Beaglehole | `AnalyticBarrierEngine` | `barrieroption.cpp` `testBabsiriValues` / `testBeagleholeValues` | published calls @ 1e-5 / 1e-3 (analytic; MC follow-up) |
+| Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
