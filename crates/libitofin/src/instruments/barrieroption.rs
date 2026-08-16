@@ -186,6 +186,7 @@ impl BarrierOption {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn solve_implied_volatility(
         &self,
         target_value: Real,
