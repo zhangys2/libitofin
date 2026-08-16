@@ -357,12 +357,17 @@ mod tests {
                 set_fd_black_scholes_barrier_engine(&mut option, engine);
                 let calculated = option.npv().unwrap();
                 let diff = (calculated - expected).abs();
+                let tol = rel_tol * expected;
+                eprintln!(
+                    "{barrier_type:?} {:?} H={barrier}: calculated={calculated:.8} \
+                     expected={expected:.8} diff={diff:.2e} tol={tol:.2e}",
+                    scheme.scheme_type
+                );
                 assert!(
-                    calculated.is_finite() && diff <= rel_tol * expected,
+                    calculated.is_finite() && diff <= tol,
                     "{barrier_type:?} {:?}: {calculated} vs {expected} \
-                     (diff {diff}, tol {})",
-                    scheme.scheme_type,
-                    rel_tol * expected
+                     (diff {diff}, tol {tol})",
+                    scheme.scheme_type
                 );
             }
         }
