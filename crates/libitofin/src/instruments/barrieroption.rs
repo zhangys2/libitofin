@@ -1029,4 +1029,79 @@ mod tests {
             "DownOut K=50 H=45: {calculated} vs Beaglehole {expected} (error {error})"
         );
     }
+
+    #[test]
+    fn low_volatility_matches_zero_vol_limits() {
+        // QuantLib barrieroption.cpp `testLowVolatility`: vol = 1e-7 must not
+        // yield NaN, and prices stay within 0.5 of the deterministic limit.
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let expiry = today + Period::new(1, TimeUnit::Years);
+        let dc = Actual365Fixed::new();
+        #[rustfmt::skip]
+        let cases = [
+            // strike, type, barrier, barrier type, rebate, r, q, expected
+            (105.0, OptionType::Put,  107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 3.0),
+            (109.0, OptionType::Put,  107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 7.0),
+            (100.0, OptionType::Put,  107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 0.0),
+            ( 99.0, OptionType::Put,  101.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 4.0),
+            (105.0, OptionType::Put,  101.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 4.0),
+            (105.0, OptionType::Call, 107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 0.0),
+            (109.0, OptionType::Call, 107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 0.0),
+            (100.0, OptionType::Call, 107.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 2.0),
+            (105.0, OptionType::Call, 101.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 4.0),
+            ( 99.0, OptionType::Call, 101.0, BarrierType::UpOut,   4.0, 0.03, 0.01, 4.0),
+            (105.0, OptionType::Put,  107.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 4.0),
+            (109.0, OptionType::Put,  107.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 4.0),
+            (105.0, OptionType::Put,  101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 2.0),
+            (100.0, OptionType::Put,  101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 0.0),
+            (102.0, OptionType::Put,  101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 0.0),
+            (105.0, OptionType::Call, 107.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 4.0),
+            (109.0, OptionType::Call, 107.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 4.0),
+            (105.0, OptionType::Call, 101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 0.0),
+            (100.0, OptionType::Call, 101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 3.0),
+            (102.0, OptionType::Call, 101.0, BarrierType::UpIn,    4.0, 0.03, 0.00, 1.0),
+            ( 91.0, OptionType::Put,   93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 0.0),
+            ( 95.0, OptionType::Put,   93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 0.0),
+            (100.0, OptionType::Put,   93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 2.0),
+            ( 97.0, OptionType::Put,   99.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 4.0),
+            (101.0, OptionType::Put,   99.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 4.0),
+            ( 91.0, OptionType::Call,  93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 7.0),
+            ( 95.0, OptionType::Call,  93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 3.0),
+            (100.0, OptionType::Call,  93.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 0.0),
+            ( 95.0, OptionType::Call,  99.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 4.0),
+            (101.0, OptionType::Call,  99.0, BarrierType::DownOut, 4.0, 0.01, 0.03, 4.0),
+            ( 91.0, OptionType::Put,   93.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 4.0),
+            ( 95.0, OptionType::Put,   93.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 4.0),
+            (100.0, OptionType::Put,   99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 3.0),
+            ( 95.0, OptionType::Put,   99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 0.0),
+            ( 95.0, OptionType::Put,   99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 0.0),
+            ( 91.0, OptionType::Call,  93.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 4.0),
+            ( 95.0, OptionType::Call,  93.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 4.0),
+            ( 98.0, OptionType::Call,  99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 0.0),
+            (100.0, OptionType::Call,  99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 0.0),
+            ( 95.0, OptionType::Call,  99.0, BarrierType::DownIn,  4.0, 0.01, 0.04, 2.0),
+        ];
+        for (strike, option_type, barrier, barrier_type, rebate, r, q, expected) in cases {
+            let process = flat_bs_process(today, 100.0, q, r, 1e-7, dc.clone());
+            let mut option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                rebate,
+                PlainVanillaPayoff::new(option_type, strike),
+                shared(EuropeanExercise::new(expiry)),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_analytic_barrier_engine(&mut option, process);
+            let calculated = option.npv().unwrap();
+            let error = (calculated - expected).abs();
+            assert!(
+                calculated.is_finite() && error <= 0.5,
+                "{barrier_type:?} {option_type:?} K={strike} H={barrier} r={r} q={q}: \
+                 {calculated} vs {expected} (error {error})"
+            );
+        }
+    }
 }
