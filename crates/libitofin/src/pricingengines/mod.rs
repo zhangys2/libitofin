@@ -4,6 +4,7 @@
 //! the [`BlackCalculator`] greeks core, and the analytic vanilla engines
 //! built on them.
 
+pub mod barrier;
 pub mod blackcalculator;
 pub mod blackformula;
 pub mod bond;
@@ -12,6 +13,7 @@ pub mod swap;
 pub mod swaption;
 pub mod vanilla;
 
+pub use barrier::{FdBlackScholesBarrierEngine, set_fd_black_scholes_barrier_engine};
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
