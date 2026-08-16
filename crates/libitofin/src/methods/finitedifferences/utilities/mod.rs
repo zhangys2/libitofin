@@ -5,12 +5,14 @@
 mod fdmaffinemodelswapinnervalue;
 mod fdmaffinemodeltermstructure;
 mod fdmboundaryconditionset;
+mod fdmdividendhandler;
 mod fdminnervaluecalculator;
 mod fdmmesherintegral;
 
 pub use fdmaffinemodelswapinnervalue::FdmAffineModelSwapInnerValue;
 pub use fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
 pub use fdmboundaryconditionset::FdmBoundaryConditionSet;
+pub use fdmdividendhandler::FdmDividendHandler;
 pub use fdminnervaluecalculator::{
     FdmCellAveragingInnerValue, FdmInnerValueCalculator, GridMapping, fdm_log_inner_value,
 };

@@ -7,8 +7,9 @@
 //! design.
 //!
 //! `FdmStepConditionComposite::vanillaComposite` (`cpp:80-145`) still omits the
-//! dividend handler (`FdmDividendHandler`, `cpp:104`); American and Bermudan
-//! step conditions are ported below.
+//! dividend handler (`FdmDividendHandler` lives in `utilities` and is wired by
+//! the FD barrier engine directly); American and Bermudan step conditions are
+//! ported below.
 
 mod fdmamericanstepcondition;
 mod fdmbermudanstepcondition;

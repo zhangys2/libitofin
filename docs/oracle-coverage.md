@@ -81,6 +81,7 @@ credit.
 | Barrier Babsiri / Beaglehole | `AnalyticBarrierEngine` | `barrieroption.cpp` `testBabsiriValues` / `testBeagleholeValues` | published calls @ 1e-5 / 1e-3 (analytic; MC follow-up) |
 | Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
 | Barrier implied vol | `BarrierOption::implied_volatility` + `AnalyticBarrierEngine` | `barrieroption.cpp` `testImpliedVolatility` | no-dividend put targets @ 1e-5 (dividend/FD arm follow-up) |
+| Barrier FD knock-out (discrete div) | `FdBlackScholesBarrierEngine` | `barrieroption.cpp` `testDividendBarrierOption` | DownOut/UpOut Douglas/CN/Hundsdorfer @ 2e-4 (in-barrier / other schemes follow-up) |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
