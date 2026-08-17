@@ -89,7 +89,7 @@ impl Scheme for MethodOfLinesScheme {
                 vec![0.0; u.len()]
             }
         };
-        let v = rk.solve(ode, &**a, t, start)?;
+        let v = rk.solve(ode, a, t, start)?;
         if let Some(error) = failure.into_inner() {
             return Err(error);
         }
