@@ -80,8 +80,9 @@ credit.
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3; American/FD/binomial follow-up) |
 | Barrier Babsiri / Beaglehole | `AnalyticBarrierEngine` | `barrieroption.cpp` `testBabsiriValues` / `testBeagleholeValues` | published calls @ 1e-5 / 1e-3 (analytic; MC follow-up) |
 | Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
-| Barrier implied vol | `BarrierOption::implied_volatility` + `AnalyticBarrierEngine` | `barrieroption.cpp` `testImpliedVolatility` | no-dividend put targets @ 1e-5 (dividend/FD arm follow-up) |
+| Barrier implied vol | `BarrierOption::implied_volatility` + analytic / FD | `barrieroption.cpp` `testImpliedVolatility` | no-div put targets @ 1e-5; discrete-div FD put targets @ 1e-5 |
 | Barrier FD (discrete div) | `FdBlackScholesBarrierEngine` + vanilla/rebate FD | `barrieroption.cpp` `testDividendBarrierOption` | DownOut/UpOut/DownIn/UpIn Douglas/CN/Hundsdorfer @ 2e-4 (other schemes / Heston follow-up) |
+| Barrier FD past-maturity div | `FdBlackScholesBarrierEngine` | `barrieroption.cpp` `testDividendBarrierOptionWithDividendsPastMaturity` | +18M cash vs T=1Y identity @ 1e-12 (Heston follow-up) |
 | Money / FX rates | `Money`, `ExchangeRate` | `money.cpp`, `exchangerate.cpp` | Value types |
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
