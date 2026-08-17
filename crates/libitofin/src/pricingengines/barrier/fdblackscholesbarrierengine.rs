@@ -365,6 +365,7 @@ mod tests {
             FdmSchemeDesc::hundsdorfer(),
             FdmSchemeDesc::craig_sneyd(),
             FdmSchemeDesc::modified_craig_sneyd(),
+            FdmSchemeDesc::tr_bdf2(),
         ];
         let rel_tol = 2e-4;
 
