@@ -41,10 +41,12 @@ pub enum FdmSchemeType {
 /// [`explicit_euler`](Self::explicit_euler),
 /// [`crank_nicolson`](Self::crank_nicolson),
 /// [`hundsdorfer`](Self::hundsdorfer),
-/// [`modified_hundsdorfer`](Self::modified_hundsdorfer). The remaining
-/// families (`CraigSneyd`, `ModifiedCraigSneyd`, `MethodOfLines`, `TrBDF2`)
-/// stay constructible through [`new`](Self::new) and are rejected by the
-/// backward solver until their schemes land.
+/// [`modified_hundsdorfer`](Self::modified_hundsdorfer),
+/// [`craig_sneyd`](Self::craig_sneyd),
+/// [`modified_craig_sneyd`](Self::modified_craig_sneyd). The remaining
+/// families (`MethodOfLines`, `TrBDF2`) stay constructible through
+/// [`new`](Self::new) and are rejected by the backward solver until their
+/// schemes land.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -98,6 +100,16 @@ impl FdmSchemeDesc {
     pub fn modified_hundsdorfer() -> Self {
         FdmSchemeDesc::new(FdmSchemeType::Hundsdorfer, 1.0 - 2.0_f64.sqrt() / 2.0, 0.5)
     }
+
+    /// Craig–Sneyd (`fdmbackwardsolver.cpp:52`): `θ = ½`, `μ = ½`.
+    pub fn craig_sneyd() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::CraigSneyd, 0.5, 0.5)
+    }
+
+    /// Modified Craig–Sneyd (`fdmbackwardsolver.cpp:54-56`): `θ = μ = ⅓`.
+    pub fn modified_craig_sneyd() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::ModifiedCraigSneyd, 1.0 / 3.0, 1.0 / 3.0)
+    }
 }
 
 #[cfg(test)]
@@ -122,8 +134,9 @@ mod tests {
         assert_eq!(desc.mu, 0.0);
     }
 
-    /// The eight unported factories are omitted, not their types: the rollback
-    /// of #658 must be able to name every one of them to reject it.
+    /// The remaining unported factories (`MethodOfLines`, `TrBDF2`) are
+    /// omitted, not their types: the rollback must be able to name every one
+    /// of them to reject it.
     #[test]
     fn every_scheme_type_is_constructible() {
         let types = [
@@ -166,5 +179,21 @@ mod tests {
         assert!((desc.theta - (1.0 - 2.0_f64.sqrt() / 2.0)).abs() < 1e-15);
         assert_eq!(desc.mu, 0.5);
         assert_ne!(desc.theta, FdmSchemeDesc::hundsdorfer().theta);
+    }
+
+    #[test]
+    fn craig_sneyd_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::craig_sneyd();
+        assert_eq!(desc.scheme_type, FdmSchemeType::CraigSneyd);
+        assert_eq!(desc.theta, 0.5);
+        assert_eq!(desc.mu, 0.5);
+    }
+
+    #[test]
+    fn modified_craig_sneyd_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::modified_craig_sneyd();
+        assert_eq!(desc.scheme_type, FdmSchemeType::ModifiedCraigSneyd);
+        assert!((desc.theta - 1.0 / 3.0).abs() < 1e-15);
+        assert!((desc.mu - 1.0 / 3.0).abs() < 1e-15);
     }
 }

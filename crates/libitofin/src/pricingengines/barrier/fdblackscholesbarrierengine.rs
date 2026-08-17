@@ -363,6 +363,8 @@ mod tests {
             FdmSchemeDesc::douglas(),
             FdmSchemeDesc::crank_nicolson(),
             FdmSchemeDesc::hundsdorfer(),
+            FdmSchemeDesc::craig_sneyd(),
+            FdmSchemeDesc::modified_craig_sneyd(),
         ];
         let rel_tol = 2e-4;
 
