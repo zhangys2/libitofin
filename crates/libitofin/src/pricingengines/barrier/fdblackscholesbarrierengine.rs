@@ -277,7 +277,7 @@ pub fn set_fd_black_scholes_barrier_engine(
 mod tests {
     use super::*;
     use crate::cashflows::dividend_vector;
-    use crate::exercise::{EuropeanExercise, Exercise};
+    use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::{BarrierOption, PlainVanillaPayoff};
@@ -461,5 +461,79 @@ mod tests {
                 "{barrier_type:?} H={barrier}: {with_npv} vs {without_npv} (diff {diff})"
             );
         }
+    }
+
+    /// `barrieroption.cpp` `testHaugValues` reject paths for the FD engine
+    /// (zero spot, already-triggered barrier, American exercise).
+    #[test]
+    fn fd_barrier_rejects_zero_spot_triggered_and_american() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let expiry = today + Period::new(6, TimeUnit::Months);
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 100.0);
+        let european: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+
+        let mut zero_spot = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            95.0,
+            3.0,
+            payoff,
+            Shared::clone(&european),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_black_scholes_barrier_engine(
+            &mut zero_spot,
+            shared_mut(FdBlackScholesBarrierEngine::new(flat_bs_process(
+                today, 0.0, 0.04, 0.08, 0.25,
+            ))),
+        );
+        let err = zero_spot.npv().unwrap_err().to_string();
+        assert!(
+            err.contains("negative or null underlying"),
+            "zero spot: {err}"
+        );
+
+        let mut triggered = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            101.0,
+            3.0,
+            payoff,
+            Shared::clone(&european),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_black_scholes_barrier_engine(
+            &mut triggered,
+            shared_mut(FdBlackScholesBarrierEngine::new(flat_bs_process(
+                today, 100.0, 0.04, 0.08, 0.25,
+            ))),
+        );
+        let err = triggered.npv().unwrap_err().to_string();
+        assert!(err.contains("barrier touched"), "triggered: {err}");
+
+        let american: Shared<dyn Exercise> =
+            shared(AmericanExercise::new(today, expiry, false).unwrap());
+        let mut american_opt = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            95.0,
+            3.0,
+            payoff,
+            american,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_black_scholes_barrier_engine(
+            &mut american_opt,
+            shared_mut(FdBlackScholesBarrierEngine::new(flat_bs_process(
+                today, 100.0, 0.04, 0.08, 0.25,
+            ))),
+        );
+        let err = american_opt.npv().unwrap_err().to_string();
+        assert!(
+            err.contains("only european style option are supported"),
+            "american: {err}"
+        );
     }
 }

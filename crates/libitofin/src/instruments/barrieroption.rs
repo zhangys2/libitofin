@@ -592,6 +592,7 @@ mod tests {
     use crate::instrument::Instrument;
     use crate::instruments::{StrikedTypePayoff, VanillaOption};
     use crate::interestrate::Compounding;
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
     use crate::pricingengines::set_fd_black_scholes_barrier_engine;
     use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
@@ -945,21 +946,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn european_haug_values() {
-        // QuantLib barrieroption.cpp `testHaugValues` European rows (Haug 1998
-        // p.72). Analytic engine only; American / FD / binomial stay follow-up.
-        // Constants shared by every published row: rebate 3, S=100, q=0.04,
-        // r=0.08, t=0.50, tolerance 1e-4.
-        let today = Date::new(15, Month::June, 2026);
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today);
-        let dc = Actual360::new();
-        let time_to_days = |t: Real| (t * 360.0).round() as i32;
-
-        type Row = (BarrierType, Real, OptionType, Real, Real, Real);
-        #[rustfmt::skip]
-        const HAUG: &[Row] = &[
+    // QuantLib barrieroption.cpp `testHaugValues` European rows (Haug 1998 p.72).
+    // Shared constants: rebate 3, S=100, q=0.04, r=0.08, t=0.50.
+    type HaugRow = (BarrierType, Real, OptionType, Real, Real, Real);
+    #[rustfmt::skip]
+    const HAUG_EUROPEAN: &[HaugRow] = &[
             // barrierType, barrier, type, strike, vol, result
             (BarrierType::DownOut,  95.0, OptionType::Call,  90.0, 0.25,  9.0246),
             (BarrierType::DownOut,  95.0, OptionType::Call, 100.0, 0.25,  6.7924),
@@ -1035,6 +1026,15 @@ mod tests {
             (BarrierType::UpIn,    105.0, OptionType::Put,  110.0, 0.30,  8.3686),
         ];
 
+    #[test]
+    fn european_haug_values() {
+        // Analytic engine @ 1e-4. American / binomial stay follow-up.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let time_to_days = |t: Real| (t * 360.0).round() as i32;
+
         let flat = |rate: Real| {
             Handle::new(shared(FlatForward::with_rate(
                 today,
@@ -1044,7 +1044,7 @@ mod tests {
                 Frequency::Annual,
             )) as Shared<dyn YieldTermStructure>)
         };
-        for &(barrier_type, barrier, option_type, strike, vol, expected) in HAUG {
+        for &(barrier_type, barrier, option_type, strike, vol, expected) in HAUG_EUROPEAN {
             let process = shared(BlackScholesMertonProcess::new(
                 Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
                 flat(0.04),
@@ -1074,6 +1074,79 @@ mod tests {
                  {calculated} vs Haug {expected} (error {error})"
             );
         }
+    }
+
+    #[test]
+    fn european_haug_fd_values() {
+        // QuantLib barrieroption.cpp `testHaugValues` FD European arm:
+        // `FdBlackScholesBarrierEngine(process, 200, 400)` @ 5e-3.
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let time_to_days = |t: Real| (t * 360.0).round() as i32;
+        let mut max_error = 0.0_f64;
+        let mut worst = String::new();
+        for &(barrier_type, barrier, option_type, strike, vol, expected) in HAUG_EUROPEAN {
+            let process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.04,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.08,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(BlackConstantVol::new(
+                    today,
+                    Some(NullCalendar::new()),
+                    vol,
+                    dc.clone(),
+                )) as Shared<dyn BlackVolTermStructure>),
+            ));
+            let mut option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                3.0,
+                PlainVanillaPayoff::new(option_type, strike),
+                shared(EuropeanExercise::new(today + time_to_days(0.50))),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_black_scholes_barrier_engine(
+                &mut option,
+                shared_mut(FdBlackScholesBarrierEngine::with_params(
+                    process,
+                    Vec::new(),
+                    200,
+                    400,
+                    0,
+                    FdmSchemeDesc::douglas(),
+                )),
+            );
+            let calculated = option.npv().unwrap();
+            let error = (calculated - expected).abs();
+            if error > max_error {
+                max_error = error;
+                worst = format!(
+                    "{barrier_type:?} {option_type:?} H={barrier} K={strike} v={vol}: \
+                     {calculated} vs {expected}"
+                );
+            }
+            assert!(
+                calculated.is_finite() && error <= 5.0e-3,
+                "{barrier_type:?} {option_type:?} H={barrier} K={strike} v={vol}: \
+                 {calculated} vs Haug {expected} (error {error})"
+            );
+        }
+        eprintln!("haug fd max error {max_error:.2e} at {worst}");
     }
 
     fn flat_bs_process(
