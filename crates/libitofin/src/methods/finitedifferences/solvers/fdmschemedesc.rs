@@ -43,10 +43,10 @@ pub enum FdmSchemeType {
 /// [`hundsdorfer`](Self::hundsdorfer),
 /// [`modified_hundsdorfer`](Self::modified_hundsdorfer),
 /// [`craig_sneyd`](Self::craig_sneyd),
-/// [`modified_craig_sneyd`](Self::modified_craig_sneyd). The remaining
-/// families (`MethodOfLines`, `TrBDF2`) stay constructible through
-/// [`new`](Self::new) and are rejected by the backward solver until their
-/// schemes land.
+/// [`modified_craig_sneyd`](Self::modified_craig_sneyd),
+/// [`method_of_lines`](Self::method_of_lines). The remaining family
+/// (`TrBDF2`) stays constructible through [`new`](Self::new) and is
+/// rejected by the backward solver until its scheme lands.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -110,6 +110,18 @@ impl FdmSchemeDesc {
     pub fn modified_craig_sneyd() -> Self {
         FdmSchemeDesc::new(FdmSchemeType::ModifiedCraigSneyd, 1.0 / 3.0, 1.0 / 3.0)
     }
+
+    /// Method of lines (`fdmbackwardsolver.cpp:67-68`): `eps = 0.001`,
+    /// `relInitStepSize = 0.01`, stored as `theta` and `mu`.
+    pub fn method_of_lines() -> Self {
+        Self::method_of_lines_with(0.001, 0.01)
+    }
+
+    /// Method of lines with prescribed RK tolerance and relative initial
+    /// step (`fdmbackwardsolver.cpp:67`).
+    pub fn method_of_lines_with(eps: Real, rel_init_step_size: Real) -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::MethodOfLines, eps, rel_init_step_size)
+    }
 }
 
 #[cfg(test)]
@@ -134,9 +146,8 @@ mod tests {
         assert_eq!(desc.mu, 0.0);
     }
 
-    /// The remaining unported factories (`MethodOfLines`, `TrBDF2`) are
-    /// omitted, not their types: the rollback must be able to name every one
-    /// of them to reject it.
+    /// The remaining unported factory (`TrBDF2`) is omitted, not its type:
+    /// the rollback must be able to name it to reject it.
     #[test]
     fn every_scheme_type_is_constructible() {
         let types = [
@@ -195,5 +206,18 @@ mod tests {
         assert_eq!(desc.scheme_type, FdmSchemeType::ModifiedCraigSneyd);
         assert!((desc.theta - 1.0 / 3.0).abs() < 1e-15);
         assert!((desc.mu - 1.0 / 3.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn method_of_lines_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::method_of_lines();
+        assert_eq!(desc.scheme_type, FdmSchemeType::MethodOfLines);
+        assert_eq!(desc.theta, 0.001);
+        assert_eq!(desc.mu, 0.01);
+
+        let custom = FdmSchemeDesc::method_of_lines_with(1e-4, 0.05);
+        assert_eq!(custom.scheme_type, FdmSchemeType::MethodOfLines);
+        assert_eq!(custom.theta, 1e-4);
+        assert_eq!(custom.mu, 0.05);
     }
 }

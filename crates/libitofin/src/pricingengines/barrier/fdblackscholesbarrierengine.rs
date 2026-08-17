@@ -327,7 +327,8 @@ mod tests {
     }
 
     /// `barrieroption.cpp` `testDividendBarrierOption`
-    /// (Douglas / Crank–Nicolson / Hundsdorfer) @ `relTol = 2e-4`.
+    /// (Douglas / Crank–Nicolson / Hundsdorfer / Craig–Sneyd /
+    /// Modified Craig–Sneyd / Method of Lines) @ `relTol = 2e-4`.
     #[test]
     fn dividend_barrier_matches_quantlib_oracle() {
         let today = Date::new(11, Month::February, 2018);
@@ -365,6 +366,7 @@ mod tests {
             FdmSchemeDesc::hundsdorfer(),
             FdmSchemeDesc::craig_sneyd(),
             FdmSchemeDesc::modified_craig_sneyd(),
+            FdmSchemeDesc::method_of_lines(),
         ];
         let rel_tol = 2e-4;
 
