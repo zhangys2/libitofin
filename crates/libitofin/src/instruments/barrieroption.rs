@@ -1028,7 +1028,7 @@ mod tests {
 
     #[test]
     fn european_haug_values() {
-        // Analytic engine @ 1e-4. American / binomial stay follow-up.
+        // Analytic engine @ 1e-4. American is priced by the binomial engine.
         let today = Date::new(15, Month::June, 2026);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
