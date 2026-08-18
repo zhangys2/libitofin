@@ -10,7 +10,7 @@ use crate::methods::finitedifferences::FiniteDifferenceModel;
 use crate::methods::finitedifferences::operators::FdmLinearOpComposite;
 use crate::methods::finitedifferences::schemes::{
     CraigSneydScheme, CrankNicolsonScheme, DouglasScheme, ExplicitEulerScheme, HundsdorferScheme,
-    ImplicitEulerScheme, ModifiedCraigSneydScheme,
+    ImplicitEulerScheme, ModifiedCraigSneydScheme, TrBDF2Scheme,
 };
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::FdmBoundaryConditionSet;
@@ -160,8 +160,26 @@ impl FdmBackwardSolver {
                 );
                 model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
+            FdmSchemeType::TrBDF2 => {
+                let trapezoidal = CraigSneydScheme::new(
+                    FdmSchemeDesc::craig_sneyd().theta,
+                    FdmSchemeDesc::craig_sneyd().mu,
+                    self.map.clone(),
+                    self.bc_set.clone(),
+                );
+                let mut model = FiniteDifferenceModel::new(
+                    TrBDF2Scheme::new(
+                        self.scheme_desc.theta,
+                        self.map.clone(),
+                        trapezoidal,
+                        self.bc_set.clone(),
+                    ),
+                    self.condition.stopping_times(),
+                );
+                model.rollback(a, damping_to, to, steps, Some(&*self.condition))
+            }
             unported => fail!(
-                "the {unported:?} scheme is not ported: MethodOfLines / TrBDF2 wait on later ADI work"
+                "the {unported:?} scheme is not ported: MethodOfLines waits on later ADI work"
             ),
         }
     }
@@ -398,10 +416,11 @@ mod tests {
     }
 
     #[test]
-    fn craig_sneyd_and_modified_craig_sneyd_roll_back() {
+    fn craig_sneyd_modified_craig_sneyd_and_tr_bdf2_roll_back() {
         for desc in [
             FdmSchemeDesc::craig_sneyd(),
             FdmSchemeDesc::modified_craig_sneyd(),
+            FdmSchemeDesc::tr_bdf2(),
         ] {
             let mut solver = solver(desc);
             let mut a = probe(SIZE);
@@ -421,7 +440,7 @@ mod tests {
     /// is told which one it asked for instead of silently getting another.
     #[test]
     fn every_unported_scheme_type_is_rejected_by_name() {
-        let unported = [FdmSchemeType::MethodOfLines, FdmSchemeType::TrBDF2];
+        let unported = [FdmSchemeType::MethodOfLines];
 
         for scheme_type in unported {
             let mut solver = solver(FdmSchemeDesc::new(scheme_type, 0.5, 0.5));

@@ -43,10 +43,10 @@ pub enum FdmSchemeType {
 /// [`hundsdorfer`](Self::hundsdorfer),
 /// [`modified_hundsdorfer`](Self::modified_hundsdorfer),
 /// [`craig_sneyd`](Self::craig_sneyd),
-/// [`modified_craig_sneyd`](Self::modified_craig_sneyd). The remaining
-/// families (`MethodOfLines`, `TrBDF2`) stay constructible through
-/// [`new`](Self::new) and are rejected by the backward solver until their
-/// schemes land.
+/// [`modified_craig_sneyd`](Self::modified_craig_sneyd),
+/// [`tr_bdf2`](Self::tr_bdf2). The remaining family (`MethodOfLines`) stays
+/// constructible through [`new`](Self::new) and is rejected by the backward
+/// solver until that scheme lands.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -110,6 +110,12 @@ impl FdmSchemeDesc {
     pub fn modified_craig_sneyd() -> Self {
         FdmSchemeDesc::new(FdmSchemeType::ModifiedCraigSneyd, 1.0 / 3.0, 1.0 / 3.0)
     }
+
+    /// Trapezoidal BDF2 (`fdmbackwardsolver.cpp:78`): `α = 2 − √2`,
+    /// `relTol = 1e-8` stored as `mu`.
+    pub fn tr_bdf2() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::TrBDF2, 2.0 - std::f64::consts::SQRT_2, 1e-8)
+    }
 }
 
 #[cfg(test)]
@@ -134,9 +140,8 @@ mod tests {
         assert_eq!(desc.mu, 0.0);
     }
 
-    /// The remaining unported factories (`MethodOfLines`, `TrBDF2`) are
-    /// omitted, not their types: the rollback must be able to name every one
-    /// of them to reject it.
+    /// The remaining unported factory (`MethodOfLines`) is omitted, not its
+    /// type: the rollback must be able to name it to reject it.
     #[test]
     fn every_scheme_type_is_constructible() {
         let types = [
@@ -195,5 +200,13 @@ mod tests {
         assert_eq!(desc.scheme_type, FdmSchemeType::ModifiedCraigSneyd);
         assert!((desc.theta - 1.0 / 3.0).abs() < 1e-15);
         assert!((desc.mu - 1.0 / 3.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn tr_bdf2_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::tr_bdf2();
+        assert_eq!(desc.scheme_type, FdmSchemeType::TrBDF2);
+        assert!((desc.theta - (2.0 - std::f64::consts::SQRT_2)).abs() < 1e-15);
+        assert_eq!(desc.mu, 1e-8);
     }
 }
