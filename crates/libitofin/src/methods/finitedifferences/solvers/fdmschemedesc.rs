@@ -44,9 +44,8 @@ pub enum FdmSchemeType {
 /// [`modified_hundsdorfer`](Self::modified_hundsdorfer),
 /// [`craig_sneyd`](Self::craig_sneyd),
 /// [`modified_craig_sneyd`](Self::modified_craig_sneyd),
-/// [`tr_bdf2`](Self::tr_bdf2). The remaining family (`MethodOfLines`) stays
-/// constructible through [`new`](Self::new) and is rejected by the backward
-/// solver until that scheme lands.
+/// [`method_of_lines`](Self::method_of_lines),
+/// [`tr_bdf2`](Self::tr_bdf2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -111,6 +110,18 @@ impl FdmSchemeDesc {
         FdmSchemeDesc::new(FdmSchemeType::ModifiedCraigSneyd, 1.0 / 3.0, 1.0 / 3.0)
     }
 
+    /// Method of lines (`fdmbackwardsolver.cpp:67-68`): `eps = 0.001`,
+    /// `relInitStepSize = 0.01`, stored as `theta` and `mu`.
+    pub fn method_of_lines() -> Self {
+        Self::method_of_lines_with(0.001, 0.01)
+    }
+
+    /// Method of lines with prescribed RK tolerance and relative initial
+    /// step (`fdmbackwardsolver.cpp:67`).
+    pub fn method_of_lines_with(eps: Real, rel_init_step_size: Real) -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::MethodOfLines, eps, rel_init_step_size)
+    }
+
     /// Trapezoidal BDF2 (`fdmbackwardsolver.cpp:78`): `α = 2 − √2`,
     /// `relTol = 1e-8` stored as `mu`.
     pub fn tr_bdf2() -> Self {
@@ -140,8 +151,6 @@ mod tests {
         assert_eq!(desc.mu, 0.0);
     }
 
-    /// The remaining unported factory (`MethodOfLines`) is omitted, not its
-    /// type: the rollback must be able to name it to reject it.
     #[test]
     fn every_scheme_type_is_constructible() {
         let types = [
@@ -200,6 +209,19 @@ mod tests {
         assert_eq!(desc.scheme_type, FdmSchemeType::ModifiedCraigSneyd);
         assert!((desc.theta - 1.0 / 3.0).abs() < 1e-15);
         assert!((desc.mu - 1.0 / 3.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn method_of_lines_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::method_of_lines();
+        assert_eq!(desc.scheme_type, FdmSchemeType::MethodOfLines);
+        assert_eq!(desc.theta, 0.001);
+        assert_eq!(desc.mu, 0.01);
+
+        let custom = FdmSchemeDesc::method_of_lines_with(1e-4, 0.05);
+        assert_eq!(custom.scheme_type, FdmSchemeType::MethodOfLines);
+        assert_eq!(custom.theta, 1e-4);
+        assert_eq!(custom.mu, 0.05);
     }
 
     #[test]

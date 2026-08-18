@@ -4,13 +4,12 @@
 //! its `.cpp:80-199`.
 
 use crate::errors::QlResult;
-use crate::fail;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::FiniteDifferenceModel;
 use crate::methods::finitedifferences::operators::FdmLinearOpComposite;
 use crate::methods::finitedifferences::schemes::{
     CraigSneydScheme, CrankNicolsonScheme, DouglasScheme, ExplicitEulerScheme, HundsdorferScheme,
-    ImplicitEulerScheme, ModifiedCraigSneydScheme, TrBDF2Scheme,
+    ImplicitEulerScheme, MethodOfLinesScheme, ModifiedCraigSneydScheme, TrBDF2Scheme,
 };
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::FdmBoundaryConditionSet;
@@ -69,8 +68,7 @@ impl FdmBackwardSolver {
     ///
     /// # Errors
     ///
-    /// Returns an error if the descriptor names one of the seven scheme
-    /// families that are not ported, or if a step fails.
+    /// Returns an error if a step fails.
     pub fn rollback(
         &mut self,
         a: &mut Array,
@@ -160,6 +158,18 @@ impl FdmBackwardSolver {
                 );
                 model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
+            FdmSchemeType::MethodOfLines => {
+                let mut model = FiniteDifferenceModel::new(
+                    MethodOfLinesScheme::new(
+                        self.scheme_desc.theta,
+                        self.scheme_desc.mu,
+                        self.map.clone(),
+                        self.bc_set.clone(),
+                    ),
+                    self.condition.stopping_times(),
+                );
+                model.rollback(a, damping_to, to, steps, Some(&*self.condition))
+            }
             FdmSchemeType::TrBDF2 => {
                 let trapezoidal = CraigSneydScheme::new(
                     FdmSchemeDesc::craig_sneyd().theta,
@@ -178,9 +188,6 @@ impl FdmBackwardSolver {
                 );
                 model.rollback(a, damping_to, to, steps, Some(&*self.condition))
             }
-            unported => fail!(
-                "the {unported:?} scheme is not ported: MethodOfLines waits on later ADI work"
-            ),
         }
     }
 }
@@ -191,6 +198,7 @@ mod tests {
 
     use super::*;
 
+    use crate::fail;
     use crate::methods::finitedifferences::operators::FdmLinearOp;
     use crate::methods::finitedifferences::schemes::testops::{
         WHOLE, assert_close, probe, scaled_composite,
@@ -416,10 +424,11 @@ mod tests {
     }
 
     #[test]
-    fn craig_sneyd_modified_craig_sneyd_and_tr_bdf2_roll_back() {
+    fn craig_sneyd_modified_craig_sneyd_method_of_lines_and_tr_bdf2_roll_back() {
         for desc in [
             FdmSchemeDesc::craig_sneyd(),
             FdmSchemeDesc::modified_craig_sneyd(),
+            FdmSchemeDesc::method_of_lines(),
             FdmSchemeDesc::tr_bdf2(),
         ] {
             let mut solver = solver(desc);
@@ -432,26 +441,6 @@ mod tests {
                     desc.scheme_type
                 );
             }
-        }
-    }
-
-    /// `cpp:197` fails on an unknown type; the families with no scheme
-    /// behind them are named rather than reached, so a caller that asks for one
-    /// is told which one it asked for instead of silently getting another.
-    #[test]
-    fn every_unported_scheme_type_is_rejected_by_name() {
-        let unported = [FdmSchemeType::MethodOfLines];
-
-        for scheme_type in unported {
-            let mut solver = solver(FdmSchemeDesc::new(scheme_type, 0.5, 0.5));
-
-            let error = solver
-                .rollback(&mut probe(SIZE), 1.0, 0.0, 4, 0)
-                .expect_err("an unported scheme type must not roll back");
-            assert!(
-                error.to_string().contains(&format!("{scheme_type:?}")),
-                "{scheme_type:?} is not named in {error}"
-            );
         }
     }
 

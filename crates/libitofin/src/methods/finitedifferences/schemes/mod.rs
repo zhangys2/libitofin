@@ -11,6 +11,7 @@ mod douglasscheme;
 mod expliciteulerscheme;
 mod hundsdorferscheme;
 mod impliciteulerscheme;
+mod methodoflinesscheme;
 mod modifiedcraigsneydscheme;
 mod scheme;
 #[cfg(test)]
@@ -24,6 +25,7 @@ pub use douglasscheme::DouglasScheme;
 pub use expliciteulerscheme::ExplicitEulerScheme;
 pub use hundsdorferscheme::HundsdorferScheme;
 pub use impliciteulerscheme::ImplicitEulerScheme;
+pub use methodoflinesscheme::MethodOfLinesScheme;
 pub use modifiedcraigsneydscheme::ModifiedCraigSneydScheme;
 pub use scheme::Scheme;
 pub use trbdf2scheme::TrBDF2Scheme;
