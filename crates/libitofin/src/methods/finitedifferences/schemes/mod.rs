@@ -16,6 +16,7 @@ mod modifiedcraigsneydscheme;
 mod scheme;
 #[cfg(test)]
 pub(crate) mod testops;
+mod trbdf2scheme;
 
 pub use boundaryconditionschemehelper::BoundaryConditionSchemeHelper;
 pub use craigsneydscheme::CraigSneydScheme;
@@ -27,3 +28,4 @@ pub use impliciteulerscheme::ImplicitEulerScheme;
 pub use methodoflinesscheme::MethodOfLinesScheme;
 pub use modifiedcraigsneydscheme::ModifiedCraigSneydScheme;
 pub use scheme::Scheme;
+pub use trbdf2scheme::TrBDF2Scheme;

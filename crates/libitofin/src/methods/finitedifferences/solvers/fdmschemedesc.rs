@@ -44,9 +44,8 @@ pub enum FdmSchemeType {
 /// [`modified_hundsdorfer`](Self::modified_hundsdorfer),
 /// [`craig_sneyd`](Self::craig_sneyd),
 /// [`modified_craig_sneyd`](Self::modified_craig_sneyd),
-/// [`method_of_lines`](Self::method_of_lines). The remaining family
-/// (`TrBDF2`) stays constructible through [`new`](Self::new) and is
-/// rejected by the backward solver until its scheme lands.
+/// [`method_of_lines`](Self::method_of_lines),
+/// [`tr_bdf2`](Self::tr_bdf2).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FdmSchemeDesc {
     /// The scheme family to step with.
@@ -122,6 +121,12 @@ impl FdmSchemeDesc {
     pub fn method_of_lines_with(eps: Real, rel_init_step_size: Real) -> Self {
         FdmSchemeDesc::new(FdmSchemeType::MethodOfLines, eps, rel_init_step_size)
     }
+
+    /// Trapezoidal BDF2 (`fdmbackwardsolver.cpp:78`): `α = 2 − √2`,
+    /// `relTol = 1e-8` stored as `mu`.
+    pub fn tr_bdf2() -> Self {
+        FdmSchemeDesc::new(FdmSchemeType::TrBDF2, 2.0 - std::f64::consts::SQRT_2, 1e-8)
+    }
 }
 
 #[cfg(test)]
@@ -146,8 +151,6 @@ mod tests {
         assert_eq!(desc.mu, 0.0);
     }
 
-    /// The remaining unported factory (`TrBDF2`) is omitted, not its type:
-    /// the rollback must be able to name it to reject it.
     #[test]
     fn every_scheme_type_is_constructible() {
         let types = [
@@ -219,5 +222,13 @@ mod tests {
         assert_eq!(custom.scheme_type, FdmSchemeType::MethodOfLines);
         assert_eq!(custom.theta, 1e-4);
         assert_eq!(custom.mu, 0.05);
+    }
+
+    #[test]
+    fn tr_bdf2_carries_the_cpp_parameters() {
+        let desc = FdmSchemeDesc::tr_bdf2();
+        assert_eq!(desc.scheme_type, FdmSchemeType::TrBDF2);
+        assert!((desc.theta - (2.0 - std::f64::consts::SQRT_2)).abs() < 1e-15);
+        assert_eq!(desc.mu, 1e-8);
     }
 }
