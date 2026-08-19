@@ -1185,7 +1185,8 @@ mod tests {
     #[test]
     fn babsiri_knock_in_calls() {
         // QuantLib barrieroption.cpp `testBabsiriValues` analytic arm
-        // (El Babsiri–Noel, Journal of Derivatives, Winter 1998). MC follow-up.
+        // (El Babsiri–Noel, Journal of Derivatives, Winter 1998).
+        // MC arm: `mcbarrierengine::babsiri_mc_matches_published_calls`.
         let today = Date::new(15, Month::June, 2026);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
@@ -1229,7 +1230,8 @@ mod tests {
     #[test]
     fn beaglehole_down_out_call() {
         // QuantLib barrieroption.cpp `testBeagleholeValues` analytic arm
-        // (Beaglehole–Dybvig–Zhou, FAJ Jan/Feb 1997). MC follow-up.
+        // (Beaglehole–Dybvig–Zhou, FAJ Jan/Feb 1997).
+        // MC arm: `mcbarrierengine::beaglehole_mc_matches_published_down_out_call`.
         let today = Date::new(15, Month::June, 2026);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);

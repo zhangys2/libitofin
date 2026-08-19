@@ -17,18 +17,11 @@
 //!   (`pathgenerator.hpp:60,142`). Rust's [`SequenceGenerator::next_sequence`]
 //!   needs `&mut self`, and returning an owned `Sample<Path>` per call keeps
 //!   the borrow simple; the consumer (`#451`'s model loop) takes it by value.
-//! - **`temp_` dropped**: C++ stages the draws in a `temp_` member so the
-//!   Brownian bridge can transform them in place (`pathgenerator.hpp:73,131`).
-//!   With the bridge deferred, the direct-copy branch reads the draws straight
-//!   from the sequence into a local, so no staging buffer is kept.
 //! - **`next` is fallible**: `evolve` returns `QlResult` on main
 //!   (`stochasticprocess.rs:81`); a mid-path `Err` is a setup/data error, not a
 //!   per-sample outcome, so it aborts the whole call.
 //!
 //! Deferred, rejected visibly rather than silently ignored:
-//! - **Brownian bridge** (`pathgenerator.hpp:130-133`): the constructor accepts
-//!   the `brownian_bridge` flag but returns `Err` when it is `true`; only the
-//!   `std::copy` branch (`pathgenerator.hpp:134-138`) is ported.
 //! - **antithetic sampling** (`pathgenerator.hpp:117,127`): `antithetic()` and
 //!   the negated-draw path are not ported; only `next()` is.
 
@@ -36,10 +29,10 @@ use crate::errors::QlResult;
 use crate::math::array::Array;
 use crate::math::randomnumbers::rngtraits::SequenceGenerator;
 use crate::math::timegrid::TimeGrid;
-use crate::methods::montecarlo::{Path, PathGen, Sample};
+use crate::methods::montecarlo::{BrownianBridge, Path, PathGen, Sample};
 use crate::shared::Shared;
 use crate::stochasticprocess::StochasticProcess1D;
-use crate::types::{Size, Time};
+use crate::types::{Real, Size, Time};
 use crate::{fail, require};
 
 /// Generates random single-factor paths from a Gaussian sequence generator.
@@ -48,6 +41,9 @@ pub struct PathGenerator<GSG> {
     dimension: Size,
     time_grid: TimeGrid,
     process: Shared<dyn StochasticProcess1D>,
+    brownian_bridge: bool,
+    bb: BrownianBridge,
+    temp: Vec<Real>,
 }
 
 impl<GSG: SequenceGenerator> PathGenerator<GSG> {
@@ -56,9 +52,9 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brownian_bridge` is `true` (deferred), if the grid is
-    /// degenerate (see [`TimeGrid::new`]), or if the generator's dimensionality
-    /// does not equal `time_steps` (`pathgenerator.hpp:90`).
+    /// Returns `Err` if the grid is degenerate (see [`TimeGrid::new`]) or if
+    /// the generator's dimensionality does not equal `time_steps`
+    /// (`pathgenerator.hpp:90`).
     pub fn new(
         process: Shared<dyn StochasticProcess1D>,
         length: Time,
@@ -74,9 +70,8 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
     ///
     /// # Errors
     ///
-    /// Returns `Err` if `brownian_bridge` is `true` (deferred) or if the
-    /// generator's dimensionality does not equal `time_grid.size() - 1`
-    /// (`pathgenerator.hpp:104`).
+    /// Returns `Err` if the generator's dimensionality does not equal
+    /// `time_grid.size() - 1` (`pathgenerator.hpp:104`).
     pub fn from_time_grid(
         process: Shared<dyn StochasticProcess1D>,
         time_grid: TimeGrid,
@@ -92,22 +87,21 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
         generator: GSG,
         brownian_bridge: bool,
     ) -> QlResult<Self> {
-        require!(
-            !brownian_bridge,
-            "brownian bridge path generation is not yet ported; only the \
-             direct-copy variant is available"
-        );
         let dimension = generator.dimension();
         let time_steps = time_grid.size() - 1;
         require!(
             dimension == time_steps,
             "sequence generator dimensionality ({dimension}) != timeSteps ({time_steps})"
         );
+        let bb = BrownianBridge::from_time_grid(&time_grid)?;
         Ok(PathGenerator {
             generator,
             dimension,
             time_grid,
             process,
+            brownian_bridge,
+            bb,
+            temp: vec![0.0; dimension],
         })
     }
 
@@ -121,8 +115,12 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
         &self.time_grid
     }
 
-    /// Draws the next path (`pathgenerator.hpp:121-154`, the `brownian_bridge
-    /// == false` branch).
+    /// Draws the next path (`pathgenerator.hpp:121-154`).
+    ///
+    /// When `brownian_bridge` is set, the Gaussian sequence is run through
+    /// [`BrownianBridge::transform`] before `evolve`
+    /// (`pathgenerator.hpp:130-133`); otherwise the draws are used as-is
+    /// (`pathgenerator.hpp:134-138`).
     ///
     /// # Errors
     ///
@@ -134,13 +132,20 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
             (sequence.weight, sequence.value.clone())
         };
 
+        let increments = if self.brownian_bridge {
+            self.bb.transform(&draws, &mut self.temp)?;
+            self.temp.clone()
+        } else {
+            draws
+        };
+
         let mut path = Path::new(self.time_grid.clone(), Array::new())?;
         *path.front_mut() = self.process.x0()?;
 
         for i in 1..path.length() {
             let t = self.time_grid[i - 1];
             let dt = self.time_grid.dt(i - 1);
-            path[i] = self.process.evolve(t, path[i - 1], dt, draws[i - 1])?;
+            path[i] = self.process.evolve(t, path[i - 1], dt, increments[i - 1])?;
         }
 
         Ok(Sample::new(path, weight))
@@ -267,11 +272,51 @@ mod tests {
     }
 
     #[test]
-    fn brownian_bridge_is_rejected_as_deferred() {
-        match PathGenerator::new(gbs_process(), 1.0, 12, generator(12, 42), true) {
-            Err(e) => assert!(e.message().contains("brownian bridge")),
-            Ok(_) => panic!("brownian_bridge = true must be rejected as deferred"),
+    fn one_step_brownian_bridge_matches_direct_copy() {
+        // size=1: the bridge is the identity, so both flags must emit the
+        // same path for a shared seed.
+        let mut direct = PathGenerator::new(gbs_process(), 1.0, 1, generator(1, 7), false).unwrap();
+        let mut bridged = PathGenerator::new(gbs_process(), 1.0, 1, generator(1, 7), true).unwrap();
+        let a = direct.next().unwrap().value;
+        let b = bridged.next().unwrap().value;
+        assert_eq!(a.values(), b.values());
+    }
+
+    #[test]
+    fn brownian_bridge_terminal_moments_match_the_gbm_law() {
+        // The bridge preserves the Wiener measure on the grid, so the same
+        // GBM terminal-moment pin as `terminal_moments_match_the_gbm_law`
+        // must hold with `brownian_bridge = true`.
+        const N: usize = 50_000;
+        const STEPS: usize = 12;
+        const T: Time = 1.0;
+
+        let mut pg =
+            PathGenerator::new(gbs_process(), T, STEPS, generator(STEPS, 42), true).unwrap();
+        let mut logs = Vec::with_capacity(N);
+        for _ in 0..N {
+            let path = pg.next().unwrap().value;
+            logs.push((path.back() / path.front()).ln());
         }
+
+        let mean = logs.iter().sum::<Real>() / N as Real;
+        let variance = logs.iter().map(|x| (x - mean).powi(2)).sum::<Real>() / (N as Real - 1.0);
+
+        let mean_target = (R - Q - 0.5 * VOL * VOL) * T;
+        let var_target = VOL * VOL * T;
+        let se = VOL * (T / N as Real).sqrt();
+        let se_var = 2.0_f64.sqrt() * var_target / (N as Real - 1.0).sqrt();
+
+        assert!(
+            (mean - mean_target).abs() < 4.0 * se,
+            "mean {mean} vs target {mean_target}: {:.2} se (bound 4.0)",
+            (mean - mean_target).abs() / se
+        );
+        assert!(
+            (variance - var_target).abs() < 5.0 * se_var,
+            "variance {variance} vs target {var_target}: {:.2} se_var (bound 5.0)",
+            (variance - var_target).abs() / se_var
+        );
     }
 
     #[test]

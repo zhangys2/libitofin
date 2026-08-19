@@ -36,7 +36,10 @@ pub use knuthuniformrng::KnuthUniformRng;
 pub use mt19937uniformrng::MersenneTwisterUniformRng;
 pub use randomsequencegenerator::RandomSequenceGenerator;
 pub use ranluxuniformrng::{Ranlux3UniformRng, Ranlux4UniformRng, Ranlux64UniformRng};
-pub use rngtraits::{InverseCumulative, McRngTraits, PseudoRandom, SequenceGenerator};
+pub use rngtraits::{
+    InverseCumulative, LowDiscrepancy, McRngTraits, PseudoRandom, SequenceGenerator,
+    SobolSequenceGenerator,
+};
 pub use xoshiro256starstaruniformrng::Xoshiro256StarStarUniformRng;
 pub use zigguratgaussianrng::ZigguratGaussianRng;
 

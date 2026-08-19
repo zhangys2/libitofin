@@ -4,6 +4,7 @@
 //! [`Sample`]; the path generators, path pricers, and Monte Carlo model stack
 //! stack on top in later tickets.
 
+mod brownianbridge;
 mod mcsimulation;
 mod montecarlomodel;
 mod multipath;
@@ -13,6 +14,7 @@ mod pathgen;
 mod pathgenerator;
 mod sample;
 
+pub use brownianbridge::BrownianBridge;
 pub use mcsimulation::{DEFAULT_MIN_SAMPLES, McSimulation};
 pub use montecarlomodel::{MonteCarloModel, PathPricer};
 pub use multipath::MultiPath;
