@@ -14,7 +14,8 @@ pub mod swaption;
 pub mod vanilla;
 
 pub use barrier::{
-    FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine, set_fd_black_scholes_barrier_engine,
+    BinomialBarrierEngine, FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine,
+    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine,
 };
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};

@@ -52,8 +52,9 @@ impl TreeLatticeImpl for BlackScholesLattice {
 }
 
 /// The discretized vanilla option rolled back on the lattice
-/// (`discretizedvanillaoption.cpp`).
-struct DiscretizedVanillaOption {
+/// (`discretizedvanillaoption.cpp`). Knock-in barrier options reuse this as
+/// the unbarriered underlying.
+pub(crate) struct DiscretizedVanillaOption {
     base: DiscretizedAssetBase,
     payoff: Shared<dyn StrikedTypePayoff>,
     exercise_type: ExerciseType,
@@ -61,7 +62,7 @@ struct DiscretizedVanillaOption {
 }
 
 impl DiscretizedVanillaOption {
-    fn new(
+    pub(crate) fn new(
         payoff: Shared<dyn StrikedTypePayoff>,
         exercise: &Shared<dyn Exercise>,
         process: &GeneralizedBlackScholesProcess,
