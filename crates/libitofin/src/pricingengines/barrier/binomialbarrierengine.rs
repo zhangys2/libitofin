@@ -1,10 +1,9 @@
 //! Binomial-tree engine for barrier options.
 //!
 //! Port of `ql/pricingengines/barrier/binomialbarrierengine.hpp` together with
-//! `discretizedbarrieroption.{hpp,cpp}` (`DiscretizedBarrierOption` only).
-//! Cox–Ross–Rubinstein steps are optionally lengthened by the Boyle–Lau
-//! barrier-alignment heuristic. `DiscretizedDermanKaniBarrierOption` stays
-//! follow-up.
+//! `discretizedbarrieroption.{hpp,cpp}`: the standard barrier asset and the
+//! Derman–Kani interpolating asset. Cox–Ross–Rubinstein steps are optionally
+//! lengthened by the Boyle–Lau barrier-alignment heuristic.
 
 use crate::discretizedasset::{DiscretizedAsset, DiscretizedAssetBase};
 use crate::errors::QlResult;
@@ -108,6 +107,10 @@ impl DiscretizedBarrierOption {
         }
     }
 
+    fn vanilla(&self) -> &Array {
+        self.vanilla.values()
+    }
+
     fn check_barrier(&self, optvalues: &mut Array, grid: &Array, vanilla: &Array) {
         let end_time = self.is_on_time(*self.stopping_times.last().expect("non-empty"));
         let stopping_time = self.stopping_time();
@@ -194,6 +197,120 @@ impl DiscretizedAsset for DiscretizedBarrierOption {
     }
 }
 
+/// Derman–Kani interpolating barrier option (`discretizedbarrieroption.hpp:67`).
+///
+/// After rolling the unenhanced asset, the node that straddles the barrier is
+/// replaced by a linear mix of the barrier rebate/vanilla and the live option
+/// value, then the standard barrier check is applied.
+struct DiscretizedDermanKaniBarrierOption {
+    base: DiscretizedAssetBase,
+    unenhanced: DiscretizedBarrierOption,
+}
+
+impl DiscretizedDermanKaniBarrierOption {
+    fn new(
+        arguments: &BarrierArguments,
+        process: &GeneralizedBlackScholesProcess,
+        grid: &TimeGrid,
+    ) -> QlResult<Self> {
+        Ok(DiscretizedDermanKaniBarrierOption {
+            base: DiscretizedAssetBase::default(),
+            unenhanced: DiscretizedBarrierOption::new(arguments, process, grid)?,
+        })
+    }
+
+    fn adjust_barrier(&self, optvalues: &mut Array, grid: &Array) {
+        let barrier = self.unenhanced.barrier;
+        let rebate = self.unenhanced.rebate;
+        let unenhanced = self.unenhanced.values();
+        let vanilla = self.unenhanced.vanilla();
+        match self.unenhanced.barrier_type {
+            BarrierType::DownIn => {
+                for j in 0..optvalues.size().saturating_sub(1) {
+                    if grid[j] <= barrier && grid[j + 1] > barrier {
+                        let ltob = barrier - grid[j];
+                        let htob = grid[j + 1] - barrier;
+                        let htol = grid[j + 1] - grid[j];
+                        let u1 = unenhanced[j + 1];
+                        let t1 = vanilla[j + 1];
+                        optvalues[j + 1] = ((ltob * t1 + htob * u1) / htol).max(0.0);
+                    }
+                }
+            }
+            BarrierType::DownOut => {
+                for j in 0..optvalues.size().saturating_sub(1) {
+                    if grid[j] <= barrier && grid[j + 1] > barrier {
+                        let a = (barrier - grid[j]) * rebate;
+                        let b = (grid[j + 1] - barrier) * unenhanced[j + 1];
+                        let c = grid[j + 1] - grid[j];
+                        optvalues[j + 1] = ((a + b) / c).max(0.0);
+                    }
+                }
+            }
+            BarrierType::UpIn => {
+                for j in 0..optvalues.size().saturating_sub(1) {
+                    if grid[j] < barrier && grid[j + 1] >= barrier {
+                        let ltob = barrier - grid[j];
+                        let htob = grid[j + 1] - barrier;
+                        let htol = grid[j + 1] - grid[j];
+                        let u = unenhanced[j];
+                        let t = vanilla[j];
+                        optvalues[j] = ((ltob * u + htob * t) / htol).max(0.0);
+                    }
+                }
+            }
+            BarrierType::UpOut => {
+                for j in 0..optvalues.size().saturating_sub(1) {
+                    if grid[j] < barrier && grid[j + 1] >= barrier {
+                        let a = (barrier - grid[j]) * unenhanced[j];
+                        let b = (grid[j + 1] - barrier) * rebate;
+                        let c = grid[j + 1] - grid[j];
+                        optvalues[j] = ((a + b) / c).max(0.0);
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl DiscretizedAsset for DiscretizedDermanKaniBarrierOption {
+    fn base(&self) -> &DiscretizedAssetBase {
+        &self.base
+    }
+
+    fn base_mut(&mut self) -> &mut DiscretizedAssetBase {
+        &mut self.base
+    }
+
+    fn as_asset_mut(&mut self) -> &mut dyn DiscretizedAsset {
+        self
+    }
+
+    fn reset(&mut self, size: Size) -> QlResult<()> {
+        let method = self.require_method()?;
+        let t = self.time();
+        self.unenhanced.initialize(method, t)?;
+        *self.values_mut() = Array::filled(size, 0.0);
+        self.adjust_values()
+    }
+
+    fn mandatory_times(&self) -> Vec<Time> {
+        self.unenhanced.mandatory_times()
+    }
+
+    fn post_adjust_values_impl(&mut self) -> QlResult<()> {
+        self.unenhanced.rollback(self.time())?;
+        let method = self.require_method()?;
+        let grid = method.grid(self.time())?;
+        let vanilla = self.unenhanced.vanilla().clone();
+        let mut values = self.values().clone();
+        self.adjust_barrier(&mut values, &grid);
+        self.unenhanced.check_barrier(&mut values, &grid, &vanilla);
+        *self.values_mut() = values;
+        Ok(())
+    }
+}
+
 /// Boyle–Lau step count so a CRR node sits on the barrier
 /// (`binomialbarrierengine.hpp`, Journal of Derivatives 1/1994).
 fn boyle_lau_steps(
@@ -233,6 +350,7 @@ pub struct BinomialBarrierEngine {
     process: Shared<GeneralizedBlackScholesProcess>,
     time_steps: Size,
     max_time_steps: Size,
+    derman_kani: bool,
 }
 
 impl BinomialBarrierEngine {
@@ -285,7 +403,24 @@ impl BinomialBarrierEngine {
             process,
             time_steps,
             max_time_steps,
+            derman_kani: false,
         })
+    }
+
+    /// `BinomialBarrierEngine<CoxRossRubinstein, DiscretizedDermanKaniBarrierOption>`
+    /// (`barrieroption.cpp` Derman arm). Boyle–Lau stays on, matching the
+    /// two-argument C++ constructor the oracle actually calls.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `time_steps` is zero.
+    pub fn derman_kani(
+        process: Shared<GeneralizedBlackScholesProcess>,
+        time_steps: Size,
+    ) -> QlResult<Self> {
+        let mut engine = Self::new(process, time_steps)?;
+        engine.derman_kani = true;
+        Ok(engine)
     }
 }
 
@@ -370,10 +505,17 @@ impl PricingEngine for BinomialBarrierEngine {
         };
         let lattice: Shared<dyn Lattice> = shared(TreeLattice1D::new(bsl, grid.clone())?);
 
-        let mut option = DiscretizedBarrierOption::new(args, &self.process, &grid)?;
-        option.initialize(Shared::clone(&lattice), maturity)?;
-        option.rollback(0.0)?;
-        let value = option.present_value()?;
+        let value = if self.derman_kani {
+            let mut option = DiscretizedDermanKaniBarrierOption::new(args, &self.process, &grid)?;
+            option.initialize(Shared::clone(&lattice), maturity)?;
+            option.rollback(0.0)?;
+            option.present_value()?
+        } else {
+            let mut option = DiscretizedBarrierOption::new(args, &self.process, &grid)?;
+            option.initialize(Shared::clone(&lattice), maturity)?;
+            option.rollback(0.0)?;
+            option.present_value()?
+        };
 
         self.base.results_mut().value = Some(value);
         Ok(())
@@ -413,6 +555,7 @@ mod tests {
 
     const STEPS: Size = 400;
     const BOYLE_LAU_TOL: Real = 1.1e-2;
+    const DERMAN_TOL: Real = 4.0e-2;
     const HAUG_DAYS: i32 = 180;
 
     fn today() -> Date {
@@ -474,6 +617,37 @@ mod tests {
         set_binomial_barrier_engine(
             &mut option,
             shared_mut(BinomialBarrierEngine::new(
+                flat_bs_process(spot, 0.04, 0.08, vol),
+                STEPS,
+            )?),
+        );
+        option.npv()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn npv_derman(
+        barrier_type: BarrierType,
+        barrier: Real,
+        rebate: Real,
+        option_type: OptionType,
+        strike: Real,
+        exercise: Shared<dyn Exercise>,
+        spot: Real,
+        vol: Real,
+    ) -> QlResult<Real> {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let mut option = BarrierOption::with_rebate(
+            barrier_type,
+            barrier,
+            rebate,
+            PlainVanillaPayoff::new(option_type, strike),
+            exercise,
+            settings,
+        )?;
+        set_binomial_barrier_engine(
+            &mut option,
+            shared_mut(BinomialBarrierEngine::derman_kani(
                 flat_bs_process(spot, 0.04, 0.08, vol),
                 STEPS,
             )?),
@@ -557,6 +731,44 @@ mod tests {
             );
         }
         eprintln!("haug american binomial max error {max_error:.2e} at {worst}");
+    }
+
+    #[test]
+    fn american_haug_derman_kani_matches_quantlib_oracle() {
+        let days = HAUG_DAYS;
+        let mut max_error = 0.0;
+        let mut worst = String::new();
+        for &(barrier_type, barrier, rebate, option_type, strike, expected) in HAUG_AMERICAN {
+            let calculated = npv_derman(
+                barrier_type,
+                barrier,
+                rebate,
+                option_type,
+                strike,
+                american(days),
+                100.0,
+                0.25,
+            )
+            .unwrap();
+            let error = (calculated - expected).abs();
+            if error > max_error {
+                max_error = error;
+                worst = format!(
+                    "{barrier_type:?} {option_type:?} H={barrier} K={strike} R={rebate}: \
+                     {calculated} vs {expected}"
+                );
+            }
+            eprintln!(
+                "derman {barrier_type:?} {option_type:?} H={barrier} K={strike}: \
+                 calculated={calculated:.8} expected={expected:.4} diff={error:.2e}"
+            );
+            assert!(
+                calculated.is_finite() && error <= DERMAN_TOL,
+                "{barrier_type:?} {option_type:?} H={barrier} K={strike}: \
+                 {calculated} vs Haug {expected} (error {error})"
+            );
+        }
+        eprintln!("haug american derman-kani max error {max_error:.2e} at {worst}");
     }
 
     #[test]
