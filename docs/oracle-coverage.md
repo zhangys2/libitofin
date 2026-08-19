@@ -79,7 +79,7 @@ credit.
 | Barrier put-call symmetry | `AnalyticBarrierEngine` | `barrieroption.cpp` `testPutCallSymmetry` | inverted knock-out put ≡ scaled call @ 1e-4 (DownOut/UpOut pairs) |
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3) |
 | Barrier Haug FD | `FdBlackScholesBarrierEngine` 200×400 | `barrieroption.cpp` `testHaugValues` | European table @ 5e-3; rejects zero spot / triggered / American |
-| Barrier Haug binomial | `BinomialBarrierEngine` CRR Boyle–Lau 400 | `barrieroption.cpp` `testHaugValues` | American + European @ 1.1e-2; rejects zero spot / triggered (Derman–Kani follow-up) |
+| Barrier Haug binomial | `BinomialBarrierEngine` CRR Boyle–Lau / Derman–Kani 400 | `barrieroption.cpp` `testHaugValues` | American + European Boyle–Lau @ 1.1e-2, Derman–Kani @ 4e-2; rejects zero spot / triggered |
 | Barrier Babsiri / Beaglehole | `AnalyticBarrierEngine` | `barrieroption.cpp` `testBabsiriValues` / `testBeagleholeValues` | published calls @ 1e-5 / 1e-3 (analytic; MC follow-up) |
 | Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
 | Barrier implied vol | `BarrierOption::implied_volatility` + analytic / FD | `barrieroption.cpp` `testImpliedVolatility` | no-div put targets @ 1e-5; discrete-div FD put targets @ 1e-5 |
