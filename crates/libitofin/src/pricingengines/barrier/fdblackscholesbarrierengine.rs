@@ -32,6 +32,7 @@ use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size};
+use crate::utilities::null::Null;
 
 type BarrierEngineBase = GenericEngine<BarrierArguments, InstrumentResults>;
 
@@ -45,6 +46,8 @@ pub struct FdBlackScholesBarrierEngine {
     x_grid: Size,
     damping_steps: Size,
     scheme_desc: FdmSchemeDesc,
+    local_vol: bool,
+    illegal_local_vol_overwrite: Real,
 }
 
 impl FdBlackScholesBarrierEngine {
@@ -63,8 +66,7 @@ impl FdBlackScholesBarrierEngine {
         Self::with_params(process, dividends, 100, 100, 0, FdmSchemeDesc::douglas())
     }
 
-    /// Full constructor matching the C++ six-argument form (local-vol
-    /// arguments omitted).
+    /// Full constructor matching the C++ six-argument form (local-vol off).
     pub fn with_params(
         process: Shared<GeneralizedBlackScholesProcess>,
         dividends: DividendSchedule,
@@ -72,6 +74,31 @@ impl FdBlackScholesBarrierEngine {
         x_grid: Size,
         damping_steps: Size,
         scheme_desc: FdmSchemeDesc,
+    ) -> Self {
+        Self::with_local_vol(
+            process,
+            dividends,
+            t_grid,
+            x_grid,
+            damping_steps,
+            scheme_desc,
+            false,
+            -Real::null(),
+        )
+    }
+
+    /// As [`with_params`](Self::with_params), with the C++ `localVol` /
+    /// `illegalLocalVolOverwrite` arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_local_vol(
+        process: Shared<GeneralizedBlackScholesProcess>,
+        dividends: DividendSchedule,
+        t_grid: Size,
+        x_grid: Size,
+        damping_steps: Size,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
     ) -> Self {
         let base =
             BarrierEngineBase::new(BarrierArguments::default(), InstrumentResults::default());
@@ -84,6 +111,8 @@ impl FdBlackScholesBarrierEngine {
             x_grid,
             damping_steps,
             scheme_desc,
+            local_vol,
+            illegal_local_vol_overwrite,
         }
     }
 }
@@ -125,6 +154,9 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
         let rebate = args.rebate.expect("validated");
         let exercise = Shared::clone(exercise);
         let is_in = matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn);
+        if is_in && self.local_vol {
+            fail!("knock-in local-vol barrier engine not yet ported");
+        }
 
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
@@ -209,11 +241,13 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver = FdmBlackScholesSolver::new(
+        let solver = FdmBlackScholesSolver::with_local_vol(
             &self.process,
             payoff.strike(),
             solver_desc,
             self.scheme_desc,
+            self.local_vol,
+            self.illegal_local_vol_overwrite,
         )?;
         let mut value = solver.value_at(spot)?;
         if is_in {
@@ -282,15 +316,21 @@ mod tests {
     use crate::instrument::Instrument;
     use crate::instruments::{BarrierOption, PlainVanillaPayoff};
     use crate::interestrate::Compounding;
+    use crate::math::interpolations::bicubic::Bicubic;
+    use crate::math::interpolations::linear::Linear;
+    use crate::math::matrix::Matrix;
     use crate::option::OptionType;
     use crate::payoff::Payoff;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
     use crate::shared::shared_mut;
-    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::volatility::{
+        BlackConstantVol, BlackVarianceSurface, BlackVolTermStructure,
+    };
+    use crate::termstructures::yields::{FlatForward, ZeroCurve};
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::calendars::target::Target;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -539,6 +579,126 @@ mod tests {
         assert!(
             err.contains("only european style option are supported"),
             "american: {err}"
+        );
+    }
+
+    /// `barrieroption.cpp` `testLocalVolAndHestonComparison` local-vol arm:
+    /// DownOut put, expected NPV 132.8 at 1% relative.
+    #[test]
+    fn local_vol_and_heston_comparison_local_vol_arm() {
+        let settlement = Date::new(5, Month::July, 2002);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(settlement);
+        let dc = Actual365Fixed::new();
+
+        let t = [13, 41, 75, 165, 256, 345, 524, 703];
+        let r = [
+            0.0357, 0.0349, 0.0341, 0.0355, 0.0359, 0.0368, 0.0386, 0.0401,
+        ];
+        let mut curve_dates = vec![settlement];
+        let mut rates = vec![0.0357];
+        for i in 0..8 {
+            curve_dates.push(settlement + Period::new(t[i], TimeUnit::Days));
+            rates.push(r[i]);
+        }
+        let vol_dates = curve_dates[1..].to_vec();
+        let r_ts = Handle::new(shared(
+            ZeroCurve::new(curve_dates, rates, dc.clone(), Linear).unwrap(),
+        ) as Shared<dyn YieldTermStructure>);
+        let q_ts = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.0,
+            dc.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+
+        let strikes = [
+            100.0, 500.0, 2000.0, 3400.0, 3600.0, 3800.0, 4000.0, 4200.0, 4400.0, 4500.0, 4600.0,
+            4800.0, 5000.0, 5200.0, 5400.0, 5600.0, 7500.0, 10000.0, 20000.0, 30000.0,
+        ];
+        let v = [
+            1.015873, 1.015873, 1.015873, 0.89729, 0.796493, 0.730914, 0.631335, 0.568895,
+            0.711309, 0.711309, 0.711309, 0.641309, 0.635593, 0.583653, 0.508045, 0.463182,
+            0.516034, 0.500534, 0.500534, 0.500534, 0.448706, 0.416661, 0.375470, 0.353442,
+            0.516034, 0.482263, 0.447713, 0.387703, 0.355064, 0.337438, 0.316966, 0.306859,
+            0.497587, 0.464373, 0.430764, 0.374052, 0.344336, 0.328607, 0.310619, 0.301865,
+            0.479511, 0.446815, 0.414194, 0.361010, 0.334204, 0.320301, 0.304664, 0.297180,
+            0.461866, 0.429645, 0.398092, 0.348638, 0.324680, 0.312512, 0.299082, 0.292785,
+            0.444801, 0.413014, 0.382634, 0.337026, 0.315788, 0.305239, 0.293855, 0.288660,
+            0.428604, 0.397219, 0.368109, 0.326282, 0.307555, 0.298483, 0.288972, 0.284791,
+            0.420971, 0.389782, 0.361317, 0.321274, 0.303697, 0.295302, 0.286655, 0.282948,
+            0.413749, 0.382754, 0.354917, 0.316532, 0.300016, 0.292251, 0.284420, 0.281164,
+            0.400889, 0.370272, 0.343525, 0.307904, 0.293204, 0.286549, 0.280189, 0.277767,
+            0.390685, 0.360399, 0.334344, 0.300507, 0.287149, 0.281380, 0.276271, 0.274588,
+            0.383477, 0.353434, 0.327580, 0.294408, 0.281867, 0.276746, 0.272655, 0.271617,
+            0.379106, 0.349214, 0.323160, 0.289618, 0.277362, 0.272641, 0.269332, 0.268846,
+            0.377073, 0.347258, 0.320776, 0.286077, 0.273617, 0.269057, 0.266293, 0.266265,
+            0.399925, 0.369232, 0.338895, 0.289042, 0.265509, 0.255589, 0.249308, 0.249665,
+            0.423432, 0.406891, 0.373720, 0.314667, 0.281009, 0.263281, 0.246451, 0.242166,
+            0.453704, 0.453704, 0.453704, 0.381255, 0.334578, 0.305527, 0.268909, 0.251367,
+            0.517748, 0.517748, 0.517748, 0.416577, 0.364770, 0.331595, 0.287423, 0.264285,
+        ];
+        let n_vol_dates = vol_dates.len();
+        let mut black_vol = Matrix::with_size(strikes.len(), n_vol_dates);
+        for i in 0..strikes.len() {
+            for j in 0..n_vol_dates {
+                black_vol[(i, j)] = v[i * n_vol_dates + j];
+            }
+        }
+        let mut vol_ts = BlackVarianceSurface::new(
+            settlement,
+            Some(Target::new()),
+            &vol_dates,
+            strikes.to_vec(),
+            &black_vol,
+            dc,
+        )
+        .unwrap();
+        vol_ts.set_interpolation(&Bicubic).unwrap();
+        let process = shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(4500.0)) as Shared<dyn Quote>),
+            q_ts,
+            r_ts,
+            Handle::new(shared(vol_ts) as Shared<dyn BlackVolTermStructure>),
+        ));
+
+        let expiry = settlement + Period::new(20, TimeUnit::Months);
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 4500.0);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+        let mut option = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            3000.0,
+            100.0,
+            payoff,
+            exercise,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_black_scholes_barrier_engine(
+            &mut option,
+            shared_mut(FdBlackScholesBarrierEngine::with_local_vol(
+                process,
+                Vec::new(),
+                100,
+                400,
+                0,
+                FdmSchemeDesc::douglas(),
+                true,
+                0.35,
+            )),
+        );
+        let calculated = option.npv().unwrap();
+        let expected = 132.8;
+        let diff = (calculated - expected).abs();
+        let tol = 0.01 * expected;
+        eprintln!(
+            "local-vol DownOut: calculated={calculated:.8} expected={expected} \
+             diff={diff:.4} tol={tol:.4}"
+        );
+        assert!(
+            calculated.is_finite() && diff <= tol,
+            "local-vol barrier: {calculated} vs {expected} (diff {diff}, tol {tol})"
         );
     }
 }

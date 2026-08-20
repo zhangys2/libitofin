@@ -9,10 +9,11 @@ use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::shared::Shared;
-use crate::termstructures::volatility::BlackVolTermStructure;
+use crate::termstructures::volatility::{BlackVolTermStructure, LocalVolTermStructure};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
+use crate::utilities::null::Null;
 
 use super::fdmlinearop::FdmLinearOp;
 use super::fdmlinearopcomposite::FdmLinearOpComposite;
@@ -33,11 +34,8 @@ use super::triplebandlinearop::TripleBandLinearOp;
 /// `currentLink()` (`cpp:40-42`). Relinking a handle of the process afterwards
 /// therefore does not reach this operator.
 ///
-/// Deferred to #636, and omitted rather than accepted and ignored:
+/// Deferred, omitted rather than accepted and ignored:
 ///
-/// - the local-volatility branch, with the `localVol` flag, the
-///   `illegalLocalVolOverwrite` fallback and the `x_` grid of spots it needs
-///   (`cpp:43-45`, `cpp:55-79`);
 /// - the quanto branch, which adjusts the drift through an `FdmQuantoHelper`
 ///   (`cpp:72-79`, `cpp:84-91`); that helper is not ported;
 /// - `toMatrixDecomp` (`cpp:133-135`), which returns a `SparseMatrix`.
@@ -46,17 +44,21 @@ pub struct FdmBlackScholesOp {
     r_ts: Shared<dyn YieldTermStructure>,
     q_ts: Shared<dyn YieldTermStructure>,
     vol_ts: Shared<dyn BlackVolTermStructure>,
+    local_vol: Option<Shared<dyn LocalVolTermStructure>>,
+    x: Array,
     dx_map: TripleBandLinearOp,
     dxx_map: TripleBandLinearOp,
     map_t: TripleBandLinearOp,
     strike: Real,
+    illegal_local_vol_overwrite: Real,
     direction: Size,
 }
 
 impl FdmBlackScholesOp {
     /// The generator over `direction` of `mesher`, reading its rates and
     /// volatility from `process` and its forward variance at `strike`
-    /// (`cpp:32-49`).
+    /// (`cpp:32-49`). Local-vol is off; the illegal-vol overwrite is
+    /// `-Null<Real>()`, matching the C++ default.
     ///
     /// The operator is unusable until
     /// [`set_time`](FdmLinearOpComposite::set_time) has filled it: its bands
@@ -71,15 +73,44 @@ impl FdmBlackScholesOp {
         strike: Real,
         direction: Size,
     ) -> QlResult<Self> {
+        Self::with_local_vol(mesher, process, strike, false, -Real::null(), direction)
+    }
+
+    /// `FdmBlackScholesOp(mesher, process, strike, localVol, illegalLocalVolOverwrite, direction)`
+    /// (`cpp:32-49`) without quanto.
+    ///
+    /// When `local_vol` is set the generator samples Dupire local variance on
+    /// the spot grid at the midpoint of each time step. A non-negative
+    /// `illegal_local_vol_overwrite` replaces Dupire failures (C++ `catch`);
+    /// a negative value, the C++ default, lets them surface.
+    pub fn with_local_vol(
+        mesher: Shared<dyn FdmMesher>,
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        direction: Size,
+    ) -> QlResult<Self> {
+        let (lv, x) = if local_vol {
+            (
+                Some(process.local_volatility()?.current_link()?),
+                mesher.locations(direction).exp(),
+            )
+        } else {
+            (None, Array::new())
+        };
         Ok(FdmBlackScholesOp {
             r_ts: process.risk_free_rate().current_link()?,
             q_ts: process.dividend_yield().current_link()?,
             vol_ts: process.black_volatility().current_link()?,
+            local_vol: lv,
+            x,
             dx_map: first_derivative_op(direction, Shared::clone(&mesher)),
             dxx_map: second_derivative_op(direction, Shared::clone(&mesher)),
             map_t: TripleBandLinearOp::new(direction, Shared::clone(&mesher)),
             mesher,
             strike,
+            illegal_local_vol_overwrite,
             direction,
         })
     }
@@ -98,7 +129,8 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
         1
     }
 
-    /// `cpp:80-97`, the plain path.
+    /// `cpp:80-97`. Local-vol samples Dupire at the step midpoint; otherwise
+    /// the Black forward variance at `strike` is used.
     ///
     /// The two scalars scaling the whole grid are passed as one-element arrays,
     /// which [`axpyb`](TripleBandLinearOp::axpyb) broadcasts, while
@@ -114,20 +146,43 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
             .q_ts
             .forward_rate(t1, t2, Compounding::Continuous, Frequency::Annual, false)?
             .rate();
-        let v = self
-            .vol_ts
-            .black_forward_variance(t1, t2, self.strike, false)?
-            / (t2 - t1);
 
-        let diffusion = self
-            .dxx_map
-            .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
-        self.map_t.axpyb(
-            &Array::filled(1, r - q - 0.5 * v),
-            &self.dx_map,
-            &diffusion,
-            &Array::filled(1, -r),
-        );
+        if let Some(local_vol) = &self.local_vol {
+            let t = 0.5 * (t1 + t2);
+            let n = self.mesher.layout().size();
+            let mut v = Array::with_size(n);
+            for iter in self.mesher.layout().iter() {
+                let i = iter.index();
+                let lv = if self.illegal_local_vol_overwrite < 0.0 {
+                    local_vol.local_vol(t, self.x[i], true)?
+                } else {
+                    match local_vol.local_vol(t, self.x[i], true) {
+                        Ok(lv) => lv,
+                        Err(_) => self.illegal_local_vol_overwrite,
+                    }
+                };
+                v[i] = lv * lv;
+            }
+            let drift = (r - q) - &(0.5 * &v);
+            let diffusion = self.dxx_map.mult(&(0.5 * &v));
+            self.map_t
+                .axpyb(&drift, &self.dx_map, &diffusion, &Array::filled(1, -r));
+        } else {
+            let v = self
+                .vol_ts
+                .black_forward_variance(t1, t2, self.strike, false)?
+                / (t2 - t1);
+
+            let diffusion = self
+                .dxx_map
+                .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
+            self.map_t.axpyb(
+                &Array::filled(1, r - q - 0.5 * v),
+                &self.dx_map,
+                &diffusion,
+                &Array::filled(1, -r),
+            );
+        }
 
         Ok(())
     }
@@ -390,5 +445,35 @@ mod tests {
         };
 
         assert_eq!(handle.borrow().apply(&u), applied);
+    }
+
+    /// Constant Black vol with `localVol=true` samples the same `v = σ²` at
+    /// every node, so the generator matches the non-local-vol operator.
+    #[test]
+    fn constant_local_vol_matches_the_black_generator() {
+        let mesher = mesher();
+        let dc = Actual365Fixed::new();
+        let today = Date::new(11, Month::February, 2018);
+        let process = GeneralizedBlackScholesProcess::new(
+            make_quote_handle(100.0).handle(),
+            flat_rate(today, Q, dc.clone()),
+            flat_rate(today, R, dc.clone()),
+            flat_vol(today, VOL, dc),
+        );
+        let mut black =
+            FdmBlackScholesOp::new(Shared::clone(&mesher), &process, STRIKE, DIRECTION).unwrap();
+        let mut local = FdmBlackScholesOp::with_local_vol(
+            Shared::clone(&mesher),
+            &process,
+            STRIKE,
+            true,
+            -Real::null(),
+            DIRECTION,
+        )
+        .unwrap();
+        black.set_time(T1, T2).unwrap();
+        local.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        assert_close(&black.apply(&u), &local.apply(&u));
     }
 }

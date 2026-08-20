@@ -2,14 +2,15 @@
 //!
 //! Port of `ql/methods/finitedifferences/solvers/fdmblackscholessolver.{hpp,cpp}`:
 //! builds an [`FdmBlackScholesOp`] and delegates interpolation to
-//! [`Fdm1DimSolver`]. Local-vol and quanto branches are omitted with the
-//! operator (`fdmblackscholesop.rs`).
+//! [`Fdm1DimSolver`]. The local-vol branch of the operator is wired through
+//! [`with_local_vol`](FdmBlackScholesSolver::with_local_vol); quanto is omitted.
 
 use crate::errors::QlResult;
 use crate::methods::finitedifferences::operators::{FdmBlackScholesOp, FdmLinearOpComposite};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::types::Real;
+use crate::utilities::null::Null;
 
 use super::fdm1dimsolver::Fdm1DimSolver;
 use super::fdmschemedesc::FdmSchemeDesc;
@@ -22,17 +23,39 @@ pub struct FdmBlackScholesSolver {
 
 impl FdmBlackScholesSolver {
     /// `FdmBlackScholesSolver(process, strike, solverDesc, schemeDesc)`
-    /// (`cpp:32-45`), without the unported local-vol / quanto arguments.
+    /// (`cpp:32-45`), with local-vol off.
     pub fn new(
         process: &GeneralizedBlackScholesProcess,
         strike: Real,
         solver_desc: FdmSolverDesc,
         scheme_desc: FdmSchemeDesc,
     ) -> QlResult<Self> {
-        let op = shared_mut(FdmBlackScholesOp::new(
+        Self::with_local_vol(
+            process,
+            strike,
+            solver_desc,
+            scheme_desc,
+            false,
+            -Real::null(),
+        )
+    }
+
+    /// As [`new`](Self::new), with the C++ `localVol` /
+    /// `illegalLocalVolOverwrite` arguments (`cpp:32-45`).
+    pub fn with_local_vol(
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+    ) -> QlResult<Self> {
+        let op = shared_mut(FdmBlackScholesOp::with_local_vol(
             Shared::clone(&solver_desc.mesher),
             process,
             strike,
+            local_vol,
+            illegal_local_vol_overwrite,
             0,
         )?);
         Ok(Self {
