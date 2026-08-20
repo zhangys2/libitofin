@@ -12,12 +12,12 @@
 //! The local volatility is derived lazily from the Black volatility and
 //! cached until an input notification invalidates it (the C++ `update()`
 //! resets `updated_` before notifying, mirrored here by the invalidating
-//! observer). Only the `BlackConstantVol` shortcut of the C++ dispatch is
-//! ported: it marks the process strike-independent and enables the exact
-//! curve formulas for `expectation` / `variance` / `evolve`. The
-//! `BlackVarianceCurve` shortcut and the strike-dependent `LocalVolSurface`
-//! fallback follow with EPIC-4, so a non-constant Black volatility without an
-//! external local volatility is an `Err` for now instead of silently wrong.
+//! observer). [`BlackConstantVol`] maps to [`LocalConstantVol`] and keeps the
+//! process strike-independent (exact curve formulas for `expectation` /
+//! `variance` / `evolve`). Any other Black surface becomes a Dupire
+//! [`LocalVolSurface`]. C++'s extra `BlackVarianceCurve` → `LocalVolCurve`
+//! shortcut is omitted: that curve is strike-independent and the Dupire
+//! surface covers it, at the cost of the more expensive formula.
 //!
 //! Not ported, noted as follow-up: the pluggable `discretization` strategy
 //! and `forceDiscretization` flag (the Euler scheme is the trait's provided
@@ -39,7 +39,8 @@ use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::TermStructure;
 use crate::termstructures::volatility::{
-    BlackConstantVol, BlackVolTermStructure, LocalConstantVol, LocalVolTermStructure,
+    BlackConstantVol, BlackVolTermStructure, LocalConstantVol, LocalVolSurface,
+    LocalVolTermStructure,
 };
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
@@ -163,24 +164,32 @@ impl GeneralizedBlackScholesProcess {
         if !self.updated.get() {
             self.is_strike_independent.set(true);
             let black_vol = self.black_volatility.current_link()?;
-            let Some(constant_vol) = (&*black_vol as &dyn Any).downcast_ref::<BlackConstantVol>()
-            else {
+            if let Some(constant_vol) = (&*black_vol as &dyn Any).downcast_ref::<BlackConstantVol>()
+            {
+                let reference_date = constant_vol.reference_date()?;
+                let vol = constant_vol.black_vol(0.0, self.x0()?, false)?;
+                let Some(day_counter) = constant_vol.day_counter() else {
+                    fail!("no day counter provided for the constant Black volatility");
+                };
+                self.local_volatility.link_to(shared(LocalConstantVol::new(
+                    reference_date,
+                    vol,
+                    day_counter,
+                ))
+                    as Shared<dyn LocalVolTermStructure>);
+            } else {
+                // Strike-dependent (or merely time-dependent) Black vol: Dupire.
+                // C++ also special-cases `BlackVarianceCurve` into `LocalVolCurve`;
+                // that shortcut is omitted, the surface covers it.
                 self.is_strike_independent.set(false);
-                fail!(
-                    "only constant Black volatilities are supported; the local-volatility \
-                     surface follows with EPIC-4"
-                );
-            };
-            let reference_date = constant_vol.reference_date()?;
-            let vol = constant_vol.black_vol(0.0, self.x0()?, false)?;
-            let Some(day_counter) = constant_vol.day_counter() else {
-                fail!("no day counter provided for the constant Black volatility");
-            };
-            self.local_volatility.link_to(shared(LocalConstantVol::new(
-                reference_date,
-                vol,
-                day_counter,
-            )) as Shared<dyn LocalVolTermStructure>);
+                self.local_volatility
+                    .link_to(shared(LocalVolSurface::with_underlying_value(
+                        self.black_volatility.clone(),
+                        self.risk_free_rate.clone(),
+                        self.dividend_yield.clone(),
+                        self.x0()?,
+                    )) as Shared<dyn LocalVolTermStructure>);
+            }
             self.updated.set(true);
         }
         Ok(self.local_volatility.handle())
@@ -558,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn non_constant_black_vol_without_local_vol_is_an_err() {
+    fn non_constant_black_vol_uses_dupire_and_the_discretized_branch() {
         let vol = shared(TimeDependentVol {
             base: TermStructureBase::with_reference_date(
                 reference(),
@@ -573,9 +582,10 @@ mod tests {
             Handle::new(vol),
         );
 
-        let err = process.diffusion(1.0, SPOT).unwrap_err();
-        assert!(err.message().contains("constant Black volatilities"));
-        assert!(process.expectation(0.0, SPOT, 0.5).is_err());
+        let sigma = process.diffusion(1.0, SPOT).unwrap();
+        assert!(sigma.is_finite() && sigma > 0.0, "dupire local vol={sigma}");
+        let err = process.expectation(0.0, SPOT, 0.5).unwrap_err();
+        assert_eq!(err.message(), "not implemented");
     }
 
     #[test]

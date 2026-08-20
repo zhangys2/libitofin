@@ -81,7 +81,8 @@ credit.
 | Barrier Haug FD | `FdBlackScholesBarrierEngine` 200×400 | `barrieroption.cpp` `testHaugValues` | European table @ 5e-3; rejects zero spot / triggered / American |
 | Barrier Haug binomial | `BinomialBarrierEngine` CRR Boyle–Lau / Derman–Kani 400 | `barrieroption.cpp` `testHaugValues` | American + European Boyle–Lau @ 1.1e-2, Derman–Kani @ 4e-2; rejects zero spot / triggered |
 | Barrier Babsiri / Beaglehole | `AnalyticBarrierEngine` / `MCBarrierEngine` Sobol | `barrieroption.cpp` `testBabsiriValues` / `testBeagleholeValues` | published calls analytic @ 1e-5 / 1e-3; MC LowDiscrepancy 131071 samples, 1 step/year, Brownian bridge, relative 2e-2 / 1e-2 |
-| Barrier Heston FD (knock-out) | `FdHestonBarrierEngine` 100×400×50 Hundsdorfer | `barrieroption.cpp` `testLocalVolAndHestonComparison` | DownOut put NPV 111.5 @ 1% relative (local-vol arm follow-up) |
+| Barrier Heston FD (knock-out) | `FdHestonBarrierEngine` 100×400×50 Hundsdorfer | `barrieroption.cpp` `testLocalVolAndHestonComparison` | DownOut put NPV 111.5 @ 1% relative |
+| Barrier local-vol FD (knock-out) | `FdBlackScholesBarrierEngine` Dupire 100×400 Douglas, `illegalLocalVolOverwrite=0.35` | `barrieroption.cpp` `testLocalVolAndHestonComparison` | DownOut put NPV 132.8 @ 1% relative |
 | Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
 | Barrier implied vol | `BarrierOption::implied_volatility` + analytic / FD | `barrieroption.cpp` `testImpliedVolatility` | no-div put targets @ 1e-5; discrete-div FD put targets @ 1e-5 |
 | Barrier FD (discrete div) | `FdBlackScholesBarrierEngine` + vanilla/rebate FD | `barrieroption.cpp` `testDividendBarrierOption` | DownOut/UpOut/DownIn/UpIn Douglas/CN/Hundsdorfer/CraigSneyd/MCS/MethodOfLines/TrBDF2 @ 2e-4 (Heston follow-up) |
