@@ -2,8 +2,9 @@
 //! dividends.
 //!
 //! Port of `ql/pricingengines/vanilla/fdblackscholesvanillaengine.{hpp,cpp}`
-//! on the Spot cash-dividend model (the default). Escrowed dividends, local
-//! vol, and quanto are follow-up.
+//! on the Spot cash-dividend model (the default). Escrowed dividends and
+//! quanto are follow-up. Local vol is the Dupire branch of
+//! [`FdmBlackScholesSolver`].
 
 use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
@@ -29,6 +30,7 @@ use crate::require;
 use crate::shared::{Shared, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size};
+use crate::utilities::null::Null;
 
 /// Finite-difference Black–Scholes vanilla engine (European + Spot dividends).
 pub struct FdBlackScholesVanillaEngine {
@@ -39,6 +41,8 @@ pub struct FdBlackScholesVanillaEngine {
     x_grid: Size,
     damping_steps: Size,
     scheme_desc: FdmSchemeDesc,
+    local_vol: bool,
+    illegal_local_vol_overwrite: Real,
 }
 
 impl FdBlackScholesVanillaEngine {
@@ -57,7 +61,7 @@ impl FdBlackScholesVanillaEngine {
         Self::with_params(process, dividends, 100, 100, 0, FdmSchemeDesc::douglas())
     }
 
-    /// Full constructor matching the C++ six-argument form (local-vol /
+    /// Full constructor matching the C++ six-argument form (local-vol off,
     /// escrowed / quanto omitted).
     pub fn with_params(
         process: Shared<GeneralizedBlackScholesProcess>,
@@ -66,6 +70,31 @@ impl FdBlackScholesVanillaEngine {
         x_grid: Size,
         damping_steps: Size,
         scheme_desc: FdmSchemeDesc,
+    ) -> Self {
+        Self::with_local_vol(
+            process,
+            dividends,
+            t_grid,
+            x_grid,
+            damping_steps,
+            scheme_desc,
+            false,
+            -Real::null(),
+        )
+    }
+
+    /// As [`with_params`](Self::with_params), with the C++ `localVol` /
+    /// `illegalLocalVolOverwrite` arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_local_vol(
+        process: Shared<GeneralizedBlackScholesProcess>,
+        dividends: DividendSchedule,
+        t_grid: Size,
+        x_grid: Size,
+        damping_steps: Size,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
     ) -> Self {
         let base =
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
@@ -78,6 +107,8 @@ impl FdBlackScholesVanillaEngine {
             x_grid,
             damping_steps,
             scheme_desc,
+            local_vol,
+            illegal_local_vol_overwrite,
         }
     }
 
@@ -180,8 +211,14 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver =
-            FdmBlackScholesSolver::new(&self.process, strike, solver_desc, self.scheme_desc)?;
+        let solver = FdmBlackScholesSolver::with_local_vol(
+            &self.process,
+            strike,
+            solver_desc,
+            self.scheme_desc,
+            self.local_vol,
+            self.illegal_local_vol_overwrite,
+        )?;
         let results = self.base.results_mut();
         results.instrument.value = Some(solver.value_at(spot)?);
         results.greeks = Greeks::default();
@@ -213,6 +250,7 @@ mod tests {
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
     use crate::time::timeunit::TimeUnit;
+    use crate::utilities::null::Null;
 
     fn process(
         today: Date,
@@ -276,6 +314,46 @@ mod tests {
         assert!(
             (calculated - expected).abs() < 0.05,
             "{calculated} vs {expected}"
+        );
+    }
+
+    /// Dupire of a constant Black vol is that vol, so `localVol = true` must
+    /// match the same analytic European within the existing FD band.
+    #[test]
+    fn local_vol_european_matches_constant_vol_analytic() {
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let process = process(today, 100.0, 0.0, 0.05, 0.20);
+        let expiry = today + Period::new(1, TimeUnit::Years);
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Put, 105.0));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+
+        let mut analytic =
+            VanillaOption::new(Shared::clone(&payoff), Shared::clone(&exercise), settings);
+        analytic
+            .base_mut()
+            .set_pricing_engine(
+                shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)))
+                    as crate::shared::SharedMut<dyn PricingEngine>,
+            );
+        let expected = analytic.npv().unwrap();
+
+        let mut fd = FdBlackScholesVanillaEngine::with_local_vol(
+            process,
+            Vec::new(),
+            100,
+            100,
+            0,
+            FdmSchemeDesc::douglas(),
+            true,
+            -Real::null(),
+        );
+        let calculated = fd.price(payoff, exercise).unwrap();
+        assert!(
+            (calculated - expected).abs() < 0.05,
+            "local-vol vanilla {calculated} vs analytic {expected}"
         );
     }
 }

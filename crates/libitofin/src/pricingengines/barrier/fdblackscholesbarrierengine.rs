@@ -2,7 +2,8 @@
 //!
 //! Port of `ql/pricingengines/barrier/fdblackscholesbarrierengine.{hpp,cpp}`.
 //! Knock-out uses steps 1–5 (mesher pinned at `ln(H)`, Dirichlet rebate,
-//! dividend handler). Knock-in is step 6: vanilla + rebate − out-value.
+//! dividend handler). Knock-in is step 6: vanilla + rebate − out-value,
+//! including the local-vol flag on the vanilla and rebate engines.
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
@@ -154,9 +155,6 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
         let rebate = args.rebate.expect("validated");
         let exercise = Shared::clone(exercise);
         let is_in = matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn);
-        if is_in && self.local_vol {
-            fail!("knock-in local-vol barrier engine not yet ported");
-        }
 
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
@@ -252,13 +250,15 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
         let mut value = solver.value_at(spot)?;
         if is_in {
             let vanilla = {
-                let mut engine = FdBlackScholesVanillaEngine::with_params(
+                let mut engine = FdBlackScholesVanillaEngine::with_local_vol(
                     Shared::clone(&self.process),
                     self.dividends.clone(),
                     self.t_grid,
                     self.x_grid,
                     0,
                     self.scheme_desc,
+                    self.local_vol,
+                    self.illegal_local_vol_overwrite,
                 );
                 engine.price(
                     shared(payoff) as Shared<dyn StrikedTypePayoff>,
@@ -273,13 +273,15 @@ impl PricingEngine for FdBlackScholesBarrierEngine {
                 0
             };
             let rebate_npv = {
-                let mut engine = FdBlackScholesRebateEngine::with_params(
+                let mut engine = FdBlackScholesRebateEngine::with_local_vol(
                     Shared::clone(&self.process),
                     self.dividends.clone(),
                     self.t_grid,
                     rebate_x_grid,
                     rebate_damping,
                     self.scheme_desc,
+                    self.local_vol,
+                    self.illegal_local_vol_overwrite,
                 );
                 engine.price(barrier_type, barrier, rebate, payoff, exercise)?
             };
@@ -336,6 +338,7 @@ mod tests {
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
     use crate::time::timeunit::TimeUnit;
+    use crate::utilities::null::Null;
 
     fn flat_bs_process(
         today: Date,
@@ -446,6 +449,65 @@ mod tests {
                     scheme.scheme_type
                 );
             }
+        }
+    }
+
+    /// Constant Black vol with `localVol = true` must reproduce the knock-in
+    /// arm of `testDividendBarrierOption` (Dupire of a flat vol is that vol).
+    #[test]
+    fn local_vol_dividend_knock_in_matches_constant_vol_oracle() {
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        let spot = 100.0;
+        let strike = 105.0;
+        let rebate = 5.0;
+        let process = flat_bs_process(today, spot, 0.0, 0.05, 0.02);
+        let dividends =
+            dividend_vector(&[today + Period::new(6, TimeUnit::Months)], &[30.0]).unwrap();
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, strike);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+        let cases = [
+            (BarrierType::DownIn, 80.0, 29.154),
+            (BarrierType::UpIn, 120.0, 4.765),
+        ];
+        let rel_tol = 2e-4;
+        for (barrier_type, barrier, expected) in cases {
+            let mut option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                rebate,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_black_scholes_barrier_engine(
+                &mut option,
+                shared_mut(FdBlackScholesBarrierEngine::with_local_vol(
+                    Shared::clone(&process),
+                    dividends.clone(),
+                    100,
+                    100,
+                    0,
+                    FdmSchemeDesc::douglas(),
+                    true,
+                    -Real::null(),
+                )),
+            );
+            let calculated = option.npv().unwrap();
+            let diff = (calculated - expected).abs();
+            let tol = rel_tol * expected;
+            eprintln!(
+                "local-vol {barrier_type:?} H={barrier}: calculated={calculated:.8} \
+                 expected={expected:.8} diff={diff:.2e} tol={tol:.2e}"
+            );
+            assert!(
+                calculated.is_finite() && diff <= tol,
+                "local-vol {barrier_type:?} H={barrier}: {calculated} vs {expected} \
+                 (diff {diff}, tol {tol})"
+            );
         }
     }
 
@@ -671,14 +733,14 @@ mod tests {
             3000.0,
             100.0,
             payoff,
-            exercise,
+            Shared::clone(&exercise),
             Shared::clone(&settings),
         )
         .unwrap();
         set_fd_black_scholes_barrier_engine(
             &mut option,
             shared_mut(FdBlackScholesBarrierEngine::with_local_vol(
-                process,
+                Shared::clone(&process),
                 Vec::new(),
                 100,
                 400,
@@ -699,6 +761,43 @@ mod tests {
         assert!(
             calculated.is_finite() && diff <= tol,
             "local-vol barrier: {calculated} vs {expected} (diff {diff}, tol {tol})"
+        );
+
+        // Knock-in needs the vanilla + rebate local-vol engines (C++ step 6).
+        let mut knock_in = BarrierOption::with_rebate(
+            BarrierType::DownIn,
+            3000.0,
+            100.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_black_scholes_barrier_engine(
+            &mut knock_in,
+            shared_mut(FdBlackScholesBarrierEngine::with_local_vol(
+                Shared::clone(&process),
+                Vec::new(),
+                100,
+                400,
+                0,
+                FdmSchemeDesc::douglas(),
+                true,
+                0.35,
+            )),
+        );
+        let knock_in_npv = knock_in.npv().unwrap();
+        let knock_in_expected = 465.0;
+        let knock_in_diff = (knock_in_npv - knock_in_expected).abs();
+        let knock_in_tol = 0.01 * knock_in_expected;
+        eprintln!(
+            "local-vol DownIn: calculated={knock_in_npv:.8} expected={knock_in_expected} \
+             diff={knock_in_diff:.4} tol={knock_in_tol:.4}"
+        );
+        assert!(
+            knock_in_npv.is_finite() && knock_in_diff <= knock_in_tol,
+            "local-vol knock-in: {knock_in_npv} vs {knock_in_expected} \
+             (diff {knock_in_diff}, tol {knock_in_tol})"
         );
     }
 }
