@@ -16,6 +16,7 @@ credit.
 | Domain | libitofin surface | QuantLib oracle(s) | Status |
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
+| Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |

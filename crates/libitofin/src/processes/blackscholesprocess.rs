@@ -12,12 +12,12 @@
 //! The local volatility is derived lazily from the Black volatility and
 //! cached until an input notification invalidates it (the C++ `update()`
 //! resets `updated_` before notifying, mirrored here by the invalidating
-//! observer). [`BlackConstantVol`] maps to [`LocalConstantVol`] and keeps the
-//! process strike-independent (exact curve formulas for `expectation` /
-//! `variance` / `evolve`). Any other Black surface becomes a Dupire
-//! [`LocalVolSurface`]. C++'s extra `BlackVarianceCurve` → `LocalVolCurve`
-//! shortcut is omitted: that curve is strike-independent and the Dupire
-//! surface covers it, at the cost of the more expensive formula.
+//! observer). [`BlackConstantVol`] maps to [`LocalConstantVol`] and
+//! [`BlackVarianceCurve`] (linear interpolator, the C++ default) maps to
+//! [`LocalVolCurve`]; both keep the process strike-independent (exact curve
+//! formulas for `expectation` / `variance` / `evolve`). Any other Black
+//! surface — including a [`BlackVarianceCurve`] built with a non-linear
+//! interpolator — becomes a Dupire [`LocalVolSurface`].
 //!
 //! Not ported, noted as follow-up: the pluggable `discretization` strategy
 //! and `forceDiscretization` flag (the Euler scheme is the trait's provided
@@ -32,6 +32,7 @@ use crate::errors::QlResult;
 use crate::fail;
 use crate::handle::{Handle, RelinkableHandle};
 use crate::interestrate::Compounding;
+use crate::math::interpolations::linear::Linear;
 use crate::patterns::observable::{AsObservable, Observable, Observer, ResetThenNotify};
 use crate::quotes::Quote;
 use crate::require;
@@ -39,8 +40,8 @@ use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::TermStructure;
 use crate::termstructures::volatility::{
-    BlackConstantVol, BlackVolTermStructure, LocalConstantVol, LocalVolSurface,
-    LocalVolTermStructure,
+    BlackConstantVol, BlackVarianceCurve, BlackVolTermStructure, LocalConstantVol, LocalVolCurve,
+    LocalVolSurface, LocalVolTermStructure,
 };
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
@@ -177,10 +178,16 @@ impl GeneralizedBlackScholesProcess {
                     day_counter,
                 ))
                     as Shared<dyn LocalVolTermStructure>);
+            } else if let Some(vol_curve) =
+                try_downcast_black_vol::<BlackVarianceCurve<Linear>>(Shared::clone(&black_vol))
+            {
+                // C++ `dynamic_pointer_cast<BlackVarianceCurve>` wraps the same
+                // shared_ptr so curve updates still reach `LocalVolCurve`.
+                self.local_volatility
+                    .link_to(shared(LocalVolCurve::new(Handle::new(vol_curve)))
+                        as Shared<dyn LocalVolTermStructure>);
             } else {
                 // Strike-dependent (or merely time-dependent) Black vol: Dupire.
-                // C++ also special-cases `BlackVarianceCurve` into `LocalVolCurve`;
-                // that shortcut is omitted, the surface covers it.
                 self.is_strike_independent.set(false);
                 self.local_volatility
                     .link_to(shared(LocalVolSurface::with_underlying_value(
@@ -242,6 +249,26 @@ fn check_time_step(dt: Time) -> QlResult<()> {
         fail!("dt ({dt}) must be non-negative");
     }
     Ok(())
+}
+
+/// Downcast `Shared<dyn BlackVolTermStructure>` to a concrete `Shared<T>`.
+///
+/// `Rc::downcast` is only provided for `Rc<dyn Any>`. The Black-vol handle is
+/// a trait object, so this rebuilds the `Rc` from the fat-pointer data word
+/// after `Any::is::<T>` confirms the pointee type. C++ does the same with
+/// `dynamic_pointer_cast` so `LocalVolCurve` observes the original curve.
+fn try_downcast_black_vol<T: BlackVolTermStructure + 'static>(
+    src: Shared<dyn BlackVolTermStructure>,
+) -> Option<Shared<T>> {
+    if !(&*src as &dyn Any).is::<T>() {
+        return None;
+    }
+    let fat = Shared::into_raw(src);
+    let thin = fat as *const T;
+    // SAFETY: `is::<T>()` guarantees the vtable is `T`'s. Casting
+    // `*const dyn Trait` to `*const T` keeps the data pointer;
+    // `from_raw` restores the same allocation and reference count.
+    Some(unsafe { Shared::from_raw(thin) })
 }
 
 impl AsObservable for GeneralizedBlackScholesProcess {
@@ -586,6 +613,96 @@ mod tests {
         assert!(sigma.is_finite() && sigma > 0.0, "dupire local vol={sigma}");
         let err = process.expectation(0.0, SPOT, 0.5).unwrap_err();
         assert_eq!(err.message(), "not implemented");
+    }
+
+    fn linear_variance_curve() -> Shared<dyn BlackVolTermStructure> {
+        let r = reference();
+        shared(
+            BlackVarianceCurve::new(
+                r,
+                &[r + 360, r + 720],
+                &[0.20, 0.25],
+                Actual360::new(),
+                true,
+            )
+            .unwrap(),
+        ) as Shared<dyn BlackVolTermStructure>
+    }
+
+    fn matching_local_vol_curve() -> LocalVolCurve<Linear> {
+        let r = reference();
+        LocalVolCurve::new(Handle::new(shared(
+            BlackVarianceCurve::new(
+                r,
+                &[r + 360, r + 720],
+                &[0.20, 0.25],
+                Actual360::new(),
+                true,
+            )
+            .unwrap(),
+        )))
+    }
+
+    fn process_with_variance_curve() -> GeneralizedBlackScholesProcess {
+        GeneralizedBlackScholesProcess::new(
+            make_quote_handle(SPOT).handle(),
+            flat_yield(Q),
+            flat_yield(R),
+            Handle::new(linear_variance_curve()),
+        )
+    }
+
+    /// C++ `blackscholesprocess.cpp` special-cases `BlackVarianceCurve` into
+    /// `LocalVolCurve` and keeps `isStrikeIndependent_ = true`, so the exact
+    /// `expectation` / `variance` / `evolve` formulas apply.
+    #[test]
+    fn black_variance_curve_uses_local_vol_curve_and_the_exact_branch() {
+        let process = process_with_variance_curve();
+        let local = matching_local_vol_curve();
+
+        for t in [0.0, 0.5, 1.0, 1.5] {
+            let sigma = process.diffusion(t, SPOT).unwrap();
+            let expected = local.local_vol(t, SPOT, true).unwrap();
+            assert!(
+                (sigma - expected).abs() < 1e-12,
+                "t={t} diffusion={sigma} local_vol={expected}"
+            );
+        }
+
+        let (t0, x0, dt, dw): (Time, Real, Time, Real) = (0.25, SPOT, 0.5, 0.5);
+        let expectation = process.expectation(t0, x0, dt).unwrap();
+        assert!((expectation - x0 * ((R - Q) * dt).exp()).abs() < 1e-12);
+
+        let vol = process.black_volatility().current_link().unwrap();
+        let expected_var = vol.black_variance(t0 + dt, 0.01, false).unwrap()
+            - vol.black_variance(t0, 0.01, false).unwrap();
+        let var = process.variance(t0, x0, dt).unwrap();
+        assert!((var - expected_var).abs() < 1e-14);
+        // Linear variance on [0, 1]: var(t) = 0.04 t, so the increment is 0.02.
+        assert!((var - 0.02).abs() < 1e-14);
+
+        let std_dev = process.std_deviation(t0, x0, dt).unwrap();
+        assert!((std_dev - var.sqrt()).abs() < 1e-15);
+
+        let evolved = process.evolve(t0, x0, dt, dw).unwrap();
+        let expected = x0 * ((R - Q) * dt - 0.5 * var + var.sqrt() * dw).exp();
+        assert!((evolved - expected).abs() < 1e-12);
+    }
+
+    #[test]
+    fn relinking_to_a_variance_curve_switches_onto_the_exact_branch() {
+        let vol = RelinkableHandle::new(constant_vol(VOL));
+        let process = GeneralizedBlackScholesProcess::new(
+            make_quote_handle(SPOT).handle(),
+            flat_yield(Q),
+            flat_yield(R),
+            vol.handle(),
+        );
+        assert!((process.diffusion(0.5, SPOT).unwrap() - VOL).abs() < 1e-15);
+
+        vol.link_to(linear_variance_curve());
+        assert!(process.expectation(0.25, SPOT, 0.5).is_ok());
+        assert!((process.diffusion(0.5, SPOT).unwrap() - 0.20).abs() < 1e-12);
     }
 
     #[test]
