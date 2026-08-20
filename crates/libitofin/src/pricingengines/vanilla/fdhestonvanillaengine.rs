@@ -24,7 +24,6 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::pricingengines::DividendSchedule;
-use crate::quotes::Quote;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
@@ -165,10 +164,14 @@ impl PricingEngine for FdHestonVanillaEngine {
             1.0,
         )?;
 
+        // C++ `FdHestonVanillaEngine::getSolverDesc` calls
+        // `processHelper(s0, dividendYield, riskFreeRate, vol)` into a helper
+        // whose parameters are `(s0, rTS, qTS)`. That swaps r and q on the
+        // equity-mesher process only (the Heston PDE still uses the model).
         let bs_process = process_helper(
             process.s0(),
-            process.risk_free_rate(),
             process.dividend_yield(),
+            process.risk_free_rate(),
             v_mesher.vola_estimate(),
         )?;
         let equity = fdm_black_scholes_mesher(
@@ -251,6 +254,7 @@ mod tests {
     use crate::time::period::Period;
     use crate::time::timeunit::TimeUnit;
 
+    #[allow(clippy::too_many_arguments)]
     fn heston_model(
         spot: Real,
         v0: Real,

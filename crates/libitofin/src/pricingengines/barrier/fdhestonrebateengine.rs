@@ -9,7 +9,7 @@ use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::fail;
 use crate::instrument::InstrumentResults;
-use crate::instruments::{BarrierArguments, CashOrNothingPayoff};
+use crate::instruments::{BarrierArguments, CashOrNothingPayoff, StrikedTypePayoff};
 use crate::methods::finitedifferences::meshers::{
     FdmHestonVarianceMesher, FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
     process_helper,
@@ -27,7 +27,6 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::DividendSchedule;
-use crate::quotes::Quote;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
@@ -172,10 +171,12 @@ impl PricingEngine for FdHestonRebateEngine {
             BarrierType::UpIn | BarrierType::UpOut => (None, Some(barrier.ln())),
         };
 
+        // Same `processHelper(s0, dividendYield, riskFreeRate, vol)` call as
+        // C++ `FdHestonRebateEngine` (r/q swapped on the equity mesher only).
         let bs_process = process_helper(
             process.s0(),
-            process.risk_free_rate(),
             process.dividend_yield(),
+            process.risk_free_rate(),
             v_mesher.vola_estimate(),
         )?;
         let equity = fdm_black_scholes_mesher(
