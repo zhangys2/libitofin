@@ -15,8 +15,9 @@ pub mod vanilla;
 
 pub use barrier::{
     BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
-    FdBlackScholesRebateEngine, MCBarrierEngine, MakeMcBarrierEngine, set_binomial_barrier_engine,
-    set_fd_black_scholes_barrier_engine, set_mc_barrier_engine,
+    FdBlackScholesRebateEngine, FdHestonBarrierEngine, MCBarrierEngine, MakeMcBarrierEngine,
+    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
+    set_mc_barrier_engine,
 };
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
