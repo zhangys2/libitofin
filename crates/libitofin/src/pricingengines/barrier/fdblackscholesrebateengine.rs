@@ -28,6 +28,7 @@ use crate::require;
 use crate::shared::{Shared, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size};
+use crate::utilities::null::Null;
 
 use crate::instruments::BarrierType;
 
@@ -42,6 +43,8 @@ pub struct FdBlackScholesRebateEngine {
     x_grid: Size,
     damping_steps: Size,
     scheme_desc: FdmSchemeDesc,
+    local_vol: bool,
+    illegal_local_vol_overwrite: Real,
 }
 
 impl FdBlackScholesRebateEngine {
@@ -50,7 +53,7 @@ impl FdBlackScholesRebateEngine {
         Self::with_params(process, Vec::new(), 100, 100, 0, FdmSchemeDesc::douglas())
     }
 
-    /// Full constructor matching the C++ six-argument form.
+    /// Full constructor matching the C++ six-argument form (local-vol off).
     pub fn with_params(
         process: Shared<GeneralizedBlackScholesProcess>,
         dividends: DividendSchedule,
@@ -58,6 +61,31 @@ impl FdBlackScholesRebateEngine {
         x_grid: Size,
         damping_steps: Size,
         scheme_desc: FdmSchemeDesc,
+    ) -> Self {
+        Self::with_local_vol(
+            process,
+            dividends,
+            t_grid,
+            x_grid,
+            damping_steps,
+            scheme_desc,
+            false,
+            -Real::null(),
+        )
+    }
+
+    /// As [`with_params`](Self::with_params), with the C++ `localVol` /
+    /// `illegalLocalVolOverwrite` arguments.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_local_vol(
+        process: Shared<GeneralizedBlackScholesProcess>,
+        dividends: DividendSchedule,
+        t_grid: Size,
+        x_grid: Size,
+        damping_steps: Size,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
     ) -> Self {
         let base =
             BarrierEngineBase::new(BarrierArguments::default(), InstrumentResults::default());
@@ -70,6 +98,8 @@ impl FdBlackScholesRebateEngine {
             x_grid,
             damping_steps,
             scheme_desc,
+            local_vol,
+            illegal_local_vol_overwrite,
         }
     }
 
@@ -198,11 +228,13 @@ impl PricingEngine for FdBlackScholesRebateEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver = FdmBlackScholesSolver::new(
+        let solver = FdmBlackScholesSolver::with_local_vol(
             &self.process,
             payoff.strike(),
             solver_desc,
             self.scheme_desc,
+            self.local_vol,
+            self.illegal_local_vol_overwrite,
         )?;
         self.base.results_mut().value = Some(solver.value_at(spot)?);
         Ok(())
