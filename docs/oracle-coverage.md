@@ -85,7 +85,7 @@ credit.
 | Barrier Heston FD vanilla | `FdHestonVanillaEngine` 40×80×25 Hundsdorfer | vs `AnalyticHestonEngine` | no-div European call @ 1% relative |
 | Barrier Heston FD (knock-in + discrete div) | `FdHestonVanillaEngine` + `FdHestonRebateEngine` + `FdHestonBarrierEngine` 50×101×3 Hundsdorfer | `barrieroption.cpp` `testDividendBarrierOption` | DownOut/UpOut/DownIn/UpIn @ 2e-4 |
 | Barrier local-vol FD (knock-out) | `FdBlackScholesBarrierEngine` Dupire 100×400 Douglas, `illegalLocalVolOverwrite=0.35` | `barrieroption.cpp` `testLocalVolAndHestonComparison` | DownOut put NPV 132.8 @ 1% relative |
-| Barrier local-vol FD (knock-in) | `FdBlackScholesVanillaEngine` + `FdBlackScholesRebateEngine` + barrier Dupire | `barrieroption.cpp` `testDividendBarrierOption` (constant vol) / `testLocalVolAndHestonComparison` | DownIn/UpIn Douglas @ 2e-4 vs 29.154 / 4.765; surface DownIn prices |
+| Barrier local-vol FD (knock-in) | `FdBlackScholesVanillaEngine` + `FdBlackScholesRebateEngine` + barrier Dupire | `barrieroption.cpp` `testDividendBarrierOption` (constant vol) / `testLocalVolAndHestonComparison` | DownIn/UpIn Douglas @ 2e-4 vs 29.154 / 4.765; surface DownIn put NPV 465.0 @ 1% relative |
 | Barrier low volatility | `AnalyticBarrierEngine` | `barrieroption.cpp` `testLowVolatility` | vol 1e-7 zero-vol limits, no NaN @ 0.5 |
 | Barrier implied vol | `BarrierOption::implied_volatility` + analytic / FD | `barrieroption.cpp` `testImpliedVolatility` | no-div put targets @ 1e-5; discrete-div FD put targets @ 1e-5 |
 | Barrier FD (discrete div) | `FdBlackScholesBarrierEngine` + vanilla/rebate FD | `barrieroption.cpp` `testDividendBarrierOption` | DownOut/UpOut/DownIn/UpIn Douglas/CN/Hundsdorfer/CraigSneyd/MCS/MethodOfLines/TrBDF2 @ 2e-4 |

@@ -733,7 +733,7 @@ mod tests {
             3000.0,
             100.0,
             payoff,
-            exercise,
+            Shared::clone(&exercise),
             Shared::clone(&settings),
         )
         .unwrap();
@@ -787,10 +787,17 @@ mod tests {
             )),
         );
         let knock_in_npv = knock_in.npv().unwrap();
-        eprintln!("local-vol DownIn: calculated={knock_in_npv:.8}");
+        let knock_in_expected = 465.0;
+        let knock_in_diff = (knock_in_npv - knock_in_expected).abs();
+        let knock_in_tol = 0.01 * knock_in_expected;
+        eprintln!(
+            "local-vol DownIn: calculated={knock_in_npv:.8} expected={knock_in_expected} \
+             diff={knock_in_diff:.4} tol={knock_in_tol:.4}"
+        );
         assert!(
-            knock_in_npv.is_finite() && knock_in_npv > 0.0,
-            "local-vol knock-in should price, got {knock_in_npv}"
+            knock_in_npv.is_finite() && knock_in_diff <= knock_in_tol,
+            "local-vol knock-in: {knock_in_npv} vs {knock_in_expected} \
+             (diff {knock_in_diff}, tol {knock_in_tol})"
         );
     }
 }

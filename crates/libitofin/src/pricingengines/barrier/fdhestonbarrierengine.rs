@@ -29,7 +29,6 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::DividendSchedule;
-use crate::quotes::Quote;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
