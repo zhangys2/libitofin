@@ -15,9 +15,9 @@ pub mod vanilla;
 
 pub use barrier::{
     BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
-    FdBlackScholesRebateEngine, FdHestonBarrierEngine, MCBarrierEngine, MakeMcBarrierEngine,
-    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
-    set_mc_barrier_engine,
+    FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCBarrierEngine,
+    MakeMcBarrierEngine, set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine,
+    set_fd_heston_barrier_engine, set_mc_barrier_engine,
 };
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
@@ -28,8 +28,7 @@ pub use swaption::{
     BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, FdG2SwaptionEngine, G2SwaptionEngine,
     JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
-pub use vanilla::AnalyticEuropeanEngine;
-pub use vanilla::FdBlackScholesVanillaEngine;
+pub use vanilla::{AnalyticEuropeanEngine, FdBlackScholesVanillaEngine, FdHestonVanillaEngine};
 
 pub use blackformula::{
     black_formula, black_formula_asset_itm_probability, black_formula_cash_itm_probability,

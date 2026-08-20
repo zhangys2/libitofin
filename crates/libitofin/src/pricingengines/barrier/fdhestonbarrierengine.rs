@@ -1,15 +1,18 @@
 //! Finite-difference Heston engine for European barrier options.
 //!
 //! Port of `ql/pricingengines/barrier/fdhestonbarrierengine.{hpp,cpp}`.
-//! This slice prices **knock-out** barriers (no leverage function, mixing
-//! factor 1). Knock-in needs [`FdHestonVanillaEngine`] plus a rebate engine
-//! and is deferred with the local-vol comparison arm.
+//! Knock-out uses steps 1–5 (mesher pinned at `ln(H)`, 2-D Dirichlet rebate,
+//! dividend handler). Knock-in is step 6: vanilla + rebate − out-value.
+//! Leverage / mixing factor ≠ 1 are omitted.
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::fail;
 use crate::instrument::{Instrument, InstrumentResults};
 use crate::instruments::{BarrierArguments, BarrierType, StrikedTypePayoff};
+use crate::pricingengines::vanilla::FdHestonVanillaEngine;
+
+use super::fdhestonrebateengine::FdHestonRebateEngine;
 use crate::methods::finitedifferences::meshers::{
     FdmHestonVarianceMesher, FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
     process_helper,
@@ -26,6 +29,7 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::DividendSchedule;
+use crate::quotes::Quote;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
@@ -35,7 +39,7 @@ use super::fdblackscholesbarrierengine::triggered;
 
 type BarrierEngineBase = GenericEngine<BarrierArguments, InstrumentResults>;
 
-/// Finite-difference Heston barrier engine (knock-out).
+/// Finite-difference Heston barrier engine (knock-out and knock-in).
 pub struct FdHestonBarrierEngine {
     base: BarrierEngineBase,
     model: SharedMut<HestonModel>,
@@ -125,9 +129,8 @@ impl PricingEngine for FdHestonBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
         let rebate = args.rebate.expect("validated");
-        if matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn) {
-            fail!("knock-in Heston barrier engine not yet ported");
-        }
+        let is_in = matches!(barrier_type, BarrierType::DownIn | BarrierType::UpIn);
+        let exercise = Shared::clone(exercise);
 
         let process = self.model.borrow().process();
         let spot = process.s0().current_link()?.value()?;
@@ -241,7 +244,45 @@ impl PricingEngine for FdHestonBarrierEngine {
             damping_steps: self.damping_steps,
         };
         let solver = FdmHestonSolver::new(process, solver_desc, self.scheme_desc, 1.0);
-        let value = solver.value_at(spot, self.model.borrow().v0())?;
+        let v0 = self.model.borrow().v0();
+        let mut value = solver.value_at(spot, v0)?;
+        if is_in {
+            let vanilla = {
+                let mut engine = FdHestonVanillaEngine::with_params(
+                    SharedMut::clone(&self.model),
+                    self.dividends.clone(),
+                    self.t_grid,
+                    self.x_grid,
+                    self.v_grid,
+                    self.damping_steps,
+                    self.scheme_desc,
+                );
+                engine.price(
+                    shared(payoff) as Shared<dyn StrikedTypePayoff>,
+                    Shared::clone(&exercise),
+                )?
+            };
+            let rebate_x_grid = 20.max(self.x_grid / 4);
+            let rebate_v_grid = 10.max(self.v_grid / 4);
+            let rebate_damping = if self.damping_steps > 0 {
+                1.min(self.damping_steps / 2)
+            } else {
+                0
+            };
+            let rebate_npv = {
+                let mut engine = FdHestonRebateEngine::with_params(
+                    SharedMut::clone(&self.model),
+                    self.dividends.clone(),
+                    self.t_grid,
+                    rebate_x_grid,
+                    rebate_v_grid,
+                    rebate_damping,
+                    self.scheme_desc,
+                );
+                engine.price(barrier_type, barrier, rebate, payoff, exercise)?
+            };
+            value = vanilla + rebate_npv - value;
+        }
         self.base.results_mut().value = Some(value);
         Ok(())
     }
@@ -260,6 +301,7 @@ pub fn set_fd_heston_barrier_engine(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cashflows::dividend_vector;
     use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
@@ -267,6 +309,7 @@ mod tests {
     use crate::interestrate::Compounding;
     use crate::math::interpolations::linear::Linear;
     use crate::option::OptionType;
+    use crate::payoff::Payoff;
     use crate::processes::HestonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
@@ -377,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn heston_barrier_rejects_knock_in_zero_spot_triggered_and_american() {
+    fn heston_barrier_rejects_zero_spot_triggered_and_american() {
         let today = Date::new(15, Month::June, 2026);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
@@ -406,19 +449,21 @@ mod tests {
         .unwrap();
         set_fd_heston_barrier_engine(
             &mut knock_in,
-            shared_mut(FdHestonBarrierEngine::new(heston_model(
-                100.0,
-                0.04,
-                1.0,
-                0.04,
-                0.2,
-                -0.5,
-                flat(0.05),
-                flat(0.0),
-            ))),
+            shared_mut(FdHestonBarrierEngine::with_params(
+                heston_model(100.0, 0.04, 1.0, 0.04, 0.2, -0.5, flat(0.05), flat(0.0)),
+                Vec::new(),
+                20,
+                40,
+                10,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            )),
         );
-        let err = knock_in.npv().unwrap_err().to_string();
-        assert!(err.contains("knock-in"), "knock-in: {err}");
+        let knock_in_npv = knock_in.npv().unwrap();
+        assert!(
+            knock_in_npv.is_finite() && knock_in_npv > 0.0,
+            "knock-in should price, got {knock_in_npv}"
+        );
 
         let mut zero_spot = BarrierOption::with_rebate(
             BarrierType::DownOut,
@@ -502,5 +547,178 @@ mod tests {
             err.contains("only european style option are supported"),
             "american: {err}"
         );
+    }
+
+    fn nearly_bs_heston(today: Date, spot: Real, r: Real, vol: Real) -> SharedMut<HestonModel> {
+        let dc = Actual365Fixed::new();
+        let flat = |rate| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        heston_model(
+            spot,
+            vol * vol,
+            1.0,
+            vol * vol,
+            0.005,
+            0.0,
+            flat(r),
+            flat(0.0),
+        )
+    }
+
+    /// `barrieroption.cpp` `testDividendBarrierOption` Heston arm:
+    /// `FdHestonBarrierEngine` 50×101×3, vol-of-vol 0.005, `relTol = 2e-4`.
+    #[test]
+    fn dividend_barrier_matches_quantlib_heston_oracle() {
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        let spot = 100.0;
+        let strike = 105.0;
+        let rebate = 5.0;
+        let r = 0.05;
+        let vol = 0.02;
+        let model = nearly_bs_heston(today, spot, r, vol);
+        let div_date = today + Period::new(6, TimeUnit::Months);
+        let div_amount = 30.0;
+        let dividends = dividend_vector(&[div_date], &[div_amount]).unwrap();
+        let r_ts = model
+            .borrow()
+            .process()
+            .risk_free_rate()
+            .current_link()
+            .unwrap();
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, strike);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+
+        let expected_down_out = r_ts.discount_date(div_date, false).unwrap() * rebate;
+        let expected_up_out = {
+            let df_div = r_ts.discount_date(div_date, false).unwrap();
+            let df_mat = r_ts.discount_date(maturity, false).unwrap();
+            payoff.value((spot - div_amount * df_div) / df_mat) * df_mat
+        };
+
+        let cases = [
+            (BarrierType::DownOut, 80.0, expected_down_out),
+            (BarrierType::UpOut, 120.0, expected_up_out),
+            (BarrierType::DownIn, 80.0, 29.154),
+            (BarrierType::UpIn, 120.0, 4.765),
+        ];
+        let rel_tol = 2e-4;
+
+        for (barrier_type, barrier, expected) in cases {
+            let mut option = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                rebate,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_heston_barrier_engine(
+                &mut option,
+                shared_mut(FdHestonBarrierEngine::with_params(
+                    SharedMut::clone(&model),
+                    dividends.clone(),
+                    50,
+                    101,
+                    3,
+                    0,
+                    FdmSchemeDesc::hundsdorfer(),
+                )),
+            );
+            let calculated = option.npv().unwrap();
+            let diff = (calculated - expected).abs();
+            let tol = rel_tol * expected;
+            eprintln!(
+                "Heston {barrier_type:?} H={barrier}: calculated={calculated:.8} \
+                 expected={expected:.8} diff={diff:.2e} tol={tol:.2e}"
+            );
+            assert!(
+                calculated.is_finite() && diff <= tol,
+                "Heston {barrier_type:?} H={barrier}: {calculated} vs {expected} \
+                 (diff {diff}, tol {tol})"
+            );
+        }
+    }
+
+    /// `barrieroption.cpp` `testDividendBarrierOptionWithDividendsPastMaturity`
+    /// Heston arm @ 1e-12.
+    #[test]
+    fn past_maturity_dividends_do_not_change_heston_npv() {
+        let today = Date::new(11, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        let model = nearly_bs_heston(today, 100.0, 0.05, 0.02);
+        let dividends =
+            dividend_vector(&[today + Period::new(18, TimeUnit::Months)], &[30.0]).unwrap();
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 105.0);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+        let cases = [(BarrierType::DownOut, 90.0), (BarrierType::UpOut, 110.0)];
+        for (barrier_type, barrier) in cases {
+            let mut without = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_heston_barrier_engine(
+                &mut without,
+                shared_mut(FdHestonBarrierEngine::with_params(
+                    SharedMut::clone(&model),
+                    Vec::new(),
+                    50,
+                    101,
+                    3,
+                    0,
+                    FdmSchemeDesc::hundsdorfer(),
+                )),
+            );
+            let without_npv = without.npv().unwrap();
+
+            let mut with_div = BarrierOption::with_rebate(
+                barrier_type,
+                barrier,
+                5.0,
+                payoff,
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_fd_heston_barrier_engine(
+                &mut with_div,
+                shared_mut(FdHestonBarrierEngine::with_params(
+                    SharedMut::clone(&model),
+                    dividends.clone(),
+                    50,
+                    101,
+                    3,
+                    0,
+                    FdmSchemeDesc::hundsdorfer(),
+                )),
+            );
+            let with_npv = with_div.npv().unwrap();
+            let diff = (with_npv - without_npv).abs();
+            eprintln!(
+                "Heston {barrier_type:?} H={barrier}: without={without_npv:.12} \
+                 with={with_npv:.12} diff={diff:.2e}"
+            );
+            assert!(
+                diff <= 1e-12,
+                "Heston {barrier_type:?} H={barrier}: {with_npv} vs {without_npv} (diff {diff})"
+            );
+        }
     }
 }
