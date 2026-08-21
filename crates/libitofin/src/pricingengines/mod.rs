@@ -28,7 +28,9 @@ pub use swaption::{
     BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, FdG2SwaptionEngine, G2SwaptionEngine,
     JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
-pub use vanilla::{AnalyticEuropeanEngine, FdBlackScholesVanillaEngine, FdHestonVanillaEngine};
+pub use vanilla::{
+    AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
+};
 
 pub use blackformula::{
     black_formula, black_formula_asset_itm_probability, black_formula_cash_itm_probability,
