@@ -54,6 +54,10 @@ credit.
 | FdmAffineModelTermStructure | `FdmAffineModelTermStructure` | `fdmaffinemodeltermstructure` | G2 origin≡curve; factors≡discountBond; setVariable notifies |
 | FdmAffineModelSwapInnerValue (G2) | `FdmAffineModelSwapInnerValue` | `fdmaffinemodelswapinnervalue` | ATM≈0; deep ITM payer>0; avg=inner; setVariable reuse |
 | FdG2SwaptionEngine | `FdG2SwaptionEngine` (Hundsdorfer default) | `fdg2swaptionengine` / `testCachedG2Values` | ITM European>0; ≈ analytic G2; Bermudan≥European; cached FDM @ 5e-3 |
+| FdmHullWhiteOp | `FdmHullWhiteOp` | `fdmhullwhiteop.{hpp,cpp}` | apply = home dir; mixed=0; splitting inverts; φ̄ discount |
+| FdmHullWhiteSolver | `FdmHullWhiteSolver` | `fdmhullwhitesolver` | constant→discount-ish; zero payoff→0 |
+| FdmHullWhiteSwapInnerValue | `FdmHullWhiteSwapInnerValue` | `fdmaffinemodelswapinnervalue` HW spec | ATM≈0; deep ITM payer>0; getState = short rate |
+| FdHullWhiteSwaptionEngine | `FdHullWhiteSwaptionEngine` (Douglas default) | `fdhullwhiteswaptionengine` / `testCachedValues` | ITM European>0; ≈ Jamshidian; Bermudan≥European; cached FDM @ 1e-4 (non-par) |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | G2 two-factor tree | `TwoFactorShortRateTree` / `G2::tree` | `twofactormodel` / `g2` | discount=exp(-(φ+x+y)dt); root φ-only; product size; builds under analytic φ |

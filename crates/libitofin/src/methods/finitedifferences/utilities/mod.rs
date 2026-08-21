@@ -12,7 +12,7 @@ mod fdminnervaluecalculator;
 mod fdmmesherintegral;
 
 pub use escroweddividendadjustment::EscrowedDividendAdjustment;
-pub use fdmaffinemodelswapinnervalue::FdmAffineModelSwapInnerValue;
+pub use fdmaffinemodelswapinnervalue::{FdmAffineModelSwapInnerValue, FdmHullWhiteSwapInnerValue};
 pub use fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
 pub use fdmboundaryconditionset::FdmBoundaryConditionSet;
 pub use fdmdirichletboundary::FdmDirichletBoundary;
