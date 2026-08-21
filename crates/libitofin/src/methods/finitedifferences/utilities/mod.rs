@@ -2,6 +2,7 @@
 //!
 //! Port of `ql/methods/finitedifferences/utilities/`.
 
+mod escroweddividendadjustment;
 mod fdmaffinemodelswapinnervalue;
 mod fdmaffinemodeltermstructure;
 mod fdmboundaryconditionset;
@@ -10,6 +11,7 @@ mod fdmdividendhandler;
 mod fdminnervaluecalculator;
 mod fdmmesherintegral;
 
+pub use escroweddividendadjustment::EscrowedDividendAdjustment;
 pub use fdmaffinemodelswapinnervalue::FdmAffineModelSwapInnerValue;
 pub use fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
 pub use fdmboundaryconditionset::FdmBoundaryConditionSet;
