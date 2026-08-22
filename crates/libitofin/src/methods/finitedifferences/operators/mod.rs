@@ -8,6 +8,7 @@
 mod fdmblackscholesop;
 mod fdmg2op;
 mod fdmhestonop;
+mod fdmhullwhiteop;
 mod fdmlinearop;
 mod fdmlinearopcomposite;
 mod fdmlinearopiterator;
@@ -21,6 +22,7 @@ mod triplebandlinearop;
 pub use fdmblackscholesop::FdmBlackScholesOp;
 pub use fdmg2op::FdmG2Op;
 pub use fdmhestonop::FdmHestonOp;
+pub use fdmhullwhiteop::FdmHullWhiteOp;
 pub use fdmlinearop::FdmLinearOp;
 pub use fdmlinearopcomposite::FdmLinearOpComposite;
 pub use fdmlinearopiterator::FdmLinearOpIterator;

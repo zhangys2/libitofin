@@ -22,22 +22,16 @@
 //!
 //! ## Deferred (omitted, not stubbed)
 //!
-//! - `HullWhite::FittingParameter` (`hullwhite.hpp:128`) and the `phi_` member it
-//!   builds in `generateArguments` (`hullwhite.cpp:87`) are the analytical
-//!   fitting law `phi(t) = f(t,t) + 0.5*temp^2`, `temp = a < sqrt(QL_EPSILON) ?
-//!   sigma*t : sigma*(1-e^{-at})/a` (`hullwhite.hpp:136-143`; note this is the
-//!   `sqrt(QL_EPSILON)` guard, distinct from `convexity_bias`'s plain
-//!   `QL_EPSILON`). `phi_` feeds only `dynamics()` (`hullwhite.hpp:162`); `A(t,T)`
-//!   reads the curve's forward directly and never touches it, so `phi_` and its
-//!   fitting law are deferred with the dynamics/tree path (#377). Consequently
-//!   [`generate_arguments`](crate::models::CalibratedModelHolder::generate_arguments)
-//!   here refreshes only the cached `r0`; the `phi_` rebuild lands with `dynamics()`.
 //! - `HullWhite::Dynamics` (`hullwhite.hpp:107`) and `tree` (`hullwhite.cpp:43`)
 //!   are ported here (#463): [`HullWhite::tree`] builds a numerical short-rate
 //!   lattice whose deterministic drift is fitted in closed form. The public
-//!   analytic-`phi` `dynamics()` accessor (`hullwhite.hpp:159`) stays deferred
-//!   with the analytic `FittingParameter`; `tree()` builds its own numerical
-//!   `phi` and never reads `phi_`. `FixedReversion` (`hullwhite.hpp:80`) is the
+//!   analytic-`phi` [`dynamics`](HullWhite::dynamics) accessor
+//!   (`hullwhite.hpp:159`) and `FittingParameter` (`hullwhite.hpp:128`) rebuild
+//!   `phi_` in `generateArguments` as `φ(t) = f(t) + ½ temp²` with
+//!   `temp = a < sqrt(QL_EPSILON) ? σ t : σ(1−e^{−at})/a` (`hullwhite.hpp:136-143`;
+//!   note this is the `sqrt(QL_EPSILON)` guard, distinct from
+//!   `convexity_bias`'s plain `QL_EPSILON`). `tree()` still builds its own
+//!   numerical `phi` and never reads `phi_`. `FixedReversion` (`hullwhite.hpp:80`) is the
 //!   calibration mask, deferred. The analytic
 //!   `testCachedHullWhite` calibration oracle (`shortratemodels.cpp:83`) is ported
 //!   in `hull_white_calibrates_to_the_cached_swaption_values` below (#399), on the
@@ -69,6 +63,7 @@ use std::rc::Rc;
 use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::interestrate::Compounding;
+use crate::math::array::Array;
 use crate::math::timegrid::TimeGrid;
 use crate::methods::lattices::{Tree, TreeLattice1D, TrinomialTree};
 use crate::models::model::{
@@ -153,6 +148,37 @@ pub fn convexity_bias(
     }
 }
 
+/// Analytical fitting law `φ(t)` (`hullwhite.hpp:136-143`).
+///
+/// ```text
+/// φ(t) = f(t) + ½ temp²
+/// temp = a < √ε ? σ t : σ (1 − e^{−at}) / a
+/// ```
+struct FittingParameterValue {
+    term_structure: Handle<dyn YieldTermStructure>,
+    a: Real,
+    sigma: Real,
+}
+
+impl ParameterValue for FittingParameterValue {
+    fn value(&self, _params: &Array, t: Time) -> Real {
+        let curve = self
+            .term_structure
+            .current_link()
+            .expect("the Hull-White fitting law requires a non-empty term-structure handle");
+        let forward = curve
+            .forward_rate(t, t, Compounding::Continuous, Frequency::NoFrequency, false)
+            .expect("the Hull-White fitting law's forward rate is well-defined on its curve")
+            .rate();
+        let temp = if self.a < Real::EPSILON.sqrt() {
+            self.sigma * t
+        } else {
+            self.sigma * (1.0 - (-self.a * t).exp()) / self.a
+        };
+        forward + 0.5 * temp * temp
+    }
+}
+
 /// The single-factor Hull-White (extended Vasicek) model
 /// (`hullwhite.hpp:46`).
 ///
@@ -162,6 +188,7 @@ pub fn convexity_bias(
 pub struct HullWhite {
     base: Vasicek,
     ts_model: TermStructureConsistentModel,
+    phi: Parameter,
     /// Keeps the term-structure observer alive: the handle holds only a weak
     /// back-reference to it (see [`register_with_term_structure`]), so dropping
     /// it here would unregister the model. Never read directly.
@@ -209,6 +236,7 @@ impl HullWhite {
         let mut model = HullWhite {
             base,
             ts_model,
+            phi: NullParameter::new(),
             ts_observer: None,
         };
         model.generate_arguments();
@@ -232,6 +260,38 @@ impl HullWhite {
     /// dates into year fractions with.
     pub fn term_structure(&self) -> &Handle<dyn YieldTermStructure> {
         self.ts_model.term_structure()
+    }
+
+    /// Mean-reversion speed `a()` (`vasicek.hpp:55`), forwarded from the
+    /// embedded Vasicek. Distinct from the affine [`OneFactorAffineModel::a`].
+    pub fn a(&self) -> Real {
+        self.base.a()
+    }
+
+    /// Short-rate volatility `sigma()` (`vasicek.hpp:57`).
+    pub fn sigma(&self) -> Real {
+        self.base.sigma()
+    }
+
+    /// Analytic fitting drift `φ(t)` (`phi_`, `hullwhite.hpp:101`).
+    pub fn phi(&self, t: Time) -> Real {
+        self.phi.value(t)
+    }
+
+    /// `HullWhite::dynamics()` (`hullwhite.hpp:159-164`): short-rate dynamics
+    /// `r_t = φ(t) + x_t` under the analytic fitting law rebuilt by
+    /// [`generate_arguments`](CalibratedModelHolder::generate_arguments).
+    ///
+    /// # Errors
+    ///
+    /// Fails if `sigma` is negative (the Ornstein-Uhlenbeck volatility
+    /// constraint). A successfully constructed model never hits this.
+    pub fn dynamics(&self) -> QlResult<Shared<dyn ShortRateDynamics>> {
+        Ok(shared(HullWhiteDynamics::new(
+            self.phi.clone(),
+            self.a(),
+            self.sigma(),
+        )?) as Shared<dyn ShortRateDynamics>)
     }
 
     /// The fitted curve's discount factor `P(t)`
@@ -396,7 +456,8 @@ impl HullWhite {
 /// `HullWhite::Dynamics` (`hullwhite.hpp:107`): the short rate is
 /// `r_t = phi(t) + x_t`, where `x_t` follows an Ornstein-Uhlenbeck process with
 /// zero mean level and `phi(t)` is the term-structure fitting drift. Built by
-/// [`HullWhite::tree`] with the numerical (tree-fitted) `phi`.
+/// [`HullWhite::dynamics`] with the analytic `phi_` and by [`HullWhite::tree`]
+/// with a numerical (tree-fitted) `phi`.
 struct HullWhiteDynamics {
     process: Shared<dyn StochasticProcess1D>,
     fitting: Parameter,
@@ -436,11 +497,10 @@ impl ShortRateDynamics for HullWhiteDynamics {
     }
 }
 
-/// `HullWhite::generateArguments()` (`hullwhite.cpp:85`): refreshes the cached
-/// `r0` from `zeroRate(0)` on every construction and relink. The C++ method also
-/// rebuilds `phi_` (the fitting law for `dynamics()`), deferred here with the
-/// dynamics/tree path (see the module deferral note); `A(t,T)` reads the curve's
-/// forward live and never uses `phi_`.
+/// `HullWhite::generateArguments()` (`hullwhite.cpp:85-88`): rebuilds the
+/// analytic `phi_` fitting law and refreshes the cached `r0` from `zeroRate(0)`
+/// on every construction, relink, and `set_params`. `A(t,T)` still reads the
+/// curve's forward live and never uses `phi_`.
 impl CalibratedModelHolder for HullWhite {
     fn calibrated_model(&self) -> &CalibratedModel {
         self.base.calibrated_model()
@@ -460,6 +520,12 @@ impl CalibratedModelHolder for HullWhite {
             .expect("the Hull-White zero rate at t=0 is well-defined on its curve")
             .rate();
         self.base.set_r0(zero);
+        let law = FittingParameterValue {
+            term_structure: self.ts_model.term_structure().clone(),
+            a: self.a(),
+            sigma: self.sigma(),
+        };
+        self.phi = TermStructureFittingParameter::new(Rc::new(law));
     }
 }
 
@@ -1184,6 +1250,57 @@ mod tests {
         assert!((x - (r - 0.02)).abs() < 1e-15);
         assert!((dynamics.short_rate(1.0, x) - r).abs() < 1e-15);
         assert_eq!(dynamics.process().x0().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn analytic_fitting_phi_matches_closed_form() {
+        let a = 0.1;
+        let sigma = 0.01;
+        let curve = Handle::new(flat(0.05));
+        let model = HullWhite::new(curve.clone(), a, sigma).unwrap();
+        let hw = model.borrow();
+        assert!((hw.a() - a).abs() < 1e-15);
+        assert!((hw.sigma() - sigma).abs() < 1e-15);
+        for t in [0.0, 0.25, 1.0, 5.0] {
+            let forward = curve
+                .current_link()
+                .unwrap()
+                .forward_rate(t, t, Compounding::Continuous, Frequency::NoFrequency, false)
+                .unwrap()
+                .rate();
+            let temp = sigma * (1.0 - (-a * t).exp()) / a;
+            let expected = forward + 0.5 * temp * temp;
+            assert!(
+                (hw.phi(t) - expected).abs() < 1e-14,
+                "t={t}: phi {} vs {expected}",
+                hw.phi(t)
+            );
+            let dynamics = hw.dynamics().unwrap();
+            assert!((dynamics.short_rate(t, 0.0) - expected).abs() < 1e-14);
+            assert!((dynamics.short_rate(t, 0.02) - (0.02 + expected)).abs() < 1e-14);
+            assert!((dynamics.variable(t, expected) - 0.0).abs() < 1e-14);
+        }
+    }
+
+    #[test]
+    fn analytic_fitting_uses_sigma_t_when_a_is_tiny() {
+        let a = 1e-10;
+        let sigma = 0.01;
+        let t = 2.0;
+        let curve = Handle::new(flat(0.05));
+        let model = HullWhite::new(curve.clone(), a, sigma).unwrap();
+        let forward = curve
+            .current_link()
+            .unwrap()
+            .forward_rate(t, t, Compounding::Continuous, Frequency::NoFrequency, false)
+            .unwrap()
+            .rate();
+        let expected = forward + 0.5 * (sigma * t) * (sigma * t);
+        let got = model.borrow().phi(t);
+        assert!(
+            (got - expected).abs() < 1e-12,
+            "tiny-a phi {got} vs {expected}"
+        );
     }
 
     #[test]
