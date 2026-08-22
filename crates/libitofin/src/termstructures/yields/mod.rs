@@ -12,6 +12,7 @@ mod forwardspreadedtermstructure;
 mod forwardstructure;
 mod impliedtermstructure;
 mod piecewiseyieldcurve;
+mod quantotermstructure;
 mod ratehelpers;
 mod zerocurve;
 mod zerospreadedtermstructure;
@@ -25,6 +26,7 @@ pub use forwardspreadedtermstructure::ForwardSpreadedTermStructure;
 pub use forwardstructure::ForwardRateStructure;
 pub use impliedtermstructure::ImpliedTermStructure;
 pub use piecewiseyieldcurve::PiecewiseYieldCurve;
+pub use quantotermstructure::QuantoTermStructure;
 pub use ratehelpers::{
     DepositRateHelper, FraRateHelper, FuturesRateHelper, OISRateHelper, Pillar, SwapRateHelper,
 };
