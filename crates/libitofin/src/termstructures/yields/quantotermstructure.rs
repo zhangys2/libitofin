@@ -44,6 +44,7 @@ impl QuantoTermStructure {
     /// `QuantoTermStructure(underlyingDividendTS, riskFreeTS, foreignRiskFreeTS,
     /// underlyingBlackVolTS, strike, exchRateBlackVolTS, exchRateATMlevel,
     /// underlyingExchRateCorrelation)`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         underlying_dividend_ts: Handle<dyn YieldTermStructure>,
         risk_free_ts: Handle<dyn YieldTermStructure>,
