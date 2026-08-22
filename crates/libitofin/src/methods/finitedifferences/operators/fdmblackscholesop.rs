@@ -7,6 +7,7 @@ use crate::errors::QlResult;
 use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::shared::Shared;
 use crate::termstructures::volatility::{BlackVolTermStructure, LocalVolTermStructure};
@@ -36,9 +37,10 @@ use super::triplebandlinearop::TripleBandLinearOp;
 ///
 /// Deferred, omitted rather than accepted and ignored:
 ///
-/// - the quanto branch, which adjusts the drift through an `FdmQuantoHelper`
-///   (`cpp:72-79`, `cpp:84-91`); that helper is not ported;
 /// - `toMatrixDecomp` (`cpp:133-135`), which returns a `SparseMatrix`.
+///
+/// The quanto branch (`cpp:72-79`, `cpp:84-91`) is
+/// [`with_quanto`](Self::with_quanto).
 pub struct FdmBlackScholesOp {
     mesher: Shared<dyn FdmMesher>,
     r_ts: Shared<dyn YieldTermStructure>,
@@ -52,6 +54,7 @@ pub struct FdmBlackScholesOp {
     strike: Real,
     illegal_local_vol_overwrite: Real,
     direction: Size,
+    quanto: Option<Shared<FdmQuantoHelper>>,
 }
 
 impl FdmBlackScholesOp {
@@ -91,6 +94,29 @@ impl FdmBlackScholesOp {
         illegal_local_vol_overwrite: Real,
         direction: Size,
     ) -> QlResult<Self> {
+        Self::with_quanto(
+            mesher,
+            process,
+            strike,
+            local_vol,
+            illegal_local_vol_overwrite,
+            direction,
+            None,
+        )
+    }
+
+    /// As [`with_local_vol`](Self::with_local_vol), with the C++ `quantoHelper`
+    /// argument (`cpp:32-49`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_quanto(
+        mesher: Shared<dyn FdmMesher>,
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        direction: Size,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> QlResult<Self> {
         let (lv, x) = if local_vol {
             (
                 Some(process.local_volatility()?.current_link()?),
@@ -112,6 +138,7 @@ impl FdmBlackScholesOp {
             strike,
             illegal_local_vol_overwrite,
             direction,
+            quanto,
         })
     }
 }
@@ -163,7 +190,11 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
                 };
                 v[i] = lv * lv;
             }
-            let drift = (r - q) - &(0.5 * &v);
+            let mut drift = (r - q) - &(0.5 * &v);
+            if let Some(quanto) = &self.quanto {
+                let adj = quanto.quanto_adjustment_array(&v.sqrt(), t1, t2)?;
+                drift = &drift - &adj;
+            }
             let diffusion = self.dxx_map.mult(&(0.5 * &v));
             self.map_t
                 .axpyb(&drift, &self.dx_map, &diffusion, &Array::filled(1, -r));
@@ -173,15 +204,16 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
                 .black_forward_variance(t1, t2, self.strike, false)?
                 / (t2 - t1);
 
+            let mut drift = Array::filled(1, r - q - 0.5 * v);
+            if let Some(quanto) = &self.quanto {
+                let adj = quanto.quanto_adjustment_array(&Array::filled(1, v.sqrt()), t1, t2)?;
+                drift = &drift - &adj;
+            }
             let diffusion = self
                 .dxx_map
                 .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
-            self.map_t.axpyb(
-                &Array::filled(1, r - q - 0.5 * v),
-                &self.dx_map,
-                &diffusion,
-                &Array::filled(1, -r),
-            );
+            self.map_t
+                .axpyb(&drift, &self.dx_map, &diffusion, &Array::filled(1, -r));
         }
 
         Ok(())

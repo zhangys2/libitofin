@@ -3,10 +3,12 @@
 //! Port of `ql/methods/finitedifferences/solvers/fdmblackscholessolver.{hpp,cpp}`:
 //! builds an [`FdmBlackScholesOp`] and delegates interpolation to
 //! [`Fdm1DimSolver`]. The local-vol branch of the operator is wired through
-//! [`with_local_vol`](FdmBlackScholesSolver::with_local_vol); quanto is omitted.
+//! [`with_local_vol`](FdmBlackScholesSolver::with_local_vol);
+//! quanto is [`with_quanto`](FdmBlackScholesSolver::with_quanto).
 
 use crate::errors::QlResult;
 use crate::methods::finitedifferences::operators::{FdmBlackScholesOp, FdmLinearOpComposite};
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::types::Real;
@@ -50,13 +52,36 @@ impl FdmBlackScholesSolver {
         local_vol: bool,
         illegal_local_vol_overwrite: Real,
     ) -> QlResult<Self> {
-        let op = shared_mut(FdmBlackScholesOp::with_local_vol(
+        Self::with_quanto(
+            process,
+            strike,
+            solver_desc,
+            scheme_desc,
+            local_vol,
+            illegal_local_vol_overwrite,
+            None,
+        )
+    }
+
+    /// As [`with_local_vol`](Self::with_local_vol), with the C++ `quantoHelper`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_quanto(
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> QlResult<Self> {
+        let op = shared_mut(FdmBlackScholesOp::with_quanto(
             Shared::clone(&solver_desc.mesher),
             process,
             strike,
             local_vol,
             illegal_local_vol_overwrite,
             0,
+            quanto,
         )?);
         Ok(Self {
             solver: Fdm1DimSolver::new(

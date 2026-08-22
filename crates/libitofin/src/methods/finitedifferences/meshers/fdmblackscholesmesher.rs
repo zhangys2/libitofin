@@ -46,11 +46,12 @@ use super::uniform1dmesher::uniform_1d_mesher;
 /// - the process is borrowed rather than shared: the mesher only reads it
 ///   while building the grid and keeps nothing.
 ///
-/// Deferred to #636: the quanto branch (`cpp:66-73`), which replaces the
-/// dividend curve with a `QuantoTermStructure` when an `FdmQuantoHelper` is
-/// given. Neither that helper nor that term structure is ported yet, so the
-/// parameter is omitted rather than accepted and ignored, and the dividend
-/// curve here is always the process's own.
+/// The quanto branch (`cpp:66-73`) is
+/// [`fdm_black_scholes_mesher_with_quanto`](fdm_black_scholes_mesher_with_quanto):
+/// it replaces the dividend curve with a
+/// [`QuantoTermStructure`](crate::termstructures::yields::QuantoTermStructure)
+/// when an [`FdmQuantoHelper`](crate::methods::finitedifferences::utilities::FdmQuantoHelper)
+/// is given.
 ///
 /// # Errors
 ///
@@ -68,6 +69,39 @@ pub fn fdm_black_scholes_mesher(
     scale_factor: Real,
     c_point: Option<(Real, Real)>,
     dividend_schedule: &[Shared<dyn Dividend>],
+    spot_adjustment: Real,
+) -> QlResult<Fdm1dMesher> {
+    fdm_black_scholes_mesher_with_quanto(
+        size,
+        process,
+        maturity,
+        strike,
+        x_min_constraint,
+        x_max_constraint,
+        eps,
+        scale_factor,
+        c_point,
+        dividend_schedule,
+        None,
+        spot_adjustment,
+    )
+}
+
+/// As [`fdm_black_scholes_mesher`](fdm_black_scholes_mesher), with the C++
+/// `fdmQuantoHelper` argument (`cpp:66-73`).
+#[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
+pub fn fdm_black_scholes_mesher_with_quanto(
+    size: Size,
+    process: &GeneralizedBlackScholesProcess,
+    maturity: Time,
+    strike: Real,
+    x_min_constraint: Option<Real>,
+    x_max_constraint: Option<Real>,
+    eps: Real,
+    scale_factor: Real,
+    c_point: Option<(Real, Real)>,
+    dividend_schedule: &[Shared<dyn Dividend>],
+    quanto: Option<&crate::methods::finitedifferences::utilities::FdmQuantoHelper>,
     spot_adjustment: Real,
 ) -> QlResult<Fdm1dMesher> {
     let spot = process.x0()?;
@@ -90,7 +124,20 @@ pub fn fdm_black_scholes_mesher(
     intermediate_steps.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
 
     let r_ts = process.risk_free_rate().current_link()?;
-    let q_ts = process.dividend_yield().current_link()?;
+    let q_ts = if let Some(quanto) = quanto {
+        shared(crate::termstructures::yields::QuantoTermStructure::new(
+            process.dividend_yield().clone(),
+            process.risk_free_rate().clone(),
+            Handle::new(Shared::clone(quanto.f_ts())),
+            process.black_volatility().clone(),
+            strike,
+            Handle::new(Shared::clone(quanto.fx_vol_ts())),
+            quanto.exch_rate_atm_level(),
+            quanto.equity_fx_correlation(),
+        )) as Shared<dyn YieldTermStructure>
+    } else {
+        process.dividend_yield().current_link()?
+    };
 
     let mut last_div_time: Time = 0.0;
     let mut fwd = spot + spot_adjustment;
@@ -445,5 +492,80 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err.message(), "negative or null underlying given");
+    }
+
+    /// `quantooption.cpp` `testFDMQuantoHelper`: quanto mesher endpoints.
+    #[test]
+    fn quanto_helper_sets_the_grid_boundaries() {
+        use crate::math::distributions::normal::InverseCumulativeNormal;
+        use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
+        use crate::time::daycounters::actual360::Actual360;
+
+        let dc = Actual360::new();
+        let today = Date::new(22, Month::April, 2019);
+        let s = 100.0;
+        let domestic_r = 0.1;
+        let foreign_r = 0.2;
+        let q = 0.3;
+        let vol = 0.3;
+        let fx_vol = 0.2;
+        let rho = -0.75;
+
+        let process = GeneralizedBlackScholesProcess::new(
+            make_quote_handle(s).handle(),
+            flat_rate(today, q, dc.clone()),
+            flat_rate(today, domestic_r, dc.clone()),
+            flat_vol(today, vol, dc.clone()),
+        );
+        let helper = FdmQuantoHelper::new(
+            process.risk_free_rate().current_link().unwrap(),
+            shared(FlatForward::with_rate(
+                today,
+                foreign_r,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>,
+            shared(BlackConstantVol::new(today, None, fx_vol, dc.clone()))
+                as Shared<dyn BlackVolTermStructure>,
+            rho,
+            1.0,
+        );
+
+        let maturity_date = today + Period::new(6, TimeUnit::Months);
+        let maturity = dc.year_fraction(today, maturity_date);
+        let eps = 0.0002;
+        let scale = 1.25;
+        let mesher = fdm_black_scholes_mesher_with_quanto(
+            3,
+            &process,
+            maturity,
+            s,
+            None,
+            None,
+            eps,
+            scale,
+            None,
+            &[],
+            Some(&helper),
+            0.0,
+        )
+        .unwrap();
+
+        let expected_adj = domestic_r - foreign_r + rho * vol * fx_vol;
+        let q_quanto = q + expected_adj;
+        let drift = domestic_r - q_quanto;
+        let log_fwd = s.ln() + drift * maturity;
+        let norm_inv = InverseCumulativeNormal::standard_value(1.0 - eps).unwrap();
+        let sigma_sqrt_t = vol * maturity.sqrt();
+        let x_min = log_fwd - sigma_sqrt_t * norm_inv * scale;
+        let x_max = s.ln() + sigma_sqrt_t * norm_inv * scale;
+        let loc = mesher.locations();
+        assert!((loc[0] - x_min).abs() < 1e-10, "xMin {} vs {x_min}", loc[0]);
+        assert!(
+            (loc[loc.len() - 1] - x_max).abs() < 1e-10,
+            "xMax {} vs {x_max}",
+            loc[loc.len() - 1]
+        );
     }
 }

@@ -18,7 +18,9 @@ mod uniformgridmesher;
 
 pub use concentrating1dmesher::concentrating_1d_mesher;
 pub use fdm1dmesher::Fdm1dMesher;
-pub use fdmblackscholesmesher::{fdm_black_scholes_mesher, process_helper};
+pub use fdmblackscholesmesher::{
+    fdm_black_scholes_mesher, fdm_black_scholes_mesher_with_quanto, process_helper,
+};
 pub use fdmhestonvariancemesher::FdmHestonVarianceMesher;
 pub use fdmmesher::FdmMesher;
 pub use fdmmeshercomposite::FdmMesherComposite;

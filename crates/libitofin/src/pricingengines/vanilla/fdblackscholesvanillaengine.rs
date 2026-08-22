@@ -3,7 +3,8 @@
 //!
 //! Port of `ql/pricingengines/vanilla/fdblackscholesvanillaengine.{hpp,cpp}`
 //! on the Spot cash-dividend model (the default) and the Escrowed model
-//! ([`CashDividendModel`]). Quanto is follow-up. Local vol is the Dupire
+//! ([`CashDividendModel`]). Quanto is [`with_quanto_helper`](FdBlackScholesVanillaEngine::with_quanto_helper)
+//! (incompatible with the escrowed cash-dividend model). Local vol is the Dupire
 //! branch of [`FdmBlackScholesSolver`]. The engine still prices Europeans
 //! only; American/Bermudan escrowed (zero-amount dividend stopping times plus
 //! `FdmEscrowedLogInnerValueCalculator`) follows with those exercise types.
@@ -16,14 +17,14 @@ use crate::instruments::{
     StrikedTypePayoff,
 };
 use crate::methods::finitedifferences::meshers::{
-    FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
+    FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher_with_quanto,
 };
 use crate::methods::finitedifferences::solvers::{
     FdmBlackScholesSolver, FdmSchemeDesc, FdmSolverDesc,
 };
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::{
-    EscrowedDividendAdjustment, FdmInnerValueCalculator, fdm_log_inner_value,
+    EscrowedDividendAdjustment, FdmInnerValueCalculator, FdmQuantoHelper, fdm_log_inner_value,
 };
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
@@ -58,6 +59,7 @@ pub struct FdBlackScholesVanillaEngine {
     local_vol: bool,
     illegal_local_vol_overwrite: Real,
     cash_dividend_model: CashDividendModel,
+    quanto: Option<Shared<FdmQuantoHelper>>,
 }
 
 impl FdBlackScholesVanillaEngine {
@@ -125,7 +127,15 @@ impl FdBlackScholesVanillaEngine {
             local_vol,
             illegal_local_vol_overwrite,
             cash_dividend_model: CashDividendModel::Spot,
+            quanto: None,
         }
+    }
+
+    /// C++ `withQuantoHelper` / the quanto-helper constructors.
+    pub fn with_quanto_helper(mut self, helper: Shared<FdmQuantoHelper>) -> Self {
+        self.base.register_with(helper.observable());
+        self.quanto = Some(helper);
+        self
     }
 
     /// C++ `withCashDividendModel`.
@@ -185,7 +195,7 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             fail!("no payoff given");
         };
         let strike = payoff.strike();
-        require!(strike > 0.0, "strike must be positive");
+        require!(strike >= 0.0, "strike must be non-negative");
 
         let maturity = self.process.time(&exercise.last_date())?;
         let spot = self.process.x0()?;
@@ -194,6 +204,10 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
         let (dividend_schedule, spot_adjustment) = match self.cash_dividend_model {
             CashDividendModel::Spot => (self.dividends.clone(), 0.0),
             CashDividendModel::Escrowed => {
+                require!(
+                    self.quanto.is_none(),
+                    "Escrowed dividend model is not supported for Quanto-Options"
+                );
                 let process = Shared::clone(&self.process);
                 let escrowed = EscrowedDividendAdjustment::new(
                     self.dividends.clone(),
@@ -217,7 +231,7 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             }
         };
 
-        let equity = fdm_black_scholes_mesher(
+        let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
             &self.process,
             maturity,
@@ -228,6 +242,7 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             1.5,
             Some((strike, 0.1)),
             &dividend_schedule,
+            self.quanto.as_deref(),
             spot_adjustment,
         )?;
         let mesher = shared(FdmMesherComposite::new(vec![equity]));
@@ -259,17 +274,24 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver = FdmBlackScholesSolver::with_local_vol(
+        let solver = FdmBlackScholesSolver::with_quanto(
             &self.process,
             strike,
             solver_desc,
             self.scheme_desc,
             self.local_vol,
             self.illegal_local_vol_overwrite,
+            self.quanto.clone(),
         )?;
+        let s = spot + spot_adjustment;
         let results = self.base.results_mut();
-        results.instrument.value = Some(solver.value_at(spot + spot_adjustment)?);
-        results.greeks = Greeks::default();
+        results.instrument.value = Some(solver.value_at(s)?);
+        results.greeks = Greeks {
+            delta: Some(solver.delta_at(s)?),
+            gamma: None,
+            theta: Some(solver.theta_at(s)?),
+            ..Greeks::default()
+        };
         results.more_greeks = MoreGreeks::default();
         Ok(())
     }
@@ -595,5 +617,208 @@ mod tests {
         .price(payoff, exercise)
         .unwrap_err();
         assert_eq!(err.message(), "spot minus dividends becomes negative");
+    }
+
+    fn quanto_helper(
+        today: Date,
+        r_d: Real,
+        r_f: Real,
+        fx_vol: Real,
+        rho: Real,
+        dc: crate::time::daycounter::DayCounter,
+    ) -> Shared<FdmQuantoHelper> {
+        shared(FdmQuantoHelper::new(
+            shared(FlatForward::with_rate(
+                today,
+                r_d,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>,
+            shared(FlatForward::with_rate(
+                today,
+                r_f,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>,
+            shared(BlackConstantVol::new(today, None, fx_vol, dc))
+                as Shared<dyn BlackVolTermStructure>,
+            rho,
+            1.0,
+        ))
+    }
+
+    /// `quantooption.cpp` `testPDEOptionValues`: FD quanto vs Black with
+    /// `q + (r_d − r_f + ρ σ σ_fx)`.
+    #[test]
+    fn pde_quanto_values_track_adjusted_black() {
+        use crate::time::daycounters::actual360::Actual360;
+
+        let dc = Actual360::new();
+        let today = Date::new(21, Month::April, 2019);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        // type, strike, spot, q, r, t, vol, fxr, fxv, corr
+        let cases = [
+            (
+                OptionType::Call,
+                105.0,
+                100.0,
+                0.04,
+                0.08,
+                0.5,
+                0.2,
+                0.05,
+                0.10,
+                0.3,
+            ),
+            (
+                OptionType::Call,
+                100.0,
+                100.0,
+                0.16,
+                0.08,
+                0.25,
+                0.15,
+                0.05,
+                0.20,
+                -0.3,
+            ),
+            (
+                OptionType::Put,
+                105.0,
+                100.0,
+                0.04,
+                0.08,
+                0.5,
+                0.2,
+                0.05,
+                0.10,
+                0.3,
+            ),
+            (
+                OptionType::Call,
+                0.0,
+                100.0,
+                0.04,
+                0.08,
+                0.3,
+                0.3,
+                0.05,
+                0.10,
+                0.75,
+            ),
+        ];
+
+        for (ty, strike, spot, q, r, t, vol, fxr, fxv, corr) in cases {
+            let process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(spot)) as Shared<dyn Quote>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    q,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    r,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(BlackConstantVol::new(today, None, vol, dc.clone()))
+                    as Shared<dyn BlackVolTermStructure>),
+            ));
+            let helper = quanto_helper(today, r, fxr, fxv, corr, dc.clone());
+            let days = (t * 360.0 + 0.5) as i32;
+            let expiry = today + days;
+            let payoff: Shared<dyn StrikedTypePayoff> = shared(PlainVanillaPayoff::new(ty, strike));
+            let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+
+            let mut fd_opt = VanillaOption::new(
+                Shared::clone(&payoff),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            );
+            let t_grid = (t * 200.0) as Size;
+            fd_opt.base_mut().set_pricing_engine(shared_mut(
+                FdBlackScholesVanillaEngine::with_params(
+                    Shared::clone(&process),
+                    Vec::new(),
+                    t_grid,
+                    500,
+                    1,
+                    FdmSchemeDesc::douglas(),
+                )
+                .with_quanto_helper(helper),
+            )
+                as crate::shared::SharedMut<dyn PricingEngine>);
+
+            let q_adj = q + (r - fxr + corr * vol * fxv);
+            let adj_process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(spot)) as Shared<dyn Quote>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    q_adj,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    r,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(BlackConstantVol::new(today, None, vol, dc.clone()))
+                    as Shared<dyn BlackVolTermStructure>),
+            ));
+            let mut analytic = VanillaOption::new(payoff, exercise, Shared::clone(&settings));
+            analytic
+                .base_mut()
+                .set_pricing_engine(shared_mut(AnalyticEuropeanEngine::new(adj_process))
+                    as crate::shared::SharedMut<dyn PricingEngine>);
+
+            let fd_npv = fd_opt.npv().unwrap();
+            let an_npv = analytic.npv().unwrap();
+            assert!(
+                (fd_npv - an_npv).abs() < 2e-4,
+                "{ty:?} K={strike} T={t}: fd={fd_npv} analytic={an_npv}"
+            );
+            let fd_delta = fd_opt.delta().unwrap();
+            let an_delta = analytic.delta().unwrap();
+            assert!(
+                (fd_delta - an_delta).abs() < 1e-4,
+                "{ty:?} K={strike} T={t}: fd delta={fd_delta} analytic={an_delta}"
+            );
+        }
+    }
+
+    #[test]
+    fn escrowed_quanto_is_rejected() {
+        let today = Date::new(21, Month::April, 2019);
+        let process = process(today, 100.0, 0.04, 0.08, 0.20);
+        let helper = quanto_helper(today, 0.08, 0.05, 0.10, 0.3, Actual365Fixed::new());
+        let expiry = today + Period::new(6, TimeUnit::Months);
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, 105.0));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+        let err = FdBlackScholesVanillaEngine::with_params(
+            process,
+            Vec::new(),
+            10,
+            10,
+            0,
+            FdmSchemeDesc::douglas(),
+        )
+        .with_quanto_helper(helper)
+        .with_cash_dividend_model(CashDividendModel::Escrowed)
+        .price(payoff, exercise)
+        .unwrap_err();
+        assert!(err.message().contains("Escrowed dividend model"));
     }
 }
