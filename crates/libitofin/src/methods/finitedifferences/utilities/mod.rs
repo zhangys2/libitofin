@@ -10,6 +10,7 @@ mod fdmdirichletboundary;
 mod fdmdividendhandler;
 mod fdminnervaluecalculator;
 mod fdmmesherintegral;
+mod fdmquantohelper;
 
 pub use escroweddividendadjustment::EscrowedDividendAdjustment;
 pub use fdmaffinemodelswapinnervalue::{FdmAffineModelSwapInnerValue, FdmHullWhiteSwapInnerValue};
@@ -21,3 +22,4 @@ pub use fdminnervaluecalculator::{
     FdmCellAveragingInnerValue, FdmInnerValueCalculator, GridMapping, fdm_log_inner_value,
 };
 pub use fdmmesherintegral::FdmMesherIntegral;
+pub use fdmquantohelper::FdmQuantoHelper;
