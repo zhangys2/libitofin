@@ -384,6 +384,8 @@ mod tests {
 
     /// `quantooption.cpp` `testAmericanQuantoOption`: near-Black Heston
     /// (`σ=1e-4`, `θ=v0`) with quanto + cash dividend, Hundsdorfer 100×400×3.
+    /// C++ uses one implicit-Euler damping step; 2-D implicit Euler needs the
+    /// iterative solvers of #636, so this roll is undamped.
     #[test]
     fn american_quanto_matches_cached_npv() {
         let today = Date::new(21, Month::April, 2019);
@@ -410,7 +412,7 @@ mod tests {
                 100,
                 400,
                 3,
-                1,
+                0,
                 FdmSchemeDesc::hundsdorfer(),
             )
             .with_quanto_helper(helper),
