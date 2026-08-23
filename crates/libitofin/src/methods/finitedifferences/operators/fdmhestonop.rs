@@ -5,16 +5,17 @@
 //! are the equity map in `ln(S)`, the CIR variance map, and the `ρ σ v` mixed
 //! derivative.
 //!
-//! Quanto and leverage-function (local-vol) branches are omitted with the rest
-//! of that work; `mixingFactor` defaults to 1, so the equity and variance
-//! maps are the plain Heston ones. `toMatrixDecomp` is omitted with the
-//! sparse-matrix work (#636).
+//! Quanto is [`with_quanto`](FdmHestonOp::with_quanto). The leverage-function
+//! (local-vol) branch is still omitted; `mixingFactor` defaults to 1, so the
+//! equity and variance maps are the plain Heston ones. `toMatrixDecomp` is
+//! omitted with the sparse-matrix work (#636).
 
 use crate::errors::QlResult;
 use crate::fail;
 use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::HestonProcess;
 use crate::shared::Shared;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -32,12 +33,14 @@ use super::triplebandlinearop::TripleBandLinearOp;
 /// Equity-direction map (`FdmHestonEquityPart`, `fdmhestonop.cpp:39-99`).
 struct FdmHestonEquityPart {
     variance_values: Array,
+    volatility_values: Array,
     dx_map: TripleBandLinearOp,
     dxx_map: TripleBandLinearOp,
     map_t: TripleBandLinearOp,
     r_ts: Shared<dyn YieldTermStructure>,
     q_ts: Shared<dyn YieldTermStructure>,
     leverage: Array,
+    quanto: Option<Shared<FdmQuantoHelper>>,
 }
 
 impl FdmHestonEquityPart {
@@ -45,6 +48,7 @@ impl FdmHestonEquityPart {
         mesher: Shared<dyn FdmMesher>,
         r_ts: Shared<dyn YieldTermStructure>,
         q_ts: Shared<dyn YieldTermStructure>,
+        quanto: Option<Shared<FdmQuantoHelper>>,
     ) -> Self {
         let mut variance_values = 0.5 * &mesher.locations(1);
         let layout = mesher.layout();
@@ -55,9 +59,11 @@ impl FdmHestonEquityPart {
                 variance_values[iter.index()] = 0.0;
             }
         }
+        let volatility_values = (2.0 * &variance_values).sqrt();
         let size = layout.size();
         FdmHestonEquityPart {
             variance_values,
+            volatility_values,
             dx_map: first_derivative_op(0, Shared::clone(&mesher)),
             dxx_map: second_derivative_op(0, Shared::clone(&mesher))
                 .mult(&(0.5 * &mesher.locations(1))),
@@ -65,6 +71,7 @@ impl FdmHestonEquityPart {
             r_ts,
             q_ts,
             leverage: Array::filled(size, 1.0),
+            quanto,
         }
     }
 
@@ -90,7 +97,15 @@ impl FdmHestonEquityPart {
             )?
             .rate();
         let l_square = &self.leverage * &self.leverage;
-        let drift = (r - q) - &(&self.variance_values * &l_square);
+        let mut drift = (r - q) - &(&self.variance_values * &l_square);
+        if let Some(quanto) = &self.quanto {
+            let adj = quanto.quanto_adjustment_array(
+                &(&self.volatility_values * &self.leverage),
+                t1,
+                t2,
+            )?;
+            drift = &drift - &adj;
+        }
         let dxx_scaled = self.dxx_map.mult(&l_square);
         self.map_t.axpyb(
             &drift,
@@ -169,6 +184,16 @@ impl FdmHestonOp {
         process: &HestonProcess,
         mixing_factor: Real,
     ) -> QlResult<Self> {
+        Self::with_quanto(mesher, process, mixing_factor, None)
+    }
+
+    /// As [`new`](Self::new), with the C++ `quantoHelper`.
+    pub fn with_quanto(
+        mesher: Shared<dyn FdmMesher>,
+        process: &HestonProcess,
+        mixing_factor: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> QlResult<Self> {
         let r_ts = process.risk_free_rate().current_link()?;
         let q_ts = process.dividend_yield().current_link()?;
         let mixed_sigma = process.sigma() * mixing_factor;
@@ -183,7 +208,7 @@ impl FdmHestonOp {
                 process.kappa(),
                 process.theta(),
             ),
-            dx_map: FdmHestonEquityPart::new(mesher, r_ts, q_ts),
+            dx_map: FdmHestonEquityPart::new(mesher, r_ts, q_ts, quanto),
         })
     }
 }

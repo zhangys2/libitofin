@@ -1,23 +1,27 @@
-//! Finite-difference Heston engine for European vanillas with cash dividends.
+//! Finite-difference Heston engine for vanillas with cash dividends.
 //!
 //! Port of `ql/pricingengines/vanilla/fdhestonvanillaengine.{hpp,cpp}` on the
-//! single-strike path (no multiple-strikes cache, leverage function, quanto,
-//! or mixing factor ≠ 1). American/Bermudan exercise is follow-up.
+//! single-strike path (no multiple-strikes cache, leverage function, or
+//! mixing factor ≠ 1). Quanto is [`with_quanto_helper`](FdHestonVanillaEngine::with_quanto_helper).
+//! American and Bermudan exercise use the Spot dividend model via
+//! [`FdmStepConditionComposite::vanilla_composite`].
 
 use crate::errors::QlResult;
-use crate::exercise::{Exercise, ExerciseType};
+use crate::exercise::Exercise;
 use crate::fail;
 use crate::instruments::{
     Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
     StrikedTypePayoff,
 };
 use crate::methods::finitedifferences::meshers::{
-    FdmHestonVarianceMesher, FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher,
+    FdmHestonVarianceMesher, FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher_with_quanto,
     process_helper,
 };
 use crate::methods::finitedifferences::solvers::{FdmHestonSolver, FdmSchemeDesc, FdmSolverDesc};
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
-use crate::methods::finitedifferences::utilities::{FdmInnerValueCalculator, fdm_log_inner_value};
+use crate::methods::finitedifferences::utilities::{
+    FdmInnerValueCalculator, FdmQuantoHelper, fdm_log_inner_value,
+};
 use crate::models::equity::HestonModel;
 use crate::models::model::CalibratedModelHolder;
 use crate::patterns::observable::{AsObservable, Observable};
@@ -29,7 +33,8 @@ use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
 use crate::types::{Real, Size};
 
-/// Finite-difference Heston vanilla engine (European + Spot dividends).
+/// Finite-difference Heston vanilla engine (European / American / Bermudan
+/// + Spot dividends).
 pub struct FdHestonVanillaEngine {
     base: OneAssetOptionEngine,
     model: SharedMut<HestonModel>,
@@ -39,6 +44,7 @@ pub struct FdHestonVanillaEngine {
     v_grid: Size,
     damping_steps: Size,
     scheme_desc: FdmSchemeDesc,
+    quanto: Option<Shared<FdmQuantoHelper>>,
 }
 
 impl FdHestonVanillaEngine {
@@ -93,7 +99,15 @@ impl FdHestonVanillaEngine {
             v_grid,
             damping_steps,
             scheme_desc,
+            quanto: None,
         }
+    }
+
+    /// C++ `withQuantoHelper` / the quanto-helper constructors.
+    pub fn with_quanto_helper(mut self, helper: Shared<FdmQuantoHelper>) -> Self {
+        self.base.register_with(helper.observable());
+        self.quanto = Some(helper);
+        self
     }
 
     /// Fills the arguments and returns the NPV.
@@ -140,9 +154,6 @@ impl PricingEngine for FdHestonVanillaEngine {
         let Some(exercise) = arguments.exercise.as_ref() else {
             fail!("no exercise given");
         };
-        if exercise.exercise_type() != ExerciseType::European {
-            fail!("only european style option are supported");
-        }
         let Some(payoff) = arguments.payoff.as_ref() else {
             fail!("no payoff given");
         };
@@ -174,7 +185,7 @@ impl PricingEngine for FdHestonVanillaEngine {
             process.risk_free_rate(),
             v_mesher.vola_estimate(),
         )?;
-        let equity = fdm_black_scholes_mesher(
+        let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
             &bs_process,
             maturity,
@@ -182,9 +193,10 @@ impl PricingEngine for FdHestonVanillaEngine {
             None,
             None,
             0.0001,
-            2.0,
+            1.5,
             Some((strike, 0.1)),
             &self.dividends,
+            self.quanto.as_deref(),
             0.0,
         )?;
         let mesher = shared(FdmMesherComposite::new(vec![
@@ -219,7 +231,13 @@ impl PricingEngine for FdHestonVanillaEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver = FdmHestonSolver::new(process, solver_desc, self.scheme_desc, 1.0);
+        let solver = FdmHestonSolver::with_quanto(
+            process,
+            solver_desc,
+            self.scheme_desc,
+            1.0,
+            self.quanto.clone(),
+        );
         let v0 = self.model.borrow().v0();
         let value = solver.value_at(spot, v0)?;
         let results = self.base.results_mut();
@@ -233,7 +251,7 @@ impl PricingEngine for FdHestonVanillaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exercise::EuropeanExercise;
+    use crate::exercise::{AmericanExercise, EuropeanExercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::PlainVanillaPayoff;
@@ -246,6 +264,7 @@ mod tests {
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
     use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
@@ -333,25 +352,75 @@ mod tests {
         );
     }
 
-    #[test]
-    fn non_european_exercise_is_rejected() {
-        use crate::exercise::AmericanExercise;
+    fn quanto_helper(
+        today: Date,
+        r_d: Real,
+        r_f: Real,
+        fx_vol: Real,
+        rho: Real,
+    ) -> Shared<FdmQuantoHelper> {
+        let dc = Actual365Fixed::new();
+        shared(FdmQuantoHelper::new(
+            shared(FlatForward::with_rate(
+                today,
+                r_d,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>,
+            shared(FlatForward::with_rate(
+                today,
+                r_f,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>,
+            shared(BlackConstantVol::new(today, None, fx_vol, dc))
+                as Shared<dyn BlackVolTermStructure>,
+            rho,
+            1.0,
+        ))
+    }
 
-        let today = Date::new(15, Month::June, 2026);
+    /// `quantooption.cpp` `testAmericanQuantoOption`: near-Black Heston
+    /// (`σ=1e-4`, `θ=v0`) with quanto + cash dividend, Hundsdorfer 100×400×3.
+    #[test]
+    fn american_quanto_matches_cached_npv() {
+        let today = Date::new(21, Month::April, 2019);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
-        let model = heston_model(100.0, 0.04, 1.0, 0.04, 0.2, -0.5, 0.05, 0.0, today);
-        let expiry = today + Period::new(6, TimeUnit::Months);
+        let maturity = today + Period::new(9, TimeUnit::Months);
+        let vol = 0.30;
+        let v0 = vol * vol;
+        let model = heston_model(100.0, v0, 1.0, v0, 1e-4, 0.0, 0.025, 0.03, today);
+        let helper = quanto_helper(today, 0.025, 0.075, 0.15, -0.75);
+        let dividends = vec![shared(crate::cashflows::FixedDividend::new(
+            8.0,
+            today + Period::new(6, TimeUnit::Months),
+        )) as Shared<dyn crate::cashflows::Dividend>];
         let payoff: Shared<dyn StrikedTypePayoff> =
-            shared(PlainVanillaPayoff::new(OptionType::Put, 100.0));
-        let exercise: Shared<dyn Exercise> =
-            shared(AmericanExercise::new(today, expiry, false).unwrap());
-        let mut engine = FdHestonVanillaEngine::new(model);
-        let err = engine.price(payoff, exercise).unwrap_err().to_string();
+            shared(PlainVanillaPayoff::new(OptionType::Call, 105.0));
+        let exercise: Shared<dyn Exercise> = shared(AmericanExercise::from_latest(maturity, false));
+
+        let mut option = VanillaOption::new(payoff, exercise, settings);
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdHestonVanillaEngine::with_params(
+                model,
+                dividends,
+                100,
+                400,
+                3,
+                1,
+                FdmSchemeDesc::hundsdorfer(),
+            )
+            .with_quanto_helper(helper),
+        ) as SharedMut<dyn PricingEngine>);
+
+        let expected = 8.90611734;
+        let calculated = option.npv().unwrap();
         assert!(
-            err.contains("only european style option are supported"),
-            "american: {err}"
+            (calculated - expected).abs() < 1e-4,
+            "Heston American quanto {calculated} vs {expected}"
         );
-        let _ = settings;
     }
 }
