@@ -18,6 +18,7 @@ credit.
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
 | FD vanilla escrowed dividends | `FdBlackScholesVanillaEngine` + `EscrowedDividendAdjustment` (European) | `dividendoption.cpp` `testFdEuropeanDegenerate` / `testEscrowedDividendModel` | empty/zero divs @ 1e-6; FD 200×400 vs Black on prepaid spot @ 1e-3 |
 | FD quanto helper | `FdmQuantoHelper` + `QuantoTermStructure` + mesher/op/engine | `quantooption.cpp` `testFDMQuantoHelper` / `testPDEOptionValues` | adj @ 1e-10; mesher bounds @ 1e-10; FD vs quanto-q Black NPV @ 2e-4, delta @ 1e-4 |
+| FD American quanto | `FdBlackScholesVanillaEngine` American + cash div + quanto | `quantooption.cpp` `testAmericanQuantoOption` | cached 8.90611734 @ 1e-4 (BS and local vol); BS≡LV @ 1e-6 |
 | Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
