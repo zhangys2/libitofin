@@ -30,6 +30,7 @@ pub use swaption::{
 };
 pub use vanilla::{
     AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
+    QuantoEuropeanEngine,
 };
 
 pub use blackformula::{
