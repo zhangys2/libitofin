@@ -10,18 +10,14 @@
 use std::any::Any;
 
 use crate::errors::QlResult;
-use crate::exercise::Exercise;
 use crate::fail;
 use crate::handle::Handle;
-use crate::instruments::{
-    OneAssetOptionEngine, OneAssetOptionResults, OptionArguments, StrikedTypePayoff,
-};
+use crate::instruments::{OneAssetOptionEngine, OneAssetOptionResults, OptionArguments};
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::quotes::Quote;
-use crate::require;
 use crate::shared::{Shared, shared};
 use crate::termstructures::volatility::BlackVolTermStructure;
 use crate::termstructures::yields::QuantoTermStructure;
@@ -97,7 +93,9 @@ impl PricingEngine for QuantoEuropeanEngine {
             )
         };
         let spot = self.process.state_variable().current_link()?.value()?;
-        require!(spot > 0.0, "negative or null underlying");
+        if spot.is_nan() || spot <= 0.0 {
+            fail!("negative or null underlying");
+        }
 
         const EXCHANGE_RATE_ATM: Real = 1.0;
         let correlation = self.correlation.current_link()?.value()?;
@@ -186,7 +184,7 @@ mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
     use crate::instrument::Instrument;
-    use crate::instruments::{PlainVanillaPayoff, VanillaOption};
+    use crate::instruments::{PlainVanillaPayoff, StrikedTypePayoff, VanillaOption};
     use crate::interestrate::Compounding;
     use crate::option::OptionType;
     use crate::processes::BlackScholesMertonProcess;
