@@ -17,6 +17,7 @@ credit.
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
 | FD vanilla escrowed dividends | `FdBlackScholesVanillaEngine` + `EscrowedDividendAdjustment` (European) | `dividendoption.cpp` `testFdEuropeanDegenerate` / `testEscrowedDividendModel` | empty/zero divs @ 1e-6; FD 200×400 vs Black on prepaid spot @ 1e-3 |
+| FD American escrowed dividends | `FdmEscrowedLogInnerValueCalculator` + American/Bermudan on `FdBlackScholesVanillaEngine` | `americanoption.cpp` `testEscrowedVsSpotAmericanOption`; `dividendoption.cpp` `testFdAmericanDegenerate` | escrowed vs spot NPV/delta @ 1e-2 (vol × S/(S−D)); empty/zero divs @ 1e-6 |
 | FD quanto helper | `FdmQuantoHelper` + `QuantoTermStructure` + mesher/op/engine | `quantooption.cpp` `testFDMQuantoHelper` / `testPDEOptionValues` | adj @ 1e-10; mesher bounds @ 1e-10; FD vs quanto-q Black NPV @ 2e-4, delta @ 1e-4 |
 | FD American quanto | `FdBlackScholesVanillaEngine` American + cash div + quanto | `quantooption.cpp` `testAmericanQuantoOption` | cached 8.90611734 @ 1e-4 (BS and local vol); BS≡LV @ 1e-6 |
 | FD Heston American quanto | `FdHestonVanillaEngine` American + cash div + quanto | `quantooption.cpp` `testAmericanQuantoOption` | near-Black Heston (`σ=1e-4`) cached 8.90611734 @ 1e-4 (Hundsdorfer undamped; 2-D implicit Euler is #636) |
