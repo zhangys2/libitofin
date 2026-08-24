@@ -20,7 +20,7 @@ credit.
 | FD quanto helper | `FdmQuantoHelper` + `QuantoTermStructure` + mesher/op/engine | `quantooption.cpp` `testFDMQuantoHelper` / `testPDEOptionValues` | adj @ 1e-10; mesher bounds @ 1e-10; FD vs quanto-q Black NPV @ 2e-4, delta @ 1e-4 |
 | FD American quanto | `FdBlackScholesVanillaEngine` American + cash div + quanto | `quantooption.cpp` `testAmericanQuantoOption` | cached 8.90611734 @ 1e-4 (BS and local vol); BS≡LV @ 1e-6 |
 | FD Heston American quanto | `FdHestonVanillaEngine` American + cash div + quanto | `quantooption.cpp` `testAmericanQuantoOption` | near-Black Heston (`σ=1e-4`) cached 8.90611734 @ 1e-4 (Hundsdorfer undamped; 2-D implicit Euler is #636) |
-| FD Heston-SLV American quanto | `FdHestonVanillaEngine` + constant leverage | `quantooption.cpp` `testAmericanQuantoOption` | `L=2`, `v0=θ=0.25 σ²` cached 8.90611734 @ 1e-4 |
+| FD Heston-SLV American quanto | `FdHestonVanillaEngine` + constant leverage | `quantooption.cpp` `testAmericanQuantoOption` | `L=2`, `v0=θ=0.25 σ²` cached 8.90611734 @ 1e-4; equity mesher vol × `L(0,S0)` |
 | Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |

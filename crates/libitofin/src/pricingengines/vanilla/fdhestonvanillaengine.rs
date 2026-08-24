@@ -191,11 +191,18 @@ impl PricingEngine for FdHestonVanillaEngine {
         // `processHelper(s0, dividendYield, riskFreeRate, vol)` into a helper
         // whose parameters are `(s0, rTS, qTS)`. That swaps r and q on the
         // equity-mesher process only (the Heston PDE still uses the model).
+        // C++ `FdmHestonLocalVolatilityVarianceMesher` keeps the CIR v-grid
+        // and multiplies `volaEstimate` by the path-averaged leverage. A
+        // constant leverage (the SLV oracle) is exactly `L(0, S0)`.
+        let mut vola_estimate = v_mesher.vola_estimate();
+        if let Some(leverage) = &self.leverage_fct {
+            vola_estimate *= leverage.local_vol(0.0, spot, true)?.max(0.01);
+        }
         let bs_process = process_helper(
             process.s0(),
             process.dividend_yield(),
             process.risk_free_rate(),
-            v_mesher.vola_estimate(),
+            vola_estimate,
         )?;
         let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
