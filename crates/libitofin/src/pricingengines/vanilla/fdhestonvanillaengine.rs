@@ -3,10 +3,11 @@
 //! Port of `ql/pricingengines/vanilla/fdhestonvanillaengine.{hpp,cpp}` on the
 //! single-strike path (no multiple-strikes cache or mixing factor ≠ 1).
 //! Quanto is [`with_quanto_helper`](FdHestonVanillaEngine::with_quanto_helper).
-//! Leverage is [`with_leverage_function`](FdHestonVanillaEngine::with_leverage_function).
+//! Leverage is [`with_leverage_function`](FdHestonVanillaEngine::with_leverage_function)
+//! and scales the equity mesher through
+//! [`FdmHestonLocalVolatilityVarianceMesher`].
 //! American and Bermudan exercise use the Spot dividend model via
-//! [`FdmStepConditionComposite::vanilla_composite`]. The local-vol variance
-//! mesher (`FdmHestonLocalVolatilityVarianceMesher`) is still omitted.
+//! [`FdmStepConditionComposite::vanilla_composite`].
 
 use crate::errors::QlResult;
 use crate::exercise::Exercise;
@@ -16,8 +17,8 @@ use crate::instruments::{
     StrikedTypePayoff,
 };
 use crate::methods::finitedifferences::meshers::{
-    FdmHestonVarianceMesher, FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher_with_quanto,
-    process_helper,
+    FdmHestonLocalVolatilityVarianceMesher, FdmMesher, FdmMesherComposite,
+    fdm_black_scholes_mesher_with_quanto, process_helper,
 };
 use crate::methods::finitedifferences::solvers::{FdmHestonSolver, FdmSchemeDesc, FdmSolverDesc};
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
@@ -178,26 +179,22 @@ impl PricingEngine for FdHestonVanillaEngine {
         require!(spot > 0.0, "negative or null underlying given");
 
         let t_avg_steps = 5.max(self.t_grid / 50);
-        let v_mesher = FdmHestonVarianceMesher::new(
+        // C++ `FdHestonVanillaEngine::getSolverDesc` uses
+        // `FdmHestonLocalVolatilityVarianceMesher` whenever a leverage
+        // function is set; without one it is the CIR mesher. The helper
+        // `processHelper(s0, dividendYield, riskFreeRate, vol)` is called
+        // into a constructor whose parameters are `(s0, rTS, qTS)`, which
+        // swaps r and q on the equity-mesher process only.
+        let v_mesher = FdmHestonLocalVolatilityVarianceMesher::new(
             self.v_grid,
             &process,
+            self.leverage_fct.clone(),
             maturity,
             t_avg_steps,
             0.0001,
             1.0,
         )?;
-
-        // C++ `FdHestonVanillaEngine::getSolverDesc` calls
-        // `processHelper(s0, dividendYield, riskFreeRate, vol)` into a helper
-        // whose parameters are `(s0, rTS, qTS)`. That swaps r and q on the
-        // equity-mesher process only (the Heston PDE still uses the model).
-        // C++ `FdmHestonLocalVolatilityVarianceMesher` keeps the CIR v-grid
-        // and multiplies `volaEstimate` by the path-averaged leverage. A
-        // constant leverage (the SLV oracle) is exactly `L(0, S0)`.
-        let mut vola_estimate = v_mesher.vola_estimate();
-        if let Some(leverage) = &self.leverage_fct {
-            vola_estimate *= leverage.local_vol(0.0, spot, true)?.max(0.01);
-        }
+        let vola_estimate = v_mesher.vola_estimate();
         let bs_process = process_helper(
             process.s0(),
             process.dividend_yield(),
