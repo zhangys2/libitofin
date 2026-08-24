@@ -4,10 +4,12 @@
 //! on the Spot cash-dividend model (the default) and the Escrowed model
 //! ([`CashDividendModel`]). Quanto is [`with_quanto_helper`](FdBlackScholesVanillaEngine::with_quanto_helper)
 //! (incompatible with the escrowed cash-dividend model). Local vol is the Dupire
-//! branch of [`FdmBlackScholesSolver`]. American and Bermudan exercise use the
-//! Spot model via [`FdmStepConditionComposite::vanilla_composite`]; escrowed
-//! early exercise needs `FdmEscrowedLogInnerValueCalculator` and is rejected.
+//! branch of [`FdmBlackScholesSolver`]. American and Bermudan exercise use
+//! [`FdmStepConditionComposite::vanilla_composite`]; the escrowed model prices
+//! early exercise through [`FdmEscrowedLogInnerValueCalculator`] and plants
+//! zero-amount dividend dates as stopping times (`cpp:126-130`).
 
+use crate::cashflows::{Dividend, FixedDividend};
 use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
@@ -23,7 +25,8 @@ use crate::methods::finitedifferences::solvers::{
 };
 use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
 use crate::methods::finitedifferences::utilities::{
-    EscrowedDividendAdjustment, FdmInnerValueCalculator, FdmQuantoHelper, fdm_log_inner_value,
+    EscrowedDividendAdjustment, FdmEscrowedLogInnerValueCalculator, FdmInnerValueCalculator,
+    FdmQuantoHelper, fdm_log_inner_value,
 };
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::payoff::Payoff;
@@ -47,7 +50,7 @@ pub enum CashDividendModel {
 }
 
 /// Finite-difference Black–Scholes vanilla engine (European / American /
-/// Bermudan + cash dividends on the Spot model).
+/// Bermudan + cash dividends on the Spot and Escrowed models).
 pub struct FdBlackScholesVanillaEngine {
     base: OneAssetOptionEngine,
     process: Shared<GeneralizedBlackScholesProcess>,
@@ -198,25 +201,21 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
 
-        let (dividend_schedule, spot_adjustment) = match self.cash_dividend_model {
-            CashDividendModel::Spot => (self.dividends.clone(), 0.0),
+        let (dividend_schedule, spot_adjustment, escrowed) = match self.cash_dividend_model {
+            CashDividendModel::Spot => (self.dividends.clone(), 0.0, None),
             CashDividendModel::Escrowed => {
-                require!(
-                    exercise.exercise_type() == ExerciseType::European,
-                    "Escrowed dividend model is not supported for American/Bermudan options"
-                );
                 require!(
                     self.quanto.is_none(),
                     "Escrowed dividend model is not supported for Quanto-Options"
                 );
                 let process = Shared::clone(&self.process);
-                let escrowed = EscrowedDividendAdjustment::new(
+                let escrowed = shared(EscrowedDividendAdjustment::new(
                     self.dividends.clone(),
                     process.risk_free_rate(),
                     process.dividend_yield(),
                     move |d| process.time(&d),
                     maturity,
-                );
+                ));
                 let settlement = self
                     .process
                     .risk_free_rate()
@@ -228,7 +227,19 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
                     spot + spot_adjustment > 0.0,
                     "spot minus dividends becomes negative"
                 );
-                (Vec::new(), spot_adjustment)
+                // American / Bermudan: zero-amount dates so the time grid stops
+                // when remaining escrowed cash drops (`cpp:126-130`).
+                let dividend_schedule = if exercise.exercise_type() == ExerciseType::European {
+                    Vec::new()
+                } else {
+                    self.dividends
+                        .iter()
+                        .map(|cf| {
+                            shared(FixedDividend::new(0.0, cf.date())) as Shared<dyn Dividend>
+                        })
+                        .collect()
+                };
+                (dividend_schedule, spot_adjustment, Some(escrowed))
             }
         };
 
@@ -250,11 +261,19 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
         let mesher_dyn: Shared<dyn FdmMesher> = mesher.clone() as Shared<dyn FdmMesher>;
 
         let payoff_dyn: Shared<dyn Payoff> = Shared::clone(payoff) as Shared<dyn Payoff>;
-        let calculator: Shared<dyn FdmInnerValueCalculator> = shared(fdm_log_inner_value(
-            payoff_dyn,
-            Shared::clone(&mesher_dyn),
-            0,
-        ));
+        let calculator: Shared<dyn FdmInnerValueCalculator> = match escrowed {
+            Some(escrowed) => shared(FdmEscrowedLogInnerValueCalculator::new(
+                escrowed,
+                payoff_dyn,
+                Shared::clone(&mesher_dyn),
+                0,
+            )),
+            None => shared(fdm_log_inner_value(
+                payoff_dyn,
+                Shared::clone(&mesher_dyn),
+                0,
+            )),
+        };
 
         let r_ts = self.process.risk_free_rate().current_link()?;
         let conditions = FdmStepConditionComposite::vanilla_composite(
@@ -301,7 +320,7 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exercise::{AmericanExercise, EuropeanExercise};
+    use crate::exercise::{AmericanExercise, BermudanExercise, EuropeanExercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::PlainVanillaPayoff;
@@ -539,10 +558,13 @@ mod tests {
         let bsm = process(today, spot, q, r, vol);
         let amount = 5.0;
 
+        // A dividend exactly on expiry stays in `dividendAdjustment(T)`, so
+        // `FdmEscrowedLogInnerValueCalculator` pays off `S* + D` and is not
+        // the prepaid-Black identity (`cpp:41-44`). C++'s
+        // `testEscrowedDividendModel` uses 3M/9M on a 1Y option.
         let dates = [
             today - Period::new(1, TimeUnit::Days),
             today + Period::new(6, TimeUnit::Months),
-            expiry,
             expiry + Period::new(1, TimeUnit::Days),
         ];
         for div_date in dates {
@@ -883,25 +905,220 @@ mod tests {
         );
     }
 
+    /// `americanoption.cpp` `testEscrowedVsSpotAmericanOption`: escrowed
+    /// American call vs spot model with vol scaled by `S / (S − D)` @ 1e-2.
     #[test]
-    fn escrowed_american_is_rejected() {
-        let today = Date::new(21, Month::April, 2019);
-        let process = process(today, 100.0, 0.03, 0.025, 0.30);
-        let expiry = today + Period::new(9, TimeUnit::Months);
+    fn escrowed_american_matches_spot_model() {
+        use crate::time::daycounters::actual360::Actual360;
+
+        let today = Date::new(27, Month::February, 2021);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(12, TimeUnit::Months);
+        let dc = Actual360::new();
+        let make_process = |vol: Real| {
+            shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.08,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.04,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(BlackConstantVol::new(today, None, vol, dc.clone()))
+                    as Shared<dyn BlackVolTermStructure>),
+            ))
+        };
+        let dividends = vec![shared(crate::cashflows::FixedDividend::new(
+            10.0,
+            today + Period::new(10, TimeUnit::Months),
+        )) as Shared<dyn crate::cashflows::Dividend>];
         let payoff: Shared<dyn StrikedTypePayoff> =
-            shared(PlainVanillaPayoff::new(OptionType::Call, 105.0));
-        let exercise: Shared<dyn Exercise> = shared(AmericanExercise::from_latest(expiry, false));
-        let err = FdBlackScholesVanillaEngine::with_params(
-            process,
+            shared(PlainVanillaPayoff::new(OptionType::Call, 100.0));
+        let exercise: Shared<dyn Exercise> =
+            shared(AmericanExercise::new(today, maturity, false).unwrap());
+
+        let price = |vol: Real, model: CashDividendModel| {
+            let mut option = VanillaOption::new(
+                Shared::clone(&payoff),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            );
+            option.base_mut().set_pricing_engine(shared_mut(
+                FdBlackScholesVanillaEngine::with_params(
+                    make_process(vol),
+                    dividends.clone(),
+                    100,
+                    400,
+                    0,
+                    FdmSchemeDesc::douglas(),
+                )
+                .with_cash_dividend_model(model),
+            )
+                as crate::shared::SharedMut<dyn PricingEngine>);
+            (option.npv().unwrap(), option.delta().unwrap())
+        };
+
+        let (spot_npv, spot_delta) = price(0.3, CashDividendModel::Spot);
+        let (esc_npv, esc_delta) = price(100.0 / 90.0 * 0.3, CashDividendModel::Escrowed);
+        assert!(
+            (esc_npv - spot_npv).abs() < 1e-2,
+            "American escrowed NPV {esc_npv} vs spot {spot_npv}"
+        );
+        assert!(
+            (esc_delta - spot_delta).abs() < 1e-2,
+            "American escrowed delta {esc_delta} vs spot {spot_delta}"
+        );
+    }
+
+    /// `dividendoption.cpp` `testFdAmericanDegenerate` (Escrowed): empty and
+    /// zero-amount dividend schedules must not move the American NPV.
+    #[test]
+    fn escrowed_american_degenerate_dividends_leave_the_npv_unchanged() {
+        let today = Date::new(27, Month::February, 2005);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let expiry = Date::new(13, Month::April, 2005);
+        let process = {
+            let dc = crate::time::daycounters::actual360::Actual360::new();
+            shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(54.625)) as Shared<dyn Quote>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.0,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(FlatForward::with_rate(
+                    today,
+                    0.052706,
+                    dc.clone(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>),
+                Handle::new(shared(BlackConstantVol::new(today, None, 0.282922, dc))
+                    as Shared<dyn BlackVolTermStructure>),
+            ))
+        };
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, 55.0));
+        let exercise: Shared<dyn Exercise> =
+            shared(AmericanExercise::new(today, expiry, false).unwrap());
+
+        let ref_npv = FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&process),
             Vec::new(),
-            10,
-            10,
+            100,
+            300,
+            0,
+            FdmSchemeDesc::douglas(),
+        )
+        .with_cash_dividend_model(CashDividendModel::Escrowed)
+        .price(Shared::clone(&payoff), Shared::clone(&exercise))
+        .unwrap();
+
+        let empty = FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&process),
+            Vec::new(),
+            100,
+            300,
+            0,
+            FdmSchemeDesc::douglas(),
+        )
+        .with_cash_dividend_model(CashDividendModel::Escrowed)
+        .price(Shared::clone(&payoff), Shared::clone(&exercise))
+        .unwrap();
+        assert!(
+            (empty - ref_npv).abs() < 1e-6,
+            "empty dividends {empty} vs {ref_npv}"
+        );
+
+        let zeros: DividendSchedule = (1..=6)
+            .map(|i| {
+                shared(crate::cashflows::FixedDividend::new(0.0, today + i))
+                    as Shared<dyn crate::cashflows::Dividend>
+            })
+            .collect();
+        let zero_npv = FdBlackScholesVanillaEngine::with_params(
+            process,
+            zeros,
+            100,
+            300,
             0,
             FdmSchemeDesc::douglas(),
         )
         .with_cash_dividend_model(CashDividendModel::Escrowed)
         .price(payoff, exercise)
-        .unwrap_err();
-        assert!(err.message().contains("American/Bermudan"));
+        .unwrap();
+        assert!(
+            (zero_npv - ref_npv).abs() < 1e-6,
+            "zero dividends {zero_npv} vs {ref_npv}"
+        );
+    }
+
+    /// Escrowed Bermudan is the same wiring as American (zero-amount stopping
+    /// times + escrowed inner value); it must price and sit above European.
+    #[test]
+    fn escrowed_bermudan_is_at_least_european() {
+        let today = Date::new(27, Month::February, 2021);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let expiry = today + Period::new(12, TimeUnit::Months);
+        let process = process(today, 100.0, 0.08, 0.04, 0.30);
+        let dividends = vec![shared(crate::cashflows::FixedDividend::new(
+            10.0,
+            today + Period::new(10, TimeUnit::Months),
+        )) as Shared<dyn crate::cashflows::Dividend>];
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, 100.0));
+        let european: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+        let bermudan: Shared<dyn Exercise> = shared(
+            BermudanExercise::new(
+                vec![
+                    today + Period::new(3, TimeUnit::Months),
+                    today + Period::new(6, TimeUnit::Months),
+                    today + Period::new(9, TimeUnit::Months),
+                    expiry,
+                ],
+                false,
+            )
+            .unwrap(),
+        );
+
+        let euro = FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&process),
+            dividends.clone(),
+            50,
+            100,
+            0,
+            FdmSchemeDesc::douglas(),
+        )
+        .with_cash_dividend_model(CashDividendModel::Escrowed)
+        .price(Shared::clone(&payoff), european)
+        .unwrap();
+        let berm = FdBlackScholesVanillaEngine::with_params(
+            process,
+            dividends,
+            50,
+            100,
+            0,
+            FdmSchemeDesc::douglas(),
+        )
+        .with_cash_dividend_model(CashDividendModel::Escrowed)
+        .price(payoff, bermudan)
+        .unwrap();
+        assert!(
+            berm + 1e-12 >= euro,
+            "escrowed Bermudan {berm} should be ≥ European {euro}"
+        );
     }
 }
