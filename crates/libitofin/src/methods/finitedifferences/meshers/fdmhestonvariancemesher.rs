@@ -6,22 +6,23 @@
 //! up to maturity, then estimates a scalar Black volatility from the
 //! probability-weighted square root of that grid.
 //!
-//! `FdmHestonLocalVolatilityVarianceMesher` (the leverage-function branch) is
-//! omitted with the rest of the local-vol Heston work: a null leverage function
-//! makes that C++ class identical to this one, which is the path
-//! [`FdHestonBarrierEngine`](crate::pricingengines::barrier::FdHestonBarrierEngine)
-//! takes.
+//! [`FdmHestonLocalVolatilityVarianceMesher`] keeps that CIR v-grid and
+//! multiplies `volaEstimate` by a path-averaged leverage when an SLV
+//! `LocalVolTermStructure` is supplied (`cpp:148-211`).
 
 use crate::errors::QlResult;
 use crate::math::distributions::noncentralchisquare::{
     InverseNonCentralCumulativeChiSquareDistribution, NonCentralCumulativeChiSquareDistribution,
 };
+use crate::math::distributions::normal::InverseCumulativeNormal;
 use crate::math::distributions::{Probability, Quantile};
 use crate::math::integrals::Integrator;
 use crate::math::integrals::lobatto::GaussLobattoIntegral;
 use crate::math::interpolations::Interpolation;
 use crate::math::interpolations::linear::LinearInterpolation;
 use crate::processes::HestonProcess;
+use crate::shared::Shared;
+use crate::termstructures::volatility::LocalVolTermStructure;
 use crate::types::{Real, Size, Time};
 use crate::utilities::null::Null;
 
@@ -119,6 +120,119 @@ impl FdmHestonVarianceMesher {
     pub fn vola_estimate(&self) -> Real {
         self.vola_estimate
     }
+}
+
+/// CIR variance grid with a leverage-scaled Black-vol estimate
+/// (`fdmhestonvariancemesher.hpp:51`).
+///
+/// The v-locations are identical to [`FdmHestonVarianceMesher`]. When
+/// `leverage` is `None` the vol estimate is too; otherwise it is multiplied
+/// by the running mean of `L(0,S0)` and the Gauss–Lobatto averages of
+/// `L(t, F exp(x σ √t))` over a 50-point normal quantile grid (`cpp:168-210`).
+#[derive(Debug)]
+pub struct FdmHestonLocalVolatilityVarianceMesher {
+    mesher: Fdm1dMesher,
+    vola_estimate: Real,
+}
+
+impl FdmHestonLocalVolatilityVarianceMesher {
+    /// `FdmHestonLocalVolatilityVarianceMesher(size, process, leverageFct, maturity, tAvgSteps, epsilon, mixingFactor)`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates construction of the CIR mesher, the leverage queries, and
+    /// the Gauss–Lobatto averages.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        size: Size,
+        process: &HestonProcess,
+        leverage: Option<Shared<dyn LocalVolTermStructure>>,
+        maturity: Time,
+        t_avg_steps: Size,
+        epsilon: Real,
+        mixing_factor: Real,
+    ) -> QlResult<Self> {
+        let inner = FdmHestonVarianceMesher::new(
+            size,
+            process,
+            maturity,
+            t_avg_steps,
+            epsilon,
+            mixing_factor,
+        )?;
+        let mut vola_estimate = inner.vola_estimate();
+        if let Some(leverage) = leverage {
+            vola_estimate *= path_averaged_leverage(
+                process,
+                leverage.as_ref(),
+                maturity,
+                t_avg_steps,
+                epsilon,
+                vola_estimate,
+            )?;
+        }
+        Ok(Self {
+            mesher: inner.into_mesher(),
+            vola_estimate,
+        })
+    }
+
+    /// The 1-D variance grid (same locations as the CIR mesher).
+    pub fn mesher(&self) -> &Fdm1dMesher {
+        &self.mesher
+    }
+
+    /// Consumes the wrapper and returns the 1-D grid.
+    pub fn into_mesher(self) -> Fdm1dMesher {
+        self.mesher
+    }
+
+    /// Scalar Black-vol estimate `volaEstimate()` (`hpp:60`).
+    pub fn vola_estimate(&self) -> Real {
+        self.vola_estimate
+    }
+}
+
+/// Running-mean leverage that scales `volaEstimate` (`cpp:168-210`).
+fn path_averaged_leverage(
+    process: &HestonProcess,
+    leverage: &dyn LocalVolTermStructure,
+    maturity: Time,
+    t_avg_steps: Size,
+    epsilon: Real,
+    vola_estimate: Real,
+) -> QlResult<Real> {
+    let s0 = process.s0().current_link()?.value()?;
+    let mut acc_sum = leverage.local_vol(0.0, s0, true)?;
+    let mut acc_n = 1.0;
+    let r_ts = process.risk_free_rate().current_link()?;
+    let q_ts = process.dividend_yield().current_link()?;
+    let inv_n = InverseCumulativeNormal::standard();
+    const S_AVG_STEPS: Size = 50;
+
+    for l in 1..=t_avg_steps {
+        let t = (maturity * l as Real) / t_avg_steps as Real;
+        let vol = vola_estimate * (acc_sum / acc_n);
+        let fwd = s0 * q_ts.discount(t, false)? / r_ts.discount(t, false)?;
+        let mut u = vec![0.0; S_AVG_STEPS];
+        let mut sig = vec![0.0; S_AVG_STEPS];
+        for i in 0..S_AVG_STEPS {
+            u[i] = epsilon + ((1.0 - 2.0 * epsilon) / (S_AVG_STEPS - 1) as Real) * i as Real;
+            let x = inv_n.value(u[i])?;
+            let f = fwd * (x * vol * t.sqrt()).exp();
+            let lv = leverage.local_vol(t, f, true)?;
+            sig[i] = lv * lv;
+        }
+        let interp = LinearInterpolation::new(u.clone(), sig)?.with_extrapolation(true);
+        let leverage_avg = GaussLobattoIntegral::new(10_000, 1e-4)?.integrate(
+            |x| interp.value(x).map(|v| v.max(0.0).sqrt()).unwrap_or(0.0),
+            u[0],
+            u[S_AVG_STEPS - 1],
+        )? / (1.0 - 2.0 * epsilon);
+        acc_sum += leverage_avg;
+        acc_n += 1.0;
+    }
+    Ok(acc_sum / acc_n)
 }
 
 fn inverse_nccs(df: Real, ncp: Real, p: Real) -> QlResult<Real> {
@@ -275,5 +389,171 @@ mod tests {
     fn size_must_be_at_least_two() {
         let err = FdmHestonVarianceMesher::new(1, &process(), 1.0, 5, 0.0001, 1.0).unwrap_err();
         assert!(err.message().contains("at least two"));
+    }
+
+    /// `fdheston.cpp` `testFdmHestonVarianceMesher`: cached CIR locations.
+    fn oracle_process() -> HestonProcess {
+        let dc = Actual365Fixed::new();
+        let today = Date::new(22, Month::February, 2018);
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        HestonProcess::new(
+            flat(0.02),
+            flat(0.02),
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            0.09,
+            1.0,
+            0.09,
+            0.2,
+            -0.5,
+        )
+    }
+
+    #[test]
+    fn cir_locations_match_the_cached_heston_mesh() {
+        let mesher =
+            FdmHestonVarianceMesher::new(5, &oracle_process(), 1.0, 10, 0.0001, 1.0).unwrap();
+        let expected = [0.0, 6.652314e-02, 9.000000e-02, 1.095781e-01, 2.563610e-01];
+        for (i, &exp) in expected.iter().enumerate() {
+            let loc = mesher.mesher().location(i);
+            assert!((loc - exp).abs() < 1e-6, "location[{i}]={loc} vs {exp}");
+        }
+    }
+
+    #[test]
+    fn constant_leverage_scales_the_vol_estimate_exactly() {
+        use crate::termstructures::volatility::{LocalConstantVol, LocalVolTermStructure};
+
+        let process = oracle_process();
+        let cir = FdmHestonVarianceMesher::new(5, &process, 1.0, 10, 0.0001, 1.0).unwrap();
+        let lvol: Shared<dyn LocalVolTermStructure> = shared(LocalConstantVol::new(
+            Date::new(22, Month::February, 2018),
+            2.5,
+            Actual365Fixed::new(),
+        ));
+        let slv = FdmHestonLocalVolatilityVarianceMesher::new(
+            5,
+            &process,
+            Some(lvol),
+            1.0,
+            10,
+            0.0001,
+            1.0,
+        )
+        .unwrap();
+        let expected = 2.5 * cir.vola_estimate();
+        assert!(
+            (slv.vola_estimate() - expected).abs() < 1e-6,
+            "const SLV vol {} vs {expected}",
+            slv.vola_estimate()
+        );
+        assert_eq!(slv.mesher().locations(), cir.mesher().locations());
+    }
+
+    /// C++ `ParableLocalVolatility`: `α ((S0 − S)² + 25)`.
+    struct ParableLocalVolatility {
+        base: crate::termstructures::TermStructureBase,
+        s0: Real,
+        alpha: Real,
+    }
+
+    impl ParableLocalVolatility {
+        fn new(
+            reference: Date,
+            s0: Real,
+            alpha: Real,
+            dc: crate::time::daycounter::DayCounter,
+        ) -> Self {
+            Self {
+                base: crate::termstructures::TermStructureBase::with_reference_date(
+                    reference,
+                    None,
+                    Some(dc),
+                ),
+                s0,
+                alpha,
+            }
+        }
+    }
+
+    impl crate::patterns::observable::AsObservable for ParableLocalVolatility {
+        fn observable(&self) -> &crate::patterns::observable::Observable {
+            self.base.observable()
+        }
+    }
+
+    impl crate::termstructures::TermStructure for ParableLocalVolatility {
+        fn base(&self) -> &crate::termstructures::TermStructureBase {
+            &self.base
+        }
+
+        fn max_date(&self) -> Date {
+            Date::max_date()
+        }
+    }
+
+    impl crate::termstructures::volatility::VolatilityTermStructure for ParableLocalVolatility {
+        fn business_day_convention(
+            &self,
+        ) -> crate::time::businessdayconvention::BusinessDayConvention {
+            crate::time::businessdayconvention::BusinessDayConvention::Following
+        }
+
+        fn min_strike(&self) -> Real {
+            0.0
+        }
+
+        fn max_strike(&self) -> Real {
+            Real::MAX
+        }
+    }
+
+    impl crate::termstructures::volatility::LocalVolTermStructure for ParableLocalVolatility {
+        fn local_vol_impl(&self, _t: Time, s: Real) -> QlResult<crate::types::Volatility> {
+            Ok(self.alpha * ((self.s0 - s).powi(2) + 25.0))
+        }
+    }
+
+    #[test]
+    fn parable_leverage_matches_the_cached_path_average() {
+        use crate::termstructures::volatility::LocalVolTermStructure;
+
+        let today = Date::new(22, Month::February, 2018);
+        let process = oracle_process();
+        let alpha = 0.01;
+        let leverage: Shared<dyn LocalVolTermStructure> = shared(ParableLocalVolatility::new(
+            today,
+            100.0,
+            alpha,
+            Actual365Fixed::new(),
+        ));
+        let slv = FdmHestonLocalVolatilityVarianceMesher::new(
+            5,
+            &process,
+            Some(Shared::clone(&leverage)),
+            0.5,
+            1,
+            0.01,
+            1.0,
+        )
+        .unwrap();
+        let initial = FdmHestonVarianceMesher::new(5, &process, 0.5, 1, 0.01, 1.0)
+            .unwrap()
+            .vola_estimate();
+        let leverage_avg = 0.455881 / (1.0 - 0.02);
+        let l0 = leverage.local_vol(0.0, 100.0, true).unwrap();
+        let expected = 0.5 * (leverage_avg + l0) * initial;
+        assert!(
+            (slv.vola_estimate() - expected).abs() < 0.001,
+            "parable SLV vol {} vs {expected}",
+            slv.vola_estimate()
+        );
     }
 }

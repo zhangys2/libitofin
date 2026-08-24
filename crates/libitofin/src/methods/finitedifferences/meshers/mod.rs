@@ -21,7 +21,9 @@ pub use fdm1dmesher::Fdm1dMesher;
 pub use fdmblackscholesmesher::{
     fdm_black_scholes_mesher, fdm_black_scholes_mesher_with_quanto, process_helper,
 };
-pub use fdmhestonvariancemesher::FdmHestonVarianceMesher;
+pub use fdmhestonvariancemesher::{
+    FdmHestonLocalVolatilityVarianceMesher, FdmHestonVarianceMesher,
+};
 pub use fdmmesher::FdmMesher;
 pub use fdmmeshercomposite::FdmMesherComposite;
 pub use fdmsimpleprocess1dmesher::fdm_simple_process_1d_mesher;
