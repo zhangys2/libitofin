@@ -1,10 +1,12 @@
 //! Finite-difference Heston engine for vanillas with cash dividends.
 //!
 //! Port of `ql/pricingengines/vanilla/fdhestonvanillaengine.{hpp,cpp}` on the
-//! single-strike path (no multiple-strikes cache, leverage function, or
-//! mixing factor ≠ 1). Quanto is [`with_quanto_helper`](FdHestonVanillaEngine::with_quanto_helper).
+//! single-strike path (no multiple-strikes cache or mixing factor ≠ 1).
+//! Quanto is [`with_quanto_helper`](FdHestonVanillaEngine::with_quanto_helper).
+//! Leverage is [`with_leverage_function`](FdHestonVanillaEngine::with_leverage_function).
 //! American and Bermudan exercise use the Spot dividend model via
-//! [`FdmStepConditionComposite::vanilla_composite`].
+//! [`FdmStepConditionComposite::vanilla_composite`]. The local-vol variance
+//! mesher (`FdmHestonLocalVolatilityVarianceMesher`) is still omitted.
 
 use crate::errors::QlResult;
 use crate::exercise::Exercise;
@@ -31,6 +33,7 @@ use crate::pricingengines::DividendSchedule;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess;
+use crate::termstructures::volatility::LocalVolTermStructure;
 use crate::types::{Real, Size};
 
 /// Finite-difference Heston vanilla engine (European / American / Bermudan
@@ -45,6 +48,7 @@ pub struct FdHestonVanillaEngine {
     damping_steps: Size,
     scheme_desc: FdmSchemeDesc,
     quanto: Option<Shared<FdmQuantoHelper>>,
+    leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
 }
 
 impl FdHestonVanillaEngine {
@@ -100,6 +104,7 @@ impl FdHestonVanillaEngine {
             damping_steps,
             scheme_desc,
             quanto: None,
+            leverage_fct: None,
         }
     }
 
@@ -107,6 +112,13 @@ impl FdHestonVanillaEngine {
     pub fn with_quanto_helper(mut self, helper: Shared<FdmQuantoHelper>) -> Self {
         self.base.register_with(helper.observable());
         self.quanto = Some(helper);
+        self
+    }
+
+    /// C++ `withLeverageFunction`.
+    pub fn with_leverage_function(mut self, leverage: Shared<dyn LocalVolTermStructure>) -> Self {
+        self.base.register_with(leverage.observable());
+        self.leverage_fct = Some(leverage);
         self
     }
 
@@ -179,11 +191,18 @@ impl PricingEngine for FdHestonVanillaEngine {
         // `processHelper(s0, dividendYield, riskFreeRate, vol)` into a helper
         // whose parameters are `(s0, rTS, qTS)`. That swaps r and q on the
         // equity-mesher process only (the Heston PDE still uses the model).
+        // C++ `FdmHestonLocalVolatilityVarianceMesher` keeps the CIR v-grid
+        // and multiplies `volaEstimate` by the path-averaged leverage. A
+        // constant leverage (the SLV oracle) is exactly `L(0, S0)`.
+        let mut vola_estimate = v_mesher.vola_estimate();
+        if let Some(leverage) = &self.leverage_fct {
+            vola_estimate *= leverage.local_vol(0.0, spot, true)?.max(0.01);
+        }
         let bs_process = process_helper(
             process.s0(),
             process.dividend_yield(),
             process.risk_free_rate(),
-            v_mesher.vola_estimate(),
+            vola_estimate,
         )?;
         let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
@@ -231,12 +250,13 @@ impl PricingEngine for FdHestonVanillaEngine {
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
         };
-        let solver = FdmHestonSolver::with_quanto(
+        let solver = FdmHestonSolver::with_leverage(
             process,
             solver_desc,
             self.scheme_desc,
             1.0,
             self.quanto.clone(),
+            self.leverage_fct.clone(),
         );
         let v0 = self.model.borrow().v0();
         let value = solver.value_at(spot, v0)?;
@@ -264,7 +284,9 @@ mod tests {
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
     use crate::shared::{Shared, SharedMut, shared, shared_mut};
-    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
+    use crate::termstructures::volatility::{
+        BlackConstantVol, BlackVolTermStructure, LocalConstantVol, LocalVolTermStructure,
+    };
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
@@ -423,6 +445,51 @@ mod tests {
         assert!(
             (calculated - expected).abs() < 1e-4,
             "Heston American quanto {calculated} vs {expected}"
+        );
+    }
+
+    /// Same C++ case with `v0 = θ = 0.25 σ²` and constant leverage 2
+    /// (`LocalConstantVol`), so `L √v = 0.30`.
+    #[test]
+    fn american_quanto_slv_matches_cached_npv() {
+        let today = Date::new(21, Month::April, 2019);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(9, TimeUnit::Months);
+        let vol = 0.30;
+        let v0 = 0.25 * vol * vol;
+        let model = heston_model(100.0, v0, 1.0, v0, 1e-4, 0.0, 0.025, 0.03, today);
+        let helper = quanto_helper(today, 0.025, 0.075, 0.15, -0.75);
+        let leverage: Shared<dyn LocalVolTermStructure> =
+            shared(LocalConstantVol::new(today, 2.0, Actual365Fixed::new()));
+        let dividends = vec![shared(crate::cashflows::FixedDividend::new(
+            8.0,
+            today + Period::new(6, TimeUnit::Months),
+        )) as Shared<dyn crate::cashflows::Dividend>];
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, 105.0));
+        let exercise: Shared<dyn Exercise> = shared(AmericanExercise::from_latest(maturity, false));
+
+        let mut option = VanillaOption::new(payoff, exercise, settings);
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdHestonVanillaEngine::with_params(
+                model,
+                dividends,
+                100,
+                400,
+                3,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            )
+            .with_quanto_helper(helper)
+            .with_leverage_function(leverage),
+        ) as SharedMut<dyn PricingEngine>);
+
+        let expected = 8.90611734;
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - expected).abs() < 1e-4,
+            "Heston-SLV American quanto {calculated} vs {expected}"
         );
     }
 }

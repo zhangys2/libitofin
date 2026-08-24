@@ -5,10 +5,10 @@
 //! are the equity map in `ln(S)`, the CIR variance map, and the `ρ σ v` mixed
 //! derivative.
 //!
-//! Quanto is [`with_quanto`](FdmHestonOp::with_quanto). The leverage-function
-//! (local-vol) branch is still omitted; `mixingFactor` defaults to 1, so the
-//! equity and variance maps are the plain Heston ones. `toMatrixDecomp` is
-//! omitted with the sparse-matrix work (#636).
+//! Quanto is [`with_quanto`](FdmHestonOp::with_quanto). Leverage is
+//! [`with_leverage`](FdmHestonOp::with_leverage) (`getLeverageFctSlice`).
+//! `mixingFactor` defaults to 1. `toMatrixDecomp` is omitted with the
+//! sparse-matrix work (#636).
 
 use crate::errors::QlResult;
 use crate::fail;
@@ -18,6 +18,7 @@ use crate::methods::finitedifferences::meshers::FdmMesher;
 use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::HestonProcess;
 use crate::shared::Shared;
+use crate::termstructures::volatility::LocalVolTermStructure;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
@@ -32,6 +33,7 @@ use super::triplebandlinearop::TripleBandLinearOp;
 
 /// Equity-direction map (`FdmHestonEquityPart`, `fdmhestonop.cpp:39-99`).
 struct FdmHestonEquityPart {
+    mesher: Shared<dyn FdmMesher>,
     variance_values: Array,
     volatility_values: Array,
     dx_map: TripleBandLinearOp,
@@ -40,6 +42,7 @@ struct FdmHestonEquityPart {
     r_ts: Shared<dyn YieldTermStructure>,
     q_ts: Shared<dyn YieldTermStructure>,
     leverage: Array,
+    leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
     quanto: Option<Shared<FdmQuantoHelper>>,
 }
 
@@ -49,6 +52,7 @@ impl FdmHestonEquityPart {
         r_ts: Shared<dyn YieldTermStructure>,
         q_ts: Shared<dyn YieldTermStructure>,
         quanto: Option<Shared<FdmQuantoHelper>>,
+        leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
     ) -> Self {
         let mut variance_values = 0.5 * &mesher.locations(1);
         let layout = mesher.layout();
@@ -67,12 +71,38 @@ impl FdmHestonEquityPart {
             dx_map: first_derivative_op(0, Shared::clone(&mesher)),
             dxx_map: second_derivative_op(0, Shared::clone(&mesher))
                 .mult(&(0.5 * &mesher.locations(1))),
-            map_t: TripleBandLinearOp::new(0, mesher),
+            map_t: TripleBandLinearOp::new(0, Shared::clone(&mesher)),
+            mesher,
             r_ts,
             q_ts,
             leverage: Array::filled(size, 1.0),
+            leverage_fct,
             quanto,
         }
+    }
+
+    /// `FdmHestonEquityPart::getLeverageFctSlice` (`cpp:74-98`).
+    fn leverage_slice(&self, t1: Time, t2: Time) -> QlResult<Array> {
+        let n = self.mesher.layout().size();
+        let mut slice = Array::filled(n, 1.0);
+        let Some(leverage_fct) = &self.leverage_fct else {
+            return Ok(slice);
+        };
+        let t = 0.5 * (t1 + t2);
+        let time = leverage_fct.max_time()?.min(t);
+        let min_strike = leverage_fct.min_strike();
+        let max_strike = leverage_fct.max_strike();
+        for iter in self.mesher.layout().iter() {
+            let nx = iter.coordinates()[0];
+            if iter.coordinates()[1] == 0 {
+                let x = self.mesher.location(&iter, 0).exp();
+                let spot = x.clamp(min_strike, max_strike);
+                slice[nx] = leverage_fct.local_vol(time, spot, true)?.max(0.01);
+            } else {
+                slice[iter.index()] = slice[nx];
+            }
+        }
+        Ok(slice)
     }
 
     fn set_time(&mut self, t1: Time, t2: Time) -> QlResult<()> {
@@ -96,6 +126,7 @@ impl FdmHestonEquityPart {
                 false,
             )?
             .rate();
+        self.leverage = self.leverage_slice(t1, t2)?;
         let l_square = &self.leverage * &self.leverage;
         let mut drift = (r - q) - &(&self.variance_values * &l_square);
         if let Some(quanto) = &self.quanto {
@@ -194,6 +225,17 @@ impl FdmHestonOp {
         mixing_factor: Real,
         quanto: Option<Shared<FdmQuantoHelper>>,
     ) -> QlResult<Self> {
+        Self::with_leverage(mesher, process, mixing_factor, quanto, None)
+    }
+
+    /// As [`with_quanto`](Self::with_quanto), with the C++ `leverageFct`.
+    pub fn with_leverage(
+        mesher: Shared<dyn FdmMesher>,
+        process: &HestonProcess,
+        mixing_factor: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+        leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
+    ) -> QlResult<Self> {
         let r_ts = process.risk_free_rate().current_link()?;
         let q_ts = process.dividend_yield().current_link()?;
         let mixed_sigma = process.sigma() * mixing_factor;
@@ -208,7 +250,7 @@ impl FdmHestonOp {
                 process.kappa(),
                 process.theta(),
             ),
-            dx_map: FdmHestonEquityPart::new(mesher, r_ts, q_ts, quanto),
+            dx_map: FdmHestonEquityPart::new(mesher, r_ts, q_ts, quanto, leverage_fct),
         })
     }
 }

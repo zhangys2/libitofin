@@ -4,8 +4,8 @@
 //! thin lazy wrapper that builds [`FdmHestonOp`] and delegates point queries
 //! to [`Fdm2DimSolver`]. `valueAt(s, v)` interpolates at `(ln(s), v)`.
 //!
-//! Quanto is [`with_quanto`](FdmHestonSolver::with_quanto). The leverage
-//! function is still omitted with the operator.
+//! Quanto is [`with_quanto`](FdmHestonSolver::with_quanto). Leverage is
+//! [`with_leverage`](FdmHestonSolver::with_leverage).
 
 use std::cell::RefCell;
 
@@ -16,6 +16,7 @@ use crate::patterns::lazyobject::LazyObject;
 use crate::patterns::observable::{AsObservable, Observer};
 use crate::processes::HestonProcess;
 use crate::shared::{Shared, SharedMut, shared, shared_mut};
+use crate::termstructures::volatility::LocalVolTermStructure;
 use crate::types::Real;
 
 use super::fdm2dimsolver::Fdm2DimSolver;
@@ -44,6 +45,7 @@ pub struct FdmHestonSolver {
     scheme_desc: FdmSchemeDesc,
     mixing_factor: Real,
     quanto: Option<Shared<FdmQuantoHelper>>,
+    leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
     solver: Shared<RefCell<Option<Shared<Fdm2DimSolver>>>>,
     lazy: SharedMut<LazyObject>,
     _updater: SharedMut<Updater>,
@@ -69,6 +71,25 @@ impl FdmHestonSolver {
         mixing_factor: Real,
         quanto: Option<Shared<FdmQuantoHelper>>,
     ) -> FdmHestonSolver {
+        Self::with_leverage(
+            process,
+            solver_desc,
+            scheme_desc,
+            mixing_factor,
+            quanto,
+            None,
+        )
+    }
+
+    /// As [`with_quanto`](Self::with_quanto), with the C++ `leverageFct`.
+    pub fn with_leverage(
+        process: Shared<HestonProcess>,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        mixing_factor: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+        leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
+    ) -> FdmHestonSolver {
         let lazy = shared_mut(LazyObject::new(true));
         let solver = shared(RefCell::new(None));
         let updater = shared_mut(Updater {
@@ -84,6 +105,7 @@ impl FdmHestonSolver {
             scheme_desc,
             mixing_factor,
             quanto,
+            leverage_fct,
             solver,
             lazy,
             _updater: updater,
@@ -110,11 +132,12 @@ impl FdmHestonSolver {
     }
 
     fn perform_calculations(&self) -> QlResult<()> {
-        let op = shared_mut(FdmHestonOp::with_quanto(
+        let op = shared_mut(FdmHestonOp::with_leverage(
             Shared::clone(&self.solver_desc.mesher),
             &self.process,
             self.mixing_factor,
             self.quanto.clone(),
+            self.leverage_fct.clone(),
         )?) as SharedMut<dyn FdmLinearOpComposite>;
         let solver = shared(Fdm2DimSolver::new(
             self.solver_desc.clone(),
