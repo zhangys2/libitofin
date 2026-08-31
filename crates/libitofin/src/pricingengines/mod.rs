@@ -18,7 +18,9 @@ pub mod vanilla;
 
 pub use asian::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
+    AnalyticDiscreteGeometricAveragePriceAsianEngine,
     set_analytic_continuous_geometric_average_price_asian_engine,
+    set_analytic_discrete_geometric_average_price_asian_engine,
 };
 pub use barrier::{
     AnalyticDoubleBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine,

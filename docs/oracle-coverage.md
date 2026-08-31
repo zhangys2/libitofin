@@ -95,6 +95,7 @@ credit.
 | Asset swap | `AssetSwap` | `ql/instruments/assetswap` | Par asset swap; leg construction per `assetswap.cpp`; identity-verified |
 | Barrier / Asian | `BarrierOption` + Haug `AnalyticBarrierEngine`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | Haug continuous with rebate; geometric Asian slice |
 | Continuous geometric Asian | `AnalyticContinuousGeometricAveragePriceAsianEngine` | `asianoptions.cpp` `testAnalyticContinuousGeometricAveragePrice` / `testAnalyticContinuousGeometricAveragePriceGreeks` | Haug put NPV 4.6922 @ 1e-4; δ/γ/θ/ρ/divρ/ν vs FD @ 1e-5 rel. to spot |
+| Discrete geometric Asian | `AnalyticDiscreteGeometricAveragePriceAsianEngine` | `asianoptions.cpp` `testAnalyticDiscreteGeometricAveragePrice` | Levy call NPV 5.3425606635 @ 1e-10 (Clewlow–Strickland p.118–123) |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |
