@@ -6,6 +6,7 @@
 mod asianoption;
 mod assetswap;
 mod barrieroption;
+mod continuousaveragingasianoption;
 mod doublebarrieroption;
 mod bond;
 mod bondforward;
@@ -41,6 +42,9 @@ pub use assetswap::AssetSwap;
 pub use barrieroption::{
     AnalyticBarrierEngine, BarrierArguments, BarrierOption, BarrierType, barrier_price,
     set_analytic_barrier_engine,
+};
+pub use continuousaveragingasianoption::{
+    AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
 };
 pub use doublebarrieroption::{
     DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,

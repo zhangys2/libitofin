@@ -4,6 +4,7 @@
 //! the [`BlackCalculator`] greeks core, and the analytic vanilla engines
 //! built on them.
 
+pub mod asian;
 pub mod barrier;
 pub mod blackcalculator;
 pub mod blackdeltacalculator;
@@ -15,6 +16,10 @@ pub mod swap;
 pub mod swaption;
 pub mod vanilla;
 
+pub use asian::{
+    AnalyticContinuousGeometricAveragePriceAsianEngine,
+    set_analytic_continuous_geometric_average_price_asian_engine,
+};
 pub use barrier::{
     AnalyticDoubleBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine,
     FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine, FdHestonBarrierEngine,
