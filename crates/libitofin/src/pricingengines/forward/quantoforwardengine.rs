@@ -17,7 +17,7 @@ use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::forward::AnalyticForwardVanillaEngine;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::quotes::Quote;
-use crate::shared::{shared, Shared};
+use crate::shared::{Shared, shared};
 use crate::termstructures::volatility::BlackVolTermStructure;
 use crate::termstructures::yields::QuantoTermStructure;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -182,7 +182,7 @@ pub fn set_quanto_forward_european_engine(
     exchange_rate_volatility: Handle<dyn BlackVolTermStructure>,
     correlation: Handle<dyn Quote>,
 ) {
-    use crate::shared::{shared_mut, SharedMut};
+    use crate::shared::{SharedMut, shared_mut};
     let engine = shared_mut(QuantoForwardEuropeanEngine::new(
         process,
         foreign_risk_free_rate,
@@ -420,5 +420,304 @@ mod tests {
         let f = fwd.npv().unwrap();
         let e = euro.npv().unwrap();
         assert!((f - e).abs() < 1e-12, "reset-0 forward {f} vs european {e}");
+    }
+}
+
+#[cfg(test)]
+mod test_greeks {
+    //! `quantooption.cpp` `testForwardGreeks`: analytic quanto-forward greeks vs
+    //! central finite differences on moving curves (tol 1e-5 relative to spot).
+
+    use super::QuantoForwardEuropeanEngine;
+    use crate::exercise::EuropeanExercise;
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::instruments::{ForwardVanillaOption, PlainVanillaPayoff};
+    use crate::interestrate::Compounding;
+    use crate::option::OptionType;
+    use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::vanilla::test_market::{quote_handle, today};
+    use crate::processes::BlackScholesMertonProcess;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
+    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::calendars::NullCalendar;
+    use crate::time::date::Date;
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+    use crate::types::Real;
+
+    const TOLERANCE: Real = 1.0e-5;
+    const UNDERLYING: Real = 100.0;
+
+    struct MovingQuantoMarket {
+        settings: Shared<Settings<Date>>,
+        spot: Shared<SimpleQuote>,
+        q_rate: Shared<SimpleQuote>,
+        r_rate: Shared<SimpleQuote>,
+        vol: Shared<SimpleQuote>,
+        fx_rate: Shared<SimpleQuote>,
+        fx_vol: Shared<SimpleQuote>,
+        correlation: Shared<SimpleQuote>,
+        process: Shared<BlackScholesMertonProcess>,
+        fx_r_ts: Handle<dyn YieldTermStructure>,
+        fx_vol_ts: Handle<dyn BlackVolTermStructure>,
+        corr_h: Handle<dyn Quote>,
+    }
+
+    fn moving_quanto_market() -> MovingQuantoMarket {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let spot = shared(SimpleQuote::new(0.0));
+        let q_rate = shared(SimpleQuote::new(0.0));
+        let r_rate = shared(SimpleQuote::new(0.0));
+        let vol = shared(SimpleQuote::new(0.0));
+        let fx_rate = shared(SimpleQuote::new(0.0));
+        let fx_vol = shared(SimpleQuote::new(0.0));
+        let correlation = shared(SimpleQuote::new(0.0));
+        let flat = |quote: &Shared<SimpleQuote>| {
+            shared(FlatForward::moving(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+                Shared::clone(&settings),
+            )) as Shared<dyn YieldTermStructure>
+        };
+        let flat_vol = |quote: &Shared<SimpleQuote>| {
+            shared(BlackConstantVol::moving_with_quote(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Shared::clone(&settings),
+            )) as Shared<dyn BlackVolTermStructure>
+        };
+        let process = shared(BlackScholesMertonProcess::new(
+            quote_handle(&spot),
+            Handle::new(flat(&q_rate)),
+            Handle::new(flat(&r_rate)),
+            Handle::new(flat_vol(&vol)),
+        ));
+        let fx_r_ts = Handle::new(flat(&fx_rate));
+        let fx_vol_ts = Handle::new(flat_vol(&fx_vol));
+        let corr_h = quote_handle(&correlation);
+        MovingQuantoMarket {
+            settings,
+            spot,
+            q_rate,
+            r_rate,
+            vol,
+            fx_rate,
+            fx_vol,
+            correlation,
+            process,
+            fx_r_ts,
+            fx_vol_ts,
+            corr_h,
+        }
+    }
+
+    fn relative_error(x1: Real, x2: Real, reference: Real) -> Real {
+        if reference != 0.0 {
+            (x1 - x2).abs() / reference
+        } else {
+            (x1 - x2).abs()
+        }
+    }
+
+    #[test]
+    fn analytic_quanto_forward_greeks_match_finite_differences() {
+        let market = moving_quanto_market();
+        let types = [OptionType::Call, OptionType::Put];
+        let moneyness = [0.9, 1.0, 1.1];
+        let q_rates = [0.04, 0.05];
+        let r_rates = [0.01, 0.05, 0.15];
+        let lengths = [2];
+        let start_months = [6, 9];
+        let vols = [0.11, 1.20];
+        let correlations = [0.10, 0.90];
+        let day_counter = Actual360::new();
+
+        for option_type in types {
+            for m in moneyness {
+                for length in lengths {
+                    for start_month in start_months {
+                        let expiry = today() + Period::new(length, TimeUnit::Years);
+                        let reset = today() + Period::new(start_month, TimeUnit::Months);
+                        let payoff = shared(PlainVanillaPayoff::new(option_type, 0.0))
+                            as Shared<dyn crate::instruments::StrikedTypePayoff>;
+                        let exercise = shared(EuropeanExercise::new(expiry));
+                        let mut option = ForwardVanillaOption::new(
+                            m,
+                            reset,
+                            payoff,
+                            exercise,
+                            Shared::clone(&market.settings),
+                        );
+                        let engine = shared_mut(QuantoForwardEuropeanEngine::new(
+                            Shared::clone(&market.process),
+                            market.fx_r_ts.clone(),
+                            market.fx_vol_ts.clone(),
+                            market.corr_h.clone(),
+                        ));
+                        option
+                            .base_mut()
+                            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+                        for u in [UNDERLYING] {
+                            for q in q_rates {
+                                for r in r_rates {
+                                    for v in vols {
+                                        for fxr in r_rates {
+                                            for fxv in vols {
+                                                for corr in correlations {
+                                                    market.spot.set_value(u);
+                                                    market.q_rate.set_value(q);
+                                                    market.r_rate.set_value(r);
+                                                    market.vol.set_value(v);
+                                                    market.fx_rate.set_value(fxr);
+                                                    market.fx_vol.set_value(fxv);
+                                                    market.correlation.set_value(corr);
+
+                                                    let value = option.npv().unwrap();
+                                                    let delta = option.delta().unwrap();
+                                                    let gamma = option.gamma().unwrap();
+                                                    let theta = option.theta().unwrap();
+                                                    let rho = option.rho().unwrap();
+                                                    let div_rho = option.dividend_rho().unwrap();
+                                                    let vega = option.vega().unwrap();
+                                                    let qrho: Real = option.result("qrho").unwrap();
+                                                    let qvega: Real =
+                                                        option.result("qvega").unwrap();
+                                                    let qlambda: Real =
+                                                        option.result("qlambda").unwrap();
+
+                                                    if value <= u * 1.0e-5 {
+                                                        continue;
+                                                    }
+
+                                                    let du = u * 1.0e-4;
+                                                    market.spot.set_value(u + du);
+                                                    let value_p = option.npv().unwrap();
+                                                    let delta_p = option.delta().unwrap();
+                                                    market.spot.set_value(u - du);
+                                                    let value_m = option.npv().unwrap();
+                                                    let delta_m = option.delta().unwrap();
+                                                    market.spot.set_value(u);
+                                                    let expected_delta =
+                                                        (value_p - value_m) / (2.0 * du);
+                                                    let expected_gamma =
+                                                        (delta_p - delta_m) / (2.0 * du);
+
+                                                    let dr = r * 1.0e-4;
+                                                    market.r_rate.set_value(r + dr);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.r_rate.set_value(r - dr);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.r_rate.set_value(r);
+                                                    let expected_rho =
+                                                        (value_p - value_m) / (2.0 * dr);
+
+                                                    let dq = q * 1.0e-4;
+                                                    market.q_rate.set_value(q + dq);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.q_rate.set_value(q - dq);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.q_rate.set_value(q);
+                                                    let expected_div_rho =
+                                                        (value_p - value_m) / (2.0 * dq);
+
+                                                    let dv = v * 1.0e-4;
+                                                    market.vol.set_value(v + dv);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.vol.set_value(v - dv);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.vol.set_value(v);
+                                                    let expected_vega =
+                                                        (value_p - value_m) / (2.0 * dv);
+
+                                                    let dfxr = fxr * 1.0e-4;
+                                                    market.fx_rate.set_value(fxr + dfxr);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.fx_rate.set_value(fxr - dfxr);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.fx_rate.set_value(fxr);
+                                                    let expected_qrho =
+                                                        (value_p - value_m) / (2.0 * dfxr);
+
+                                                    let dfxv = fxv * 1.0e-4;
+                                                    market.fx_vol.set_value(fxv + dfxv);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.fx_vol.set_value(fxv - dfxv);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.fx_vol.set_value(fxv);
+                                                    let expected_qvega =
+                                                        (value_p - value_m) / (2.0 * dfxv);
+
+                                                    let dcorr = corr * 1.0e-4;
+                                                    market.correlation.set_value(corr + dcorr);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.correlation.set_value(corr - dcorr);
+                                                    let value_m = option.npv().unwrap();
+                                                    market.correlation.set_value(corr);
+                                                    let expected_qlambda =
+                                                        (value_p - value_m) / (2.0 * dcorr);
+
+                                                    let dt = day_counter
+                                                        .year_fraction(today() - 1, today() + 1);
+                                                    market
+                                                        .settings
+                                                        .set_evaluation_date(today() - 1);
+                                                    let value_m = option.npv().unwrap();
+                                                    market
+                                                        .settings
+                                                        .set_evaluation_date(today() + 1);
+                                                    let value_p = option.npv().unwrap();
+                                                    market.settings.set_evaluation_date(today());
+                                                    let expected_theta = (value_p - value_m) / dt;
+
+                                                    let checks = [
+                                                        ("delta", expected_delta, delta),
+                                                        ("gamma", expected_gamma, gamma),
+                                                        ("theta", expected_theta, theta),
+                                                        ("rho", expected_rho, rho),
+                                                        ("divRho", expected_div_rho, div_rho),
+                                                        ("vega", expected_vega, vega),
+                                                        ("qrho", expected_qrho, qrho),
+                                                        ("qvega", expected_qvega, qvega),
+                                                        ("qlambda", expected_qlambda, qlambda),
+                                                    ];
+                                                    for (name, expected, calculated) in checks {
+                                                        let error =
+                                                            relative_error(expected, calculated, u);
+                                                        assert!(
+                                                            error <= TOLERANCE,
+                                                            "{name} of {option_type:?} \
+                                                             m={m} reset={start_month}mo \
+                                                             length={length}y q={q} r={r} v={v} \
+                                                             fxr={fxr} fxv={fxv} corr={corr}: \
+                                                             analytic {calculated} vs FD {expected} \
+                                                             (relative error {error})"
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
