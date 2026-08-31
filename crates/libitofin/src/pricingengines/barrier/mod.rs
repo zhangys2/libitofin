@@ -1,8 +1,8 @@
 //! Barrier-option pricing engines.
 //!
 //! Port of `ql/pricingengines/barrier/`. The analytic Haug engine lives with
-//! the instrument; the finite-difference, binomial, and Monte Carlo barrier
-//! engines are here.
+//! the instrument; the finite-difference, binomial, Monte Carlo, and analytic
+//! quanto barrier engines are here.
 
 mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
@@ -10,6 +10,7 @@ mod fdblackscholesrebateengine;
 mod fdhestonbarrierengine;
 mod fdhestonrebateengine;
 mod mcbarrierengine;
+mod quantobarrierengine;
 
 pub use binomialbarrierengine::{BinomialBarrierEngine, set_binomial_barrier_engine};
 pub use fdblackscholesbarrierengine::{
@@ -22,3 +23,4 @@ pub use mcbarrierengine::{
     BarrierPathPricer, BiasedBarrierPathPricer, MCBarrierEngine, MakeMcBarrierEngine,
     set_mc_barrier_engine,
 };
+pub use quantobarrierengine::{QuantoBarrierEngine, set_quanto_barrier_engine};
