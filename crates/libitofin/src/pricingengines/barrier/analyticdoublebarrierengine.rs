@@ -320,3 +320,557 @@ pub fn set_analytic_double_barrier_engine(
         as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exercise::EuropeanExercise;
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::instruments::{DoubleBarrierOption, DoubleBarrierType, PlainVanillaPayoff};
+    use crate::interestrate::Compounding;
+    use crate::option::OptionType;
+    use crate::processes::BlackScholesMertonProcess;
+    use crate::quotes::SimpleQuote;
+    use crate::settings::Settings;
+    use crate::shared::{Shared, shared};
+    use crate::termstructures::volatility::BlackConstantVol;
+    use crate::termstructures::yields::FlatForward;
+    use crate::time::date::{Date, Month};
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::frequency::Frequency;
+    use crate::types::{Rate, Time, Volatility};
+
+    fn today() -> Date {
+        Date::new(15, Month::June, 2026)
+    }
+
+    fn time_to_days(t: Time) -> i32 {
+        (t * 360.0).round() as i32
+    }
+
+    fn flat_rate(rate: Rate) -> Handle<dyn crate::termstructures::yieldtermstructure::YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
+            today(),
+            rate,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn crate::termstructures::yieldtermstructure::YieldTermStructure>)
+    }
+
+    fn flat_vol(vol: Volatility) -> Handle<dyn crate::termstructures::volatility::BlackVolTermStructure> {
+        Handle::new(
+            shared(BlackConstantVol::new(today(), None, vol, Actual360::new()))
+                as Shared<dyn crate::termstructures::volatility::BlackVolTermStructure>,
+        )
+    }
+
+    struct HaugRow {
+        barrier_type: DoubleBarrierType,
+        barrier_lo: Real,
+        barrier_hi: Real,
+        option_type: OptionType,
+        strike: Real,
+        spot: Real,
+        q: Rate,
+        r: Rate,
+        t: Time,
+        vol: Volatility,
+        result: Real,
+    }
+
+    /// `doublebarrieroption.cpp` `testEuropeanHaugValues` Ikeda/Kunitomo @ 1e-4.
+    #[rustfmt::skip]
+    #[allow(clippy::approx_constant)]
+    const HAUG_DOUBLE_BARRIER: &[HaugRow] = &[
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 4.3515,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 6.1644,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 7.0373,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 6.9853,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 7.9336,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 6.5088,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 4.3505,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 5.8500,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 5.7726,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 6.8082,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 6.3383,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 4.3841,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 4.3139,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 4.8293,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 3.7765,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 5.9697,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 4.0004,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 2.2563,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 3.7516,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 2.6387,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 1.4903,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 3.5805,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 1.5098,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 0.5635,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 1.2055,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 0.3098,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 0.0477,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 0.5537,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 0.0441,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 0.0011,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 1.8825,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 3.7855,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 5.7191,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 2.1374,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 4.7033,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 7.1683,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 1.8825,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 3.7845,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 5.6060,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 2.1374,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 4.6236,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 6.1062,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 1.8825,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 3.7014,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 4.6472,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 2.1325,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 3.8944,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 3.5868,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 1.8600,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 2.6866,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 2.0719,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 1.8883,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 1.7851,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 0.8244,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 0.9473,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 0.3449,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 0.0578,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 0.4555,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 0.0491,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockOut, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Put, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 0.0013,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 0.0000,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 0.0900,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 1.1537,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 0.0292,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 1.6487,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 50.0, barrier_hi: 150.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 5.7321,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 0.0010,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 0.4045,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 2.4184,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 0.2062,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 3.2439,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 60.0, barrier_hi: 140.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 7.8569,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 0.0376,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 1.4252,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 4.4145,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 1.0447,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 5.5818,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 70.0, barrier_hi: 130.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 9.9846,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 0.5999,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 3.6158,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 6.7007,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 3.4340,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 8.0724,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 80.0, barrier_hi: 120.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 11.6774,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.15, result: 3.1460,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.25, result: 5.9447,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.25, vol: 0.35, result: 8.1432,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.15, result: 6.4608,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.25, result: 9.5382,
+        },
+        HaugRow {
+            barrier_type: DoubleBarrierType::KnockIn, barrier_lo: 90.0, barrier_hi: 110.0,
+            option_type: OptionType::Call, strike: 100.0, spot: 100.0,
+            q: 0.0, r: 0.1, t: 0.50, vol: 0.35, result: 12.2398,
+        },
+    ];
+
+    #[test]
+    fn european_haug_double_barrier_values() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+
+        for row in HAUG_DOUBLE_BARRIER {
+            let process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(row.spot)) as Shared<dyn crate::quotes::Quote>),
+                flat_rate(row.q),
+                flat_rate(row.r),
+                flat_vol(row.vol),
+            ));
+            let payoff = PlainVanillaPayoff::new(row.option_type, row.strike);
+            let exercise = shared(EuropeanExercise::new(today() + time_to_days(row.t)));
+            let mut option = DoubleBarrierOption::new(
+                row.barrier_type,
+                row.barrier_lo,
+                row.barrier_hi,
+                0.0,
+                payoff,
+                exercise,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+            set_analytic_double_barrier_engine(&mut option, process);
+            let calculated = option.npv().unwrap();
+            assert!(
+                (calculated - row.result).abs() <= 1.0e-4,
+                "{:?} {:?} lo={} hi={} v={}: {calculated} vs Haug {} (tol 1e-4)",
+                row.barrier_type,
+                row.option_type,
+                row.barrier_lo,
+                row.barrier_hi,
+                row.vol,
+                row.result,
+            );
+        }
+    }
+}
