@@ -103,6 +103,7 @@ credit.
 | Discrete geometric average-strike Asian | `AnalyticDiscreteGeometricAverageStrikeAsianEngine` | `asianoptions.cpp` `testAnalyticDiscreteGeometricAverageStrike` | call NPV 4.97109 @ 1e-5 |
 | Continuous floating lookback | `AnalyticContinuousFloatingLookbackEngine` | `lookbackoptions.cpp` `testAnalyticContinuousFloatingLookback` | Haug + Broadie–Glasserman–Kou floating-strike table @ 1e-4 |
 | Continuous fixed lookback | `AnalyticContinuousFixedLookbackEngine` | `lookbackoptions.cpp` `testAnalyticContinuousFixedLookback` | Haug fixed-strike 36-row table @ 1e-4 |
+| Continuous partial floating lookback | `AnalyticContinuousPartialFloatingLookbackEngine` | `lookbackoptions.cpp` `testAnalyticContinuousPartialFloatingLookback` | Haug 2006 p.146 36-row table @ 1e-4 |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |

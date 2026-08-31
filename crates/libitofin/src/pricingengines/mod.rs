@@ -71,7 +71,9 @@ pub use forward::{
 };
 pub use lookback::{
     AnalyticContinuousFixedLookbackEngine, AnalyticContinuousFloatingLookbackEngine,
-    set_analytic_continuous_fixed_lookback_engine, set_analytic_continuous_floating_lookback_engine,
+    AnalyticContinuousPartialFloatingLookbackEngine, set_analytic_continuous_fixed_lookback_engine,
+    set_analytic_continuous_floating_lookback_engine,
+    set_analytic_continuous_partial_floating_lookback_engine,
 };
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{

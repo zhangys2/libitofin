@@ -63,7 +63,8 @@ pub use doublebarrieroption::{
 pub use lookbackoption::{
     ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption, ContinuousFixedLookbackResults,
     ContinuousFloatingLookbackArguments, ContinuousFloatingLookbackOption,
-    ContinuousFloatingLookbackResults,
+    ContinuousFloatingLookbackResults, ContinuousPartialFloatingLookbackArguments,
+    ContinuousPartialFloatingLookbackOption, ContinuousPartialFloatingLookbackResults,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
