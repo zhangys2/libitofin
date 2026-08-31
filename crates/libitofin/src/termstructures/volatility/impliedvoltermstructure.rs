@@ -8,7 +8,7 @@
 use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::patterns::observable::{AsObservable, Observable, Observer, ResetThenNotify};
-use crate::shared::{shared, Shared, SharedMut};
+use crate::shared::{Shared, SharedMut, shared};
 use crate::termstructures::volatility::{BlackVolTermStructure, VolatilityTermStructure};
 use crate::termstructures::{TermStructure, TermStructureBase};
 use crate::time::businessdayconvention::BusinessDayConvention;
