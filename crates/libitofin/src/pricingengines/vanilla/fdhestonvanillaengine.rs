@@ -201,6 +201,8 @@ impl PricingEngine for FdHestonVanillaEngine {
             process.risk_free_rate(),
             vola_estimate,
         )?;
+        // QuantLib `FdHestonVanillaEngine::getSolverDesc` single-strike path
+        // uses `scaleFactor = 2.0` (multi-strike uses 1.5).
         let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
             &bs_process,
@@ -209,7 +211,7 @@ impl PricingEngine for FdHestonVanillaEngine {
             None,
             None,
             0.0001,
-            1.5,
+            2.0,
             Some((strike, 0.1)),
             &self.dividends,
             self.quanto.as_deref(),

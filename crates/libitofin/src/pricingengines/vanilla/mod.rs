@@ -28,6 +28,7 @@ pub mod fdmeuropeanengine;
 pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
 pub mod mcvanillaengine;
+pub mod quantoengine;
 
 pub use analytichestonengine::HestonChf;
 pub use batesengine::BatesEngine;
@@ -42,14 +43,16 @@ pub use mceuropeanhestonengine::{
     EuropeanHestonPathPricer, MCEuropeanHestonEngine, MakeMcEuropeanHestonEngine,
 };
 pub use mcvanillaengine::McVanillaEngineBase;
+pub use quantoengine::QuantoEuropeanEngine;
 
 use std::any::Any;
 
 use crate::errors::QlResult;
-use crate::exercise::ExerciseType;
+use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
 use crate::instruments::{
     Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
+    StrikedTypePayoff,
 };
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
@@ -72,6 +75,22 @@ impl AnalyticEuropeanEngine {
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
         base.register_with(process.observable());
         AnalyticEuropeanEngine { base, process }
+    }
+
+    /// Fills the arguments and calculates; used by
+    /// [`QuantoEuropeanEngine`](quantoengine::QuantoEuropeanEngine).
+    pub(crate) fn calculate_from_arguments(
+        &mut self,
+        payoff: Shared<dyn StrikedTypePayoff>,
+        exercise: Shared<dyn Exercise>,
+    ) -> QlResult<&OneAssetOptionResults> {
+        {
+            let args = self.base.arguments_mut();
+            args.payoff = Some(payoff);
+            args.exercise = Some(exercise);
+        }
+        PricingEngine::calculate(self)?;
+        Ok(self.base.results())
     }
 }
 
