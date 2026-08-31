@@ -6,6 +6,7 @@ pub mod analyticcontinuousfixedlookback;
 pub mod analyticcontinuousfloatinglookback;
 pub mod analyticcontinuouspartialfixedlookback;
 pub mod analyticcontinuouspartialfloatinglookback;
+pub mod mclookbackengine;
 
 pub use analyticcontinuousfixedlookback::{
     AnalyticContinuousFixedLookbackEngine, set_analytic_continuous_fixed_lookback_engine,
@@ -20,4 +21,12 @@ pub use analyticcontinuouspartialfixedlookback::{
 pub use analyticcontinuouspartialfloatinglookback::{
     AnalyticContinuousPartialFloatingLookbackEngine,
     set_analytic_continuous_partial_floating_lookback_engine,
+};
+pub use mclookbackengine::{
+    MakeMcLookbackEngine, McContinuousFixedLookbackEngine,
+    McContinuousFloatingLookbackEngine, McContinuousPartialFixedLookbackEngine,
+    McContinuousPartialFloatingLookbackEngine, MCLookbackEngine,
+    set_mc_continuous_fixed_lookback_engine, set_mc_continuous_floating_lookback_engine,
+    set_mc_continuous_partial_fixed_lookback_engine,
+    set_mc_continuous_partial_floating_lookback_engine,
 };
