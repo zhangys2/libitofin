@@ -27,6 +27,8 @@ pub enum AverageType {
 #[derive(Default)]
 pub struct ContinuousAveragingAsianArguments {
     pub average_type: Option<AverageType>,
+    /// Averaging start date (`Date()` / unset when the unseasoned ctor was used).
+    pub start_date: Option<Date>,
     pub payoff: Option<PlainVanillaPayoff>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
@@ -63,15 +65,44 @@ pub struct ContinuousAveragingAsianOption {
     base: InstrumentBase,
     settings: Shared<Settings<Date>>,
     average_type: AverageType,
+    start_date: Option<Date>,
     payoff: PlainVanillaPayoff,
     exercise: Shared<dyn Exercise>,
     greeks: Greeks,
 }
 
 impl ContinuousAveragingAsianOption {
-    /// Builds a continuous-averaging Asian option.
+    /// Unseasoned continuous-averaging Asian (no start date).
     pub fn new(
         average_type: AverageType,
+        payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::assemble(average_type, None, payoff, exercise, settings)
+    }
+
+    /// Seasoned continuous-averaging Asian with averaging start date
+    /// (`asianoption.cpp`).
+    pub fn with_start_date(
+        average_type: AverageType,
+        start_date: Date,
+        payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::assemble(
+            average_type,
+            Some(start_date),
+            payoff,
+            exercise,
+            settings,
+        )
+    }
+
+    fn assemble(
+        average_type: AverageType,
+        start_date: Option<Date>,
         payoff: PlainVanillaPayoff,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
@@ -82,6 +113,7 @@ impl ContinuousAveragingAsianOption {
             base,
             settings,
             average_type,
+            start_date,
             payoff,
             exercise,
             greeks: Greeks::default(),
@@ -90,6 +122,10 @@ impl ContinuousAveragingAsianOption {
 
     pub fn average_type(&self) -> AverageType {
         self.average_type
+    }
+
+    pub fn start_date(&self) -> Option<Date> {
+        self.start_date
     }
 
     fn greek(value: Option<Real>, description: &str) -> QlResult<Real> {
@@ -150,6 +186,7 @@ impl Instrument for ContinuousAveragingAsianOption {
             fail!("wrong argument type");
         };
         arguments.average_type = Some(self.average_type);
+        arguments.start_date = self.start_date;
         arguments.payoff = Some(self.payoff);
         arguments.exercise = Some(Shared::clone(&self.exercise));
         Ok(())

@@ -3,6 +3,7 @@
 mod analyticcontinuousgeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragestrikeasianengine;
+mod continuousarithmeticasianlevyengine;
 mod mcdiscretearithmeticaveragepriceasianengine;
 mod mcdiscretearithmeticaveragepriceasianhestonengine;
 mod mcdiscretearithmeticaveragestrikeasianengine;
@@ -21,6 +22,9 @@ pub use analyticdiscretegeometricaveragepriceasianengine::{
 pub use analyticdiscretegeometricaveragestrikeasianengine::{
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,
     set_analytic_discrete_geometric_average_strike_asian_engine,
+};
+pub use continuousarithmeticasianlevyengine::{
+    ContinuousArithmeticAsianLevyEngine, set_continuous_arithmetic_asian_levy_engine,
 };
 pub use mcdiscretearithmeticaveragepriceasianengine::{
     ArithmeticApoPathPricer, MCDiscreteArithmeticAveragePriceAsianEngine,
