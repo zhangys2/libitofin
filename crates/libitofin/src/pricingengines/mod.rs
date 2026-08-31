@@ -21,7 +21,7 @@ pub use asian::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,
-    ContinuousArithmeticAsianLevyEngine,
+    ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
     MCDiscreteArithmeticAveragePriceAsianEngine,
     MCDiscreteArithmeticAveragePriceAsianHestonEngine,
     MCDiscreteArithmeticAverageStrikeAsianEngine,
@@ -38,7 +38,8 @@ pub use asian::{
     set_mc_discrete_arithmetic_average_strike_asian_engine,
     set_mc_discrete_geometric_average_price_asian_engine,
     set_mc_discrete_geometric_average_price_asian_heston_engine,
-    set_continuous_arithmetic_asian_levy_engine, set_turnbull_wakeman_asian_engine,
+    set_continuous_arithmetic_asian_levy_engine, set_continuous_arithmetic_asian_vecer_engine,
+    set_turnbull_wakeman_asian_engine,
 };
 pub use barrier::{
     AnalyticDoubleBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine,
