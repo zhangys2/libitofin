@@ -11,6 +11,7 @@ mod continuousaveragingasianoption;
 mod discreteaveragingasianoption;
 mod doublebarrieroption;
 mod lookbackoption;
+mod softbarrieroption;
 mod bond;
 mod bondforward;
 mod bonds;
@@ -67,6 +68,9 @@ pub use lookbackoption::{
     ContinuousPartialFixedLookbackOption, ContinuousPartialFixedLookbackResults,
     ContinuousPartialFloatingLookbackArguments, ContinuousPartialFloatingLookbackOption,
     ContinuousPartialFloatingLookbackResults,
+};
+pub use softbarrieroption::{
+    SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
