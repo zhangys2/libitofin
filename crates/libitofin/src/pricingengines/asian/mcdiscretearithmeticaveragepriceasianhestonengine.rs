@@ -3,9 +3,11 @@
 //! Port of `ql/pricingengines/asian/mc_discr_arith_av_price_heston.{hpp,cpp}` and
 //! the multi-factor branch of `mcdiscreteasianenginebase.hpp`.
 //!
-//! Control-variate pricing (analytic discrete geometric Heston Asian) is not
-//! yet available; `with_control_variate(true)` fails at calculate time.
+//! Control variate: analytic discrete geometric Heston Asian
+//! ([`AnalyticDiscreteGeometricAveragePriceAsianHestonEngine`]) with geometric
+//! Heston path pricer.
 
+use std::any::Any;
 use std::marker::PhantomData;
 
 use crate::errors::QlResult;
@@ -28,6 +30,10 @@ use crate::require;
 use crate::shared::{Shared, SharedMut};
 use crate::stochasticprocess::StochasticProcess;
 use crate::types::{DiscountFactor, Real, Size, Time};
+
+use super::{
+    AnalyticDiscreteGeometricAveragePriceAsianHestonEngine, GeometricApoHestonPathPricer,
+};
 
 type EngineBase = GenericEngine<DiscreteAveragingAsianArguments, DiscreteAveragingAsianResults>;
 
@@ -168,6 +174,35 @@ impl<RNG: McRngTraits> MCDiscreteArithmeticAveragePriceAsianHestonEngine<RNG> {
             TimeGrid::from_mandatory_times(&fixing_times)
         }
     }
+
+    fn control_variate_value(&self) -> QlResult<Real> {
+        let mut control =
+            AnalyticDiscreteGeometricAveragePriceAsianHestonEngine::new(Shared::clone(
+                &self.process,
+            ))?;
+        {
+            let src = self.base.arguments();
+            let Some(dst) = (control.arguments_mut() as &mut dyn Any)
+                .downcast_mut::<DiscreteAveragingAsianArguments>()
+            else {
+                fail!("wrong argument type for control engine");
+            };
+            dst.average_type = src.average_type;
+            dst.running_accumulator = src.running_accumulator;
+            dst.past_fixings = src.past_fixings;
+            dst.fixing_dates = src.fixing_dates.clone();
+            dst.payoff = src.payoff;
+            dst.exercise = src.exercise.clone();
+        }
+        control.calculate()?;
+        let Some(results) = control.results().as_instrument_results() else {
+            fail!("no results returned from control pricing engine");
+        };
+        let Some(value) = results.value else {
+            fail!("engine does not provide control-variation price");
+        };
+        Ok(value)
+    }
 }
 
 impl<RNG: McRngTraits> AsObservable for MCDiscreteArithmeticAveragePriceAsianHestonEngine<RNG> {
@@ -190,12 +225,6 @@ impl<RNG: McRngTraits> PricingEngine for MCDiscreteArithmeticAveragePriceAsianHe
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        require!(
-            !self.control_variate,
-            "Heston arithmetic Asian control variate requires \
-             AnalyticDiscreteGeometricAveragePriceAsianHestonEngine (not yet ported)"
-        );
-
         let args = self.base.arguments();
         require!(
             args.average_type == Some(AverageType::Arithmetic),
@@ -229,7 +258,7 @@ impl<RNG: McRngTraits> PricingEngine for MCDiscreteArithmeticAveragePriceAsianHe
             payoff.option_type(),
             payoff.strike(),
             discount,
-            fixing_indices,
+            fixing_indices.clone(),
             running_accumulator,
             past_fixings,
         )?;
@@ -237,14 +266,38 @@ impl<RNG: McRngTraits> PricingEngine for MCDiscreteArithmeticAveragePriceAsianHe
         let mut simulation = McSimulation::<
             MultiPathGenerator<RNG::RsgType>,
             ArithmeticApoHestonPathPricer,
-        >::new(self.antithetic_variate, false);
-        simulation.calculate(
-            mpg,
-            path_pricer,
-            self.required_tolerance,
-            self.required_samples,
-            self.max_samples,
-        )?;
+        >::new(self.antithetic_variate, self.control_variate);
+
+        if self.control_variate {
+            // QL GeometricAPOHestonPathPricer defaults: runningProduct=1, pastFixings=0
+            // (seasoned CV deferred until analytic seasoning is complete).
+            let control_pricer = GeometricApoHestonPathPricer::new(
+                payoff.option_type(),
+                payoff.strike(),
+                discount,
+                fixing_indices,
+                1.0,
+                0,
+            )?;
+            let control_value = self.control_variate_value()?;
+            simulation.calculate_with_control_variate(
+                mpg,
+                path_pricer,
+                control_pricer,
+                control_value,
+                self.required_tolerance,
+                self.required_samples,
+                self.max_samples,
+            )?;
+        } else {
+            simulation.calculate(
+                mpg,
+                path_pricer,
+                self.required_tolerance,
+                self.required_samples,
+                self.max_samples,
+            )?;
+        }
 
         let mean = simulation.sample_accumulator()?.mean()?;
         let results = self.base.results_mut();
@@ -400,11 +453,7 @@ mod tests {
     }
 
     /// Ballestra / Albrecher–Zeng via `testMCDiscreteArithmeticAveragePriceHeston`
-    /// (`LowDiscrepancy`, seed 42; CV deferred).
-    ///
-    /// Albrecher uses 16383 samples (QL: 8191): the same seed/steps stream sits
-    /// just outside QL's 9e-2 literature band at 8191; one Sobol length step up
-    /// recovers the band without widening the tolerance.
+    /// (`LowDiscrepancy`, seed 42; geometric Heston analytic CV).
     #[test]
     fn monte_carlo_discrete_arithmetic_average_price_heston_matches_literature() {
         let settings = shared(Settings::new());
@@ -425,16 +474,6 @@ mod tests {
                 -0.5,
             ));
 
-            let engine = shared_mut(
-                MakeMcDiscreteArithmeticApHestonEngine::<LowDiscrepancy>::new(Shared::clone(
-                    &process,
-                ))
-                .with_seed(42)
-                .with_samples(4095)
-                .build()
-                .unwrap(),
-            );
-
             let first = 1.0 / 12.0;
             let length = 11.0 / 12.0;
             let fixings: Size = 12;
@@ -448,6 +487,16 @@ mod tests {
                 };
                 fixing_dates.push(today + (t * 365.25) as i32);
             }
+
+            let engine = shared_mut(
+                MakeMcDiscreteArithmeticApHestonEngine::<LowDiscrepancy>::new(Shared::clone(
+                    &process,
+                ))
+                .with_seed(42)
+                .with_samples(4095)
+                .build()
+                .unwrap(),
+            );
 
             let mut option = DiscreteAveragingAsianOption::new(
                 AverageType::Arithmetic,
@@ -471,6 +520,28 @@ mod tests {
                 (calculated - expected).abs() <= tolerance,
                 "Ballestra: expected {expected}, got {calculated} (tol {tolerance})"
             );
+
+            let engine_cv = shared_mut(
+                MakeMcDiscreteArithmeticApHestonEngine::<LowDiscrepancy>::new(Shared::clone(
+                    &process,
+                ))
+                .with_seed(42)
+                .with_steps(48)
+                .with_samples(4095)
+                .with_control_variate(true)
+                .build()
+                .unwrap(),
+            );
+            set_mc_discrete_arithmetic_average_price_asian_heston_engine(
+                &mut option,
+                SharedMut::clone(&engine_cv) as SharedMut<dyn PricingEngine>,
+            );
+            let calculated_cv = option.npv().unwrap();
+            let tolerance_cv = 3.0e-2;
+            assert!(
+                (calculated_cv - expected).abs() <= tolerance_cv,
+                "Ballestra CV: expected {expected}, got {calculated_cv} (tol {tolerance_cv})"
+            );
         }
 
         // --- Albrecher / Zeng–Kwok Table 4 ---
@@ -487,6 +558,8 @@ mod tests {
                 -0.5711,
             ));
 
+            // Non-CV: QL uses 8191; this port needs 16383 at the same seed/steps to
+            // stay inside the 9e-2 literature band (see prior Heston AP oracle).
             let engine = shared_mut(
                 MakeMcDiscreteArithmeticApHestonEngine::<LowDiscrepancy>::new(Shared::clone(
                     &process,
@@ -498,6 +571,18 @@ mod tests {
                 .unwrap(),
             );
 
+            let engine_cv = shared_mut(
+                MakeMcDiscreteArithmeticApHestonEngine::<LowDiscrepancy>::new(Shared::clone(
+                    &process,
+                ))
+                .with_seed(42)
+                .with_steps(180)
+                .with_samples(8191)
+                .with_control_variate(true)
+                .build()
+                .unwrap(),
+            );
+
             let fixing_dates: Vec<Date> = (1..=120)
                 .map(|i| today + Period::new(i, TimeUnit::Months))
                 .collect();
@@ -505,7 +590,6 @@ mod tests {
 
             let strikes = [60.0, 80.0, 100.0, 120.0, 140.0];
             let prices = [42.5990, 29.3698, 18.2360, 10.0565, 4.9609];
-            let tolerance = 9.0e-2;
 
             for (strike, expected) in strikes.into_iter().zip(prices) {
                 let mut option = DiscreteAveragingAsianOption::new(
@@ -524,9 +608,21 @@ mod tests {
                     SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>,
                 );
                 let calculated = option.npv().unwrap();
+                let tolerance = 9.0e-2;
                 assert!(
                     (calculated - expected).abs() <= tolerance,
                     "Albrecher K={strike}: expected {expected}, got {calculated} (tol {tolerance})"
+                );
+
+                set_mc_discrete_arithmetic_average_price_asian_heston_engine(
+                    &mut option,
+                    SharedMut::clone(&engine_cv) as SharedMut<dyn PricingEngine>,
+                );
+                let calculated_cv = option.npv().unwrap();
+                let tolerance_cv = 3.0e-2;
+                assert!(
+                    (calculated_cv - expected).abs() <= tolerance_cv,
+                    "Albrecher CV K={strike}: expected {expected}, got {calculated_cv} (tol {tolerance_cv})"
                 );
             }
         }
