@@ -18,6 +18,7 @@ credit.
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
 | Analytic quanto vanilla | `QuantoEuropeanEngine` (`QuantoEngine<VanillaOption, AnalyticEuropeanEngine>`) | `quantooption.cpp` `testValues` | Haug call 5.3280/1.5, put 8.1636 @ 1e-4; NPV/greeks ≡ quanto-q Black |
 | Analytic quanto greeks | `QuantoEuropeanEngine` | `quantooption.cpp` `testGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega/qρ/qvega/qλ) @ 1e-5 relative to spot |
+| Analytic quanto barrier | `QuantoBarrierEngine` (`QuantoEngine<BarrierOption, AnalyticBarrierEngine>`) | `quantooption.cpp` `testBarrierValues` | Haug DownOut call 8.247 / put 2.274, DownIn put 2.85 @ tol 0.5; NPV ≡ quanto-q barrier |
 | FD vanilla escrowed dividends | `FdBlackScholesVanillaEngine` + `EscrowedDividendAdjustment` (European) | `dividendoption.cpp` `testFdEuropeanDegenerate` / `testEscrowedDividendModel` | empty/zero divs @ 1e-6; FD 200×400 vs Black on prepaid spot @ 1e-3 |
 | FD American escrowed dividends | `FdmEscrowedLogInnerValueCalculator` + American/Bermudan on `FdBlackScholesVanillaEngine` | `americanoption.cpp` `testEscrowedVsSpotAmericanOption`; `dividendoption.cpp` `testFdAmericanDegenerate` | escrowed vs spot NPV/delta @ 1e-2 (vol × S/(S−D)); empty/zero divs @ 1e-6 |
 | FD quanto helper | `FdmQuantoHelper` + `QuantoTermStructure` + mesher/op/engine | `quantooption.cpp` `testFDMQuantoHelper` / `testPDEOptionValues` | adj @ 1e-10; mesher bounds @ 1e-10; FD vs quanto-q Black NPV @ 2e-4, delta @ 1e-4 |

@@ -298,6 +298,24 @@ impl AnalyticBarrierEngine {
         base.register_with(process.observable());
         Self { base, process }
     }
+
+    /// Fills the arguments and calculates; used by
+    /// [`QuantoBarrierEngine`](crate::pricingengines::QuantoBarrierEngine).
+    pub(crate) fn calculate_from_arguments(
+        &mut self,
+        arguments: &BarrierArguments,
+    ) -> QlResult<&InstrumentResults> {
+        {
+            let args = self.base.arguments_mut();
+            args.barrier_type = arguments.barrier_type;
+            args.barrier = arguments.barrier;
+            args.rebate = arguments.rebate;
+            args.payoff = arguments.payoff;
+            args.exercise = arguments.exercise.as_ref().map(Shared::clone);
+        }
+        PricingEngine::calculate(self)?;
+        Ok(self.base.results())
+    }
 }
 
 impl AsObservable for AnalyticBarrierEngine {
