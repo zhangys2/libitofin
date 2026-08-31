@@ -14,6 +14,7 @@ pub mod bond;
 pub mod capfloor;
 pub mod forward;
 pub mod greeks;
+pub mod lookback;
 pub mod swap;
 pub mod swaption;
 pub mod vanilla;
@@ -67,6 +68,9 @@ pub use forward::{
     QuantoForwardEuropeanEngine, QuantoForwardPerformanceEuropeanEngine,
     set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
     set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
+};
+pub use lookback::{
+    AnalyticContinuousFloatingLookbackEngine, set_analytic_continuous_floating_lookback_engine,
 };
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{

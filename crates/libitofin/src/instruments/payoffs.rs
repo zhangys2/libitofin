@@ -2,10 +2,10 @@
 //!
 //! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
-//! [`PlainVanillaPayoff`] and the [`CashOrNothingPayoff`]. The remaining
-//! payoffs (`NullPayoff`, `FloatingTypePayoff`, `PercentageStrikePayoff`,
-//! `AssetOrNothingPayoff`, `GapPayoff`, `SuperFundPayoff`,
-//! `SuperSharePayoff`) are follow-up work.
+//! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], and the
+//! [`CashOrNothingPayoff`]. The remaining payoffs (`NullPayoff`,
+//! `PercentageStrikePayoff`, `AssetOrNothingPayoff`, `GapPayoff`,
+//! `SuperFundPayoff`, `SuperSharePayoff`) are follow-up work.
 
 use std::any::Any;
 
@@ -80,6 +80,54 @@ impl TypePayoff for PlainVanillaPayoff {
 impl StrikedTypePayoff for PlainVanillaPayoff {
     fn strike(&self) -> Real {
         self.strike
+    }
+}
+
+/// Floating-strike payoff: needs both terminal price and strike at exercise.
+///
+/// Ports `FloatingTypePayoff` (`ql/instruments/payoffs.hpp:75`,
+/// `payoffs.cpp:61-74`). Single-argument [`Payoff::value`] always fails;
+/// use [`FloatingTypePayoff::value_with_strike`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloatingTypePayoff {
+    option_type: OptionType,
+}
+
+impl FloatingTypePayoff {
+    /// Builds a floating-type payoff of the given put/call type.
+    pub fn new(option_type: OptionType) -> FloatingTypePayoff {
+        FloatingTypePayoff { option_type }
+    }
+
+    /// Payoff given both the underlying price and the floating strike.
+    pub fn value_with_strike(&self, price: Real, strike: Real) -> Real {
+        let intrinsic = match self.option_type {
+            OptionType::Call => price - strike,
+            OptionType::Put => strike - price,
+        };
+        if intrinsic < 0.0 { 0.0 } else { intrinsic }
+    }
+}
+
+impl Payoff for FloatingTypePayoff {
+    fn name(&self) -> String {
+        "FloatingType".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!("{} {}", self.name(), self.option_type)
+    }
+
+    fn value(&self, _price: Real) -> Real {
+        // QuantLib's single-argument `operator()` raises
+        // (`FloatingTypePayoff::operator()(Real)`); use `value_with_strike`.
+        unimplemented!("floating payoff not handled")
+    }
+}
+
+impl TypePayoff for FloatingTypePayoff {
+    fn option_type(&self) -> OptionType {
+        self.option_type
     }
 }
 

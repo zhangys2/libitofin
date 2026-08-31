@@ -10,6 +10,7 @@ mod barrieroption;
 mod continuousaveragingasianoption;
 mod discreteaveragingasianoption;
 mod doublebarrieroption;
+mod lookbackoption;
 mod bond;
 mod bondforward;
 mod bonds;
@@ -59,6 +60,10 @@ pub use discreteaveragingasianoption::{
 pub use doublebarrieroption::{
     DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
 };
+pub use lookbackoption::{
+    ContinuousFloatingLookbackArguments, ContinuousFloatingLookbackOption,
+    ContinuousFloatingLookbackResults,
+};
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
 pub use bonds::{
@@ -88,7 +93,9 @@ pub use oneassetoption::{
     OneAssetOptionResults, OptionArguments, VanillaOption,
 };
 pub use overnightindexedswap::OvernightIndexedSwap;
-pub use payoffs::{CashOrNothingPayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff};
+pub use payoffs::{
+    CashOrNothingPayoff, FloatingTypePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
+};
 pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
 pub use swaption::{
     SettlementMethod, SettlementType, Swaption, SwaptionArguments, SwaptionEngine,
