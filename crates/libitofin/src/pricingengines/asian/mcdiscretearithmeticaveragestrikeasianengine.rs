@@ -347,6 +347,8 @@ mod tests {
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
 
     fn quote_handle(q: &Shared<SimpleQuote>) -> Handle<dyn crate::quotes::Quote> {
         Handle::new(Shared::clone(q) as Shared<dyn crate::quotes::Quote>)
@@ -601,5 +603,79 @@ mod tests {
                 calculated
             );
         }
+    }
+
+    /// Issue #646 / `testMCDiscreteArithmeticAverageStrikeExerciseDate`:
+    /// with r=q=0 and vol>0, later exercise must raise the ASO price.
+    #[test]
+    fn monte_carlo_discrete_arithmetic_average_strike_sensitive_to_exercise_date() {
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::June, 2026);
+        settings.set_evaluation_date(today);
+
+        let spot = shared(SimpleQuote::new(90.0));
+        let q_rate = shared(SimpleQuote::new(0.0));
+        let r_rate = shared(SimpleQuote::new(0.0));
+        let vol = shared(SimpleQuote::new(0.20));
+
+        let process = shared(BlackScholesMertonProcess::new(
+            quote_handle(&spot),
+            flat_rate(today, &q_rate),
+            flat_rate(today, &r_rate),
+            flat_vol(today, &vol),
+        ));
+
+        let engine = shared_mut(
+            MakeMcDiscreteArithmeticAsEngine::<LowDiscrepancy>::new(Shared::clone(&process))
+                .with_seed(42)
+                .with_samples(8191)
+                .build()
+                .unwrap(),
+        );
+
+        let fixing_dates: Vec<Date> = (0..=6)
+            .map(|i| today + Period::new(i, TimeUnit::Months))
+            .collect();
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 90.0);
+
+        let mut option1 = DiscreteAveragingAsianOption::new(
+            AverageType::Arithmetic,
+            0.0,
+            0,
+            fixing_dates.clone(),
+            payoff,
+            shared(EuropeanExercise::new(*fixing_dates.last().unwrap())),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_mc_discrete_arithmetic_average_strike_asian_engine(
+            &mut option1,
+            SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>,
+        );
+        let price1 = option1.npv().unwrap();
+
+        let mut option2 = DiscreteAveragingAsianOption::new(
+            AverageType::Arithmetic,
+            0.0,
+            0,
+            fixing_dates.clone(),
+            payoff,
+            shared(EuropeanExercise::new(
+                *fixing_dates.last().unwrap() + Period::new(3, TimeUnit::Months),
+            )),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_mc_discrete_arithmetic_average_strike_asian_engine(
+            &mut option2,
+            SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>,
+        );
+        let price2 = option2.npv().unwrap();
+
+        assert!(
+            price2 > price1,
+            "average-strike Asian should be sensitive to exercise date: \
+             exercise at last fixing = {price1}, exercise +3M = {price2}"
+        );
     }
 }
