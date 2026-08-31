@@ -94,6 +94,7 @@ credit.
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
 | Asset swap | `AssetSwap` | `ql/instruments/assetswap` | Par asset swap; leg construction per `assetswap.cpp`; identity-verified |
 | Barrier / Asian | `BarrierOption` + Haug `AnalyticBarrierEngine`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | Haug continuous with rebate; geometric Asian slice |
+| Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Barrier knock-in/out parity | `AnalyticBarrierEngine` + `AnalyticEuropeanEngine` | `barrieroption.cpp` `testParity` | DownIn + DownOut ≡ European call @ 1e-7 (Actual360 and Business252 vol) |
 | Barrier put-call symmetry | `AnalyticBarrierEngine` | `barrieroption.cpp` `testPutCallSymmetry` | inverted knock-out put ≡ scaled call @ 1e-4 (DownOut/UpOut pairs) |
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3) |
