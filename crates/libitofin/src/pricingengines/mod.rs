@@ -5,6 +5,7 @@
 //! built on them.
 
 pub mod asian;
+pub mod basket;
 pub mod barrier;
 pub mod blackcalculator;
 pub mod blackdeltacalculator;
@@ -23,7 +24,7 @@ pub use asian::{
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
     AnalyticDiscreteGeometricAveragePriceAsianHestonEngine,
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,
-    ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
+    ChoiAsianEngine, ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
     MCDiscreteArithmeticAveragePriceAsianEngine,
     MCDiscreteArithmeticAveragePriceAsianHestonEngine,
     MCDiscreteArithmeticAverageStrikeAsianEngine,
@@ -43,8 +44,9 @@ pub use asian::{
     set_mc_discrete_geometric_average_price_asian_engine,
     set_mc_discrete_geometric_average_price_asian_heston_engine,
     set_continuous_arithmetic_asian_levy_engine, set_continuous_arithmetic_asian_vecer_engine,
-    set_turnbull_wakeman_asian_engine,
+    set_choi_asian_engine, set_turnbull_wakeman_asian_engine,
 };
+pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use barrier::{
     AnalyticDoubleBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine,
     FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine, FdHestonBarrierEngine,
