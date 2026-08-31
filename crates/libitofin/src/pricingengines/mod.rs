@@ -12,6 +12,7 @@ pub mod blackdeltacalculator;
 pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
+pub mod exotic;
 pub mod forward;
 pub mod greeks;
 pub mod lookback;
@@ -66,6 +67,7 @@ pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
+pub use exotic::{AnalyticSimpleChooserEngine, set_analytic_simple_chooser_engine};
 pub use forward::{
     AnalyticForwardPerformanceVanillaEngine, AnalyticForwardVanillaEngine,
     QuantoForwardEuropeanEngine, QuantoForwardPerformanceEuropeanEngine,
