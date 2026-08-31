@@ -11,6 +11,7 @@ mod continuousaveragingasianoption;
 mod discreteaveragingasianoption;
 mod doublebarrieroption;
 mod lookbackoption;
+mod partialtimebarrieroption;
 mod softbarrieroption;
 mod bond;
 mod bondforward;
@@ -68,6 +69,10 @@ pub use lookbackoption::{
     ContinuousPartialFixedLookbackOption, ContinuousPartialFixedLookbackResults,
     ContinuousPartialFloatingLookbackArguments, ContinuousPartialFloatingLookbackOption,
     ContinuousPartialFloatingLookbackResults,
+};
+pub use partialtimebarrieroption::{
+    PartialBarrierRange, PartialTimeBarrierArguments, PartialTimeBarrierOption,
+    PartialTimeBarrierResults,
 };
 pub use softbarrieroption::{
     SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults,

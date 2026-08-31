@@ -49,11 +49,13 @@ pub use asian::{
 };
 pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use barrier::{
-    AnalyticDoubleBarrierEngine, AnalyticSoftBarrierEngine, BarrierPathPricer,
+    AnalyticDoubleBarrierEngine, AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine,
+    BarrierPathPricer,
     BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
     FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCDoubleBarrierEngine,
     MCBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
-    QuantoDoubleBarrierEngine, set_analytic_double_barrier_engine, set_analytic_soft_barrier_engine,
+    QuantoDoubleBarrierEngine, set_analytic_double_barrier_engine,
+    set_analytic_partial_time_barrier_engine, set_analytic_soft_barrier_engine,
     set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
     set_mc_barrier_engine, set_mc_double_barrier_engine, set_quanto_barrier_engine,
     set_quanto_double_barrier_engine, set_vanna_volga_double_barrier_engine,

@@ -5,6 +5,7 @@
 //! quanto barrier engines are here.
 
 mod analyticdoublebarrierengine;
+mod analyticpartialtimebarrieroptionengine;
 mod analyticsoftbarrierengine;
 mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
@@ -31,6 +32,9 @@ pub use mcbarrierengine::{
 };
 pub use analyticdoublebarrierengine::{
     AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
+};
+pub use analyticpartialtimebarrieroptionengine::{
+    AnalyticPartialTimeBarrierOptionEngine, set_analytic_partial_time_barrier_engine,
 };
 pub use analyticsoftbarrierengine::{
     AnalyticSoftBarrierEngine, set_analytic_soft_barrier_engine,
