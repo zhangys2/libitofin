@@ -23,13 +23,11 @@
 //!   `maxSamples` default (`mcsimulation.hpp:55`) is expressed as `Size::MAX`.
 //!
 //! Deferred, rejected visibly rather than silently ignored:
-//! - **control variate** (`mcsimulation.hpp:167-188`): [`new`] keeps the
-//!   `control_variate` flag but [`calculate`](McSimulation::calculate) returns
-//!   `Err` when it is `true`; the CV model-construction branch is omitted.
-//! - **antithetic variate**: threaded to [`MonteCarloModel::new`], which averages
-//!   the forward path with its antithetic partner when the generator supports it
-//!   (the multi-factor path); the single-factor generator's antithetic draw is a
-//!   fail-loud `Err`.
+//! - **separate control-variate path generator**: same-path CV is supported via
+//!   [`calculate_with_control_variate`](McSimulation::calculate_with_control_variate);
+//!   a distinct CV generator is not.
+//! - **antithetic variate** on single-factor generators remains a fail-loud
+//!   `Err` from [`PathGenerator`](crate::methods::montecarlo::PathGenerator).
 //! - **`maxError` over a sequence** (`mcsimulation.hpp:89-95`): the multi-variate
 //!   `max_element` reduction is dropped; the single-variate `result_type = Real`
 //!   is its own error.
@@ -48,7 +46,7 @@ pub const DEFAULT_MIN_SAMPLES: Size = 1023;
 /// Owns the Monte Carlo model and runs the sampling loops.
 ///
 /// `S` defaults to [`GeneralStatistics`], QuantLib's default `Statistics` tool.
-pub struct McSimulation<PG, P, S = GeneralStatistics> {
+pub struct McSimulation<PG: PathGen, P, S = GeneralStatistics> {
     model: Option<MonteCarloModel<PG, P, S>>,
     antithetic_variate: bool,
     control_variate: bool,
@@ -167,8 +165,9 @@ where
     /// # Errors
     ///
     /// Errors if neither `required_tolerance` nor `required_samples` is set, if
-    /// control variate is requested (deferred), or on an accumulation failure
-    /// (including a single-factor antithetic draw, deferred).
+    /// control variate was requested at construction (use
+    /// [`calculate_with_control_variate`](McSimulation::calculate_with_control_variate)),
+    /// or on an accumulation failure (including a single-factor antithetic draw).
     pub fn calculate(
         &mut self,
         path_generator: PG,
@@ -177,18 +176,65 @@ where
         required_samples: Option<Size>,
         max_samples: Option<Size>,
     ) -> QlResult<()> {
-        require!(
-            required_tolerance.is_some() || required_samples.is_some(),
-            "neither tolerance nor number of samples set"
-        );
         require!(!self.control_variate, "control variate not supported");
+        self.finish_calculate(
+            MonteCarloModel::new(
+                path_generator,
+                path_pricer,
+                S::default(),
+                self.antithetic_variate,
+            )?,
+            required_tolerance,
+            required_samples,
+            max_samples,
+        )
+    }
 
-        self.model = Some(MonteCarloModel::new(
+    /// Same-path control variate (`mcsimulation.hpp:167-188` with a null CV
+    /// path generator): prices each path as
+    /// `pricer(path) + control_value - control_pricer(path)`.
+    ///
+    /// # Errors
+    ///
+    /// Errors if neither tolerance nor samples is set, or on accumulation
+    /// failure.
+    #[allow(clippy::too_many_arguments)]
+    pub fn calculate_with_control_variate<CP>(
+        &mut self,
+        path_generator: PG,
+        path_pricer: P,
+        control_pricer: CP,
+        control_value: Real,
+        required_tolerance: Option<Real>,
+        required_samples: Option<Size>,
+        max_samples: Option<Size>,
+    ) -> QlResult<()>
+    where
+        CP: PathPricer<PG::PathType> + 'static,
+    {
+        let model = MonteCarloModel::new(
             path_generator,
             path_pricer,
             S::default(),
             self.antithetic_variate,
-        )?);
+        )?
+        .with_control_variate(control_pricer, control_value);
+        self.finish_calculate(model, required_tolerance, required_samples, max_samples)
+    }
+
+    fn finish_calculate(
+        &mut self,
+        model: MonteCarloModel<PG, P, S>,
+        required_tolerance: Option<Real>,
+        required_samples: Option<Size>,
+        max_samples: Option<Size>,
+    ) -> QlResult<()> {
+        require!(
+            required_tolerance.is_some() || required_samples.is_some(),
+            "neither tolerance nor number of samples set"
+        );
+
+        self.model = Some(model);
 
         match required_tolerance {
             Some(tolerance) => {

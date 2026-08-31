@@ -29,8 +29,9 @@
 //! exercised only over a multi-factor generator.
 //!
 //! Deferred, rejected visibly rather than silently ignored:
-//! - **control variate** (`montecarlomodel.hpp:67-69,98-106`): the four CV
-//!   constructor parameters are dropped entirely.
+//! - **separate control-variate path generator** (`montecarlomodel.hpp:103-106`):
+//!   only the same-path CV branch (`cvPathGenerator_` null) is ported; a distinct
+//!   CV generator is not accepted.
 //!
 //! [`new`]: MonteCarloModel::new
 
@@ -56,16 +57,21 @@ impl<P, F: Fn(&P) -> Real> PathPricer<P> for F {
     }
 }
 
+/// Same-path control variate payload (`cvPathPricer_` + `cvOptionValue_`).
+type SamePathControl<Path> = (Box<dyn PathPricer<Path>>, Real);
+
 /// Draws paths, prices them, and accumulates the sample statistics.
 ///
 /// Generic over the path generator `PG` (single- or multi-factor,
 /// `mctraits.hpp:44,55`). `S` defaults to [`GeneralStatistics`], QuantLib's
 /// default `Statistics` tool.
-pub struct MonteCarloModel<PG, P, S = GeneralStatistics> {
+pub struct MonteCarloModel<PG: PathGen, P, S = GeneralStatistics> {
     path_generator: PG,
     path_pricer: P,
     sample_accumulator: S,
     antithetic_variate: bool,
+    /// Same-path control variate: `(cv_path_pricer, analytic_cv_value)`.
+    control: Option<SamePathControl<PG::PathType>>,
 }
 
 impl<PG, P, S> MonteCarloModel<PG, P, S>
@@ -82,7 +88,7 @@ where
     /// # Errors
     ///
     /// Infallible today; the `QlResult` return preserves the C++ constructor's
-    /// fallibility for the deferred control-variate branch.
+    /// fallibility for the deferred separate-CV-generator branch.
     pub fn new(
         path_generator: PG,
         path_pricer: P,
@@ -94,7 +100,19 @@ where
             path_pricer,
             sample_accumulator,
             antithetic_variate,
+            control: None,
         })
+    }
+
+    /// Same-path control variate (`montecarlomodel.hpp:98-101`): each sample
+    /// becomes `price + cv_value - cv_pricer(path)` using the primary path.
+    pub fn with_control_variate(
+        mut self,
+        control_pricer: impl PathPricer<PG::PathType> + 'static,
+        control_value: Real,
+    ) -> Self {
+        self.control = Some((Box::new(control_pricer), control_value));
+        self
     }
 
     /// Draws, prices, and accumulates `samples` paths (`montecarlomodel.hpp:92`).
@@ -113,10 +131,10 @@ where
     pub fn add_samples(&mut self, samples: Size) -> QlResult<()> {
         for _ in 0..samples {
             let sample = self.path_generator.next()?;
-            let price = self.path_pricer.price(&sample.value);
+            let price = self.price_path(&sample.value);
             if self.antithetic_variate {
                 let antithetic = self.path_generator.antithetic()?;
-                let price2 = self.path_pricer.price(&antithetic.value);
+                let price2 = self.price_path(&antithetic.value);
                 self.sample_accumulator
                     .add_weighted((price + price2) / 2.0, sample.weight)?;
             } else {
@@ -124,6 +142,14 @@ where
             }
         }
         Ok(())
+    }
+
+    fn price_path(&self, path: &PG::PathType) -> Real {
+        let mut price = self.path_pricer.price(path);
+        if let Some((cv_pricer, cv_value)) = &self.control {
+            price += cv_value - cv_pricer.price(path);
+        }
+        price
     }
 
     /// The sample accumulator, for the mean, error estimate, and richer
