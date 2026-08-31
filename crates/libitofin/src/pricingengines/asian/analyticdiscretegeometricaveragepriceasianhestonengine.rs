@@ -365,6 +365,11 @@ mod tests {
     use crate::exercise::{EuropeanExercise, Exercise};
     use crate::instruments::{DiscreteAveragingAsianOption, PlainVanillaPayoff};
     use crate::interestrate::Compounding;
+    use crate::math::randomnumbers::rngtraits::LowDiscrepancy;
+    use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::asian::{
+        MakeMcDiscreteGeometricApHestonEngine, set_mc_discrete_geometric_average_price_asian_heston_engine,
+    };
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
     use crate::shared::shared;
@@ -462,6 +467,110 @@ mod tests {
                 prices[i],
                 tol[i]
             );
+        }
+    }
+
+    /// Seasoned analytic vs MC via `testDiscreteGeometricAveragePriceHestonPastFixings`.
+    #[test]
+    fn discrete_geometric_asian_heston_past_fixings_matches_mc() {
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::June, 2026);
+        settings.set_evaluation_date(today);
+
+        let days: [Natural; 5] = [30, 90, 180, 360, 720];
+        let strikes: [Real; 3] = [90.0, 100.0, 110.0];
+        let tol: [[[Real; 2]; 5]; 3] = [
+            [
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.05, 0.04],
+                [0.04, 0.04],
+            ],
+            [
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.06, 0.06],
+                [0.06, 0.05],
+            ],
+            [
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.04, 0.04],
+                [0.05, 0.04],
+                [0.06, 0.05],
+            ],
+        ];
+
+        let spot = shared(SimpleQuote::new(100.0));
+        let process = shared(HestonProcess::new(
+            flat_rate(today, 0.05),
+            flat_rate(today, 0.0),
+            quote_handle(&spot),
+            0.09,
+            1.15,
+            0.0348,
+            0.39,
+            -0.64,
+        ));
+
+        let analytic_engine = shared_mut(
+            AnalyticDiscreteGeometricAveragePriceAsianHestonEngine::new(Shared::clone(&process))
+                .unwrap(),
+        );
+        let mc_engine = shared_mut(
+            MakeMcDiscreteGeometricApHestonEngine::<LowDiscrepancy>::new(Shared::clone(&process))
+                .with_samples(8191)
+                .with_seed(43)
+                .build()
+                .unwrap(),
+        );
+
+        for (strike_index, &strike) in strikes.iter().enumerate() {
+            for (day_index, &day) in days.iter().enumerate() {
+                let future_fixings = (day as Real / 30.0).floor() as Size;
+                let expiry = today + day as SerialNumber;
+                let mut fixing_dates = vec![Date::default(); future_fixings];
+                for j in (0..future_fixings).rev() {
+                    fixing_dates[j] = expiry - (j as SerialNumber) * 30;
+                }
+
+                let cases = [(100.0, 1_usize), (95.0 * 100.0 * 105.0, 3_usize)];
+                for (k, &(running_accumulator, past_fixings)) in cases.iter().enumerate() {
+
+                    let exercise = shared(EuropeanExercise::new(expiry));
+                    let payoff = PlainVanillaPayoff::new(OptionType::Call, strike);
+                    let mut option = DiscreteAveragingAsianOption::new(
+                        AverageType::Geometric,
+                        running_accumulator,
+                        past_fixings,
+                        fixing_dates.clone(),
+                        payoff,
+                        Shared::clone(&exercise) as Shared<dyn Exercise>,
+                        Shared::clone(&settings),
+                    )
+                    .unwrap();
+
+                    option.base_mut().set_pricing_engine(
+                        SharedMut::clone(&analytic_engine) as SharedMut<dyn PricingEngine>,
+                    );
+                    let analytic_price = option.npv().unwrap();
+
+                    set_mc_discrete_geometric_average_price_asian_heston_engine(
+                        &mut option,
+                        SharedMut::clone(&mc_engine) as SharedMut<dyn PricingEngine>,
+                    );
+                    let mc_price = option.npv().unwrap();
+
+                    let tolerance = tol[strike_index][day_index][k];
+                    let error = (analytic_price - mc_price).abs();
+                    assert!(
+                        error <= tolerance,
+                        "K={strike} days={day} k={k}: analytic={analytic_price} mc={mc_price} err={error} tol={tolerance}"
+                    );
+                }
+            }
         }
     }
 }
