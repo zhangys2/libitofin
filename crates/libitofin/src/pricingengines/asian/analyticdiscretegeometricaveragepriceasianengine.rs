@@ -16,13 +16,13 @@ use crate::math::distributions::normal::{CumulativeNormalDistribution, NormalDis
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
-use crate::pricingengines::BlackCalculator;
+use crate::pricingengines::{BlackCalculator, black_scholes_theta};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::frequency::Frequency;
-use crate::types::{Real, Time};
+use crate::types::Real;
 
 type EngineBase = GenericEngine<DiscreteAveragingAsianArguments, DiscreteAveragingAsianResults>;
 
@@ -164,7 +164,8 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
         )?;
 
         let results = self.base.results_mut();
-        results.instrument.value = Some(black.value());
+        let value = black.value();
+        results.instrument.value = Some(value);
 
         // Greeks follow QuantLib; oracle for them is a follow-up slice.
         let (nx_1, nx_1_density) = if sig_g > Real::EPSILON {
@@ -192,21 +193,26 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
         let t_rho = rfdc.year_fraction(r_ts.reference_date()?, exercise_date);
         let t_div = divdc.year_fraction(q_ts.reference_date()?, exercise_date);
 
-        results.greeks.delta = Some(
-            future_weight * black.delta(forward_price)? * forward_price / spot,
-        );
-        results.greeks.gamma = Some(
-            forward_price * future_weight / (spot * spot)
-                * (black.gamma(forward_price)? * future_weight * forward_price
-                    - past_weight * black.delta(forward_price)?),
-        );
+        let delta =
+            future_weight * black.delta(forward_price)? * forward_price / spot;
+        let gamma = forward_price * future_weight / (spot * spot)
+            * (black.gamma(forward_price)? * future_weight * forward_price
+                - past_weight * black.delta(forward_price)?);
+
+        results.greeks.delta = Some(delta);
+        results.greeks.gamma = Some(gamma);
         results.greeks.vega = Some(vega);
         results.greeks.rho = Some(
-            black.rho(t_rho)? * time_sum / (n * t_rho) - (t_rho - time_sum / n) * black.value(),
+            black.rho(t_rho)? * time_sum / (n * t_rho) - (t_rho - time_sum / n) * value,
         );
         results.greeks.dividend_rho =
             Some(black.dividend_rho(t_div)? * time_sum / (n * t_div));
-        results.greeks.theta = black.theta(spot, time_sum.max(Time::EPSILON)).ok();
+        results.greeks.theta = Some(black_scholes_theta(
+            &self.process,
+            value,
+            delta,
+            gamma,
+        )?);
 
         Ok(())
     }
@@ -318,6 +324,100 @@ mod tests {
         assert!(
             (calculated - expected).abs() <= 1.0e-10,
             "expected {expected}, got {calculated}"
+        );
+    }
+
+    /// Theta from `blackScholesTheta(process, value, delta, gamma)` vs eval-date FD.
+    #[test]
+    fn discrete_geometric_average_price_theta_matches_finite_difference() {
+        use crate::pricingengine::PricingEngine;
+        use crate::shared::{SharedMut, shared_mut};
+        use crate::time::calendars::NullCalendar;
+        use crate::types::Real;
+
+        const TOLERANCE: Real = 1.0e-5;
+        const UNDERLYING: Real = 100.0;
+
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let spot = shared(SimpleQuote::new(UNDERLYING));
+        let q_rate = shared(SimpleQuote::new(0.03));
+        let r_rate = shared(SimpleQuote::new(0.06));
+        let vol = shared(SimpleQuote::new(0.20));
+        let flat = |quote: &Shared<SimpleQuote>| {
+            shared(FlatForward::moving(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+                Shared::clone(&settings),
+            )) as Shared<dyn YieldTermStructure>
+        };
+        let flat_vol = |quote: &Shared<SimpleQuote>| {
+            shared(BlackConstantVol::moving_with_quote(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Shared::clone(&settings),
+            )) as Shared<dyn BlackVolTermStructure>
+        };
+        let process = shared(BlackScholesMertonProcess::new(
+            quote_handle(&spot),
+            Handle::new(flat(&q_rate)),
+            Handle::new(flat(&r_rate)),
+            Handle::new(flat_vol(&vol)),
+        ));
+
+        let future_fixings = 10;
+        let exercise_date = today + 360;
+        let dt_fix = (360.0 / future_fixings as Real).round() as i32;
+        let mut fixing_dates = Vec::with_capacity(future_fixings);
+        fixing_dates.push(today + dt_fix);
+        for _ in 1..future_fixings {
+            let last = *fixing_dates.last().expect("non-empty");
+            fixing_dates.push(last + dt_fix);
+        }
+
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 100.0);
+        let exercise = shared(EuropeanExercise::new(exercise_date));
+        let mut option = DiscreteAveragingAsianOption::new(
+            AverageType::Geometric,
+            1.0,
+            0,
+            fixing_dates,
+            payoff,
+            exercise,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let engine = shared_mut(AnalyticDiscreteGeometricAveragePriceAsianEngine::new(
+            Shared::clone(&process),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+        let value = option.npv().unwrap();
+        assert!(value > UNDERLYING * 1.0e-5);
+        let theta = option.theta().unwrap();
+
+        let dc = Actual360::new();
+        let dt = dc.year_fraction(today - 1, today + 1);
+        settings.set_evaluation_date(today - 1);
+        let value_m = option.npv().unwrap();
+        settings.set_evaluation_date(today + 1);
+        let value_p = option.npv().unwrap();
+        settings.set_evaluation_date(today);
+        let expected_theta = (value_p - value_m) / dt;
+
+        let error = (expected_theta - theta).abs() / UNDERLYING;
+        assert!(
+            error <= TOLERANCE,
+            "theta analytic {theta} vs FD {expected_theta} (rel err {error})"
         );
     }
 }

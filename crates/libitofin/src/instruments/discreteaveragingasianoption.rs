@@ -69,6 +69,7 @@ pub struct DiscreteAveragingAsianOption {
     fixing_dates: Vec<Date>,
     payoff: PlainVanillaPayoff,
     exercise: Shared<dyn Exercise>,
+    greeks: Greeks,
 }
 
 impl DiscreteAveragingAsianOption {
@@ -93,7 +94,20 @@ impl DiscreteAveragingAsianOption {
             fixing_dates,
             payoff,
             exercise,
+            greeks: Greeks::default(),
         })
+    }
+
+    fn greek(value: Option<Real>, description: &str) -> QlResult<Real> {
+        let Some(value) = value else {
+            fail!("{description} not provided");
+        };
+        Ok(value)
+    }
+
+    pub fn theta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.theta, "theta")
     }
 
     pub fn average_type(&self) -> AverageType {
@@ -142,8 +156,12 @@ impl Instrument for DiscreteAveragingAsianOption {
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
-        self.base_mut()
-            .store_results(results.as_instrument_results().expect("instrument results"));
+        let Some(results) = (results as &dyn Any).downcast_ref::<DiscreteAveragingAsianResults>()
+        else {
+            fail!("no greeks returned from pricing engine");
+        };
+        self.greeks = results.greeks;
+        self.base_mut().store_results(&results.instrument);
         Ok(())
     }
 }
