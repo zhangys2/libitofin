@@ -32,7 +32,8 @@ mod xccybasisswap;
 
 pub use crate::pricingengines::{
     AnalyticDoubleBarrierEngine, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
-    MCBarrierEngine, MakeMcBarrierEngine, set_analytic_double_barrier_engine,
+    MCBarrierEngine, MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine,
+    set_analytic_double_barrier_engine, set_mc_double_barrier_engine,
     set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_mc_barrier_engine,
 };
 pub use asianoption::geometric_average_price_asian;
