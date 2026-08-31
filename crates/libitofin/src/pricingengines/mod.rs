@@ -6,6 +6,7 @@
 
 pub mod barrier;
 pub mod blackcalculator;
+pub mod blackdeltacalculator;
 pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
@@ -22,8 +23,10 @@ pub use barrier::{
     set_analytic_double_barrier_engine, set_binomial_barrier_engine,
     set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine, set_mc_barrier_engine,
     set_mc_double_barrier_engine, set_quanto_barrier_engine, set_quanto_double_barrier_engine,
+    set_vanna_volga_double_barrier_engine, VannaVolgaDoubleBarrierEngine,
 };
 pub use blackcalculator::BlackCalculator;
+pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use forward::{
