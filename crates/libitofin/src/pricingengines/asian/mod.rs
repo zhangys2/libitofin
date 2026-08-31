@@ -2,6 +2,7 @@
 
 mod analyticcontinuousgeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragepriceasianengine;
+mod analyticdiscretegeometricaveragestrikeasianengine;
 
 pub use analyticcontinuousgeometricaveragepriceasianengine::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
@@ -10,4 +11,8 @@ pub use analyticcontinuousgeometricaveragepriceasianengine::{
 pub use analyticdiscretegeometricaveragepriceasianengine::{
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
     set_analytic_discrete_geometric_average_price_asian_engine,
+};
+pub use analyticdiscretegeometricaveragestrikeasianengine::{
+    AnalyticDiscreteGeometricAverageStrikeAsianEngine,
+    set_analytic_discrete_geometric_average_strike_asian_engine,
 };
