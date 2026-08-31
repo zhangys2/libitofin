@@ -5,6 +5,7 @@
 //! quanto barrier engines are here.
 
 mod analyticdoublebarrierengine;
+mod analyticsoftbarrierengine;
 mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
 mod fdblackscholesrebateengine;
@@ -30,6 +31,9 @@ pub use mcbarrierengine::{
 };
 pub use analyticdoublebarrierengine::{
     AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
+};
+pub use analyticsoftbarrierengine::{
+    AnalyticSoftBarrierEngine, set_analytic_soft_barrier_engine,
 };
 pub use mcdoublebarrierengine::{
     DoubleBarrierPathPricer, MCDoubleBarrierEngine, MakeMcDoubleBarrierEngine,
