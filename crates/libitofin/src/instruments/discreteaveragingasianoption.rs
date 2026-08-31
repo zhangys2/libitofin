@@ -110,6 +110,31 @@ impl DiscreteAveragingAsianOption {
         Self::greek(self.greeks.theta, "theta")
     }
 
+    pub fn delta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.delta, "delta")
+    }
+
+    pub fn gamma(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.gamma, "gamma")
+    }
+
+    pub fn vega(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.vega, "vega")
+    }
+
+    pub fn rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.rho, "rho")
+    }
+
+    pub fn dividend_rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.dividend_rho, "dividend rho")
+    }
+
     pub fn average_type(&self) -> AverageType {
         self.average_type
     }
