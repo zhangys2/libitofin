@@ -4,6 +4,7 @@ mod analyticcontinuousgeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragestrikeasianengine;
 mod mcdiscretearithmeticaveragepriceasianengine;
+mod mcdiscretearithmeticaveragepriceasianhestonengine;
 mod mcdiscretegeometricaveragepriceasianengine;
 mod mcdiscretegeometricaveragepriceasianhestonengine;
 
@@ -22,6 +23,11 @@ pub use analyticdiscretegeometricaveragestrikeasianengine::{
 pub use mcdiscretearithmeticaveragepriceasianengine::{
     ArithmeticApoPathPricer, MCDiscreteArithmeticAveragePriceAsianEngine,
     MakeMcDiscreteArithmeticApEngine, set_mc_discrete_arithmetic_average_price_asian_engine,
+};
+pub use mcdiscretearithmeticaveragepriceasianhestonengine::{
+    ArithmeticApoHestonPathPricer, MCDiscreteArithmeticAveragePriceAsianHestonEngine,
+    MakeMcDiscreteArithmeticApHestonEngine,
+    set_mc_discrete_arithmetic_average_price_asian_heston_engine,
 };
 pub use mcdiscretegeometricaveragepriceasianengine::{
     GeometricApoPathPricer, MCDiscreteGeometricAveragePriceAsianEngine,
