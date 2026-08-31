@@ -45,6 +45,7 @@ pub use barrieroption::{
 };
 pub use continuousaveragingasianoption::{
     AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
+    ContinuousAveragingAsianResults,
 };
 pub use doublebarrieroption::{
     DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,

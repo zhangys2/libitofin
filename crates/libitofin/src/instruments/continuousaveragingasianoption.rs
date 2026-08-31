@@ -7,13 +7,14 @@ use std::any::Any;
 use crate::errors::QlResult;
 use crate::exercise::Exercise;
 use crate::fail;
-use crate::instrument::{Instrument, InstrumentBase};
-use crate::instruments::PlainVanillaPayoff;
-use crate::pricingengine::Arguments;
+use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
+use crate::instruments::{Greeks, PlainVanillaPayoff};
+use crate::pricingengine::{Arguments, Results};
 use crate::require;
 use crate::settings::Settings;
 use crate::shared::Shared;
 use crate::time::date::Date;
+use crate::types::Real;
 
 /// Average type (`Average::Type`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -39,6 +40,24 @@ impl Arguments for ContinuousAveragingAsianArguments {
     }
 }
 
+/// Engine results for continuous-averaging Asian options.
+#[derive(Default)]
+pub struct ContinuousAveragingAsianResults {
+    pub instrument: InstrumentResults,
+    pub greeks: Greeks,
+}
+
+impl Results for ContinuousAveragingAsianResults {
+    fn reset(&mut self) {
+        self.instrument.reset();
+        self.greeks.reset();
+    }
+
+    fn as_instrument_results(&self) -> Option<&InstrumentResults> {
+        Some(&self.instrument)
+    }
+}
+
 /// European option on the continuous average of the underlying.
 pub struct ContinuousAveragingAsianOption {
     base: InstrumentBase,
@@ -46,6 +65,7 @@ pub struct ContinuousAveragingAsianOption {
     average_type: AverageType,
     payoff: PlainVanillaPayoff,
     exercise: Shared<dyn Exercise>,
+    greeks: Greeks,
 }
 
 impl ContinuousAveragingAsianOption {
@@ -64,11 +84,49 @@ impl ContinuousAveragingAsianOption {
             average_type,
             payoff,
             exercise,
+            greeks: Greeks::default(),
         })
     }
 
     pub fn average_type(&self) -> AverageType {
         self.average_type
+    }
+
+    fn greek(value: Option<Real>, description: &str) -> QlResult<Real> {
+        let Some(value) = value else {
+            fail!("{description} not provided");
+        };
+        Ok(value)
+    }
+
+    pub fn delta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.delta, "delta")
+    }
+
+    pub fn gamma(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.gamma, "gamma")
+    }
+
+    pub fn theta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.theta, "theta")
+    }
+
+    pub fn vega(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.vega, "vega")
+    }
+
+    pub fn rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.rho, "rho")
+    }
+
+    pub fn dividend_rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.dividend_rho, "dividend rho")
     }
 }
 
@@ -94,6 +152,16 @@ impl Instrument for ContinuousAveragingAsianOption {
         arguments.average_type = Some(self.average_type);
         arguments.payoff = Some(self.payoff);
         arguments.exercise = Some(Shared::clone(&self.exercise));
+        Ok(())
+    }
+
+    fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
+        let Some(results) = (results as &dyn Any).downcast_ref::<ContinuousAveragingAsianResults>()
+        else {
+            fail!("no greeks returned from pricing engine");
+        };
+        self.greeks = results.greeks;
+        self.base_mut().store_results(&results.instrument);
         Ok(())
     }
 }
