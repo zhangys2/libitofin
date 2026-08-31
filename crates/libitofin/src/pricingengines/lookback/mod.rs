@@ -4,6 +4,7 @@
 
 pub mod analyticcontinuousfixedlookback;
 pub mod analyticcontinuousfloatinglookback;
+pub mod analyticcontinuouspartialfixedlookback;
 pub mod analyticcontinuouspartialfloatinglookback;
 
 pub use analyticcontinuousfixedlookback::{
@@ -11,6 +12,10 @@ pub use analyticcontinuousfixedlookback::{
 };
 pub use analyticcontinuousfloatinglookback::{
     AnalyticContinuousFloatingLookbackEngine, set_analytic_continuous_floating_lookback_engine,
+};
+pub use analyticcontinuouspartialfixedlookback::{
+    AnalyticContinuousPartialFixedLookbackEngine,
+    set_analytic_continuous_partial_fixed_lookback_engine,
 };
 pub use analyticcontinuouspartialfloatinglookback::{
     AnalyticContinuousPartialFloatingLookbackEngine,
