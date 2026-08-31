@@ -322,6 +322,7 @@ mod tests {
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -353,6 +354,46 @@ mod tests {
                 Actual360::new(),
             )) as Shared<dyn BlackVolTermStructure>,
         )
+    }
+
+    fn moving_rate(
+        quote: &Shared<SimpleQuote>,
+        settings: &Shared<Settings<Date>>,
+    ) -> Handle<dyn YieldTermStructure> {
+        Handle::new(
+            shared(FlatForward::moving(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+                Shared::clone(settings),
+            )) as Shared<dyn YieldTermStructure>,
+        )
+    }
+
+    fn moving_vol(
+        quote: &Shared<SimpleQuote>,
+        settings: &Shared<Settings<Date>>,
+    ) -> Handle<dyn BlackVolTermStructure> {
+        Handle::new(
+            shared(BlackConstantVol::moving_with_quote(
+                0,
+                NullCalendar::new(),
+                quote_handle(quote),
+                Actual360::new(),
+                Shared::clone(settings),
+            )) as Shared<dyn BlackVolTermStructure>,
+        )
+    }
+
+    fn assert_all_fixings_in_the_past(err: &crate::errors::QlError) {
+        assert!(
+            err.message().contains("all fixings are in the past"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     /// `asianoptions.cpp` `testPastFixings`.
@@ -553,5 +594,106 @@ mod tests {
             "past fixings had no effect on geometric average-price option (MC): \
              without={price3}, with={price4}"
         );
+    }
+
+    /// `asianoptions.cpp` `testAllFixingsInThePast` (Choi deferred).
+    #[test]
+    fn all_fixings_in_the_past_raises_for_mc_engines() {
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::June, 2026);
+        settings.set_evaluation_date(today);
+
+        let spot = shared(SimpleQuote::new(100.0));
+        let q_rate = shared(SimpleQuote::new(0.005));
+        let r_rate = shared(SimpleQuote::new(0.01));
+        let vol = shared(SimpleQuote::new(0.20));
+
+        let process = shared(BlackScholesMertonProcess::new(
+            quote_handle(&spot),
+            moving_rate(&q_rate, &settings),
+            moving_rate(&r_rate, &settings),
+            moving_vol(&vol, &settings),
+        ));
+
+        let exercise_date = today + Period::new(2, TimeUnit::Weeks);
+        let start_date = exercise_date - Period::new(1, TimeUnit::Years);
+        let fixing_dates: Vec<Date> = (0..12)
+            .map(|i| start_date + Period::new(i, TimeUnit::Months))
+            .collect();
+        let past_fixings: Size = 12;
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 100.0);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
+
+        let running_sum = past_fixings as Real * spot.value().unwrap();
+        let running_product = spot.value().unwrap().powi(past_fixings as i32);
+
+        let mut option1 = DiscreteAveragingAsianOption::new(
+            AverageType::Arithmetic,
+            running_sum,
+            past_fixings,
+            fixing_dates.clone(),
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let mut option2 = DiscreteAveragingAsianOption::new(
+            AverageType::Arithmetic,
+            running_sum,
+            past_fixings,
+            fixing_dates.clone(),
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let mut option3 = DiscreteAveragingAsianOption::new(
+            AverageType::Geometric,
+            running_product,
+            past_fixings,
+            fixing_dates.clone(),
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        set_mc_discrete_arithmetic_average_price_asian_engine(
+            &mut option1,
+            shared_mut(
+                MakeMcDiscreteArithmeticApEngine::<LowDiscrepancy>::new(Shared::clone(&process))
+                    .with_samples(2047)
+                    .build()
+                    .unwrap(),
+            ) as SharedMut<dyn PricingEngine>,
+        );
+        set_mc_discrete_arithmetic_average_strike_asian_engine(
+            &mut option2,
+            shared_mut(
+                MakeMcDiscreteArithmeticAsEngine::<LowDiscrepancy>::new(Shared::clone(&process))
+                    .with_samples(2047)
+                    .build()
+                    .unwrap(),
+            ) as SharedMut<dyn PricingEngine>,
+        );
+        set_mc_discrete_geometric_average_price_asian_engine(
+            &mut option3,
+            shared_mut(
+                MakeMcDiscreteGeometricApEngine::<LowDiscrepancy>::new(Shared::clone(&process))
+                    .with_samples(2047)
+                    .build()
+                    .unwrap(),
+            ) as SharedMut<dyn PricingEngine>,
+        );
+
+        assert_all_fixings_in_the_past(&option1.npv().unwrap_err());
+        assert_all_fixings_in_the_past(&option2.npv().unwrap_err());
+        assert_all_fixings_in_the_past(&option3.npv().unwrap_err());
+
+        // Eval date on the last fixing: still PastFixingsOnly (only t=0 remains).
+        settings.set_evaluation_date(*fixing_dates.last().unwrap());
+        assert_all_fixings_in_the_past(&option1.npv().unwrap_err());
+        assert_all_fixings_in_the_past(&option2.npv().unwrap_err());
+        assert_all_fixings_in_the_past(&option3.npv().unwrap_err());
     }
 }
