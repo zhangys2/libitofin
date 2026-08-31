@@ -24,15 +24,17 @@ pub use barrier::{
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
+pub use forward::{
+    AnalyticForwardPerformanceVanillaEngine, AnalyticForwardVanillaEngine,
+    QuantoForwardEuropeanEngine, QuantoForwardPerformanceEuropeanEngine,
+    set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
+    set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
+};
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,
     BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, FdG2SwaptionEngine,
     FdHullWhiteSwaptionEngine, G2SwaptionEngine, JamshidianSwaptionEngine, TreeG2SwaptionEngine,
-};
-pub use forward::{
-    AnalyticForwardVanillaEngine, QuantoForwardEuropeanEngine, set_analytic_forward_vanilla_engine,
-    set_quanto_forward_european_engine,
 };
 pub use vanilla::{
     AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
