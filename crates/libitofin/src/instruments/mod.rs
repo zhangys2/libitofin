@@ -6,6 +6,7 @@
 mod asianoption;
 mod assetswap;
 mod barrieroption;
+mod doublebarrieroption;
 mod bond;
 mod bondforward;
 mod bonds;
@@ -30,7 +31,8 @@ mod vanillaswap;
 mod xccybasisswap;
 
 pub use crate::pricingengines::{
-    BinomialBarrierEngine, FdBlackScholesBarrierEngine, MCBarrierEngine, MakeMcBarrierEngine,
+    AnalyticDoubleBarrierEngine, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
+    MCBarrierEngine, MakeMcBarrierEngine, set_analytic_double_barrier_engine,
     set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_mc_barrier_engine,
 };
 pub use asianoption::geometric_average_price_asian;
@@ -38,6 +40,9 @@ pub use assetswap::AssetSwap;
 pub use barrieroption::{
     AnalyticBarrierEngine, BarrierArguments, BarrierOption, BarrierType, barrier_price,
     set_analytic_barrier_engine,
+};
+pub use doublebarrieroption::{
+    DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
