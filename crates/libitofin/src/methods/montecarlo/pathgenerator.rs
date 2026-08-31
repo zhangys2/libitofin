@@ -22,8 +22,7 @@
 //!   per-sample outcome, so it aborts the whole call.
 //!
 //! Deferred, rejected visibly rather than silently ignored:
-//! - **antithetic sampling** (`pathgenerator.hpp:117,127`): `antithetic()` and
-//!   the negated-draw path are not ported; only `next()` is.
+//! - none: antithetic sampling is ported (`pathgenerator.hpp:117,127`).
 
 use crate::errors::QlResult;
 use crate::math::array::Array;
@@ -33,7 +32,7 @@ use crate::methods::montecarlo::{BrownianBridge, Path, PathGen, Sample};
 use crate::shared::Shared;
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size, Time};
-use crate::{fail, require};
+use crate::{require};
 
 /// Generates random single-factor paths from a Gaussian sequence generator.
 pub struct PathGenerator<GSG> {
@@ -127,16 +126,40 @@ impl<GSG: SequenceGenerator> PathGenerator<GSG> {
     /// Propagates any `evolve`/`x0` error from the process, aborting the path.
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> QlResult<Sample<Path>> {
-        let (weight, draws) = {
-            let sequence = self.generator.next_sequence();
-            (sequence.weight, sequence.value.clone())
-        };
+        self.generate(false)
+    }
 
-        let increments = if self.brownian_bridge {
-            self.bb.transform(&draws, &mut self.temp)?;
-            self.temp.clone()
+    /// Draws the antithetic partner of the last forward path
+    /// (`pathgenerator.hpp:117,127`): reuses [`SequenceGenerator::last_sequence`]
+    /// and negates the (possibly bridge-transformed) increments.
+    ///
+    /// # Errors
+    ///
+    /// Propagates any `evolve`/`x0` error from the process, aborting the path.
+    pub fn antithetic(&mut self) -> QlResult<Sample<Path>> {
+        self.generate(true)
+    }
+
+    fn generate(&mut self, antithetic: bool) -> QlResult<Sample<Path>> {
+        let sequence = if antithetic {
+            self.generator.last_sequence()
         } else {
-            draws
+            self.generator.next_sequence()
+        };
+        let weight = sequence.weight;
+        let draws = &sequence.value;
+
+        let increments: Vec<Real> = if self.brownian_bridge {
+            self.bb.transform(draws, &mut self.temp)?;
+            if antithetic {
+                self.temp.iter().map(|x| -x).collect()
+            } else {
+                self.temp.clone()
+            }
+        } else if antithetic {
+            draws.iter().map(|x| -x).collect()
+        } else {
+            draws.clone()
         };
 
         let mut path = Path::new(self.time_grid.clone(), Array::new())?;
@@ -159,14 +182,8 @@ impl<GSG: SequenceGenerator> PathGen for PathGenerator<GSG> {
         PathGenerator::next(self)
     }
 
-    /// Antithetic sampling is deferred for the single-factor generator
-    /// (`pathgenerator.hpp:117,127`): only [`next`](PathGenerator::next) is
-    /// ported, so this fails loudly rather than returning an unnegated draw.
     fn antithetic(&mut self) -> QlResult<Sample<Path>> {
-        fail!(
-            "antithetic single-factor path generation is not yet ported; only \
-             the forward draw is available"
-        )
+        PathGenerator::antithetic(self)
     }
 
     fn dimension(&self) -> Size {
@@ -320,13 +337,17 @@ mod tests {
     }
 
     #[test]
-    fn pathgen_antithetic_is_rejected_as_deferred() {
-        // pathgenerator.hpp:117,127: single-factor antithetic is not ported;
-        // the PathGen impl must fail loudly rather than reuse the forward draw.
+    fn antithetic_negates_the_forward_increments() {
         let mut pg = PathGenerator::new(gbs_process(), 1.0, 12, generator(12, 42), false).unwrap();
-        match PathGen::antithetic(&mut pg) {
-            Err(e) => assert!(e.message().contains("antithetic")),
-            Ok(_) => panic!("single-factor antithetic must be rejected as deferred"),
+        let forward = pg.next().unwrap().value;
+        let anti = pg.antithetic().unwrap().value;
+        assert_eq!(forward.length(), anti.length());
+        assert_eq!(forward[0], anti[0]);
+        for i in 1..forward.length() {
+            assert!(
+                forward[i] != anti[i] || forward[i] == SPOT,
+                "terminal paths should differ under negated shocks"
+            );
         }
     }
 

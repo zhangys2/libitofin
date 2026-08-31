@@ -10,6 +10,7 @@ mod fdblackscholesbarrierengine;
 mod fdblackscholesrebateengine;
 mod fdhestonbarrierengine;
 mod fdhestonrebateengine;
+mod mcdoublebarrierengine;
 mod mcbarrierengine;
 mod quantobarrierengine;
 mod quantodoublebarrierengine;
@@ -27,6 +28,10 @@ pub use mcbarrierengine::{
 };
 pub use analyticdoublebarrierengine::{
     AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
+};
+pub use mcdoublebarrierengine::{
+    DoubleBarrierPathPricer, MCDoubleBarrierEngine, MakeMcDoubleBarrierEngine,
+    set_mc_double_barrier_engine,
 };
 pub use quantobarrierengine::{QuantoBarrierEngine, set_quanto_barrier_engine};
 pub use quantodoublebarrierengine::{
