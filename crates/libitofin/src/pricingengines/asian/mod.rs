@@ -2,6 +2,7 @@
 
 mod analyticcontinuousgeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragepriceasianengine;
+mod analyticdiscretegeometricaveragepriceasianhestonengine;
 mod analyticdiscretegeometricaveragestrikeasianengine;
 mod continuousarithmeticasianlevyengine;
 mod continuousarithmeticasianvecerengine;
@@ -19,6 +20,10 @@ pub use analyticcontinuousgeometricaveragepriceasianengine::{
 pub use analyticdiscretegeometricaveragepriceasianengine::{
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
     set_analytic_discrete_geometric_average_price_asian_engine,
+};
+pub use analyticdiscretegeometricaveragepriceasianhestonengine::{
+    AnalyticDiscreteGeometricAveragePriceAsianHestonEngine,
+    set_analytic_discrete_geometric_average_price_asian_heston_engine,
 };
 pub use analyticdiscretegeometricaveragestrikeasianengine::{
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,

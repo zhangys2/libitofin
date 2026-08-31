@@ -20,6 +20,7 @@ pub mod vanilla;
 pub use asian::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
+    AnalyticDiscreteGeometricAveragePriceAsianHestonEngine,
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,
     ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
     MCDiscreteArithmeticAveragePriceAsianEngine,
@@ -32,6 +33,7 @@ pub use asian::{
     MakeMcDiscreteGeometricApHestonEngine, TurnbullWakemanAsianEngine,
     set_analytic_continuous_geometric_average_price_asian_engine,
     set_analytic_discrete_geometric_average_price_asian_engine,
+    set_analytic_discrete_geometric_average_price_asian_heston_engine,
     set_analytic_discrete_geometric_average_strike_asian_engine,
     set_mc_discrete_arithmetic_average_price_asian_engine,
     set_mc_discrete_arithmetic_average_price_asian_heston_engine,
