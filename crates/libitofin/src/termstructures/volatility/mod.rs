@@ -31,6 +31,7 @@ mod blackvariancecurve;
 mod blackvariancesurface;
 mod capfloor;
 mod flatsmilesection;
+mod impliedvoltermstructure;
 mod interpolatedsmilesection;
 mod localconstantvol;
 mod localvolcurve;
@@ -44,6 +45,7 @@ mod swaption;
 mod volatilitytype;
 
 pub use blackconstantvol::BlackConstantVol;
+pub use impliedvoltermstructure::ImpliedVolTermStructure;
 pub use blackvariancecurve::{BlackVarianceCurve, BlackVolTimeExtrapolation};
 pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
