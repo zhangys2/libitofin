@@ -311,6 +311,7 @@ mod tests {
     use crate::pricingengines::asian::{
         MakeMcDiscreteArithmeticApEngine, MakeMcDiscreteArithmeticAsEngine,
         MakeMcDiscreteGeometricApEngine, set_analytic_discrete_geometric_average_price_asian_engine,
+        set_choi_asian_engine,
         set_mc_discrete_arithmetic_average_price_asian_engine,
         set_mc_discrete_arithmetic_average_strike_asian_engine,
         set_mc_discrete_geometric_average_price_asian_engine,
@@ -596,7 +597,7 @@ mod tests {
         );
     }
 
-    /// `asianoptions.cpp` `testAllFixingsInThePast` (Choi deferred).
+    /// `asianoptions.cpp` `testAllFixingsInThePast`.
     #[test]
     fn all_fixings_in_the_past_raises_for_mc_engines() {
         let settings = shared(Settings::new());
@@ -657,6 +658,16 @@ mod tests {
             Shared::clone(&settings),
         )
         .unwrap();
+        let mut option4 = DiscreteAveragingAsianOption::new(
+            AverageType::Arithmetic,
+            running_sum,
+            past_fixings,
+            fixing_dates.clone(),
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
 
         set_mc_discrete_arithmetic_average_price_asian_engine(
             &mut option1,
@@ -685,15 +696,28 @@ mod tests {
                     .unwrap(),
             ) as SharedMut<dyn PricingEngine>,
         );
+        set_choi_asian_engine(
+            &mut option4,
+            Shared::clone(&process),
+            Shared::clone(&settings),
+        );
 
         assert_all_fixings_in_the_past(&option1.npv().unwrap_err());
         assert_all_fixings_in_the_past(&option2.npv().unwrap_err());
         assert_all_fixings_in_the_past(&option3.npv().unwrap_err());
+        assert!(
+            option4.npv().is_err(),
+            "Choi engine must fail when all fixings are in the past"
+        );
 
         // Eval date on the last fixing: still PastFixingsOnly (only t=0 remains).
         settings.set_evaluation_date(*fixing_dates.last().unwrap());
         assert_all_fixings_in_the_past(&option1.npv().unwrap_err());
         assert_all_fixings_in_the_past(&option2.npv().unwrap_err());
         assert_all_fixings_in_the_past(&option3.npv().unwrap_err());
+        assert!(
+            option4.npv().is_err(),
+            "Choi engine must fail when all fixings are in the past (eval on last fixing)"
+        );
     }
 }
