@@ -12,6 +12,7 @@ mod discreteaveragingasianoption;
 mod doublebarrieroption;
 mod lookbackoption;
 mod partialtimebarrieroption;
+mod complexchooseroption;
 mod simplechooseroption;
 mod softbarrieroption;
 mod bond;
@@ -74,6 +75,9 @@ pub use lookbackoption::{
 pub use partialtimebarrieroption::{
     PartialBarrierRange, PartialTimeBarrierArguments, PartialTimeBarrierOption,
     PartialTimeBarrierResults,
+};
+pub use complexchooseroption::{
+    ComplexChooserArguments, ComplexChooserOption, ComplexChooserResults,
 };
 pub use simplechooseroption::{
     SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults,
