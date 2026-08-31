@@ -12,6 +12,7 @@ mod boundaryconditions;
 mod cranknicolsondamping_oracle;
 mod finitedifferencemodel;
 mod stepcondition;
+mod tridiagonaloperator;
 
 pub mod meshers;
 pub mod operators;
@@ -24,3 +25,4 @@ pub use boundarycondition::{BoundaryCondition, BoundarySide};
 pub use boundaryconditions::{DirichletBoundary, NeumannBoundary, TimeDependentDirichletBoundary};
 pub use finitedifferencemodel::FiniteDifferenceModel;
 pub use stepcondition::{NullCondition, StepCondition};
+pub use tridiagonaloperator::TridiagonalOperator;
