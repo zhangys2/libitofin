@@ -1,14 +1,15 @@
 //! Geometric Asian option (continuous average) analytic price.
 //!
-//! First exotic Asian slice: Kemna-Vorst continuous geometric-average European
-//! option. Discrete arithmetic Asians remain follow-up.
+//! Kemna–Vorst via the Haug continuous-geometric formula implemented in
+//! [`AnalyticContinuousGeometricAveragePriceAsianEngine`]. This helper uses
+//! flat curves and a single day-count for all time fractions.
 
 use crate::errors::QlResult;
-use crate::math::distributions::normal::CumulativeNormalDistribution;
 use crate::option::OptionType;
+use crate::pricingengines::BlackCalculator;
 use crate::types::Real;
 
-/// Continuous geometric-average price Asian (Kemna–Vorst).
+/// Continuous geometric-average price Asian (Haug 1997, flat curves).
 pub fn geometric_average_price_asian(
     option_type: OptionType,
     spot: Real,
@@ -18,24 +19,19 @@ pub fn geometric_average_price_asian(
     vol: Real,
     t: Real,
 ) -> QlResult<Real> {
-    // Adjust drift/vol for the continuous geometric average.
-    let vol_a = vol / 3.0_f64.sqrt();
-    let b = 0.5 * (r + q + vol * vol / 6.0);
-    let std = vol_a * t.sqrt();
-    let d1 = ((spot / strike).ln() + (b + 0.5 * vol_a * vol_a) * t) / std;
-    let d2 = d1 - std;
-    let n = CumulativeNormalDistribution::standard();
-    let df_r = (-r * t).exp();
-    let forward_factor = ((b - r) * t).exp();
-    Ok(match option_type {
-        OptionType::Call => df_r * (spot * forward_factor * n.value(d1) - strike * n.value(d2)),
-        OptionType::Put => df_r * (strike * n.value(-d2) - spot * forward_factor * n.value(-d1)),
-    })
+    let dividend_yield = 0.5 * (r + q + vol * vol / 6.0);
+    let dividend_discount = (-dividend_yield * t).exp();
+    let risk_free_discount = (-r * t).exp();
+    let forward = spot * dividend_discount / risk_free_discount;
+    let std_dev = (vol * vol * t / 3.0).sqrt();
+    let black = BlackCalculator::new(option_type, strike, forward, std_dev, risk_free_discount)?;
+    Ok(black.value())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::distributions::normal::CumulativeNormalDistribution;
 
     #[test]
     fn geometric_asian_call_is_below_vanilla_black_scholes() {

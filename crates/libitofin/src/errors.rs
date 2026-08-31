@@ -57,7 +57,8 @@ macro_rules! fail {
 #[macro_export]
 macro_rules! require {
     ($cond:expr, $($arg:tt)*) => {
-        if !($cond) {
+        if $cond {
+        } else {
             $crate::fail!($($arg)*);
         }
     };
@@ -69,7 +70,8 @@ macro_rules! require {
 #[macro_export]
 macro_rules! ensure {
     ($cond:expr, $($arg:tt)*) => {
-        if !($cond) {
+        if $cond {
+        } else {
             $crate::fail!($($arg)*);
         }
     };
@@ -82,7 +84,8 @@ macro_rules! ensure {
 #[macro_export]
 macro_rules! assert_ql {
     ($cond:expr, $($arg:tt)*) => {
-        if !($cond) {
+        if $cond {
+        } else {
             $crate::fail!($($arg)*);
         }
     };
