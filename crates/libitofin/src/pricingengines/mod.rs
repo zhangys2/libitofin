@@ -70,7 +70,8 @@ pub use forward::{
     set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
 };
 pub use lookback::{
-    AnalyticContinuousFloatingLookbackEngine, set_analytic_continuous_floating_lookback_engine,
+    AnalyticContinuousFixedLookbackEngine, AnalyticContinuousFloatingLookbackEngine,
+    set_analytic_continuous_fixed_lookback_engine, set_analytic_continuous_floating_lookback_engine,
 };
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{
