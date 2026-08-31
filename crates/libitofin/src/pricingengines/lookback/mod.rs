@@ -4,10 +4,15 @@
 
 pub mod analyticcontinuousfixedlookback;
 pub mod analyticcontinuousfloatinglookback;
+pub mod analyticcontinuouspartialfloatinglookback;
 
 pub use analyticcontinuousfixedlookback::{
     AnalyticContinuousFixedLookbackEngine, set_analytic_continuous_fixed_lookback_engine,
 };
 pub use analyticcontinuousfloatinglookback::{
     AnalyticContinuousFloatingLookbackEngine, set_analytic_continuous_floating_lookback_engine,
+};
+pub use analyticcontinuouspartialfloatinglookback::{
+    AnalyticContinuousPartialFloatingLookbackEngine,
+    set_analytic_continuous_partial_floating_lookback_engine,
 };
