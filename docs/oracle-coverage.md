@@ -108,6 +108,7 @@ credit.
 | Continuous lookback MC vs analytic | `MCLookbackEngine` | `lookbackoptions.cpp` `testMonteCarloLookback` | partial fixed / fixed / partial floating / floating call+put vs analytic @ 0.1 (2000 steps, antithetic, seed 1) |
 | Soft barrier Haug values | `AnalyticSoftBarrierEngine` | `softbarrieroption.cpp` `testSoftBarrierHaug` | Haug 2nd ed. p.166 DownOut call table @ 1e-4 (59 rows; one tight-barrier/high-vol case omitted as in QL) |
 | Partial-time barrier EndB1 | `AnalyticPartialTimeBarrierOptionEngine` | `partialtimebarrieroption.cpp` `testAnalyticEngine` / `testAnalyticEnginePutOption` / `testPutCallSymmetry` | DownOut call + UpOut put 20-row tables @ 1e-4; 10 put-call symmetry pairs @ 1e-4 |
+| Simple chooser Haug value | `AnalyticSimpleChooserEngine` | `chooseroption.cpp` `testAnalyticSimpleChooserEngine` | Haug 2nd ed. pp.39–40 @ 3e-5 |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |
