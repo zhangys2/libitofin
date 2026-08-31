@@ -61,12 +61,13 @@ impl PricingEngine for AnalyticContinuousGeometricAveragePriceAsianEngine {
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        let (average_type, payoff, exercise) = {
+        let (average_type, payoff, exercise, start_date) = {
             let args = self.base.arguments();
             (
                 args.average_type.expect("validated"),
                 args.payoff.expect("validated"),
                 args.exercise.as_ref().expect("validated"),
+                args.start_date,
             )
         };
 
@@ -74,6 +75,14 @@ impl PricingEngine for AnalyticContinuousGeometricAveragePriceAsianEngine {
             average_type == AverageType::Geometric,
             "not a geometric average option"
         );
+        if start_date.is_some() {
+            fail!(
+                "seasoned continuous geometric Asian options not yet supported - \
+                 requires adjustment of forward price and variance based on \
+                 accumulated geometric average. This feature needs mathematical \
+                 review and implementation."
+            );
+        }
         if exercise.exercise_type() != ExerciseType::European {
             fail!("not an European Option");
         }

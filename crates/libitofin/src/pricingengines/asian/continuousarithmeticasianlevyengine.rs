@@ -537,4 +537,133 @@ mod tests {
             );
         }
     }
+
+    /// `asianoptions.cpp` `testContinuousSeasonedAsianOptions`.
+    #[test]
+    fn continuous_seasoned_asian_options_ordering() {
+        use crate::time::calendars::Target;
+        use crate::pricingengines::asian::set_analytic_continuous_geometric_average_price_asian_engine;
+        use crate::time::daycounters::actual365fixed::Actual365Fixed;
+
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::November, 2025);
+        settings.set_evaluation_date(today);
+
+        let settlement = Date::new(17, Month::November, 2025);
+        let maturity = Date::new(17, Month::November, 2026);
+        let start_date = Date::new(17, Month::August, 2025);
+
+        let spot = shared(SimpleQuote::new(100.0));
+        let process = shared(BlackScholesMertonProcess::new(
+            quote_handle(&spot),
+            Handle::new(
+                shared(FlatForward::with_rate(
+                    settlement,
+                    0.03,
+                    Actual365Fixed::new(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>,
+            ),
+            Handle::new(
+                shared(FlatForward::with_rate(
+                    settlement,
+                    0.06,
+                    Actual365Fixed::new(),
+                    Compounding::Continuous,
+                    Frequency::Annual,
+                )) as Shared<dyn YieldTermStructure>,
+            ),
+            Handle::new(
+                shared(BlackConstantVol::new(
+                    settlement,
+                    Some(Target::new()),
+                    0.20,
+                    Actual365Fixed::new(),
+                )) as Shared<dyn BlackVolTermStructure>,
+            ),
+        ));
+
+        let payoff = PlainVanillaPayoff::new(OptionType::Put, 100.0);
+        let exercise: Shared<dyn crate::exercise::Exercise> =
+            shared(EuropeanExercise::new(maturity));
+
+        let zero_average = shared(SimpleQuote::new(0.0));
+        let mut fresh = ContinuousAveragingAsianOption::with_start_date(
+            AverageType::Arithmetic,
+            settlement,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_continuous_arithmetic_asian_levy_engine(
+            &mut fresh,
+            Shared::clone(&process),
+            quote_handle(&zero_average),
+        );
+        let fresh_npv = fresh.npv().unwrap();
+
+        let low_average = shared(SimpleQuote::new(98.5));
+        let mut seasoned = ContinuousAveragingAsianOption::with_start_date(
+            AverageType::Arithmetic,
+            start_date,
+            PlainVanillaPayoff::new(OptionType::Put, 100.0),
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_continuous_arithmetic_asian_levy_engine(
+            &mut seasoned,
+            Shared::clone(&process),
+            quote_handle(&low_average),
+        );
+        let seasoned_npv = seasoned.npv().unwrap();
+        assert!(
+            seasoned_npv < fresh_npv,
+            "seasoned put NPV ({seasoned_npv}) should be below fresh ({fresh_npv}) \
+             when current average (98.5) is below strike (100)"
+        );
+
+        let high_average = shared(SimpleQuote::new(102.0));
+        let mut seasoned_high = ContinuousAveragingAsianOption::with_start_date(
+            AverageType::Arithmetic,
+            start_date,
+            PlainVanillaPayoff::new(OptionType::Put, 100.0),
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_continuous_arithmetic_asian_levy_engine(
+            &mut seasoned_high,
+            Shared::clone(&process),
+            quote_handle(&high_average),
+        );
+        let seasoned_high_npv = seasoned_high.npv().unwrap();
+        assert!(
+            seasoned_high_npv < seasoned_npv,
+            "seasoned put with higher average ({seasoned_high_npv}) should be below \
+             seasoned with lower average ({seasoned_npv})"
+        );
+
+        let mut seasoned_geometric = ContinuousAveragingAsianOption::with_start_date(
+            AverageType::Geometric,
+            start_date,
+            PlainVanillaPayoff::new(OptionType::Put, 100.0),
+            exercise,
+            settings,
+        )
+        .unwrap();
+        set_analytic_continuous_geometric_average_price_asian_engine(
+            &mut seasoned_geometric,
+            process,
+        );
+        let err = seasoned_geometric.npv().unwrap_err();
+        assert!(
+            err.message()
+                .contains("seasoned continuous geometric Asian options not yet supported"),
+            "unexpected error: {}",
+            err.message()
+        );
+    }
 }
