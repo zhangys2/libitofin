@@ -29,6 +29,7 @@ pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
 pub mod mcvanillaengine;
 pub mod quantoengine;
+pub mod quantoforwardengine;
 
 pub use analytichestonengine::HestonChf;
 pub use batesengine::BatesEngine;
@@ -44,6 +45,7 @@ pub use mceuropeanhestonengine::{
 };
 pub use mcvanillaengine::McVanillaEngineBase;
 pub use quantoengine::QuantoEuropeanEngine;
+pub use quantoforwardengine::QuantoForwardEuropeanEngine;
 
 use std::any::Any;
 

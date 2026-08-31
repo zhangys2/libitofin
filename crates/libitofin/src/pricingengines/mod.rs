@@ -9,6 +9,7 @@ pub mod blackcalculator;
 pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
+pub mod forward;
 pub mod swap;
 pub mod swaption;
 pub mod vanilla;
@@ -23,6 +24,7 @@ pub use barrier::{
 pub use blackcalculator::BlackCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
+pub use forward::{ForwardVanillaEngine, forward_vanilla_calculate};
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,
@@ -31,7 +33,7 @@ pub use swaption::{
 };
 pub use vanilla::{
     AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
-    QuantoEuropeanEngine,
+    QuantoEuropeanEngine, QuantoForwardEuropeanEngine,
 };
 
 pub use blackformula::{
