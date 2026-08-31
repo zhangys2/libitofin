@@ -61,6 +61,7 @@ pub use doublebarrieroption::{
     DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
 };
 pub use lookbackoption::{
+    ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption, ContinuousFixedLookbackResults,
     ContinuousFloatingLookbackArguments, ContinuousFloatingLookbackOption,
     ContinuousFloatingLookbackResults,
 };
