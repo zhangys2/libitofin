@@ -4,6 +4,7 @@
 //! the instrument; the finite-difference, binomial, Monte Carlo, and analytic
 //! quanto barrier engines are here.
 
+mod analyticdoublebarrierengine;
 mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
 mod fdblackscholesrebateengine;
@@ -11,6 +12,7 @@ mod fdhestonbarrierengine;
 mod fdhestonrebateengine;
 mod mcbarrierengine;
 mod quantobarrierengine;
+mod quantodoublebarrierengine;
 
 pub use binomialbarrierengine::{BinomialBarrierEngine, set_binomial_barrier_engine};
 pub use fdblackscholesbarrierengine::{
@@ -23,4 +25,10 @@ pub use mcbarrierengine::{
     BarrierPathPricer, BiasedBarrierPathPricer, MCBarrierEngine, MakeMcBarrierEngine,
     set_mc_barrier_engine,
 };
+pub use analyticdoublebarrierengine::{
+    AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
+};
 pub use quantobarrierengine::{QuantoBarrierEngine, set_quanto_barrier_engine};
+pub use quantodoublebarrierengine::{
+    QuantoDoubleBarrierEngine, set_quanto_double_barrier_engine,
+};
