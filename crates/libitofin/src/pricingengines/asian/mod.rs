@@ -8,6 +8,7 @@ mod mcdiscretearithmeticaveragepriceasianhestonengine;
 mod mcdiscretearithmeticaveragestrikeasianengine;
 mod mcdiscretegeometricaveragepriceasianengine;
 mod mcdiscretegeometricaveragepriceasianhestonengine;
+mod turnbullwakemanasianengine;
 
 pub use analyticcontinuousgeometricaveragepriceasianengine::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
@@ -42,4 +43,7 @@ pub use mcdiscretegeometricaveragepriceasianhestonengine::{
     GeometricApoHestonPathPricer, MCDiscreteGeometricAveragePriceAsianHestonEngine,
     MakeMcDiscreteGeometricApHestonEngine,
     set_mc_discrete_geometric_average_price_asian_heston_engine,
+};
+pub use turnbullwakemanasianengine::{
+    TurnbullWakemanAsianEngine, set_turnbull_wakeman_asian_engine,
 };
