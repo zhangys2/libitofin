@@ -15,6 +15,7 @@ mod cmsswap;
 mod fixedvsfloatingswap;
 mod floatfloatswap;
 mod forwardrateagreement;
+mod forwardvanillaoption;
 mod futures;
 mod makecapfloor;
 mod makeois;
@@ -56,6 +57,7 @@ pub use fixedvsfloatingswap::{
 };
 pub use floatfloatswap::FloatFloatSwap;
 pub use forwardrateagreement::{ForwardRateAgreement, Position};
+pub use forwardvanillaoption::{ForwardOptionArguments, ForwardVanillaOption};
 pub use futures::FuturesType;
 pub use makecapfloor::MakeCapFloor;
 pub use makeois::MakeOis;
