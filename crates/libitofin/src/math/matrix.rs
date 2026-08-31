@@ -257,6 +257,29 @@ impl Mul<&Matrix> for &Array {
     }
 }
 
+/// Determinant of a 3×3 matrix (closed form).
+pub fn det3(m: &Matrix) -> Real {
+    m[(0, 0)] * (m[(1, 1)] * m[(2, 2)] - m[(1, 2)] * m[(2, 1)])
+        - m[(0, 1)] * (m[(1, 0)] * m[(2, 2)] - m[(1, 2)] * m[(2, 0)])
+        + m[(0, 2)] * (m[(1, 0)] * m[(2, 1)] - m[(1, 1)] * m[(2, 0)])
+}
+
+/// Inverse of a 3×3 matrix via the adjugate formula.
+pub fn inverse_3x3(m: &Matrix) -> Matrix {
+    assert_eq!(m.rows(), 3);
+    assert_eq!(m.columns(), 3);
+    let d = det3(m);
+    let mut inv = Matrix::with_size(3, 3);
+    for i in 0..3 {
+        for j in 0..3 {
+            inv[(j, i)] = (m[((i + 1) % 3, (j + 1) % 3)] * m[((i + 2) % 3, (j + 2) % 3)]
+                - m[((i + 1) % 3, (j + 2) % 3)] * m[((i + 2) % 3, (j + 1) % 3)])
+                / d;
+        }
+    }
+    inv
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

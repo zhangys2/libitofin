@@ -14,6 +14,8 @@ mod mcdoublebarrierengine;
 mod mcbarrierengine;
 mod quantobarrierengine;
 mod quantodoublebarrierengine;
+mod vannavolgainterpolation;
+mod vannavolgadoublebarrierengine;
 
 pub use binomialbarrierengine::{BinomialBarrierEngine, set_binomial_barrier_engine};
 pub use fdblackscholesbarrierengine::{
@@ -36,4 +38,7 @@ pub use mcdoublebarrierengine::{
 pub use quantobarrierengine::{QuantoBarrierEngine, set_quanto_barrier_engine};
 pub use quantodoublebarrierengine::{
     QuantoDoubleBarrierEngine, set_quanto_double_barrier_engine,
+};
+pub use vannavolgadoublebarrierengine::{
+    VannaVolgaDoubleBarrierEngine, set_vanna_volga_double_barrier_engine,
 };
