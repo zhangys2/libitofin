@@ -21,9 +21,8 @@
 //! interior points between them; the lattice engines need it so swap reset/pay
 //! times land on exact grid nodes.
 //!
-//! Deferred (not needed yet): the value-semantics mandatory-times ctor
-//! (`timegrid.hpp:54`) and the initializer-list ctors (`:141,143`), plus
-//! `closest_time` (`timegrid.hpp:153`).
+//! Deferred (not needed yet): the initializer-list ctors (`timegrid.hpp:141,143`)
+//! and `closest_time` (`timegrid.hpp:153`).
 
 use std::ops::Index;
 
@@ -67,6 +66,41 @@ impl TimeGrid {
 
     /// Grid through a set of mandatory times, with regularly spaced interior
     /// points (`timegrid.hpp:87`, the `(begin, end, steps)` ctor).
+    ///
+    /// Mandatory times only: no interior fill (`timegrid.hpp:54-87`).
+    ///
+    /// Guarantees every distinct input time is a grid node. Prepends `0` when
+    /// the earliest mandatory time is strictly positive. Use
+    /// [`with_mandatory_times`] when a target step count should densify the grid.
+    ///
+    /// # Errors
+    /// Returns `Err` if `times` is empty or contains a negative time.
+    pub fn from_mandatory_times(times: &[Time]) -> QlResult<Self> {
+        require!(!times.is_empty(), "empty time sequence");
+        let mut mandatory = times.to_vec();
+        mandatory.sort_by(|a, b| {
+            a.partial_cmp(b)
+                .expect("time-grid mandatory times must be totally ordered")
+        });
+        require!(mandatory[0] >= 0.0, "negative times not allowed");
+        mandatory.dedup_by(|a, b| close_enough(*a, *b));
+
+        let mut grid_times = Vec::with_capacity(mandatory.len() + 1);
+        if mandatory[0] > 0.0 {
+            grid_times.push(0.0);
+        }
+        grid_times.extend_from_slice(&mandatory);
+
+        let dt = grid_times.windows(2).map(|w| w[1] - w[0]).collect();
+        Ok(TimeGrid {
+            times: grid_times,
+            dt,
+            mandatory_times: mandatory,
+        })
+    }
+
+    /// Time grid with mandatory time points plus regular interior fill
+    /// (`timegrid.hpp:87`).
     ///
     /// The sorted, `close_enough`-deduped `times` become grid nodes *verbatim*
     /// (so a later `index`/`initialize` resolves them exactly); between each
@@ -344,6 +378,13 @@ mod tests {
         // mandatory times (min(1, 1, 2) = 1 here).
         let grid = TimeGrid::with_mandatory_times(&[1.0, 2.0, 4.0], 0).unwrap();
         assert_eq!(grid.times(), &[0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(grid.mandatory_times(), &[1.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn from_mandatory_times_places_only_input_nodes() {
+        let grid = TimeGrid::from_mandatory_times(&[1.0, 2.0, 4.0]).unwrap();
+        assert_eq!(grid.times(), &[0.0, 1.0, 2.0, 4.0]);
         assert_eq!(grid.mandatory_times(), &[1.0, 2.0, 4.0]);
     }
 

@@ -176,7 +176,7 @@ impl<RNG: McRngTraits> MCDiscreteGeometricAveragePriceAsianEngine<RNG> {
             let steps = (per_year as Real * t) as Size;
             TimeGrid::with_mandatory_times(&fixing_times, steps.max(1))
         } else {
-            TimeGrid::with_mandatory_times(&fixing_times, 0)
+            TimeGrid::from_mandatory_times(&fixing_times)
         }
     }
 
@@ -443,7 +443,7 @@ mod tests {
                 fixing_times.push(t);
             }
         }
-        let grid = TimeGrid::with_mandatory_times(&fixing_times, 0).unwrap();
+        let grid = TimeGrid::from_mandatory_times(&fixing_times).unwrap();
         assert_eq!(grid.size(), future_fixings + 1);
         assert_eq!(grid.mandatory_times().len(), future_fixings);
     }
