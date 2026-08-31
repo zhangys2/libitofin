@@ -19,8 +19,6 @@ use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
-use crate::termstructures::volatility::BlackVolTermStructure;
-use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 
 type EngineBase = GenericEngine<ContinuousAveragingAsianArguments, InstrumentResults>;
