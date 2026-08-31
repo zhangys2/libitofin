@@ -12,13 +12,16 @@ pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
 pub mod forward;
+pub mod greeks;
 pub mod swap;
 pub mod swaption;
 pub mod vanilla;
 
 pub use asian::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
+    AnalyticDiscreteGeometricAveragePriceAsianEngine,
     set_analytic_continuous_geometric_average_price_asian_engine,
+    set_analytic_discrete_geometric_average_price_asian_engine,
 };
 pub use barrier::{
     AnalyticDoubleBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine,
@@ -32,6 +35,7 @@ pub use barrier::{
 };
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
+pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use forward::{
