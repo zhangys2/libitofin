@@ -1,11 +1,11 @@
 //! Asian-option pricing engines.
 
-mod choiasianengine;
 mod analyticcontinuousgeometricaveragepriceasianengine;
 mod analyticcontinuousgeometricaveragepriceasianhestonengine;
 mod analyticdiscretegeometricaveragepriceasianengine;
 mod analyticdiscretegeometricaveragepriceasianhestonengine;
 mod analyticdiscretegeometricaveragestrikeasianengine;
+mod choiasianengine;
 mod continuousarithmeticasianlevyengine;
 mod continuousarithmeticasianvecerengine;
 mod mcdiscretearithmeticaveragepriceasianengine;
@@ -15,7 +15,6 @@ mod mcdiscretegeometricaveragepriceasianengine;
 mod mcdiscretegeometricaveragepriceasianhestonengine;
 mod turnbullwakemanasianengine;
 
-pub use choiasianengine::{ChoiAsianEngine, set_choi_asian_engine};
 pub use analyticcontinuousgeometricaveragepriceasianengine::{
     AnalyticContinuousGeometricAveragePriceAsianEngine,
     set_analytic_continuous_geometric_average_price_asian_engine,
@@ -36,6 +35,7 @@ pub use analyticdiscretegeometricaveragestrikeasianengine::{
     AnalyticDiscreteGeometricAverageStrikeAsianEngine,
     set_analytic_discrete_geometric_average_strike_asian_engine,
 };
+pub use choiasianengine::{ChoiAsianEngine, set_choi_asian_engine};
 pub use continuousarithmeticasianlevyengine::{
     ContinuousArithmeticAsianLevyEngine, set_continuous_arithmetic_asian_levy_engine,
 };

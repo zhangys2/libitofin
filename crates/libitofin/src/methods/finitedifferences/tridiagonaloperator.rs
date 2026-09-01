@@ -36,9 +36,7 @@ impl TridiagonalOperator {
                 upper_diagonal: Array::new(),
             })
         } else {
-            fail!(
-                "invalid size ({size}) for tridiagonal operator (must be null or >= 2)"
-            );
+            fail!("invalid size ({size}) for tridiagonal operator (must be null or >= 2)");
         }
     }
 

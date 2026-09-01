@@ -62,24 +62,23 @@ mod tests {
             Handle::new(Shared::clone(q) as Shared<dyn crate::quotes::Quote>)
         };
         let flat = |q: &Shared<SimpleQuote>| {
-            Handle::new(
-                shared(FlatForward::new(
-                    today,
-                    quote_handle(q),
-                    Actual360::new(),
-                    Compounding::Continuous,
-                    Frequency::Annual,
-                )) as Shared<dyn crate::termstructures::yieldtermstructure::YieldTermStructure>,
-            )
-        };
-        let flat_vol = Handle::new(
-            shared(BlackConstantVol::with_quote(
+            Handle::new(shared(FlatForward::new(
                 today,
-                None,
-                quote_handle(&vol),
+                quote_handle(q),
                 Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        );
+                Compounding::Continuous,
+                Frequency::Annual,
+            ))
+                as Shared<
+                    dyn crate::termstructures::yieldtermstructure::YieldTermStructure,
+                >)
+        };
+        let flat_vol = Handle::new(shared(BlackConstantVol::with_quote(
+            today,
+            None,
+            quote_handle(&vol),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>);
         let process = BlackScholesMertonProcess::new(
             quote_handle(&spot),
             flat(&q_rate),

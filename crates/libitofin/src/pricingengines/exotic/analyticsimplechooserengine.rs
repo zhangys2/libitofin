@@ -107,7 +107,8 @@ impl PricingEngine for AnalyticSimpleChooserEngine {
         );
 
         let d = ((spot / strike).ln()
-            + ((risk_free_rate - dividend_rate) + volatility * volatility * 0.5) * time_to_maturity)
+            + ((risk_free_rate - dividend_rate) + volatility * volatility * 0.5)
+                * time_to_maturity)
             / (volatility * time_to_maturity.sqrt());
 
         let y = ((spot / strike).ln()
@@ -134,7 +135,8 @@ pub fn set_analytic_simple_chooser_engine(
     option: &mut crate::instruments::SimpleChooserOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticSimpleChooserEngine::new(process)) as SharedMut<dyn PricingEngine>;
+    let engine =
+        shared_mut(AnalyticSimpleChooserEngine::new(process)) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -150,8 +152,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
 
@@ -160,26 +162,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `chooseroption.cpp` `testAnalyticSimpleChooserEngine` (Haug pp.39–40).
@@ -201,8 +199,7 @@ mod tests {
         ));
 
         let strike = 50.0;
-        let exercise: Shared<dyn Exercise> =
-            shared(EuropeanExercise::new(today + 180));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 180));
         let choosing_date = today + 90;
 
         let mut option =

@@ -23,10 +23,9 @@ pub use analyticcontinuouspartialfloatinglookback::{
     set_analytic_continuous_partial_floating_lookback_engine,
 };
 pub use mclookbackengine::{
-    MakeMcLookbackEngine, McContinuousFixedLookbackEngine,
+    MCLookbackEngine, MakeMcLookbackEngine, McContinuousFixedLookbackEngine,
     McContinuousFloatingLookbackEngine, McContinuousPartialFixedLookbackEngine,
-    McContinuousPartialFloatingLookbackEngine, MCLookbackEngine,
-    set_mc_continuous_fixed_lookback_engine, set_mc_continuous_floating_lookback_engine,
-    set_mc_continuous_partial_fixed_lookback_engine,
+    McContinuousPartialFloatingLookbackEngine, set_mc_continuous_fixed_lookback_engine,
+    set_mc_continuous_floating_lookback_engine, set_mc_continuous_partial_fixed_lookback_engine,
     set_mc_continuous_partial_floating_lookback_engine,
 };

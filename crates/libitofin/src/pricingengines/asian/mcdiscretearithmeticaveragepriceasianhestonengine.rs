@@ -31,9 +31,7 @@ use crate::shared::{Shared, SharedMut};
 use crate::stochasticprocess::StochasticProcess;
 use crate::types::{DiscountFactor, Real, Size, Time};
 
-use super::{
-    AnalyticDiscreteGeometricAveragePriceAsianHestonEngine, GeometricApoHestonPathPricer,
-};
+use super::{AnalyticDiscreteGeometricAveragePriceAsianHestonEngine, GeometricApoHestonPathPricer};
 
 type EngineBase = GenericEngine<DiscreteAveragingAsianArguments, DiscreteAveragingAsianResults>;
 
@@ -118,7 +116,10 @@ impl<RNG: McRngTraits> MCDiscreteArithmeticAveragePriceAsianHestonEngine<RNG> {
             time_steps.is_none() || time_steps_per_year.is_none(),
             "both time steps and time steps per year were provided"
         );
-        require!(time_steps != Some(0), "timeSteps must be positive, 0 not allowed");
+        require!(
+            time_steps != Some(0),
+            "timeSteps must be positive, 0 not allowed"
+        );
         require!(
             time_steps_per_year != Some(0),
             "timeStepsPerYear must be positive, 0 not allowed"
@@ -176,10 +177,9 @@ impl<RNG: McRngTraits> MCDiscreteArithmeticAveragePriceAsianHestonEngine<RNG> {
     }
 
     fn control_variate_value(&self) -> QlResult<Real> {
-        let mut control =
-            AnalyticDiscreteGeometricAveragePriceAsianHestonEngine::new(Shared::clone(
-                &self.process,
-            ))?;
+        let mut control = AnalyticDiscreteGeometricAveragePriceAsianHestonEngine::new(
+            Shared::clone(&self.process),
+        )?;
         {
             let src = self.base.arguments();
             let Some(dst) = (control.arguments_mut() as &mut dyn Any)
@@ -426,8 +426,8 @@ mod tests {
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
     use crate::shared::{Shared, shared, shared_mut};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounter::DayCounter;
     use crate::time::daycounters::actual360::Actual360;
@@ -441,15 +441,13 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real, dc: DayCounter) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                dc,
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            dc,
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     /// Ballestra / Albrecher–Zeng via `testMCDiscreteArithmeticAveragePriceHeston`

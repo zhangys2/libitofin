@@ -83,14 +83,11 @@ impl VannaVolgaInterpolation {
         let k1 = self.strikes[1];
         let k2 = self.strikes[2];
         let vega_k = self.vega_at(k)?;
-        let x1 = vega_k / self.vegas[0]
-            * (k1 / k).ln() * (k2 / k).ln()
+        let x1 = vega_k / self.vegas[0] * (k1 / k).ln() * (k2 / k).ln()
             / ((k1 / k0).ln() * (k2 / k0).ln());
-        let x2 = vega_k / self.vegas[1]
-            * (k / k0).ln() * (k2 / k).ln()
+        let x2 = vega_k / self.vegas[1] * (k / k0).ln() * (k2 / k).ln()
             / ((k1 / k0).ln() * (k2 / k1).ln());
-        let x3 = vega_k / self.vegas[2]
-            * (k / k0).ln() * (k / k1).ln()
+        let x3 = vega_k / self.vegas[2] * (k / k0).ln() * (k / k1).ln()
             / ((k2 / k0).ln() * (k2 / k1).ln());
 
         let sqrt_t = self.t.sqrt();

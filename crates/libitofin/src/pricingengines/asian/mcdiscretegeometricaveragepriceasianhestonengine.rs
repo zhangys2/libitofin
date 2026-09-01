@@ -117,7 +117,10 @@ impl<RNG: McRngTraits> MCDiscreteGeometricAveragePriceAsianHestonEngine<RNG> {
             time_steps.is_none() || time_steps_per_year.is_none(),
             "both time steps and time steps per year were provided"
         );
-        require!(time_steps != Some(0), "timeSteps must be positive, 0 not allowed");
+        require!(
+            time_steps != Some(0),
+            "timeSteps must be positive, 0 not allowed"
+        );
         require!(
             time_steps_per_year != Some(0),
             "timeStepsPerYear must be positive, 0 not allowed"
@@ -152,9 +155,7 @@ impl<RNG: McRngTraits> MCDiscreteGeometricAveragePriceAsianHestonEngine<RNG> {
                 fixing_times.push(t);
             }
         }
-        if fixing_times.is_empty()
-            || (fixing_times.len() == 1 && fixing_times[0] == 0.0)
-        {
+        if fixing_times.is_empty() || (fixing_times.len() == 1 && fixing_times[0] == 0.0) {
             fail!("all fixings are in the past");
         }
         Ok(fixing_times)
@@ -366,8 +367,8 @@ mod tests {
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
     use crate::shared::{Shared, shared, shared_mut};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -377,15 +378,13 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     /// Kim–Kim–Kim–Wee tables 1–3 via `testMCDiscreteGeometricAveragePriceHeston`
@@ -418,8 +417,7 @@ mod tests {
 
         // 30-day options need wider tolerance (weekly-fixing ambiguity).
         let days: [i32; 18] = [
-            30, 91, 182, 365, 730, 1095, 30, 91, 182, 365, 730, 1095, 30, 91, 182, 365, 730,
-            1095,
+            30, 91, 182, 365, 730, 1095, 30, 91, 182, 365, 730, 1095, 30, 91, 182, 365, 730, 1095,
         ];
         let strikes: [Real; 18] = [
             90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 110.0,
@@ -430,8 +428,8 @@ mod tests {
             9.9948, 12.0639, 0.1012, 0.5949, 1.4444, 2.9479, 5.3531, 7.3315,
         ];
         let tol: [Real; 18] = [
-            4.0e-2, 2.0e-2, 2.0e-2, 4.0e-2, 8.0e-2, 2.0e-1, 1.0e-1, 4.0e-2, 3.0e-2, 2.0e-2,
-            9.0e-2, 2.0e-1, 2.0e-2, 1.0e-2, 2.0e-2, 2.0e-2, 7.0e-2, 2.0e-1,
+            4.0e-2, 2.0e-2, 2.0e-2, 4.0e-2, 8.0e-2, 2.0e-1, 1.0e-1, 4.0e-2, 3.0e-2, 2.0e-2, 9.0e-2,
+            2.0e-1, 2.0e-2, 1.0e-2, 2.0e-2, 2.0e-2, 7.0e-2, 2.0e-1,
         ];
 
         for i in 0..18 {

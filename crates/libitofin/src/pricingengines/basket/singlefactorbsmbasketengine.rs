@@ -7,7 +7,6 @@ use std::any::Any;
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::instruments::{BasketArguments, BasketResults, StrikedTypePayoff, TypePayoff};
-use crate::payoff::Payoff;
 use crate::math::array::Array;
 use crate::math::comparison::close_enough;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
@@ -15,6 +14,7 @@ use crate::math::solver1d::Solver1D;
 use crate::math::solvers1d::brent::Brent;
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
+use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::basket::vectorbsmprocessextractor::VectorBsmProcessExtractor;
 use crate::processes::GeneralizedBlackScholesProcess;
@@ -136,12 +136,7 @@ impl PricingEngine for SingleFactorBsmBasketEngine {
             "wrong number of weights arguments in payoff"
         );
 
-        let exercise = self
-            .base
-            .arguments()
-            .exercise
-            .as_ref()
-            .expect("validated");
+        let exercise = self.base.arguments().exercise.as_ref().expect("validated");
         require!(
             exercise.exercise_type() == ExerciseType::European,
             "not an European exercise"

@@ -492,22 +492,29 @@ mod tests {
                 dc.clone(),
                 Compounding::Continuous,
                 Frequency::Annual,
-            )) as Shared<dyn crate::termstructures::yieldtermstructure::YieldTermStructure>),
+            ))
+                as Shared<
+                    dyn crate::termstructures::yieldtermstructure::YieldTermStructure,
+                >),
             Handle::new(shared(FlatForward::with_rate(
                 settlement,
                 r,
                 dc.clone(),
                 Compounding::Continuous,
                 Frequency::Annual,
-            )) as Shared<dyn crate::termstructures::yieldtermstructure::YieldTermStructure>),
-            Handle::new(
-                shared(BlackConstantVol::new(
-                    settlement,
-                    Some(Target::new()),
-                    vol,
-                    dc,
-                )) as Shared<dyn crate::termstructures::volatility::BlackVolTermStructure>,
-            ),
+            ))
+                as Shared<
+                    dyn crate::termstructures::yieldtermstructure::YieldTermStructure,
+                >),
+            Handle::new(shared(BlackConstantVol::new(
+                settlement,
+                Some(Target::new()),
+                vol,
+                dc,
+            ))
+                as Shared<
+                    dyn crate::termstructures::volatility::BlackVolTermStructure,
+                >),
         ));
 
         (
@@ -540,7 +547,10 @@ mod tests {
                 Shared::clone(&settings),
             )
             .unwrap();
-            crate::pricingengines::set_analytic_double_barrier_engine(&mut option, Shared::clone(&process));
+            crate::pricingengines::set_analytic_double_barrier_engine(
+                &mut option,
+                Shared::clone(&process),
+            );
             option.npv().unwrap()
         };
 

@@ -12,8 +12,8 @@ use crate::instruments::{
 };
 use crate::math::array::Array;
 use crate::math::matrix::Matrix;
-use crate::payoff::Payoff;
 use crate::patterns::observable::{AsObservable, Observable};
+use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::basket::ChoiBasketEngine;
 use crate::pricingengines::blackformula::black_formula;
@@ -24,8 +24,8 @@ use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::termstructures::yields::FlatForward;
+use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
 use crate::types::{Real, Size};
 
@@ -111,7 +111,8 @@ impl PricingEngine for ChoiAsianEngine {
         let exercise_date = exercise.last_date();
         let r_ts = self.process.risk_free_rate().current_link()?;
 
-        if future_fixings > 0 && StochasticProcess1D::time(&*self.process, &fixing_dates[0])? == 0.0 {
+        if future_fixings > 0 && StochasticProcess1D::time(&*self.process, &fixing_dates[0])? == 0.0
+        {
             fixing_dates.remove(0);
             future_fixings -= 1;
             past_fixings += 1;
@@ -192,16 +193,12 @@ impl PricingEngine for ChoiAsianEngine {
                     Handle::new(Shared::clone(&forward_quote) as Shared<dyn crate::quotes::Quote>),
                     Handle::clone(&zero_ts),
                     Handle::clone(&zero_ts),
-                    Handle::new(
-                        shared(BlackConstantVol::with_quote(
-                            vol_ref_date,
-                            None,
-                            Handle::new(
-                                Shared::clone(&vol_quote) as Shared<dyn crate::quotes::Quote>,
-                            ),
-                            vol_dc.clone(),
-                        )) as Shared<dyn BlackVolTermStructure>,
-                    ),
+                    Handle::new(shared(BlackConstantVol::with_quote(
+                        vol_ref_date,
+                        None,
+                        Handle::new(Shared::clone(&vol_quote) as Shared<dyn crate::quotes::Quote>),
+                        vol_dc.clone(),
+                    )) as Shared<dyn BlackVolTermStructure>),
                 )));
             }
 
@@ -218,8 +215,9 @@ impl PricingEngine for ChoiAsianEngine {
                 basket_exercise,
                 Shared::clone(&self.settings),
             );
-            basket.base_mut().set_pricing_engine_silent(shared_mut(
-                ChoiBasketEngine::with_params(
+            basket
+                .base_mut()
+                .set_pricing_engine_silent(shared_mut(ChoiBasketEngine::with_params(
                     processes,
                     rho,
                     self.lambda,
@@ -227,8 +225,7 @@ impl PricingEngine for ChoiAsianEngine {
                     false,
                     false,
                     Shared::clone(&self.settings),
-                ),
-            ) as SharedMut<dyn PricingEngine>);
+                )) as SharedMut<dyn PricingEngine>);
 
             basket.npv()? * r_ts.discount_date(exercise_date, false)?
         } else {
@@ -239,7 +236,9 @@ impl PricingEngine for ChoiAsianEngine {
                 spot / (past_fixings + future_fixings) as Real
                     * q_ts.discount_date(fixing_date, false)?
                     / r_ts.discount_date(fixing_date, false)?,
-                vol_ts.black_variance_date(fixing_date, strike, false)?.sqrt(),
+                vol_ts
+                    .black_variance_date(fixing_date, strike, false)?
+                    .sqrt(),
                 r_ts.discount_date(exercise_date, false)?,
                 0.0,
             )?
@@ -256,7 +255,8 @@ pub fn set_choi_asian_engine(
     process: Shared<GeneralizedBlackScholesProcess>,
     settings: Shared<Settings<Date>>,
 ) {
-    let engine = shared_mut(ChoiAsianEngine::new(process, settings)) as SharedMut<dyn PricingEngine>;
+    let engine =
+        shared_mut(ChoiAsianEngine::new(process, settings)) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -268,6 +268,7 @@ mod tests {
     use crate::instrument::Instrument;
     use crate::instruments::DiscreteAveragingAsianOption;
     use crate::interestrate::Compounding;
+    use crate::math::interpolations::linear::Linear;
     use crate::math::randomnumbers::rngtraits::LowDiscrepancy;
     use crate::option::OptionType;
     use crate::pricingengines::asian::{
@@ -280,7 +281,6 @@ mod tests {
         BlackConstantVol, BlackVarianceCurve, BlackVolTermStructure,
     };
     use crate::termstructures::yields::ZeroCurve;
-    use crate::math::interpolations::linear::Linear;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -293,26 +293,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::new(
-                reference,
-                None,
-                vol,
-                Actual365Fixed::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::new(
+            reference,
+            None,
+            vol,
+            Actual365Fixed::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `asianoptions.cpp` `testChoiAsianEngineVsMC`.
@@ -325,7 +321,8 @@ mod tests {
 
         let mut fixing_dates = vec![today + Period::new(1, TimeUnit::Months)];
         while fixing_dates.last().copied().unwrap() < maturity - Period::new(1, TimeUnit::Months) {
-            fixing_dates.push(fixing_dates.last().copied().unwrap() + Period::new(1, TimeUnit::Months));
+            fixing_dates
+                .push(fixing_dates.last().copied().unwrap() + Period::new(1, TimeUnit::Months));
         }
 
         let past_fixings_count = 2;
@@ -362,12 +359,14 @@ mod tests {
         set_mc_discrete_arithmetic_average_price_asian_engine(&mut option, mc_engine);
         let expected = option.npv().unwrap();
 
-        option.base_mut().set_pricing_engine(shared_mut(ChoiAsianEngine::with_params(
-            Shared::clone(&process),
-            20.0,
-            2 << 12,
-            Shared::clone(&settings),
-        )) as SharedMut<dyn PricingEngine>);
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(ChoiAsianEngine::with_params(
+                Shared::clone(&process),
+                20.0,
+                2 << 12,
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         let diff = (calculated - expected).abs();
         assert!(
@@ -377,52 +376,46 @@ mod tests {
 
         let process = shared(BlackScholesMertonProcess::new(
             quote_handle(&shared(SimpleQuote::new(100.0))),
-            Handle::new(
-                shared(
-                    ZeroCurve::new(
-                        vec![
-                            today,
-                            today + Period::new(3, TimeUnit::Months),
-                            today + Period::new(13, TimeUnit::Months),
-                        ],
-                        vec![0.1, 0.0, 0.15],
-                        Actual365Fixed::new(),
-                        Linear,
-                    )
-                    .unwrap(),
-                ) as Shared<dyn YieldTermStructure>,
-            ),
-            Handle::new(
-                shared(
-                    ZeroCurve::new(
-                        vec![
-                            today,
-                            today + Period::new(3, TimeUnit::Months),
-                            today + Period::new(13, TimeUnit::Months),
-                        ],
-                        vec![0.1, 0.2, 0.05],
-                        Actual365Fixed::new(),
-                        Linear,
-                    )
-                    .unwrap(),
-                ) as Shared<dyn YieldTermStructure>,
-            ),
-            Handle::new(
-                shared(
-                    BlackVarianceCurve::new(
+            Handle::new(shared(
+                ZeroCurve::new(
+                    vec![
                         today,
-                        &[
-                            today + Period::new(1, TimeUnit::Days),
-                            today + Period::new(100, TimeUnit::Days),
-                            today + Period::new(13, TimeUnit::Months),
-                        ],
-                        &[0.25, 0.5, 0.4],
-                        Actual365Fixed::new(),
-                        false,
-                    )
-                    .unwrap(),
-                ) as Shared<dyn BlackVolTermStructure>,
-            ),
+                        today + Period::new(3, TimeUnit::Months),
+                        today + Period::new(13, TimeUnit::Months),
+                    ],
+                    vec![0.1, 0.0, 0.15],
+                    Actual365Fixed::new(),
+                    Linear,
+                )
+                .unwrap(),
+            ) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(
+                ZeroCurve::new(
+                    vec![
+                        today,
+                        today + Period::new(3, TimeUnit::Months),
+                        today + Period::new(13, TimeUnit::Months),
+                    ],
+                    vec![0.1, 0.2, 0.05],
+                    Actual365Fixed::new(),
+                    Linear,
+                )
+                .unwrap(),
+            ) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(
+                BlackVarianceCurve::new(
+                    today,
+                    &[
+                        today + Period::new(1, TimeUnit::Days),
+                        today + Period::new(100, TimeUnit::Days),
+                        today + Period::new(13, TimeUnit::Months),
+                    ],
+                    &[0.25, 0.5, 0.4],
+                    Actual365Fixed::new(),
+                    false,
+                )
+                .unwrap(),
+            ) as Shared<dyn BlackVolTermStructure>),
         ));
 
         let mc_engine = shared_mut(
@@ -435,12 +428,14 @@ mod tests {
         set_mc_discrete_arithmetic_average_price_asian_engine(&mut option, mc_engine);
         let expected = option.npv().unwrap();
 
-        option.base_mut().set_pricing_engine(shared_mut(ChoiAsianEngine::with_params(
-            Shared::clone(&process),
-            20.0,
-            2 << 12,
-            Shared::clone(&settings),
-        )) as SharedMut<dyn PricingEngine>);
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(ChoiAsianEngine::with_params(
+                Shared::clone(&process),
+                20.0,
+                2 << 12,
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         let diff = (calculated - expected).abs();
         assert!(
@@ -485,10 +480,12 @@ mod tests {
             Shared::clone(&settings),
         )
         .unwrap();
-        asian_option.base_mut().set_pricing_engine(shared_mut(ChoiAsianEngine::new(
-            Shared::clone(&process),
-            Shared::clone(&settings),
-        )) as SharedMut<dyn PricingEngine>);
+        asian_option
+            .base_mut()
+            .set_pricing_engine(shared_mut(ChoiAsianEngine::new(
+                Shared::clone(&process),
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>);
 
         let calculated = asian_option.npv().unwrap();
         let r = r_ts.current_link().unwrap();
@@ -526,10 +523,12 @@ mod tests {
             Shared::clone(&settings),
         )
         .unwrap();
-        asian_option.base_mut().set_pricing_engine(shared_mut(ChoiAsianEngine::new(
-            Shared::clone(&process),
-            Shared::clone(&settings),
-        )) as SharedMut<dyn PricingEngine>);
+        asian_option
+            .base_mut()
+            .set_pricing_engine(shared_mut(ChoiAsianEngine::new(
+                Shared::clone(&process),
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = asian_option.npv().unwrap();
         let expected = r.discount_date(maturity, false).unwrap()
             * payoff.value((running_accumulator + 100.0) / (past_fixings_count + 1) as Real);
@@ -549,10 +548,12 @@ mod tests {
             Shared::clone(&settings),
         )
         .unwrap();
-        asian_option.base_mut().set_pricing_engine(shared_mut(ChoiAsianEngine::new(
-            Shared::clone(&process),
-            Shared::clone(&settings),
-        )) as SharedMut<dyn PricingEngine>);
+        asian_option
+            .base_mut()
+            .set_pricing_engine(shared_mut(ChoiAsianEngine::new(
+                Shared::clone(&process),
+                Shared::clone(&settings),
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = asian_option.npv().unwrap();
         let expected = r.discount_date(maturity, false).unwrap()
             * payoff.value(running_accumulator / past_fixings_count as Real);

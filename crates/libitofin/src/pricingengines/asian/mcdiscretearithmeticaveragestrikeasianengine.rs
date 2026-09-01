@@ -342,8 +342,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -355,26 +355,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     struct Case {

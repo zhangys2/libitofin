@@ -227,14 +227,13 @@ impl Instrument for DiscreteAveragingAsianOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any)
-            .downcast_mut::<DiscreteAveragingAsianArguments>()
+        let Some(arguments) =
+            (arguments as &mut dyn Any).downcast_mut::<DiscreteAveragingAsianArguments>()
         else {
             fail!("wrong argument type");
         };
 
-        let (running_accumulator, past_fixings, fixing_dates) = if self.all_past_fixings_provided
-        {
+        let (running_accumulator, past_fixings, fixing_dates) = if self.all_past_fixings_provided {
             let Some(today) = self.settings.evaluation_date() else {
                 fail!("no evaluation date set");
             };
@@ -308,21 +307,21 @@ mod tests {
     use crate::math::comparison::close;
     use crate::math::randomnumbers::rngtraits::LowDiscrepancy;
     use crate::option::OptionType;
+    use crate::pricingengine::PricingEngine;
     use crate::pricingengines::asian::{
         MakeMcDiscreteArithmeticApEngine, MakeMcDiscreteArithmeticAsEngine,
-        MakeMcDiscreteGeometricApEngine, set_analytic_discrete_geometric_average_price_asian_engine,
-        set_choi_asian_engine,
+        MakeMcDiscreteGeometricApEngine,
+        set_analytic_discrete_geometric_average_price_asian_engine, set_choi_asian_engine,
         set_mc_discrete_arithmetic_average_price_asian_engine,
         set_mc_discrete_arithmetic_average_strike_asian_engine,
         set_mc_discrete_geometric_average_price_asian_engine,
     };
-    use crate::pricingengine::PricingEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
@@ -335,58 +334,50 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn moving_rate(
         quote: &Shared<SimpleQuote>,
         settings: &Shared<Settings<Date>>,
     ) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::moving(
-                0,
-                NullCalendar::new(),
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-                Shared::clone(settings),
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::moving(
+            0,
+            NullCalendar::new(),
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+            Shared::clone(settings),
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn moving_vol(
         quote: &Shared<SimpleQuote>,
         settings: &Shared<Settings<Date>>,
     ) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::moving_with_quote(
-                0,
-                NullCalendar::new(),
-                quote_handle(quote),
-                Actual360::new(),
-                Shared::clone(settings),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::moving_with_quote(
+            0,
+            NullCalendar::new(),
+            quote_handle(quote),
+            Actual360::new(),
+            Shared::clone(settings),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn assert_all_fixings_in_the_past(err: &crate::errors::QlError) {
@@ -417,8 +408,9 @@ mod tests {
         ));
 
         let payoff = PlainVanillaPayoff::new(OptionType::Put, 100.0);
-        let exercise: Shared<dyn Exercise> =
-            shared(EuropeanExercise::new(today + Period::new(1, TimeUnit::Years)));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(1, TimeUnit::Years),
+        ));
 
         let fixing_dates1: Vec<Date> = (0..=12)
             .map(|i| today + Period::new(i, TimeUnit::Months))

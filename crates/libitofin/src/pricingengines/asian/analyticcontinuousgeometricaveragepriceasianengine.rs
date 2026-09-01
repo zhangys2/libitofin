@@ -162,8 +162,9 @@ pub fn set_analytic_continuous_geometric_average_price_asian_engine(
     option: &mut crate::instruments::ContinuousAveragingAsianOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticContinuousGeometricAveragePriceAsianEngine::new(process))
-        as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticContinuousGeometricAveragePriceAsianEngine::new(
+        process,
+    )) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -181,8 +182,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -192,26 +193,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `asianoptions.cpp` `testAnalyticContinuousGeometricAveragePrice` (Haug p.96–97).
@@ -356,11 +353,10 @@ mod tests {
                             Shared::clone(&market.settings),
                         )
                         .unwrap();
-                        let engine = shared_mut(
-                            AnalyticContinuousGeometricAveragePriceAsianEngine::new(
+                        let engine =
+                            shared_mut(AnalyticContinuousGeometricAveragePriceAsianEngine::new(
                                 Shared::clone(&market.process),
-                            ),
-                        );
+                            ));
                         option
                             .base_mut()
                             .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);

@@ -57,7 +57,10 @@ impl AnalyticDiscreteGeometricAveragePriceAsianHestonEngine {
     }
 
     /// With ξ integral right limit (eqs 23–24).
-    pub fn with_xi_right_limit(process: Shared<HestonProcess>, xi_right_limit: Real) -> QlResult<Self> {
+    pub fn with_xi_right_limit(
+        process: Shared<HestonProcess>,
+        xi_right_limit: Real,
+    ) -> QlResult<Self> {
         let v0 = process.v0();
         let rho = process.rho();
         let kappa = process.kappa();
@@ -109,7 +112,8 @@ impl AnalyticDiscreteGeometricAveragePriceAsianHestonEngine {
         let n = t_n.len();
         let a_term = self.a(s, w, t, t_expiry, k_star, t_n);
         let omega_term = self.v0 * self.omega_tilde(s, w, k_star, k_star, n, tau_k);
-        let term3 = self.kappa * self.kappa * self.theta * (t_expiry - t) / (self.sigma * self.sigma);
+        let term3 =
+            self.kappa * self.kappa * self.theta * (t_expiry - t) / (self.sigma * self.sigma);
 
         let mut summation = Complex::new(0.0, 0.0);
         for i in (k_star + 1)..=(n + 1) {
@@ -181,7 +185,8 @@ impl AnalyticDiscreteGeometricAveragePriceAsianHestonEngine {
         }
         let term1 = (s * (n_ - k_star_) / n_ + w)
             * (self.log_s0 - self.rho * self.v0 / self.sigma - t * temp - tr_t);
-        let term2 = temp * (s * summation / n_ + w * t_expiry) + w * tr_t_expiry + summation2 * s / n_;
+        let term2 =
+            temp * (s * summation / n_ + w * t_expiry) + w * tr_t_expiry + summation2 * s / n_;
         term1 + term2
     }
 
@@ -207,8 +212,8 @@ impl AnalyticDiscreteGeometricAveragePriceAsianHestonEngine {
             self.omega_tilde(s, w, k + 1, k_star, n, tau_k)
         };
         let ratio = self.f_tilde(z_kp1, omega_kp1, d_tau_k) / self.f(z_kp1, omega_kp1, d_tau_k);
-        let result =
-            omega_k + self.kappa / (self.sigma * self.sigma) - 2.0 * ratio / (self.sigma * self.sigma);
+        let result = omega_k + self.kappa / (self.sigma * self.sigma)
+            - 2.0 * ratio / (self.sigma * self.sigma);
         self.omega_tilde_lookup.borrow_mut().insert(k, result);
         result
     }
@@ -304,7 +309,15 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianHestonEngine {
         let zero = Complex::new(0.0, 0.0);
         let term1 = 0.5
             * (self
-                .phi(one, zero, start_time, expiry_time, k_star, &fixing_times, &tau_k)
+                .phi(
+                    one,
+                    zero,
+                    start_time,
+                    expiry_time,
+                    k_star,
+                    &fixing_times,
+                    &tau_k,
+                )
                 .re
                 - adjusted_strike);
 
@@ -368,7 +381,8 @@ mod tests {
     use crate::math::randomnumbers::rngtraits::LowDiscrepancy;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::asian::{
-        MakeMcDiscreteGeometricApHestonEngine, set_mc_discrete_geometric_average_price_asian_heston_engine,
+        MakeMcDiscreteGeometricApHestonEngine,
+        set_mc_discrete_geometric_average_price_asian_heston_engine,
     };
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
@@ -384,15 +398,13 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     /// Kim–Kim–Kim–Wee tables via `testAnalyticDiscreteGeometricAveragePriceHeston`.
@@ -538,7 +550,6 @@ mod tests {
 
                 let cases = [(100.0, 1_usize), (95.0 * 100.0 * 105.0, 3_usize)];
                 for (k, &(running_accumulator, past_fixings)) in cases.iter().enumerate() {
-
                     let exercise = shared(EuropeanExercise::new(expiry));
                     let payoff = PlainVanillaPayoff::new(OptionType::Call, strike);
                     let mut option = DiscreteAveragingAsianOption::new(
@@ -553,7 +564,7 @@ mod tests {
                     .unwrap();
 
                     option.base_mut().set_pricing_engine(
-                        SharedMut::clone(&analytic_engine) as SharedMut<dyn PricingEngine>,
+                        SharedMut::clone(&analytic_engine) as SharedMut<dyn PricingEngine>
                     );
                     let analytic_price = option.npv().unwrap();
 

@@ -118,8 +118,7 @@ impl Instrument for SoftBarrierOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) =
-            (arguments as &mut dyn Any).downcast_mut::<SoftBarrierArguments>()
+        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<SoftBarrierArguments>()
         else {
             fail!("wrong argument type");
         };

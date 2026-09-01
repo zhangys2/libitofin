@@ -3,36 +3,36 @@
 //! Port of `ql/instruments/`: the payoff subset and the vanilla-option
 //! instruments needed by the European-option slice.
 
-mod basketoption;
 mod asianoption;
 mod assetswap;
 mod barrieroption;
-mod continuousaveragingasianoption;
-mod discreteaveragingasianoption;
-mod doublebarrieroption;
-mod lookbackoption;
-mod partialtimebarrieroption;
-mod complexchooseroption;
-mod simplechooseroption;
-mod softbarrieroption;
+mod basketoption;
 mod bond;
 mod bondforward;
 mod bonds;
 mod callablebond;
 mod capfloor;
 mod cmsswap;
+mod complexchooseroption;
+mod continuousaveragingasianoption;
+mod discreteaveragingasianoption;
+mod doublebarrieroption;
 mod fixedvsfloatingswap;
 mod floatfloatswap;
 mod forwardrateagreement;
 mod forwardvanillaoption;
 mod futures;
+mod lookbackoption;
 mod makecapfloor;
 mod makeois;
 mod makeswaption;
 mod makevanillaswap;
 mod oneassetoption;
 mod overnightindexedswap;
+mod partialtimebarrieroption;
 mod payoffs;
+mod simplechooseroption;
+mod softbarrieroption;
 mod swap;
 mod swaption;
 mod vanillaswap;
@@ -41,12 +41,8 @@ mod xccybasisswap;
 pub use crate::pricingengines::{
     AnalyticDoubleBarrierEngine, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
     MCBarrierEngine, MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine,
-    set_analytic_double_barrier_engine, set_mc_double_barrier_engine,
-    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_mc_barrier_engine,
-};
-pub use basketoption::{
-    AverageBasketPayoff, BasketArguments, BasketEngine, BasketOption, BasketResults,
-    SpreadBasketPayoff,
+    set_analytic_double_barrier_engine, set_binomial_barrier_engine,
+    set_fd_black_scholes_barrier_engine, set_mc_barrier_engine, set_mc_double_barrier_engine,
 };
 pub use asianoption::geometric_average_price_asian;
 pub use assetswap::AssetSwap;
@@ -54,36 +50,9 @@ pub use barrieroption::{
     AnalyticBarrierEngine, BarrierArguments, BarrierOption, BarrierType, barrier_price,
     set_analytic_barrier_engine,
 };
-pub use continuousaveragingasianoption::{
-    AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
-    ContinuousAveragingAsianResults,
-};
-pub use discreteaveragingasianoption::{
-    DiscreteAveragingAsianArguments, DiscreteAveragingAsianOption, DiscreteAveragingAsianResults,
-};
-pub use doublebarrieroption::{
-    DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
-};
-pub use lookbackoption::{
-    ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption, ContinuousFixedLookbackResults,
-    ContinuousFloatingLookbackArguments, ContinuousFloatingLookbackOption,
-    ContinuousFloatingLookbackResults, ContinuousPartialFixedLookbackArguments,
-    ContinuousPartialFixedLookbackOption, ContinuousPartialFixedLookbackResults,
-    ContinuousPartialFloatingLookbackArguments, ContinuousPartialFloatingLookbackOption,
-    ContinuousPartialFloatingLookbackResults,
-};
-pub use partialtimebarrieroption::{
-    PartialBarrierRange, PartialTimeBarrierArguments, PartialTimeBarrierOption,
-    PartialTimeBarrierResults,
-};
-pub use complexchooseroption::{
-    ComplexChooserArguments, ComplexChooserOption, ComplexChooserResults,
-};
-pub use simplechooseroption::{
-    SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults,
-};
-pub use softbarrieroption::{
-    SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults,
+pub use basketoption::{
+    AverageBasketPayoff, BasketArguments, BasketEngine, BasketOption, BasketResults,
+    SpreadBasketPayoff,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
@@ -97,6 +66,19 @@ pub use callablebond::{
 };
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
 pub use cmsswap::CmsSwap;
+pub use complexchooseroption::{
+    ComplexChooserArguments, ComplexChooserOption, ComplexChooserResults,
+};
+pub use continuousaveragingasianoption::{
+    AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
+    ContinuousAveragingAsianResults,
+};
+pub use discreteaveragingasianoption::{
+    DiscreteAveragingAsianArguments, DiscreteAveragingAsianOption, DiscreteAveragingAsianResults,
+};
+pub use doublebarrieroption::{
+    DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
+};
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
     FixedVsFloatingSwapResults, FloatingArgumentsFn,
@@ -105,6 +87,14 @@ pub use floatfloatswap::FloatFloatSwap;
 pub use forwardrateagreement::{ForwardRateAgreement, Position};
 pub use forwardvanillaoption::{ForwardOptionArguments, ForwardVanillaOption};
 pub use futures::FuturesType;
+pub use lookbackoption::{
+    ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption,
+    ContinuousFixedLookbackResults, ContinuousFloatingLookbackArguments,
+    ContinuousFloatingLookbackOption, ContinuousFloatingLookbackResults,
+    ContinuousPartialFixedLookbackArguments, ContinuousPartialFixedLookbackOption,
+    ContinuousPartialFixedLookbackResults, ContinuousPartialFloatingLookbackArguments,
+    ContinuousPartialFloatingLookbackOption, ContinuousPartialFloatingLookbackResults,
+};
 pub use makecapfloor::MakeCapFloor;
 pub use makeois::MakeOis;
 pub use makeswaption::MakeSwaption;
@@ -114,9 +104,15 @@ pub use oneassetoption::{
     OneAssetOptionResults, OptionArguments, VanillaOption,
 };
 pub use overnightindexedswap::OvernightIndexedSwap;
+pub use partialtimebarrieroption::{
+    PartialBarrierRange, PartialTimeBarrierArguments, PartialTimeBarrierOption,
+    PartialTimeBarrierResults,
+};
 pub use payoffs::{
     CashOrNothingPayoff, FloatingTypePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
+pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};
+pub use softbarrieroption::{SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults};
 pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
 pub use swaption::{
     SettlementMethod, SettlementType, Swaption, SwaptionArguments, SwaptionEngine,

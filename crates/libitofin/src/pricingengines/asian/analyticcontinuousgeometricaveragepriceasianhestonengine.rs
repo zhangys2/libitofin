@@ -103,14 +103,7 @@ impl AnalyticContinuousGeometricAveragePriceAsianHestonEngine {
     }
 
     /// Φ(s, w; T, t) — Kim–Wee eq (25).
-    pub fn phi(
-        &self,
-        s: Complex,
-        w: Complex,
-        t_expiry: Time,
-        t: Time,
-        cutoff: Size,
-    ) -> Complex {
+    pub fn phi(&self, s: Complex, w: Complex, t_expiry: Time, t: Time, cutoff: Size) -> Complex {
         let tau = t_expiry - t;
         let z1 = self.z1_f(s, w, t_expiry);
         let z2 = self.z2_f(s, w, t_expiry);
@@ -140,15 +133,7 @@ impl AnalyticContinuousGeometricAveragePriceAsianHestonEngine {
         w * self.rho / self.sigma
     }
 
-    fn f(
-        &self,
-        z1: Complex,
-        z2: Complex,
-        z3: Complex,
-        z4: Complex,
-        n: i32,
-        tau: Time,
-    ) -> Complex {
+    fn f(&self, z1: Complex, z2: Complex, z3: Complex, z4: Complex, n: i32, tau: Time) -> Complex {
         let result = if n < 2 {
             if n < 0 {
                 Complex::new(0.0, 0.0)
@@ -173,7 +158,8 @@ impl AnalyticContinuousGeometricAveragePriceAsianHestonEngine {
             prefactor
                 * (z1 * tau * tau * f_minus_n[3]
                     + z2 * tau * f_minus_n[2]
-                    + (z3 - 0.5 * self.kappa * self.kappa / (self.sigma * self.sigma)) * f_minus_n[1])
+                    + (z3 - 0.5 * self.kappa * self.kappa / (self.sigma * self.sigma))
+                        * f_minus_n[1])
         };
         self.f_lookup_table.borrow_mut().insert(n, result);
         result
@@ -296,9 +282,8 @@ pub fn set_analytic_continuous_geometric_average_price_asian_heston_engine(
     option: &mut crate::instruments::ContinuousAveragingAsianOption,
     process: Shared<HestonProcess>,
 ) -> QlResult<()> {
-    let engine = shared_mut(AnalyticContinuousGeometricAveragePriceAsianHestonEngine::new(
-        process,
-    )?) as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticContinuousGeometricAveragePriceAsianHestonEngine::new(process)?)
+        as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
     Ok(())
 }
@@ -323,15 +308,13 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     /// Kim–Wee / Kim–Kim–Kim–Wee tables via

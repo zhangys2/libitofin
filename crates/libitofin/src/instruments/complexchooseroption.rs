@@ -135,16 +135,23 @@ impl Instrument for ComplexChooserOption {
     }
 
     fn is_expired(&self) -> QlResult<bool> {
-        let call_expired =
-            crate::event::event_has_occurred(self.exercise_call.last_date(), &self.settings, None, None)?;
-        let put_expired =
-            crate::event::event_has_occurred(self.exercise_put.last_date(), &self.settings, None, None)?;
+        let call_expired = crate::event::event_has_occurred(
+            self.exercise_call.last_date(),
+            &self.settings,
+            None,
+            None,
+        )?;
+        let put_expired = crate::event::event_has_occurred(
+            self.exercise_put.last_date(),
+            &self.settings,
+            None,
+            None,
+        )?;
         Ok(call_expired && put_expired)
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) =
-            (arguments as &mut dyn Any).downcast_mut::<ComplexChooserArguments>()
+        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<ComplexChooserArguments>()
         else {
             fail!("wrong argument type");
         };

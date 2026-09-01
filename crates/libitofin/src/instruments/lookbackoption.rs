@@ -109,8 +109,8 @@ impl Instrument for ContinuousFloatingLookbackOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any)
-            .downcast_mut::<ContinuousFloatingLookbackArguments>()
+        let Some(arguments) =
+            (arguments as &mut dyn Any).downcast_mut::<ContinuousFloatingLookbackArguments>()
         else {
             fail!("wrong argument type");
         };
@@ -224,8 +224,8 @@ impl Instrument for ContinuousFixedLookbackOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any)
-            .downcast_mut::<ContinuousFixedLookbackArguments>()
+        let Some(arguments) =
+            (arguments as &mut dyn Any).downcast_mut::<ContinuousFixedLookbackArguments>()
         else {
             fail!("wrong argument type");
         };
@@ -261,7 +261,10 @@ impl Arguments for ContinuousPartialFloatingLookbackArguments {
         require!(self.payoff.is_some(), "no payoff given");
         require!(self.exercise.is_some(), "no exercise given");
         require!(self.lambda.is_some(), "no lambda given");
-        require!(self.lookback_period_end.is_some(), "no lookback period end given");
+        require!(
+            self.lookback_period_end.is_some(),
+            "no lookback period end given"
+        );
         let minmax = self.minmax.expect("minmax set by instrument");
         require!(
             minmax >= 0.0,
@@ -391,8 +394,8 @@ impl Instrument for ContinuousPartialFloatingLookbackOption {
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
-        let Some(results) = (results as &dyn Any)
-            .downcast_ref::<ContinuousPartialFloatingLookbackResults>()
+        let Some(results) =
+            (results as &dyn Any).downcast_ref::<ContinuousPartialFloatingLookbackResults>()
         else {
             fail!("no greeks returned from pricing engine");
         };
@@ -501,8 +504,8 @@ impl Instrument for ContinuousPartialFixedLookbackOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any)
-            .downcast_mut::<ContinuousPartialFixedLookbackArguments>()
+        let Some(arguments) =
+            (arguments as &mut dyn Any).downcast_mut::<ContinuousPartialFixedLookbackArguments>()
         else {
             fail!("wrong argument type");
         };
@@ -515,8 +518,8 @@ impl Instrument for ContinuousPartialFixedLookbackOption {
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
-        let Some(results) = (results as &dyn Any)
-            .downcast_ref::<ContinuousPartialFixedLookbackResults>()
+        let Some(results) =
+            (results as &dyn Any).downcast_ref::<ContinuousPartialFixedLookbackResults>()
         else {
             fail!("no greeks returned from pricing engine");
         };

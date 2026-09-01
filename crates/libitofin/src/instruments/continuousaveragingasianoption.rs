@@ -91,13 +91,7 @@ impl ContinuousAveragingAsianOption {
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
-        Self::assemble(
-            average_type,
-            Some(start_date),
-            payoff,
-            exercise,
-            settings,
-        )
+        Self::assemble(average_type, Some(start_date), payoff, exercise, settings)
     }
 
     fn assemble(
@@ -180,8 +174,8 @@ impl Instrument for ContinuousAveragingAsianOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any)
-            .downcast_mut::<ContinuousAveragingAsianArguments>()
+        let Some(arguments) =
+            (arguments as &mut dyn Any).downcast_mut::<ContinuousAveragingAsianArguments>()
         else {
             fail!("wrong argument type");
         };

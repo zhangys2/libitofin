@@ -44,7 +44,11 @@ impl VectorBsmProcessExtractor {
     }
 
     pub fn get_dividend_yield_df(&self, maturity_date: Date) -> QlResult<Array> {
-        self.extract(|p| p.dividend_yield().current_link()?.discount_date(maturity_date, false))
+        self.extract(|p| {
+            p.dividend_yield()
+                .current_link()?
+                .discount_date(maturity_date, false)
+        })
     }
 
     pub fn get_interest_rate_df(&self, maturity_date: Date) -> QlResult<DiscountFactor> {
