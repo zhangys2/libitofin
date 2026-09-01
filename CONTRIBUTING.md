@@ -70,6 +70,17 @@ highlights:
   snapshot-and-fan-out is the planned parallelism model, not yet wired in.
 - FFI lives in sibling crates; `libitofin` stays FFI-agnostic.
 
+## History provenance
+
+Commits up to and including `0dd6af4` (2026-07-29) were imported from the
+upstream `bitbrew` itofin repository. A `(#N)` reference in those subjects
+points at **upstream** PR N, not at a `zhangys2/libitofin` PR — this repo's PR
+counter restarted at #1 on 2026-08-02. From `1ef83f3` (2026-07-30) onward,
+`(#N)` means a PR in this repository.
+
+Note that GitHub renders those old `(#N)` subjects as links into *this* repo;
+those links are wrong for anything before the cutoff.
+
 ## Security
 
 Please report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
