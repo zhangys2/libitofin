@@ -12,6 +12,7 @@ mod bondforward;
 mod bonds;
 mod callablebond;
 mod capfloor;
+mod cliquetoption;
 mod cmsswap;
 mod complexchooseroption;
 mod continuousaveragingasianoption;
@@ -65,6 +66,7 @@ pub use callablebond::{
     CallableFixedRateBond, CallableZeroCouponBond,
 };
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
+pub use cliquetoption::{CliquetArguments, CliquetOption, CliquetResults};
 pub use cmsswap::CmsSwap;
 pub use complexchooseroption::{
     ComplexChooserArguments, ComplexChooserOption, ComplexChooserResults,
@@ -109,7 +111,8 @@ pub use partialtimebarrieroption::{
     PartialTimeBarrierResults,
 };
 pub use payoffs::{
-    CashOrNothingPayoff, FloatingTypePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
+    CashOrNothingPayoff, FloatingTypePayoff, PercentageStrikePayoff, PlainVanillaPayoff,
+    StrikedTypePayoff, TypePayoff,
 };
 pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};
 pub use softbarrieroption::{SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults};
