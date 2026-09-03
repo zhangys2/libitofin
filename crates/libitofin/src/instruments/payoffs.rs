@@ -2,9 +2,9 @@
 //!
 //! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
-//! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], and the
+//! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], [`PercentageStrikePayoff`], and the
 //! [`CashOrNothingPayoff`]. The remaining payoffs (`NullPayoff`,
-//! `PercentageStrikePayoff`, `AssetOrNothingPayoff`, `GapPayoff`,
+//! `AssetOrNothingPayoff`, `GapPayoff`,
 //! `SuperFundPayoff`, `SuperSharePayoff`) are follow-up work.
 
 use std::any::Any;
@@ -80,6 +80,60 @@ impl TypePayoff for PlainVanillaPayoff {
 impl StrikedTypePayoff for PlainVanillaPayoff {
     fn strike(&self) -> Real {
         self.strike
+    }
+}
+
+/// Percentage-strike payoff: strike is a moneyness multiplier on spot.
+///
+/// Ports `PercentageStrikePayoff` (`ql/instruments/payoffs.hpp:119`,
+/// `payoffs.cpp:110-118`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PercentageStrikePayoff {
+    option_type: OptionType,
+    moneyness: Real,
+}
+
+impl PercentageStrikePayoff {
+    /// Builds a percentage-strike payoff with the given type and moneyness.
+    pub fn new(option_type: OptionType, moneyness: Real) -> Self {
+        Self {
+            option_type,
+            moneyness,
+        }
+    }
+}
+
+impl Payoff for PercentageStrikePayoff {
+    fn name(&self) -> String {
+        "PercentageStrike".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!(
+            "{} {}, {} moneyness",
+            self.name(),
+            self.option_type,
+            self.moneyness
+        )
+    }
+
+    fn value(&self, price: Real) -> Real {
+        match self.option_type {
+            OptionType::Call => price * (1.0 - self.moneyness).max(0.0),
+            OptionType::Put => price * (self.moneyness - 1.0).max(0.0),
+        }
+    }
+}
+
+impl TypePayoff for PercentageStrikePayoff {
+    fn option_type(&self) -> OptionType {
+        self.option_type
+    }
+}
+
+impl StrikedTypePayoff for PercentageStrikePayoff {
+    fn strike(&self) -> Real {
+        self.moneyness
     }
 }
 

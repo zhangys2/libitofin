@@ -12,6 +12,7 @@ pub mod blackdeltacalculator;
 pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
+pub mod cliquet;
 pub mod exotic;
 pub mod forward;
 pub mod greeks;
@@ -60,6 +61,7 @@ pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
+pub use cliquet::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
 pub use exotic::{
     AnalyticComplexChooserEngine, AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,
     set_analytic_simple_chooser_engine,
