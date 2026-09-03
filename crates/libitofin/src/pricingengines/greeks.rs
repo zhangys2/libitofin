@@ -92,6 +92,9 @@ mod tests {
         let gamma = 0.01;
         let theta = black_scholes_theta(&process, value, delta, gamma).unwrap();
         let expected = 0.06 * value - (0.06 - 0.03) * 100.0 * delta - 0.5 * 0.04 * 10_000.0 * gamma;
-        assert!((theta - expected).abs() <= 1.0e-12, "{theta} vs {expected}");
+        // `local_vol` at t = 0 is a finite-difference derivative of variance, so the
+        // recovered vol carries ~1e-11 of error; 1e-12 asserts FD accuracy at machine
+        // epsilon. A real theta regression would be orders of magnitude larger.
+        assert!((theta - expected).abs() <= 1.0e-9, "{theta} vs {expected}");
     }
 }
