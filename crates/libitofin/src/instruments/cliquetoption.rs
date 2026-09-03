@@ -54,15 +54,9 @@ impl Arguments for CliquetArguments {
         require!(!self.reset_dates.is_empty(), "no reset dates given");
         let maturity = self.exercise.as_ref().expect("validated").last_date();
         for (i, reset) in self.reset_dates.iter().enumerate() {
-            require!(
-                maturity > *reset,
-                "reset date greater or equal to maturity"
-            );
+            require!(maturity > *reset, "reset date greater or equal to maturity");
             if i > 0 {
-                require!(
-                    *reset > self.reset_dates[i - 1],
-                    "unsorted reset dates"
-                );
+                require!(*reset > self.reset_dates[i - 1], "unsorted reset dates");
             }
         }
         Ok(())

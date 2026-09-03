@@ -118,9 +118,8 @@ impl PricingEngine for AnalyticCliquetEngine {
             )?;
 
             value += weight * black.value();
-            delta += weight
-                * (black.delta(underlying)?
-                    + moneyness.strike() * discount * black.beta());
+            delta +=
+                weight * (black.delta(underlying)? + moneyness.strike() * discount * black.beta());
             theta += q_ts
                 .forward_rate_between(
                     reset_dates[i - 1],
@@ -181,8 +180,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
 
@@ -191,26 +190,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `cliquetoption.cpp` `testValues` (Haug p.37).
