@@ -147,7 +147,9 @@ impl PricingEngine for TurnbullWakemanAsianEngine {
         }
         ea2 /= (m * m) as Real;
 
-        let tn = *times.last().expect("future fixings non-empty when strike > 0");
+        let tn = *times
+            .last()
+            .expect("future fixings non-empty when strike > 0");
         let sigma = (ea2 / (ea * ea)).ln().sqrt() / tn.sqrt();
 
         let black = BlackCalculator::new(
@@ -195,8 +197,8 @@ mod tests {
     use crate::termstructures::volatility::{
         BlackConstantVol, BlackVarianceCurve, BlackVolTermStructure,
     };
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -209,26 +211,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::new(
-                reference,
-                None,
-                vol,
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::new(
+            reference,
+            None,
+            vol,
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `asianoptions.cpp` `testPastFixingsModelDependency`.
@@ -255,8 +253,9 @@ mod tests {
             today + Period::new(2, TimeUnit::Weeks),
             today + Period::new(6, TimeUnit::Weeks),
         ];
-        let exercise: Shared<dyn crate::exercise::Exercise> =
-            shared(EuropeanExercise::new(today + Period::new(6, TimeUnit::Weeks)));
+        let exercise: Shared<dyn crate::exercise::Exercise> = shared(EuropeanExercise::new(
+            today + Period::new(6, TimeUnit::Weeks),
+        ));
         let all_past = vec![100.0, 100.0];
 
         let mut call = DiscreteAveragingAsianOption::with_all_past_fixings(
@@ -587,18 +586,16 @@ mod tests {
                             base_vol - (fixings as Real - 1.0) * vol_slope + k as Real * vol_slope
                         })
                         .collect();
-                    Handle::new(
-                        shared(
-                            BlackVarianceCurve::new(
-                                today,
-                                &fixing_dates,
-                                &vols,
-                                Actual360::new(),
-                                true,
-                            )
-                            .unwrap(),
-                        ) as Shared<dyn BlackVolTermStructure>,
-                    )
+                    Handle::new(shared(
+                        BlackVarianceCurve::new(
+                            today,
+                            &fixing_dates,
+                            &vols,
+                            Actual360::new(),
+                            true,
+                        )
+                        .unwrap(),
+                    ) as Shared<dyn BlackVolTermStructure>)
                 }
                 Slope::Down => {
                     let vols: Vec<Volatility> = (0..fixings)
@@ -606,18 +603,16 @@ mod tests {
                             base_vol + (fixings as Real - 1.0) * vol_slope - k as Real * vol_slope
                         })
                         .collect();
-                    Handle::new(
-                        shared(
-                            BlackVarianceCurve::new(
-                                today,
-                                &fixing_dates,
-                                &vols,
-                                Actual360::new(),
-                                false,
-                            )
-                            .unwrap(),
-                        ) as Shared<dyn BlackVolTermStructure>,
-                    )
+                    Handle::new(shared(
+                        BlackVarianceCurve::new(
+                            today,
+                            &fixing_dates,
+                            &vols,
+                            Actual360::new(),
+                            false,
+                        )
+                        .unwrap(),
+                    ) as Shared<dyn BlackVolTermStructure>)
                 }
             };
 

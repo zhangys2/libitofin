@@ -109,7 +109,10 @@ impl VannaVolgaDoubleBarrierEngine {
             vol25_put.maturity() == vol25_call.maturity() && vol25_put.maturity() == t,
             "maturity of 3 vols are not the same"
         );
-        require!(!domestic_ts.is_empty(), "domestic yield curve is not defined");
+        require!(
+            !domestic_ts.is_empty(),
+            "domestic yield curve is not defined"
+        );
         require!(!foreign_ts.is_empty(), "foreign yield curve is not defined");
 
         let base = EngineBase::new(
@@ -314,8 +317,14 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
 
         let price_atm_call_bs =
             black_formula(OptionType::Call, atm_strike, forward, std_atm, d_disc, 0.0)?;
-        let price25_call_bs =
-            black_formula(OptionType::Call, call25_strike, forward, std_atm, d_disc, 0.0)?;
+        let price25_call_bs = black_formula(
+            OptionType::Call,
+            call25_strike,
+            forward,
+            std_atm,
+            d_disc,
+            0.0,
+        )?;
         let price25_put_bs =
             black_formula(OptionType::Put, put25_strike, forward, std_atm, d_disc, 0.0)?;
 
@@ -338,8 +347,15 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
         )?;
 
         let atm_vol_q = atm_vol_shift.value().unwrap();
-        let (vega_atm, vanna_atm, volga_atm) =
-            analytical_greeks(forward, atm_strike, spot0, f_disc, atm_vol_q, self.t, &self.normal)?;
+        let (vega_atm, vanna_atm, volga_atm) = analytical_greeks(
+            forward,
+            atm_strike,
+            spot0,
+            f_disc,
+            atm_vol_q,
+            self.t,
+            &self.normal,
+        )?;
         let (vega25_call, vanna25_call, volga25_call) = analytical_greeks(
             forward,
             call25_strike,
@@ -402,10 +418,20 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
         let q = &inverse_3x3(&a) * &b;
 
         let r_dom = domestic
-            .zero_rate(self.t, Compounding::Continuous, Frequency::NoFrequency, false)?
+            .zero_rate(
+                self.t,
+                Compounding::Continuous,
+                Frequency::NoFrequency,
+                false,
+            )?
             .rate();
         let r_for = foreign
-            .zero_rate(self.t, Compounding::Continuous, Frequency::NoFrequency, false)?
+            .zero_rate(
+                self.t,
+                Compounding::Continuous,
+                Frequency::NoFrequency,
+                false,
+            )?
             .rate();
         let theta_tilt_minus = ((r_dom - r_for) / atm_vol0 - atm_vol0 / 2.0) * sqrt_t;
         let h = (barrier_hi / spot0).ln() / atm_vol0 / sqrt_t;
@@ -418,7 +444,8 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
             double_no_touch += (-2.0 * jf * theta_tilt_minus * (h - l)).exp()
                 * (self.cnd.value(h + e_minus) - self.cnd.value(l + e_minus))
                 - (-2.0 * jf * theta_tilt_minus * (h - l) + 2.0 * theta_tilt_minus * h).exp()
-                    * (self.cnd.value(h - 2.0 * h + e_minus) - self.cnd.value(l - 2.0 * h + e_minus));
+                    * (self.cnd.value(h - 2.0 * h + e_minus)
+                        - self.cnd.value(l - 2.0 * h + e_minus));
         }
 
         let lambda = double_no_touch;
@@ -471,16 +498,18 @@ fn store_additional(
             shared(bs_price_with_smile) as Shared<dyn Any>,
         );
     } else {
-        results
-            .additional_results
-            .insert("VanillaPrice".into(), shared(vanilla_option) as Shared<dyn Any>);
+        results.additional_results.insert(
+            "VanillaPrice".into(),
+            shared(vanilla_option) as Shared<dyn Any>,
+        );
     }
     results
         .additional_results
         .insert("BarrierInPrice".into(), shared(in_price) as Shared<dyn Any>);
-    results
-        .additional_results
-        .insert("BarrierOutPrice".into(), shared(out_price) as Shared<dyn Any>);
+    results.additional_results.insert(
+        "BarrierOutPrice".into(),
+        shared(out_price) as Shared<dyn Any>,
+    );
     if let Some(lambda) = lambda {
         results
             .additional_results
@@ -597,39 +626,317 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn vv_table() -> &'static [VvRow] {
         &[
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Call, strike: 1.13321, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.11638, result: 0.14413 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Call, strike: 1.22687, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.10088, result: 0.07456 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Call, strike: 1.31179, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08925, result: 0.02710 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Call, strike: 1.38843, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08463, result: 0.00569 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Call, strike: 1.46047, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08412, result: 0.00013 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Put, strike: 1.13321, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.11638, result: 0.00017 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Put, strike: 1.22687, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.10088, result: 0.00353 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Put, strike: 1.31179, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08925, result: 0.02221 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Put, strike: 1.38843, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08463, result: 0.06049 },
-            VvRow { barrier_lo: 1.1, barrier_hi: 1.5, option_type: OptionType::Put, strike: 1.46047, spot: 1.30265, q: 0.0003541, r: 0.0033871, t: 1.0, vol25_put: 0.10087, vol_atm: 0.08925, vol25_call: 0.08463, vol: 0.08412, result: 0.11103 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Call, strike: 1.06145, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.12511, result: 0.19981 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Call, strike: 1.19545, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.10890, result: 0.10389 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Call, strike: 1.32238, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09444, result: 0.03555 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Call, strike: 1.44298, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09197, result: 0.00634 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Call, strike: 1.56345, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09261, result: 0.00000 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Put, strike: 1.06145, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.12511, result: 0.00000 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Put, strike: 1.19545, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.10890, result: 0.00436 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Put, strike: 1.32238, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09444, result: 0.03173 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Put, strike: 1.44298, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09197, result: 0.09346 },
-            VvRow { barrier_lo: 1.0, barrier_hi: 1.6, option_type: OptionType::Put, strike: 1.56345, spot: 1.30265, q: 0.0009418, r: 0.0039788, t: 2.0, vol25_put: 0.10891, vol_atm: 0.09525, vol25_call: 0.09197, vol: 0.09261, result: 0.17704 },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Call,
+                strike: 1.13321,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.11638,
+                result: 0.14413,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Call,
+                strike: 1.22687,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.10088,
+                result: 0.07456,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Call,
+                strike: 1.31179,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08925,
+                result: 0.02710,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Call,
+                strike: 1.38843,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08463,
+                result: 0.00569,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Call,
+                strike: 1.46047,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08412,
+                result: 0.00013,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Put,
+                strike: 1.13321,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.11638,
+                result: 0.00017,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Put,
+                strike: 1.22687,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.10088,
+                result: 0.00353,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Put,
+                strike: 1.31179,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08925,
+                result: 0.02221,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Put,
+                strike: 1.38843,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08463,
+                result: 0.06049,
+            },
+            VvRow {
+                barrier_lo: 1.1,
+                barrier_hi: 1.5,
+                option_type: OptionType::Put,
+                strike: 1.46047,
+                spot: 1.30265,
+                q: 0.0003541,
+                r: 0.0033871,
+                t: 1.0,
+                vol25_put: 0.10087,
+                vol_atm: 0.08925,
+                vol25_call: 0.08463,
+                vol: 0.08412,
+                result: 0.11103,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Call,
+                strike: 1.06145,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.12511,
+                result: 0.19981,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Call,
+                strike: 1.19545,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.10890,
+                result: 0.10389,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Call,
+                strike: 1.32238,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09444,
+                result: 0.03555,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Call,
+                strike: 1.44298,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09197,
+                result: 0.00634,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Call,
+                strike: 1.56345,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09261,
+                result: 0.00000,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Put,
+                strike: 1.06145,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.12511,
+                result: 0.00000,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Put,
+                strike: 1.19545,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.10890,
+                result: 0.00436,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Put,
+                strike: 1.32238,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09444,
+                result: 0.03173,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Put,
+                strike: 1.44298,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09197,
+                result: 0.09346,
+            },
+            VvRow {
+                barrier_lo: 1.0,
+                barrier_hi: 1.6,
+                option_type: OptionType::Put,
+                strike: 1.56345,
+                spot: 1.30265,
+                q: 0.0009418,
+                r: 0.0039788,
+                t: 2.0,
+                vol25_put: 0.10891,
+                vol_atm: 0.09525,
+                vol25_call: 0.09197,
+                vol: 0.09261,
+                result: 0.17704,
+            },
         ]
     }
 

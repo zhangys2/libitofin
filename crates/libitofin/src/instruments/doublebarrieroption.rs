@@ -70,8 +70,14 @@ impl DoubleBarrierOption {
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
-        require!(barrier_lo > 0.0 && barrier_hi > 0.0, "barriers must be positive");
-        require!(barrier_lo < barrier_hi, "low barrier must be below high barrier");
+        require!(
+            barrier_lo > 0.0 && barrier_hi > 0.0,
+            "barriers must be positive"
+        );
+        require!(
+            barrier_lo < barrier_hi,
+            "low barrier must be below high barrier"
+        );
         let base = InstrumentBase::new();
         settings.register_eval_date_observer(&base.observer());
         Ok(Self {
@@ -114,8 +120,7 @@ impl Instrument for DoubleBarrierOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) =
-            (arguments as &mut dyn Any).downcast_mut::<DoubleBarrierArguments>()
+        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<DoubleBarrierArguments>()
         else {
             fail!("wrong argument type");
         };

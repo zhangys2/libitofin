@@ -54,12 +54,7 @@ impl AnalyticContinuousPartialFloatingLookbackEngine {
     }
 
     fn residual_time(&self) -> QlResult<Time> {
-        let exercise = self
-            .base
-            .arguments()
-            .exercise
-            .as_ref()
-            .expect("validated");
+        let exercise = self.base.arguments().exercise.as_ref().expect("validated");
         StochasticProcess1D::time(&*self.process, &exercise.last_date())
     }
 
@@ -161,13 +156,9 @@ impl AnalyticContinuousPartialFloatingLookbackEngine {
             (n3, n4, 0.0, 0.0, 0.0)
         } else {
             let t_ratio = lookback_period_end_time / residual_time;
-            let cnbn1 =
-                BivariateCumulativeNormalDistributionWe04DP::new(t_ratio.sqrt())?;
-            let cnbn2 = BivariateCumulativeNormalDistributionWe04DP::new(
-                -(1.0 - t_ratio).sqrt(),
-            )?;
-            let cnbn3 =
-                BivariateCumulativeNormalDistributionWe04DP::new(-t_ratio.sqrt())?;
+            let cnbn1 = BivariateCumulativeNormalDistributionWe04DP::new(t_ratio.sqrt())?;
+            let cnbn2 = BivariateCumulativeNormalDistributionWe04DP::new(-(1.0 - t_ratio).sqrt())?;
+            let cnbn3 = BivariateCumulativeNormalDistributionWe04DP::new(-t_ratio.sqrt())?;
 
             let n3 = cnbn1.value(
                 eta * (-f1 + 2.0 * carry * sqrt_t1 / vol),
@@ -192,14 +183,12 @@ impl AnalyticContinuousPartialFloatingLookbackEngine {
 
         if full_lookback_period {
             Ok(eta
-                * (underlying * div_disc * n1
-                    - lambda * minmax * rf_disc * n2
+                * (underlying * div_disc * n1 - lambda * minmax * rf_disc * n2
                     + underlying * rf_disc * lambda / x
                         * (pow_s * n3 - div_disc / rf_disc * pow_l * n4)))
         } else {
             Ok(eta
-                * (underlying * div_disc * n1
-                    - lambda * minmax * rf_disc * n2
+                * (underlying * div_disc * n1 - lambda * minmax * rf_disc * n2
                     + underlying * rf_disc * lambda / x
                         * (pow_s * n3 - div_disc / rf_disc * pow_l * n4)
                     + underlying * div_disc * n5
@@ -258,8 +247,9 @@ pub fn set_analytic_continuous_partial_floating_lookback_engine(
     option: &mut crate::instruments::ContinuousPartialFloatingLookbackOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticContinuousPartialFloatingLookbackEngine::new(process))
-        as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticContinuousPartialFloatingLookbackEngine::new(
+        process,
+    )) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -274,8 +264,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::types::{Rate, Volatility};
@@ -285,26 +275,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn time_to_days(t: Time) -> i32 {
@@ -333,42 +319,474 @@ mod tests {
         settings.set_evaluation_date(today);
 
         let cases = [
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.25, result: 8.6524, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.5, result: 9.2128, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.75, result: 9.5567, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.25, result: 10.5751, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.5, result: 11.2601, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.75, result: 11.6804, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.25, result: 13.3402, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.5, result: 14.5121, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.75, result: 15.314, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.25, result: 16.3047, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.5, result: 17.737, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.75, result: 18.7171, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.25, result: 17.9831, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.5, result: 19.6618, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.75, result: 20.8493, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.25, result: 21.9793, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.5, result: 24.0311, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.75, result: 25.4825, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.25, result: 2.7189, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.5, result: 3.4639, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.75, result: 4.1912, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.25, result: 3.3231, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.5, result: 4.2336, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, lambda: 1.0, t1: 0.75, result: 5.1226, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.25, result: 7.9153, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.5, result: 9.5825, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.75, result: 11.0362, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.25, result: 9.6743, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.5, result: 11.7119, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, lambda: 1.0, t1: 0.75, result: 13.4887, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.25, result: 13.4719, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.5, result: 16.1495, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 90.0, spot: 90.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.75, result: 18.4071, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.25, result: 16.4657, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.5, result: 19.7383, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, minmax: 110.0, spot: 110.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, lambda: 1.0, t1: 0.75, result: 22.4976, tol: 1.0e-4 },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 8.6524,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 9.2128,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 9.5567,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 10.5751,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 11.2601,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 11.6804,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 13.3402,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 14.5121,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 15.314,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 16.3047,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 17.737,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 18.7171,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 17.9831,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 19.6618,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 20.8493,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 21.9793,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 24.0311,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 25.4825,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 2.7189,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 3.4639,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 4.1912,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 3.3231,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 4.2336,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 5.1226,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 7.9153,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 9.5825,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 11.0362,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 9.6743,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 11.7119,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 13.4887,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 13.4719,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 16.1495,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 90.0,
+                spot: 90.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 18.4071,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.25,
+                result: 16.4657,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.5,
+                result: 19.7383,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                minmax: 110.0,
+                spot: 110.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                lambda: 1.0,
+                t1: 0.75,
+                result: 22.4976,
+                tol: 1.0e-4,
+            },
         ];
 
         let spot = shared(SimpleQuote::new(0.0));

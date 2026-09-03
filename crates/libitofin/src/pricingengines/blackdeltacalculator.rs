@@ -35,8 +35,14 @@ impl BlackDeltaCalculator {
         std_dev: Real,
     ) -> QlResult<Self> {
         require!(spot > 0.0, "positive spot value required");
-        require!(d_discount > 0.0, "positive domestic discount factor required");
-        require!(f_discount > 0.0, "positive foreign discount factor required");
+        require!(
+            d_discount > 0.0,
+            "positive domestic discount factor required"
+        );
+        require!(
+            f_discount > 0.0,
+            "positive foreign discount factor required"
+        );
         require!(std_dev >= 0.0, "non-negative standard deviation required");
         let phi = match option_type {
             OptionType::Call => 1.0,
@@ -57,13 +63,13 @@ impl BlackDeltaCalculator {
 
     /// Inverts the Black delta to a strike (`strikeFromDelta`).
     pub fn strike_from_delta(&self, delta: Real) -> QlResult<Real> {
-        require!(delta * self.phi >= 0.0, "option type and delta are incoherent");
+        require!(
+            delta * self.phi >= 0.0,
+            "option type and delta are incoherent"
+        );
         match self.delta_type {
             DeltaType::Spot => {
-                require!(
-                    delta.abs() <= self.f_discount,
-                    "spot delta out of range"
-                );
+                require!(delta.abs() <= self.f_discount, "spot delta out of range");
                 let arg = -self.phi
                     * InverseCumulativeNormal::standard_value(self.phi * delta / self.f_discount)?
                     * self.std_dev
@@ -89,11 +95,13 @@ impl BlackDeltaCalculator {
         match atm_type {
             AtmType::Spot => Ok(self.spot),
             AtmType::Fwd => Ok(self.forward),
-            AtmType::DeltaNeutral => Ok(if matches!(self.delta_type, DeltaType::Spot | DeltaType::Fwd) {
-                self.f_exp_pos
-            } else {
-                self.f_exp_neg
-            }),
+            AtmType::DeltaNeutral => Ok(
+                if matches!(self.delta_type, DeltaType::Spot | DeltaType::Fwd) {
+                    self.f_exp_pos
+                } else {
+                    self.f_exp_neg
+                },
+            ),
             AtmType::GammaMax | AtmType::VegaMax | AtmType::PutCall50 => Ok(self.f_exp_pos),
             AtmType::Null => fail!("invalid atm type"),
         }

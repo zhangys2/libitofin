@@ -2,8 +2,8 @@
 //!
 //! Port of `ql/pricingengines/basket/choibasketengine.{hpp,cpp}`.
 
-use std::f64::consts::{PI, SQRT_2};
 use std::any::Any;
+use std::f64::consts::{PI, SQRT_2};
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
@@ -12,12 +12,14 @@ use crate::instrument::Instrument;
 use crate::instruments::{BasketArguments, BasketOption, BasketResults, TypePayoff};
 use crate::math::array::Array;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
-use crate::math::integrals::gaussianquadratures::{GaussianQuadrature, MultiDimGaussianIntegration};
+use crate::math::integrals::gaussianquadratures::{
+    GaussianQuadrature, MultiDimGaussianIntegration,
+};
 use crate::math::matrix::Matrix;
+use crate::math::matrixutilities::Svd;
 use crate::math::matrixutilities::cholesky_decomposition;
 use crate::math::matrixutilities::getcovariance::get_covariance;
 use crate::math::matrixutilities::householder::{HouseholderReflection, HouseholderTransformation};
-use crate::math::matrixutilities::Svd;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::basket::singlefactorbsmbasketengine::SingleFactorBsmBasketEngine;
@@ -180,10 +182,9 @@ impl PricingEngine for ChoiBasketEngine {
 
         let mut e1 = Array::with_size(self.n);
         e1[0] = 1.0;
-        let r = HouseholderTransformation::new(
-            HouseholderReflection::new(e1).reflection_vector(&q1)?,
-        )
-        .matrix();
+        let r =
+            HouseholderTransformation::new(HouseholderReflection::new(e1).reflection_vector(&q1)?)
+                .matrix();
 
         let mut r_2_n = Matrix::with_size(self.n, self.n - 1);
         for i in 0..self.n {
@@ -224,17 +225,11 @@ impl PricingEngine for ChoiBasketEngine {
 
         let mut vq = Array::with_size(self.n);
         for i in 0..self.n {
-            vq[i] = 0.5
-                * v_mat.row(i)
-                    .iter()
-                    .map(|x| x * x)
-                    .sum::<Real>();
+            vq[i] = 0.5 * v_mat.row(i).iter().map(|x| x * x).sum::<Real>();
         }
 
-        let quotes: Vec<Shared<SimpleQuote>> = fwd
-            .iter()
-            .map(|&f| shared(SimpleQuote::new(f)))
-            .collect();
+        let quotes: Vec<Shared<SimpleQuote>> =
+            fwd.iter().map(|&f| shared(SimpleQuote::new(f))).collect();
 
         let mut inner_processes = Vec::with_capacity(self.n);
         for i in 0..self.n {
@@ -249,14 +244,12 @@ impl PricingEngine for ChoiBasketEngine {
                 Handle::new(Shared::clone(&quotes[i]) as Shared<dyn Quote>),
                 Handle::clone(&r_ts),
                 Handle::clone(&r_ts),
-                Handle::new(
-                    shared(BlackConstantVol::with_quote(
-                        vol_ref,
-                        None,
-                        Handle::new(Shared::clone(&vol_quote) as Shared<dyn Quote>),
-                        vol_dc.clone(),
-                    )) as Shared<dyn BlackVolTermStructure>,
-                ),
+                Handle::new(shared(BlackConstantVol::with_quote(
+                    vol_ref,
+                    None,
+                    Handle::new(Shared::clone(&vol_quote) as Shared<dyn Quote>),
+                    vol_dc.clone(),
+                )) as Shared<dyn BlackVolTermStructure>),
             )));
         }
 
@@ -265,9 +258,12 @@ impl PricingEngine for ChoiBasketEngine {
             Shared::clone(args.exercise.as_ref().expect("validated")),
             Shared::clone(&self.settings),
         );
-        basket.base_mut().set_pricing_engine_silent(shared_mut(
-            SingleFactorBsmBasketEngine::new(inner_processes),
-        ) as SharedMut<dyn PricingEngine>);
+        basket
+            .base_mut()
+            .set_pricing_engine_silent(
+                shared_mut(SingleFactorBsmBasketEngine::new(inner_processes))
+                    as SharedMut<dyn PricingEngine>,
+            );
 
         let ghq = MultiDimGaussianIntegration::new(&n_int_order, |order| {
             GaussianQuadrature::hermite(order, 0.0)
@@ -316,10 +312,11 @@ impl PricingEngine for ChoiBasketEngine {
                 fwd_delta[k] *= dr0 * weights[k];
 
                 let delta_name = format!("forwardDelta {k}");
-                self.base.results_mut().instrument.additional_results.insert(
-                    delta_name,
-                    shared(fwd_delta[k]) as Shared<dyn Any>,
-                );
+                self.base
+                    .results_mut()
+                    .instrument
+                    .additional_results
+                    .insert(delta_name, shared(fwd_delta[k]) as Shared<dyn Any>);
             }
 
             if self.control_variate {
@@ -357,8 +354,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -371,26 +368,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::new(
-                reference,
-                None,
-                vol,
-                Actual365Fixed::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::new(
+            reference,
+            None,
+            vol,
+            Actual365Fixed::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `basketoption.cpp` `testGoldenChoiBasketEngineExample` (NPV @ 1e-5).
@@ -466,7 +459,9 @@ mod tests {
                 shared(EuropeanExercise::new(maturity)),
                 Shared::clone(&settings),
             );
-            option.base_mut().set_pricing_engine(SharedMut::clone(&engine));
+            option
+                .base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
             let calculated = option.npv().unwrap();
             assert!(
                 (calculated - expected).abs() <= 1e-5,

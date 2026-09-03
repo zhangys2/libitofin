@@ -46,21 +46,12 @@ impl AnalyticPartialTimeBarrierOptionEngine {
     }
 
     fn residual_time(&self) -> QlResult<Time> {
-        let exercise = self
-            .base
-            .arguments()
-            .exercise
-            .as_ref()
-            .expect("validated");
+        let exercise = self.base.arguments().exercise.as_ref().expect("validated");
         StochasticProcess1D::time(&*self.process, &exercise.last_date())
     }
 
     fn cover_event_time(&self) -> QlResult<Time> {
-        let cover = self
-            .base
-            .arguments()
-            .cover_event_date
-            .expect("validated");
+        let cover = self.base.arguments().cover_event_date.expect("validated");
         StochasticProcess1D::time(&*self.process, &cover)
     }
 
@@ -122,8 +113,7 @@ impl AnalyticPartialTimeBarrierOptionEngine {
         let t1 = self.cover_event_time()?;
         let vol = self.volatility(t1, strike)?;
         let s = self.underlying()?;
-        Ok(self.e1(barrier, strike, b)?
-            + 2.0 * (barrier / s).ln() / (vol * t1.sqrt()))
+        Ok(self.e1(barrier, strike, b)? + 2.0 * (barrier / s).ln() / (vol * t1.sqrt()))
     }
 
     fn e4(&self, barrier: Real, strike: Real, b: Rate) -> QlResult<Real> {
@@ -193,7 +183,9 @@ impl AnalyticPartialTimeBarrierOptionEngine {
             BarrierType::DownOut => match barrier_range {
                 PartialBarrierRange::Start => self.ca(1, barrier, strike, r, q),
                 PartialBarrierRange::EndB1 => self.co_b1(barrier, strike, r, q),
-                PartialBarrierRange::EndB2 => self.co_b2(BarrierType::DownOut, barrier, strike, r, q),
+                PartialBarrierRange::EndB2 => {
+                    self.co_b2(BarrierType::DownOut, barrier, strike, r, q)
+                }
             },
             BarrierType::DownIn => match barrier_range {
                 PartialBarrierRange::Start => self.cia(1, barrier, strike, r, q),
@@ -255,7 +247,8 @@ impl AnalyticPartialTimeBarrierOptionEngine {
                 let mut result = s * ((b - r) * t).exp();
                 result *= self.m(-g1_, -e1_, rho_)? - hs_mu1 * self.m(-g3_, e3_, -rho_)?;
                 result -= x1 * (self.m(-g2_, -e2_, rho_)? - hs_mu * self.m(-g4_, e4_, -rho_)?);
-                result -= s * ((b - r) * t).exp()
+                result -= s
+                    * ((b - r) * t).exp()
                     * (self.m(-self.d1(strike, b)?, -e1_, rho_)?
                         - hs_mu1 * self.m(e3_, -self.f1(barrier, strike, b)?, -rho_)?);
                 result += x1
@@ -444,8 +437,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
 
@@ -454,26 +447,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     struct Case {
@@ -503,26 +492,126 @@ mod tests {
         let barrier = 100.0;
 
         let cases = [
-            Case { underlying: 95.0, strike: 90.0, days: 1, result: 0.0393 },
-            Case { underlying: 95.0, strike: 110.0, days: 1, result: 0.0000 },
-            Case { underlying: 105.0, strike: 90.0, days: 1, result: 9.8751 },
-            Case { underlying: 105.0, strike: 110.0, days: 1, result: 6.2303 },
-            Case { underlying: 95.0, strike: 90.0, days: 90, result: 6.2747 },
-            Case { underlying: 95.0, strike: 110.0, days: 90, result: 3.7352 },
-            Case { underlying: 105.0, strike: 90.0, days: 90, result: 15.6324 },
-            Case { underlying: 105.0, strike: 110.0, days: 90, result: 9.6812 },
-            Case { underlying: 95.0, strike: 90.0, days: 180, result: 10.3345 },
-            Case { underlying: 95.0, strike: 110.0, days: 180, result: 5.8712 },
-            Case { underlying: 105.0, strike: 90.0, days: 180, result: 19.2896 },
-            Case { underlying: 105.0, strike: 110.0, days: 180, result: 11.6055 },
-            Case { underlying: 95.0, strike: 90.0, days: 270, result: 13.4342 },
-            Case { underlying: 95.0, strike: 110.0, days: 270, result: 7.1270 },
-            Case { underlying: 105.0, strike: 90.0, days: 270, result: 22.0753 },
-            Case { underlying: 105.0, strike: 110.0, days: 270, result: 12.7342 },
-            Case { underlying: 95.0, strike: 90.0, days: 359, result: 16.8576 },
-            Case { underlying: 95.0, strike: 110.0, days: 359, result: 7.5763 },
-            Case { underlying: 105.0, strike: 90.0, days: 359, result: 25.1488 },
-            Case { underlying: 105.0, strike: 110.0, days: 359, result: 13.1376 },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 1,
+                result: 0.0393,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 110.0,
+                days: 1,
+                result: 0.0000,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 90.0,
+                days: 1,
+                result: 9.8751,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 110.0,
+                days: 1,
+                result: 6.2303,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 90,
+                result: 6.2747,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 110.0,
+                days: 90,
+                result: 3.7352,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 90.0,
+                days: 90,
+                result: 15.6324,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 110.0,
+                days: 90,
+                result: 9.6812,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 180,
+                result: 10.3345,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 110.0,
+                days: 180,
+                result: 5.8712,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 90.0,
+                days: 180,
+                result: 19.2896,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 110.0,
+                days: 180,
+                result: 11.6055,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 270,
+                result: 13.4342,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 110.0,
+                days: 270,
+                result: 7.1270,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 90.0,
+                days: 270,
+                result: 22.0753,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 110.0,
+                days: 270,
+                result: 12.7342,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 359,
+                result: 16.8576,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 110.0,
+                days: 359,
+                result: 7.5763,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 90.0,
+                days: 359,
+                result: 25.1488,
+            },
+            Case {
+                underlying: 105.0,
+                strike: 110.0,
+                days: 359,
+                result: 13.1376,
+            },
         ];
 
         let spot = shared(SimpleQuote::new(0.0));
@@ -571,26 +660,126 @@ mod tests {
         let barrier = 100.0;
 
         let cases = [
-            Case { underlying: 95.0, strike: 90.0, days: 1, result: 1.5551 },
-            Case { underlying: 95.0, strike: 95.0, days: 1, result: 2.0589 },
-            Case { underlying: 90.0, strike: 95.0, days: 1, result: 4.4512 },
-            Case { underlying: 99.0, strike: 90.0, days: 1, result: 0.3404 },
-            Case { underlying: 95.0, strike: 90.0, days: 90, result: 2.4181 },
-            Case { underlying: 95.0, strike: 95.0, days: 90, result: 3.2257 },
-            Case { underlying: 90.0, strike: 95.0, days: 90, result: 5.0624 },
-            Case { underlying: 99.0, strike: 90.0, days: 90, result: 1.5992 },
-            Case { underlying: 95.0, strike: 90.0, days: 180, result: 3.0021 },
-            Case { underlying: 95.0, strike: 95.0, days: 180, result: 4.0617 },
-            Case { underlying: 90.0, strike: 95.0, days: 180, result: 5.7960 },
-            Case { underlying: 99.0, strike: 90.0, days: 180, result: 2.1903 },
-            Case { underlying: 95.0, strike: 90.0, days: 270, result: 3.4194 },
-            Case { underlying: 95.0, strike: 95.0, days: 270, result: 4.7362 },
-            Case { underlying: 90.0, strike: 95.0, days: 270, result: 6.4370 },
-            Case { underlying: 99.0, strike: 90.0, days: 270, result: 2.6025 },
-            Case { underlying: 95.0, strike: 90.0, days: 359, result: 3.5965 },
-            Case { underlying: 95.0, strike: 95.0, days: 359, result: 5.1865 },
-            Case { underlying: 90.0, strike: 95.0, days: 359, result: 6.8782 },
-            Case { underlying: 99.0, strike: 90.0, days: 359, result: 2.7759 },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 1,
+                result: 1.5551,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 95.0,
+                days: 1,
+                result: 2.0589,
+            },
+            Case {
+                underlying: 90.0,
+                strike: 95.0,
+                days: 1,
+                result: 4.4512,
+            },
+            Case {
+                underlying: 99.0,
+                strike: 90.0,
+                days: 1,
+                result: 0.3404,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 90,
+                result: 2.4181,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 95.0,
+                days: 90,
+                result: 3.2257,
+            },
+            Case {
+                underlying: 90.0,
+                strike: 95.0,
+                days: 90,
+                result: 5.0624,
+            },
+            Case {
+                underlying: 99.0,
+                strike: 90.0,
+                days: 90,
+                result: 1.5992,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 180,
+                result: 3.0021,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 95.0,
+                days: 180,
+                result: 4.0617,
+            },
+            Case {
+                underlying: 90.0,
+                strike: 95.0,
+                days: 180,
+                result: 5.7960,
+            },
+            Case {
+                underlying: 99.0,
+                strike: 90.0,
+                days: 180,
+                result: 2.1903,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 270,
+                result: 3.4194,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 95.0,
+                days: 270,
+                result: 4.7362,
+            },
+            Case {
+                underlying: 90.0,
+                strike: 95.0,
+                days: 270,
+                result: 6.4370,
+            },
+            Case {
+                underlying: 99.0,
+                strike: 90.0,
+                days: 270,
+                result: 2.6025,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 90.0,
+                days: 359,
+                result: 3.5965,
+            },
+            Case {
+                underlying: 95.0,
+                strike: 95.0,
+                days: 359,
+                result: 5.1865,
+            },
+            Case {
+                underlying: 90.0,
+                strike: 95.0,
+                days: 359,
+                result: 6.8782,
+            },
+            Case {
+                underlying: 99.0,
+                strike: 90.0,
+                days: 359,
+                result: 2.7759,
+            },
         ];
 
         let spot = shared(SimpleQuote::new(0.0));
@@ -778,7 +967,10 @@ mod tests {
                 Shared::clone(&settings),
             )
             .unwrap();
-            set_analytic_partial_time_barrier_engine(&mut call_option, Shared::clone(&call_process));
+            set_analytic_partial_time_barrier_engine(
+                &mut call_option,
+                Shared::clone(&call_process),
+            );
 
             let put_value = put_option.npv().unwrap();
             let call_value = call_option.npv().unwrap();

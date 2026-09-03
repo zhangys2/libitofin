@@ -22,10 +22,8 @@ use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Time, Volatility};
 
-type EngineBase = GenericEngine<
-    ContinuousPartialFixedLookbackArguments,
-    ContinuousPartialFixedLookbackResults,
->;
+type EngineBase =
+    GenericEngine<ContinuousPartialFixedLookbackArguments, ContinuousPartialFixedLookbackResults>;
 
 /// Pricing engine for European continuous partial-time fixed-strike lookbacks.
 pub struct AnalyticContinuousPartialFixedLookbackEngine {
@@ -54,20 +52,11 @@ impl AnalyticContinuousPartialFixedLookbackEngine {
     }
 
     fn strike(&self) -> Real {
-        self.base
-            .arguments()
-            .payoff
-            .expect("validated")
-            .strike()
+        self.base.arguments().payoff.expect("validated").strike()
     }
 
     fn residual_time(&self) -> QlResult<Time> {
-        let exercise = self
-            .base
-            .arguments()
-            .exercise
-            .as_ref()
-            .expect("validated");
+        let exercise = self.base.arguments().exercise.as_ref().expect("validated");
         StochasticProcess1D::time(&*self.process, &exercise.last_date())
     }
 
@@ -181,8 +170,7 @@ impl AnalyticContinuousPartialFixedLookbackEngine {
         let div_disc = self.dividend_discount()?;
 
         Ok(eta
-            * (underlying * div_disc * n1
-                - strike * rf_disc * n2
+            * (underlying * div_disc * n1 - strike * rf_disc * n2
                 + underlying * rf_disc / x * (-pow_s * n3 + div_disc / rf_disc * n4)
                 - underlying * div_disc * n5
                 - strike * rf_disc * n6
@@ -260,8 +248,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::types::{Rate, Volatility};
@@ -271,26 +259,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn time_to_days(t: Time) -> i32 {
@@ -318,42 +302,438 @@ mod tests {
         settings.set_evaluation_date(today);
 
         let cases = [
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.25, result: 20.2845, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.5, result: 19.6239, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.75, result: 18.6244, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.25, result: 4.0432, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.5, result: 3.958, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.75, result: 3.7015, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.25, result: 27.5385, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.5, result: 25.8126, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.75, result: 23.4957, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.25, result: 11.4895, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.5, result: 10.8995, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.75, result: 9.8244, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.25, result: 35.4578, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.5, result: 32.7172, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.75, result: 29.1473, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.25, result: 19.725, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.5, result: 18.4025, tol: 1.0e-4 },
-            Case { option_type: OptionType::Call, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.75, result: 16.2976, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.25, result: 0.4973, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.5, result: 0.4632, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.75, result: 0.3863, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.25, result: 12.6978, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.5, result: 10.9492, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.1, t1: 0.75, result: 9.1555, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.25, result: 4.5863, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.5, result: 4.1925, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.75, result: 3.5831, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.25, result: 19.0255, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.5, result: 16.9433, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.2, t1: 0.75, result: 14.6505, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.25, result: 9.9348, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.5, result: 9.1111, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 90.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.75, result: 7.9267, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.25, result: 25.2112, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.5, result: 22.8217, tol: 1.0e-4 },
-            Case { option_type: OptionType::Put, strike: 110.0, spot: 100.0, q: 0.0, r: 0.06, t: 1.0, v: 0.3, t1: 0.75, result: 20.0566, tol: 1.0e-4 },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.25,
+                result: 20.2845,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.5,
+                result: 19.6239,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.75,
+                result: 18.6244,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.25,
+                result: 4.0432,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.5,
+                result: 3.958,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.75,
+                result: 3.7015,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.25,
+                result: 27.5385,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.5,
+                result: 25.8126,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.75,
+                result: 23.4957,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.25,
+                result: 11.4895,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.5,
+                result: 10.8995,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.75,
+                result: 9.8244,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.25,
+                result: 35.4578,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.5,
+                result: 32.7172,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.75,
+                result: 29.1473,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.25,
+                result: 19.725,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.5,
+                result: 18.4025,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Call,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.75,
+                result: 16.2976,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.25,
+                result: 0.4973,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.5,
+                result: 0.4632,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.75,
+                result: 0.3863,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.25,
+                result: 12.6978,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.5,
+                result: 10.9492,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.1,
+                t1: 0.75,
+                result: 9.1555,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.25,
+                result: 4.5863,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.5,
+                result: 4.1925,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.75,
+                result: 3.5831,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.25,
+                result: 19.0255,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.5,
+                result: 16.9433,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.2,
+                t1: 0.75,
+                result: 14.6505,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.25,
+                result: 9.9348,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.5,
+                result: 9.1111,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 90.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.75,
+                result: 7.9267,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.25,
+                result: 25.2112,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.5,
+                result: 22.8217,
+                tol: 1.0e-4,
+            },
+            Case {
+                option_type: OptionType::Put,
+                strike: 110.0,
+                spot: 100.0,
+                q: 0.0,
+                r: 0.06,
+                t: 1.0,
+                v: 0.3,
+                t1: 0.75,
+                result: 20.0566,
+                tol: 1.0e-4,
+            },
         ];
 
         let spot = shared(SimpleQuote::new(0.0));

@@ -5,6 +5,7 @@
 use std::marker::PhantomData;
 
 use crate::errors::QlResult;
+use crate::exercise::Exercise;
 use crate::fail;
 use crate::instrument::Instrument;
 use crate::instruments::{
@@ -14,7 +15,6 @@ use crate::instruments::{
     ContinuousPartialFloatingLookbackArguments, ContinuousPartialFloatingLookbackResults,
     FloatingTypePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
-use crate::exercise::Exercise;
 use crate::math::randomnumbers::rngtraits::McRngTraits;
 use crate::math::statistics::MeanStdDev;
 use crate::math::timegrid::TimeGrid;
@@ -51,7 +51,10 @@ impl PathPricer<Path> for LookbackFixedPathPricer {
         let values = path.values();
         let underlying = match self.payoff.option_type() {
             OptionType::Put => values[1..].iter().copied().fold(f64::INFINITY, f64::min),
-            OptionType::Call => values[1..].iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            OptionType::Call => values[1..]
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max),
         };
         self.payoff.value(underlying) * self.discount
     }
@@ -116,7 +119,10 @@ impl PathPricer<Path> for LookbackFloatingPathPricer {
         let terminal_price = path.back();
         let strike = match self.payoff.option_type() {
             OptionType::Call => values[1..].iter().copied().fold(f64::INFINITY, f64::min),
-            OptionType::Put => values[1..].iter().copied().fold(f64::NEG_INFINITY, f64::max),
+            OptionType::Put => values[1..]
+                .iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max),
         };
         self.payoff.value_with_strike(terminal_price, strike) * self.discount
     }
@@ -240,10 +246,9 @@ impl McLookbackArguments for ContinuousFloatingLookbackArguments {
         discount: DiscountFactor,
     ) -> QlResult<LookbackMcPathPricer> {
         let payoff = self.payoff.expect("validated");
-        Ok(LookbackMcPathPricer::Floating(LookbackFloatingPathPricer::new(
-            payoff.option_type(),
-            discount,
-        )))
+        Ok(LookbackMcPathPricer::Floating(
+            LookbackFloatingPathPricer::new(payoff.option_type(), discount),
+        ))
     }
 }
 
@@ -680,8 +685,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -692,26 +697,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn time_to_days(t: Time) -> i32 {
@@ -865,14 +866,15 @@ mod tests {
                 Shared::clone(&settings),
             )
             .unwrap();
-            set_analytic_continuous_floating_lookback_engine(&mut floating, Shared::clone(&process));
+            set_analytic_continuous_floating_lookback_engine(
+                &mut floating,
+                Shared::clone(&process),
+            );
             let analytical = floating.npv().unwrap();
             set_mc_continuous_floating_lookback_engine(
                 &mut floating,
-                mc_engine::<
-                    ContinuousFloatingLookbackArguments,
-                    ContinuousFloatingLookbackResults,
-                >(),
+                mc_engine::<ContinuousFloatingLookbackArguments, ContinuousFloatingLookbackResults>(
+                ),
             );
             let monte_carlo = floating.npv().unwrap();
             assert!(

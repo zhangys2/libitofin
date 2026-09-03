@@ -12,12 +12,12 @@ use crate::instruments::{
     AverageType, DiscreteAveragingAsianArguments, DiscreteAveragingAsianResults,
     PlainVanillaPayoff, StrikedTypePayoff,
 };
-use crate::payoff::Payoff;
 use crate::math::randomnumbers::rngtraits::McRngTraits;
 use crate::math::statistics::MeanStdDev;
 use crate::math::timegrid::TimeGrid;
 use crate::methods::montecarlo::{McSimulation, Path, PathGenerator, PathPricer};
 use crate::patterns::observable::{AsObservable, Observable};
+use crate::payoff::Payoff;
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
@@ -121,7 +121,10 @@ impl<RNG: McRngTraits> MCDiscreteGeometricAveragePriceAsianEngine<RNG> {
                 || time_steps.is_some() ^ time_steps_per_year.is_some(),
             "provide either time steps or time steps per year, not both"
         );
-        require!(time_steps != Some(0), "timeSteps must be positive, 0 not allowed");
+        require!(
+            time_steps != Some(0),
+            "timeSteps must be positive, 0 not allowed"
+        );
         require!(
             time_steps_per_year != Some(0),
             "timeStepsPerYear must be positive, 0 not allowed"
@@ -157,9 +160,7 @@ impl<RNG: McRngTraits> MCDiscreteGeometricAveragePriceAsianEngine<RNG> {
                 fixing_times.push(t);
             }
         }
-        if fixing_times.is_empty()
-            || (fixing_times.len() == 1 && fixing_times[0] == 0.0)
-        {
+        if fixing_times.is_empty() || (fixing_times.len() == 1 && fixing_times[0] == 0.0) {
             fail!("all fixings are in the past");
         }
         Ok(fixing_times)
@@ -225,12 +226,8 @@ impl<RNG: McRngTraits> PricingEngine for MCDiscreteGeometricAveragePriceAsianEng
 
         let r_ts = self.process.risk_free_rate().current_link()?;
         let discount = r_ts.discount_date(exercise.last_date(), false)?;
-        let path_pricer = GeometricApoPathPricer::new(
-            payoff,
-            discount,
-            running_accumulator,
-            past_fixings,
-        )?;
+        let path_pricer =
+            GeometricApoPathPricer::new(payoff, discount, running_accumulator, past_fixings)?;
 
         let generator = self.path_generator()?;
         let mut simulation: McSimulation<PathGenerator<RNG::RsgType>, GeometricApoPathPricer> =
@@ -374,8 +371,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -385,26 +382,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// Grid nodes match future fixing times only (QuantLib auto-spacing, steps=0).

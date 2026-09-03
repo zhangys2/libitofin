@@ -140,8 +140,7 @@ impl PricingEngine for ContinuousArithmeticAsianLevyEngine {
 
         let x = if t2 < t {
             require!(
-                !self.current_average.is_empty()
-                    && self.current_average.current_link()?.is_valid(),
+                !self.current_average.is_empty() && self.current_average.current_link()?.is_valid(),
                 "current average required for seasoned option"
             );
             strike - ((t - t2) / t) * self.current_average.current_link()?.value()?
@@ -168,9 +167,7 @@ impl PricingEngine for ContinuousArithmeticAsianLevyEngine {
         let value = match payoff.option_type() {
             OptionType::Call => se * n.value(d1) - x * (-risk_free_rate * t2).exp() * n.value(d2),
             OptionType::Put => {
-                se * n.value(d1)
-                    - x * (-risk_free_rate * t2).exp() * n.value(d2)
-                    - se
+                se * n.value(d1) - x * (-risk_free_rate * t2).exp() * n.value(d2) - se
                     + x * (-risk_free_rate * t2).exp()
             }
         };
@@ -205,11 +202,11 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::date::SerialNumber;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
-    use crate::time::date::SerialNumber;
     use crate::types::{Natural, Volatility};
 
     fn quote_handle(q: &Shared<SimpleQuote>) -> Handle<dyn Quote> {
@@ -217,26 +214,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::new(
-                reference,
-                None,
-                vol,
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::new(
+            reference,
+            None,
+            vol,
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     struct Case {
@@ -541,8 +534,8 @@ mod tests {
     /// `asianoptions.cpp` `testContinuousSeasonedAsianOptions`.
     #[test]
     fn continuous_seasoned_asian_options_ordering() {
-        use crate::time::calendars::Target;
         use crate::pricingengines::asian::set_analytic_continuous_geometric_average_price_asian_engine;
+        use crate::time::calendars::Target;
         use crate::time::daycounters::actual365fixed::Actual365Fixed;
 
         let settings = shared(Settings::new());
@@ -556,32 +549,26 @@ mod tests {
         let spot = shared(SimpleQuote::new(100.0));
         let process = shared(BlackScholesMertonProcess::new(
             quote_handle(&spot),
-            Handle::new(
-                shared(FlatForward::with_rate(
-                    settlement,
-                    0.03,
-                    Actual365Fixed::new(),
-                    Compounding::Continuous,
-                    Frequency::Annual,
-                )) as Shared<dyn YieldTermStructure>,
-            ),
-            Handle::new(
-                shared(FlatForward::with_rate(
-                    settlement,
-                    0.06,
-                    Actual365Fixed::new(),
-                    Compounding::Continuous,
-                    Frequency::Annual,
-                )) as Shared<dyn YieldTermStructure>,
-            ),
-            Handle::new(
-                shared(BlackConstantVol::new(
-                    settlement,
-                    Some(Target::new()),
-                    0.20,
-                    Actual365Fixed::new(),
-                )) as Shared<dyn BlackVolTermStructure>,
-            ),
+            Handle::new(shared(FlatForward::with_rate(
+                settlement,
+                0.03,
+                Actual365Fixed::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(FlatForward::with_rate(
+                settlement,
+                0.06,
+                Actual365Fixed::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>),
+            Handle::new(shared(BlackConstantVol::new(
+                settlement,
+                Some(Target::new()),
+                0.20,
+                Actual365Fixed::new(),
+            )) as Shared<dyn BlackVolTermStructure>),
         ));
 
         let payoff = PlainVanillaPayoff::new(OptionType::Put, 100.0);

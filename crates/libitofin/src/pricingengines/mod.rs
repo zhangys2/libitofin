@@ -5,8 +5,8 @@
 //! built on them.
 
 pub mod asian;
-pub mod basket;
 pub mod barrier;
+pub mod basket;
 pub mod blackcalculator;
 pub mod blackdeltacalculator;
 pub mod blackformula;
@@ -25,46 +25,39 @@ pub use asian::{
     AnalyticContinuousGeometricAveragePriceAsianHestonEngine,
     AnalyticDiscreteGeometricAveragePriceAsianEngine,
     AnalyticDiscreteGeometricAveragePriceAsianHestonEngine,
-    AnalyticDiscreteGeometricAverageStrikeAsianEngine,
-    ChoiAsianEngine, ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
-    MCDiscreteArithmeticAveragePriceAsianEngine,
-    MCDiscreteArithmeticAveragePriceAsianHestonEngine,
-    MCDiscreteArithmeticAverageStrikeAsianEngine,
-    MCDiscreteGeometricAveragePriceAsianEngine,
-    MCDiscreteGeometricAveragePriceAsianHestonEngine,
-    MakeMcDiscreteArithmeticApEngine, MakeMcDiscreteArithmeticApHestonEngine,
-    MakeMcDiscreteArithmeticAsEngine, MakeMcDiscreteGeometricApEngine,
-    MakeMcDiscreteGeometricApHestonEngine, TurnbullWakemanAsianEngine,
-    set_analytic_continuous_geometric_average_price_asian_engine,
+    AnalyticDiscreteGeometricAverageStrikeAsianEngine, ChoiAsianEngine,
+    ContinuousArithmeticAsianLevyEngine, ContinuousArithmeticAsianVecerEngine,
+    MCDiscreteArithmeticAveragePriceAsianEngine, MCDiscreteArithmeticAveragePriceAsianHestonEngine,
+    MCDiscreteArithmeticAverageStrikeAsianEngine, MCDiscreteGeometricAveragePriceAsianEngine,
+    MCDiscreteGeometricAveragePriceAsianHestonEngine, MakeMcDiscreteArithmeticApEngine,
+    MakeMcDiscreteArithmeticApHestonEngine, MakeMcDiscreteArithmeticAsEngine,
+    MakeMcDiscreteGeometricApEngine, MakeMcDiscreteGeometricApHestonEngine,
+    TurnbullWakemanAsianEngine, set_analytic_continuous_geometric_average_price_asian_engine,
     set_analytic_continuous_geometric_average_price_asian_heston_engine,
     set_analytic_discrete_geometric_average_price_asian_engine,
     set_analytic_discrete_geometric_average_price_asian_heston_engine,
-    set_analytic_discrete_geometric_average_strike_asian_engine,
+    set_analytic_discrete_geometric_average_strike_asian_engine, set_choi_asian_engine,
+    set_continuous_arithmetic_asian_levy_engine, set_continuous_arithmetic_asian_vecer_engine,
     set_mc_discrete_arithmetic_average_price_asian_engine,
     set_mc_discrete_arithmetic_average_price_asian_heston_engine,
     set_mc_discrete_arithmetic_average_strike_asian_engine,
     set_mc_discrete_geometric_average_price_asian_engine,
-    set_mc_discrete_geometric_average_price_asian_heston_engine,
-    set_continuous_arithmetic_asian_levy_engine, set_continuous_arithmetic_asian_vecer_engine,
-    set_choi_asian_engine, set_turnbull_wakeman_asian_engine,
+    set_mc_discrete_geometric_average_price_asian_heston_engine, set_turnbull_wakeman_asian_engine,
 };
-pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use barrier::{
     AnalyticDoubleBarrierEngine, AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine,
-    BarrierPathPricer,
-    BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
-    FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCDoubleBarrierEngine,
-    MCBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
-    QuantoDoubleBarrierEngine, set_analytic_double_barrier_engine,
+    BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
+    FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCBarrierEngine,
+    MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
+    QuantoDoubleBarrierEngine, VannaVolgaDoubleBarrierEngine, set_analytic_double_barrier_engine,
     set_analytic_partial_time_barrier_engine, set_analytic_soft_barrier_engine,
     set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
     set_mc_barrier_engine, set_mc_double_barrier_engine, set_quanto_barrier_engine,
     set_quanto_double_barrier_engine, set_vanna_volga_double_barrier_engine,
-    VannaVolgaDoubleBarrierEngine,
 };
+pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
-pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use exotic::{
@@ -77,12 +70,13 @@ pub use forward::{
     set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
     set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
 };
+pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use lookback::{
     AnalyticContinuousFixedLookbackEngine, AnalyticContinuousFloatingLookbackEngine,
     AnalyticContinuousPartialFixedLookbackEngine, AnalyticContinuousPartialFloatingLookbackEngine,
-    MakeMcLookbackEngine, McContinuousFixedLookbackEngine, McContinuousFloatingLookbackEngine,
-    McContinuousPartialFixedLookbackEngine, McContinuousPartialFloatingLookbackEngine,
-    MCLookbackEngine, set_analytic_continuous_fixed_lookback_engine,
+    MCLookbackEngine, MakeMcLookbackEngine, McContinuousFixedLookbackEngine,
+    McContinuousFloatingLookbackEngine, McContinuousPartialFixedLookbackEngine,
+    McContinuousPartialFloatingLookbackEngine, set_analytic_continuous_fixed_lookback_engine,
     set_analytic_continuous_floating_lookback_engine,
     set_analytic_continuous_partial_fixed_lookback_engine,
     set_analytic_continuous_partial_floating_lookback_engine,

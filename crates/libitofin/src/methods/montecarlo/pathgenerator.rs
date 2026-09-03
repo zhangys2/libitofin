@@ -29,10 +29,10 @@ use crate::math::array::Array;
 use crate::math::randomnumbers::rngtraits::SequenceGenerator;
 use crate::math::timegrid::TimeGrid;
 use crate::methods::montecarlo::{BrownianBridge, Path, PathGen, Sample};
+use crate::require;
 use crate::shared::Shared;
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Size, Time};
-use crate::{require};
 
 /// Generates random single-factor paths from a Gaussian sequence generator.
 pub struct PathGenerator<GSG> {

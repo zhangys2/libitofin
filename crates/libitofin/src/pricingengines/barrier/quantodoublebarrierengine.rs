@@ -144,10 +144,10 @@ mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
     use crate::instrument::Instrument;
-    use crate::pricingengines::set_analytic_double_barrier_engine;
     use crate::instruments::{DoubleBarrierOption, DoubleBarrierType, PlainVanillaPayoff};
     use crate::interestrate::Compounding;
     use crate::option::OptionType;
+    use crate::pricingengines::set_analytic_double_barrier_engine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;

@@ -150,14 +150,12 @@ impl PricingEngine for AnalyticDiscreteGeometricAverageStrikeAsianEngine {
 
         let m = if past_fixings == 0 { 1 } else { past_fixings };
         let running_log_average = running_log / m as Real;
-        let mu_g = past_weight * running_log_average
-            + future_weight * underlying.ln()
-            + nu * time_sum / n;
+        let mu_g =
+            past_weight * running_log_average + future_weight * underlying.ln() + nu * time_sum / n;
 
         let cnd = CumulativeNormalDistribution::standard();
         let sqrt_sigma_sum_2 = sigma_sum_2.sqrt();
-        let y1 = (underlying.ln()
-            + (risk_free_rate - dividend_rate) * residual_time
+        let y1 = (underlying.ln() + (risk_free_rate - dividend_rate) * residual_time
             - mu_g
             - variance / 2.0
             + sigma_sum_2 / 2.0)
@@ -184,8 +182,9 @@ pub fn set_analytic_discrete_geometric_average_strike_asian_engine(
     option: &mut crate::instruments::DiscreteAveragingAsianOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticDiscreteGeometricAverageStrikeAsianEngine::new(process))
-        as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticDiscreteGeometricAverageStrikeAsianEngine::new(
+        process,
+    )) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -203,8 +202,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -214,26 +213,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `asianoptions.cpp` `testAnalyticDiscreteGeometricAverageStrike`.

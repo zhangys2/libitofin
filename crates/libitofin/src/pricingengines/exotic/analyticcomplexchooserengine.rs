@@ -111,7 +111,13 @@ impl AnalyticComplexChooserEngine {
         let growth = self.dividend_discount(tau)?;
         let discount = self.risk_free_discount(tau)?;
         let forward = spot * growth / discount;
-        BlackCalculator::new(option_type, self.strike(option_type), forward, std_dev, discount)
+        BlackCalculator::new(
+            option_type,
+            self.strike(option_type),
+            forward,
+            std_dev,
+            discount,
+        )
     }
 
     fn critical_value(&self) -> QlResult<Real> {
@@ -196,8 +202,7 @@ impl PricingEngine for AnalyticComplexChooserEngine {
 
         let r_call = self.risk_free_rate(t + tc)?;
         let mut value = s * ((b_call - r_call) * tc).exp() * self.bivariate_m(rho1, d1, y1)?
-            - xc * (-r_call * tc).exp()
-                * self.bivariate_m(rho1, d2, y1 - v_call * tc.sqrt())?;
+            - xc * (-r_call * tc).exp() * self.bivariate_m(rho1, d2, y1 - v_call * tc.sqrt())?;
 
         let r_put = self.risk_free_rate(t + tp)?;
         value -= s * ((b_put - r_put) * tp).exp() * self.bivariate_m(rho2, -d1, -y2)?;
@@ -213,7 +218,8 @@ pub fn set_analytic_complex_chooser_engine(
     option: &mut crate::instruments::ComplexChooserOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticComplexChooserEngine::new(process)) as SharedMut<dyn PricingEngine>;
+    let engine =
+        shared_mut(AnalyticComplexChooserEngine::new(process)) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -229,8 +235,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
 
@@ -239,26 +245,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `chooseroption.cpp` `testAnalyticComplexChooserEngine`.
@@ -282,8 +284,7 @@ mod tests {
         let choosing_date = today + 90;
         let call_exercise: Shared<dyn Exercise> =
             shared(EuropeanExercise::new(choosing_date + 180));
-        let put_exercise: Shared<dyn Exercise> =
-            shared(EuropeanExercise::new(choosing_date + 210));
+        let put_exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(choosing_date + 210));
 
         let mut option = ComplexChooserOption::new(
             choosing_date,

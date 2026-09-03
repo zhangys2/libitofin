@@ -146,9 +146,7 @@ impl<RNG: McRngTraits> MCDiscreteArithmeticAveragePriceAsianEngine<RNG> {
                 fixing_times.push(t);
             }
         }
-        if fixing_times.is_empty()
-            || (fixing_times.len() == 1 && fixing_times[0] == 0.0)
-        {
+        if fixing_times.is_empty() || (fixing_times.len() == 1 && fixing_times[0] == 0.0) {
             fail!("all fixings are in the past");
         }
         Ok(fixing_times)
@@ -407,8 +405,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -432,26 +430,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// Levy (1997) table via `asianoptions.cpp` `testMCDiscreteArithmeticAveragePrice`.
@@ -881,8 +875,9 @@ mod tests {
                 let t = j as Real * dt + case.first;
                 fixing_dates.push(today + time_to_days(t));
             }
-            let exercise =
-                shared(EuropeanExercise::new(*fixing_dates.last().expect("non-empty")));
+            let exercise = shared(EuropeanExercise::new(
+                *fixing_dates.last().expect("non-empty"),
+            ));
 
             let mut option = DiscreteAveragingAsianOption::new(
                 AverageType::Arithmetic,

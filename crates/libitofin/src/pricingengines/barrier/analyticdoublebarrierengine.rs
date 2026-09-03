@@ -164,20 +164,21 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                     df_r,
                     df_q,
                 ),
-                DoubleBarrierType::KnockIn => (vanilla - call_ko(
-                    &self.normal,
-                    self.series,
-                    spot,
-                    strike,
-                    barrier_lo,
-                    barrier_hi,
-                    b,
-                    sig2,
-                    residual_time,
-                    std_dev,
-                    df_r,
-                    df_q,
-                ))
+                DoubleBarrierType::KnockIn => (vanilla
+                    - call_ko(
+                        &self.normal,
+                        self.series,
+                        spot,
+                        strike,
+                        barrier_lo,
+                        barrier_hi,
+                        b,
+                        sig2,
+                        residual_time,
+                        std_dev,
+                        df_r,
+                        df_q,
+                    ))
                 .max(0.0),
             },
             OptionType::Put => match barrier_type {
@@ -195,20 +196,21 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                     df_r,
                     df_q,
                 ),
-                DoubleBarrierType::KnockIn => (vanilla - put_ko(
-                    &self.normal,
-                    self.series,
-                    spot,
-                    strike,
-                    barrier_lo,
-                    barrier_hi,
-                    b,
-                    sig2,
-                    residual_time,
-                    std_dev,
-                    df_r,
-                    df_q,
-                ))
+                DoubleBarrierType::KnockIn => (vanilla
+                    - put_ko(
+                        &self.normal,
+                        self.series,
+                        spot,
+                        strike,
+                        barrier_lo,
+                        barrier_hi,
+                        b,
+                        sig2,
+                        residual_time,
+                        std_dev,
+                        df_r,
+                        df_q,
+                    ))
                 .max(0.0),
             },
         };
@@ -316,8 +318,8 @@ pub fn set_analytic_double_barrier_engine(
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
     use crate::shared::{SharedMut, shared_mut};
-    let engine = shared_mut(AnalyticDoubleBarrierEngine::new(process))
-        as SharedMut<dyn PricingEngine>;
+    let engine =
+        shared_mut(AnalyticDoubleBarrierEngine::new(process)) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 #[cfg(test)]
@@ -348,17 +350,24 @@ mod tests {
         (t * 360.0).round() as i32
     }
 
-    fn flat_rate(rate: Rate) -> Handle<dyn crate::termstructures::yieldtermstructure::YieldTermStructure> {
+    fn flat_rate(
+        rate: Rate,
+    ) -> Handle<dyn crate::termstructures::yieldtermstructure::YieldTermStructure> {
         Handle::new(shared(FlatForward::with_rate(
             today(),
             rate,
             Actual360::new(),
             Compounding::Continuous,
             Frequency::Annual,
-        )) as Shared<dyn crate::termstructures::yieldtermstructure::YieldTermStructure>)
+        ))
+            as Shared<
+                dyn crate::termstructures::yieldtermstructure::YieldTermStructure,
+            >)
     }
 
-    fn flat_vol(vol: Volatility) -> Handle<dyn crate::termstructures::volatility::BlackVolTermStructure> {
+    fn flat_vol(
+        vol: Volatility,
+    ) -> Handle<dyn crate::termstructures::volatility::BlackVolTermStructure> {
         Handle::new(
             shared(BlackConstantVol::new(today(), None, vol, Actual360::new()))
                 as Shared<dyn crate::termstructures::volatility::BlackVolTermStructure>,

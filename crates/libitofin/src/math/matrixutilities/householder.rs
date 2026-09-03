@@ -35,10 +35,9 @@ impl HouseholderReflection {
             let eps2 = eps * eps;
             let eps3 = eps * eps2;
             let eps4 = eps2 * eps2;
-            let numerator = &a2
-                - &(&a1 * (eps / 2.0 - eps2 / 8.0 + eps3 / 16.0 - 5.0 / 128.0 * eps4));
-            let denom =
-                a_dot_e * (eps + eps2 / 4.0 - eps3 / 8.0 + 5.0 / 64.0 * eps4).sqrt();
+            let numerator =
+                &a2 - &(&a1 * (eps / 2.0 - eps2 / 8.0 + eps3 / 16.0 - 5.0 / 128.0 * eps4));
+            let denom = a_dot_e * (eps + eps2 / 4.0 - eps3 / 8.0 + 5.0 / 64.0 * eps4).sqrt();
             Ok(&numerator / denom)
         } else {
             let c = a - &(&self.e * na);

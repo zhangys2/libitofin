@@ -113,8 +113,7 @@ impl Instrument for SimpleChooserOption {
     }
 
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) =
-            (arguments as &mut dyn Any).downcast_mut::<SimpleChooserArguments>()
+        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<SimpleChooserArguments>()
         else {
             fail!("wrong argument type");
         };

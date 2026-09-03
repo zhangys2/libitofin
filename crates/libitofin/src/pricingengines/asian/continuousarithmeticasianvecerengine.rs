@@ -94,8 +94,7 @@ impl ContinuousArithmeticAsianVecerEngine {
                 Ok((v * (t - t2)).exp())
             }
         } else if (r - v).abs() >= EPS {
-            Ok((v * (t - t2)).exp() * (1.0 - ((v - r) * (t2 - t)).exp())
-                / ((r - v) * (t2 - t1)))
+            Ok((v * (t - t2)).exp() * (1.0 - ((v - r) * (t2 - t)).exp()) / ((r - v) * (t2 - t1)))
         } else {
             Ok((v * (t - t2)).exp() * (t2 - t) / (t2 - t1))
         }
@@ -181,18 +180,13 @@ impl PricingEngine for ContinuousArithmeticAsianVecerEngine {
         let value = if (t2 - t1) < 0.001 {
             let payoff_shared: Shared<dyn StrikedTypePayoff> = shared(payoff);
             let mut european = AnalyticEuropeanEngine::new(Shared::clone(&self.process));
-            let results = european.calculate_from_arguments(payoff_shared, Shared::clone(&exercise))?;
-            results
-                .instrument
-                .value
-                .expect("analytic european NPV")
+            let results =
+                european.calculate_from_arguments(payoff_shared, Shared::clone(&exercise))?;
+            results.instrument.value.expect("analytic european NPV")
         } else {
             let theta = 0.5; // Crank–Nicolson
             let z0 = Self::cont_strategy(0.0, t1, t2, q, r)? - (-r * t).exp() * strike / s0;
-            require!(
-                z0 >= self.z_min && z0 <= self.z_max,
-                "spot not on grid"
-            );
+            require!(z0 >= self.z_min && z0 <= self.z_max, "spot not on grid");
 
             let h = (self.z_max - self.z_min) / self.asset_steps as Real;
             let k = t / self.time_steps as Real;
@@ -325,11 +319,11 @@ mod tests {
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::Month;
-    use crate::time::daycounters::actual360::Actual360;
     use crate::time::date::SerialNumber;
+    use crate::time::daycounters::actual360::Actual360;
     use crate::types::{Natural, Volatility};
 
     fn quote_handle(q: &Shared<SimpleQuote>) -> Handle<dyn Quote> {
@@ -337,26 +331,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::with_rate(
-                reference,
-                rate,
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::new(
-                reference,
-                None,
-                vol,
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::new(
+            reference,
+            None,
+            vol,
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     struct Case {

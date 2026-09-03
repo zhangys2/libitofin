@@ -148,9 +148,8 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
         require!(spot > 0.0, "positive underlying value required");
 
         let m = if past_fixings == 0 { 1 } else { past_fixings };
-        let mu_g = past_weight * running_log / m as Real
-            + future_weight * spot.ln()
-            + nu * time_sum / n;
+        let mu_g =
+            past_weight * running_log / m as Real + future_weight * spot.ln() + nu * time_sum / n;
         let forward_price = (mu_g + variance / 2.0).exp();
 
         let risk_free_discount = r_ts.discount_date(exercise_date, false)?;
@@ -183,9 +182,7 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
             * risk_free_discount
             * ((dmu_g_dsig + sig_g * dsig_g_dsig) * nx_1 + nx_1_density * dsig_g_dsig)
             - if payoff.option_type() == OptionType::Put {
-                risk_free_discount
-                    * forward_price
-                    * (dmu_g_dsig + sig_g * dsig_g_dsig)
+                risk_free_discount * forward_price * (dmu_g_dsig + sig_g * dsig_g_dsig)
             } else {
                 0.0
             };
@@ -193,8 +190,7 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
         let t_rho = rfdc.year_fraction(r_ts.reference_date()?, exercise_date);
         let t_div = divdc.year_fraction(q_ts.reference_date()?, exercise_date);
 
-        let delta =
-            future_weight * black.delta(forward_price)? * forward_price / spot;
+        let delta = future_weight * black.delta(forward_price)? * forward_price / spot;
         let gamma = forward_price * future_weight / (spot * spot)
             * (black.gamma(forward_price)? * future_weight * forward_price
                 - past_weight * black.delta(forward_price)?);
@@ -202,17 +198,10 @@ impl PricingEngine for AnalyticDiscreteGeometricAveragePriceAsianEngine {
         results.greeks.delta = Some(delta);
         results.greeks.gamma = Some(gamma);
         results.greeks.vega = Some(vega);
-        results.greeks.rho = Some(
-            black.rho(t_rho)? * time_sum / (n * t_rho) - (t_rho - time_sum / n) * value,
-        );
-        results.greeks.dividend_rho =
-            Some(black.dividend_rho(t_div)? * time_sum / (n * t_div));
-        results.greeks.theta = Some(black_scholes_theta(
-            &self.process,
-            value,
-            delta,
-            gamma,
-        )?);
+        results.greeks.rho =
+            Some(black.rho(t_rho)? * time_sum / (n * t_rho) - (t_rho - time_sum / n) * value);
+        results.greeks.dividend_rho = Some(black.dividend_rho(t_div)? * time_sum / (n * t_div));
+        results.greeks.theta = Some(black_scholes_theta(&self.process, value, delta, gamma)?);
 
         Ok(())
     }
@@ -223,8 +212,9 @@ pub fn set_analytic_discrete_geometric_average_price_asian_engine(
     option: &mut crate::instruments::DiscreteAveragingAsianOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine = shared_mut(AnalyticDiscreteGeometricAveragePriceAsianEngine::new(process))
-        as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticDiscreteGeometricAveragePriceAsianEngine::new(
+        process,
+    )) as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -242,8 +232,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::frequency::Frequency;
@@ -253,26 +243,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     /// `asianoptions.cpp` `testAnalyticDiscreteGeometricAveragePrice` (Levy 1997).
@@ -538,11 +524,10 @@ mod tests {
                             Shared::clone(&market.settings),
                         )
                         .unwrap();
-                        let engine = shared_mut(
-                            AnalyticDiscreteGeometricAveragePriceAsianEngine::new(
+                        let engine =
+                            shared_mut(AnalyticDiscreteGeometricAveragePriceAsianEngine::new(
                                 Shared::clone(&market.process),
-                            ),
-                        );
+                            ));
                         option
                             .base_mut()
                             .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);

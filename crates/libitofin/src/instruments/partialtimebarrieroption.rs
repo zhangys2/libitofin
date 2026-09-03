@@ -165,7 +165,8 @@ impl Instrument for PartialTimeBarrierOption {
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
-        let Some(results) = (results as &dyn Any).downcast_ref::<PartialTimeBarrierResults>() else {
+        let Some(results) = (results as &dyn Any).downcast_ref::<PartialTimeBarrierResults>()
+        else {
             fail!("no greeks returned from pricing engine");
         };
         self.greeks = results.greeks;

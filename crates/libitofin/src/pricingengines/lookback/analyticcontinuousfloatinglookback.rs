@@ -50,12 +50,7 @@ impl AnalyticContinuousFloatingLookbackEngine {
     }
 
     fn residual_time(&self) -> QlResult<Time> {
-        let exercise = self
-            .base
-            .arguments()
-            .exercise
-            .as_ref()
-            .expect("validated");
+        let exercise = self.base.arguments().exercise.as_ref().expect("validated");
         StochasticProcess1D::time(&*self.process, &exercise.last_date())
     }
 
@@ -165,8 +160,8 @@ pub fn set_analytic_continuous_floating_lookback_engine(
     option: &mut crate::instruments::ContinuousFloatingLookbackOption,
     process: Shared<GeneralizedBlackScholesProcess>,
 ) {
-    let engine =
-        shared_mut(AnalyticContinuousFloatingLookbackEngine::new(process)) as SharedMut<dyn PricingEngine>;
+    let engine = shared_mut(AnalyticContinuousFloatingLookbackEngine::new(process))
+        as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
 
@@ -181,8 +176,8 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::shared;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::types::{Rate, Volatility};
@@ -192,26 +187,22 @@ mod tests {
     }
 
     fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(
-            shared(FlatForward::new(
-                reference,
-                quote_handle(quote),
-                Actual360::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>,
-        )
+        Handle::new(shared(FlatForward::new(
+            reference,
+            quote_handle(quote),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
     }
 
     fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(
-            shared(BlackConstantVol::with_quote(
-                reference,
-                None,
-                quote_handle(quote),
-                Actual360::new(),
-            )) as Shared<dyn BlackVolTermStructure>,
-        )
+        Handle::new(shared(BlackConstantVol::with_quote(
+            reference,
+            None,
+            quote_handle(quote),
+            Actual360::new(),
+        )) as Shared<dyn BlackVolTermStructure>)
     }
 
     fn time_to_days(t: Time) -> i32 {
@@ -344,10 +335,7 @@ mod tests {
                 Shared::clone(&settings),
             )
             .unwrap();
-            set_analytic_continuous_floating_lookback_engine(
-                &mut option,
-                Shared::clone(&process),
-            );
+            set_analytic_continuous_floating_lookback_engine(&mut option, Shared::clone(&process));
             let calculated = option.npv().unwrap();
             assert!(
                 (calculated - case.result).abs() <= case.tol,
