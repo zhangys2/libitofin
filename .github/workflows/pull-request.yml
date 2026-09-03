@@ -25,11 +25,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: install rust toolchain
-        uses: dtolnay/rust-toolchain@1.96.0
-        with:
-          components: rustfmt, clippy
-
       - name: set up python
         uses: actions/setup-python@v5
         with:
@@ -38,8 +33,17 @@ jobs:
       - name: install pre-commit
         run: python -m pip install --upgrade pip pre-commit
 
+      # The rust hooks are skipped here, so no toolchain is needed in this job.
+      # If SKIP below is ever removed, restore dtolnay/rust-toolchain@1.96.0.
       - name: run pre-commit on changed files
         shell: bash
+        env:
+          # fmt/check/clippy/test shell out to cargo and rebuild the whole
+          # workspace. The "Rust fmt and clippy" and "Rust workspace" jobs below
+          # already run strictly broader equivalents (--workspace --all-targets
+          # --locked), so running them here too built the workspace three times
+          # per PR. Everything else in .pre-commit-config.yaml still runs.
+          SKIP: fmt,check,clippy,test
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             pre-commit run --from-ref "origin/${{ github.base_ref }}" --to-ref HEAD --show-diff-on-failure
@@ -58,6 +62,9 @@ jobs:
         uses: dtolnay/rust-toolchain@1.96.0
         with:
           components: rustfmt, clippy
+
+      - name: cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: set up python
         uses: actions/setup-python@v5
@@ -88,6 +95,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
       # itofin-py needs a 3.13+ interpreter for abi3-py313 during clippy.
       - name: set up python
         uses: actions/setup-python@v5
@@ -109,6 +119,9 @@ jobs:
 
       - name: install rust toolchain
         uses: dtolnay/rust-toolchain@1.96.0
+
+      - name: cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
 
       # Workspace members include itofin-py (abi3-py313); default runner Python is 3.12.
       - name: set up python
