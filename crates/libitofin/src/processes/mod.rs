@@ -10,7 +10,9 @@
 
 mod batesprocess;
 mod blackscholesprocess;
+mod forwardmeasureprocess;
 mod g2process;
+mod gsrprocess;
 mod hestonprocess;
 mod ornsteinuhlenbeckprocess;
 mod stochasticprocessarray;
@@ -20,7 +22,9 @@ pub use blackscholesprocess::{
     BlackProcess, BlackScholesMertonProcess, BlackScholesProcess, GarmanKohlagenProcess,
     GeneralizedBlackScholesProcess,
 };
+pub use forwardmeasureprocess::{ForwardMeasureProcess1D, ForwardMeasureTime};
 pub use g2process::G2Process;
+pub use gsrprocess::GsrProcess;
 pub use hestonprocess::HestonProcess;
 pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
 pub use stochasticprocessarray::StochasticProcessArray;

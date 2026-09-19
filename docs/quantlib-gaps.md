@@ -18,7 +18,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|
-| Rates | GSR (Gaussian short-rate) | `ql/models/shortrate/onefactormodels/gsr.hpp`, `gsrprocess` | `gsr.cpp` | false | none | No GSR in Rust short-rate set |
+| Rates | GSR (Gaussian short-rate) | `ql/models/shortrate/onefactormodels/gsr.hpp`, `gsrprocess` | `gsr.cpp` | partial | partial | Constant a/σ `GsrProcess` + `ForwardMeasureProcess1D`; piecewise core / `Gsr` model / engines deferred |
 | Rates | Libor market model | `ql/legacy/libormarketmodels/*` | `libormarketmodel.cpp`, `libormarketmodelprocess.cpp` | false | none | Cap/swaption LMM + process |
 | Rates | Generic market model / SMM / CMS-MM | `ql/models/marketmodels/*` | `marketmodel.cpp`, `marketmodel_cms.cpp`, `marketmodel_smm*.cpp` | false | none | Largest rates MC gap; grouped |
 | Rates | Markov functional / Gaussian 1D | `markovfunctional`, `gaussian1dmodel` | `markovfunctional.cpp`, `gaussian1dmodel.cpp` | false | none | Incl. Gaussian1d swaption/cap engines |
