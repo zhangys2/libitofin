@@ -4,6 +4,7 @@
 import builtins
 import itofin
 from itofin import indexes
+from itofin import instruments
 from itofin import quotes
 from itofin import time
 import typing
@@ -29,11 +30,13 @@ __all__ = [
     "FraRateHelper",
     "FuturesRateHelper",
     "FuturesType",
+    "InterpolatedDefaultDensityCurve",
     "InterpolatedHazardRateCurve",
     "InterpolatedSwaptionVolatilityCube",
     "InterpolatedYoYInflationCurve",
     "InterpolatedZeroInflationCurve",
     "KInterpolatedYoYOptionletVolatilitySurface",
+    "KerkhofSeasonality",
     "MultiplicativePriceSeasonality",
     "OISRateHelper",
     "OptionletStripper1",
@@ -41,6 +44,7 @@ __all__ = [
     "PiecewiseConvexMonotoneForward",
     "PiecewiseCubicZero",
     "PiecewiseDefaultCurve",
+    "PiecewiseDefaultDensityCurve",
     "PiecewiseFlatForward",
     "PiecewiseLinearForward",
     "PiecewiseLinearZero",
@@ -59,6 +63,7 @@ __all__ = [
     "SwapRateHelper",
     "SwaptionVolatilityMatrix",
     "SwaptionVolatilityStructure",
+    "UpfrontCdsHelper",
     "VolatilityType",
     "YearOnYearInflationSwapHelper",
     "YieldTermStructure",
@@ -848,6 +853,10 @@ class DefaultProbabilityHelper:
     so it is a separate hierarchy from RateHelper. It exposes the two dates the
     bootstrap places a curve node by.
     """
+    def implied_quote(self) -> builtins.float:
+        r"""
+        Return the quote implied by the linked, bootstrapped curve.
+        """
     def pillar_date(self) -> time.Date:
         r"""
         Return the date the curve node this helper sets sits at.
@@ -869,6 +878,14 @@ class DefaultProbabilityTermStructure:
     the default density and the hazard rate, each in a year-fraction and a date
     form.
     """
+    def jump_dates(self) -> builtins.list[time.Date]:
+        r"""
+        Return copied jump dates in constructor order.
+        """
+    def jump_times(self) -> builtins.list[builtins.float]:
+        r"""
+        Return jump times relative to the current reference date.
+        """
     def survival_probability(self, t: builtins.float, extrapolate: builtins.bool = False) -> builtins.float:
         r"""
         Return the survival probability from the reference date to year-fraction t.
@@ -1142,6 +1159,17 @@ class FlatHazardRate(DefaultProbabilityTermStructure):
     quote. The moving forms fix the reference date settlement_days business days
     past the evaluation date carried by settings.
     """
+    @staticmethod
+    def with_jumps(reference_date: time.Date, hazard_rate: quotes.SimpleQuote, day_counter: time.DayCounter, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> FlatHazardRate:
+        r"""
+        Build a fixed-reference curve retaining multiplicative survival jump quotes.
+        Empty jump_dates selects consecutive year-end dates; jumps apply strictly after their date.
+        """
+    @staticmethod
+    def moving_with_jumps(settlement_days: builtins.int, calendar: time.Calendar, hazard_rate: quotes.SimpleQuote, day_counter: time.DayCounter, settings: itofin.Settings, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> FlatHazardRate:
+        r"""
+        Build a moving-reference curve with retained jump quotes and fixed jump dates.
+        """
     def __init__(self, reference_date: time.Date, hazard_rate: quotes.SimpleQuote, day_counter: time.DayCounter) -> None:
         r"""
         Build a curve reading its hazard rate live, on a pinned reference date.
@@ -1406,6 +1434,36 @@ class FuturesRateHelper(RateHelper):
 
         Returns:
             float: The convexity quote's value, or zero when none was supplied.
+        """
+
+@typing.final
+class InterpolatedDefaultDensityCurve(DefaultProbabilityTermStructure):
+    r"""
+    A density curve using BackwardFlat or Linear interpolation and flat-density extrapolation.
+    """
+    def __init__(self, dates: typing.Sequence[time.Date], densities: typing.Sequence[builtins.float], day_counter: time.DayCounter, interpolation: builtins.str = 'BackwardFlat', calendar: typing.Optional[time.Calendar] = None) -> None:
+        r"""
+        Build from dated density nodes; interpolation is BackwardFlat or Linear.
+        """
+    def dates(self) -> builtins.list[time.Date]:
+        r"""
+        Return copied node dates.
+        """
+    def times(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied node times.
+        """
+    def data(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied node densities.
+        """
+    def default_densities(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied node densities.
+        """
+    def nodes(self) -> builtins.list[tuple[time.Date, builtins.float]]:
+        r"""
+        Return copied date and density pairs.
         """
 
 @typing.final
@@ -1763,6 +1821,19 @@ class KInterpolatedYoYOptionletVolatilitySurface:
         """
 
 @typing.final
+class KerkhofSeasonality(MultiplicativePriceSeasonality):
+    r"""
+    Monthly cumulative Kerkhof correction for zero inflation; YoY curves reject it.
+    """
+    def __init__(self, base_date: time.Date, factors: typing.Sequence[builtins.float]) -> None:
+        r"""
+        Build from exactly twelve monthly factors, retaining a copied factor set.
+        """
+    def seasonality_factor(self, to: time.Date) -> builtins.float:
+        r"""
+        Return the cumulative monthly factor relative to the anchor date.
+        """
+
 class MultiplicativePriceSeasonality:
     r"""
     The seasonal correction a price index carries, whose factors multiply
@@ -2223,6 +2294,40 @@ class PiecewiseDefaultCurve(DefaultProbabilityTermStructure):
         """
 
 @typing.final
+class PiecewiseDefaultDensityCurve(DefaultProbabilityTermStructure):
+    r"""
+    A lazy CDS bootstrap solving default-density nodes with BackwardFlat or Linear interpolation.
+    """
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[DefaultProbabilityHelper], day_counter: time.DayCounter, interpolation: builtins.str = 'BackwardFlat') -> None:
+        r"""
+        Retain helpers and bootstrap lazily; quote changes invalidate the solved nodes.
+        """
+    def calculate(self) -> None:
+        r"""
+        Run the bootstrap if its cache is stale.
+        """
+    def dates(self) -> builtins.list[time.Date]:
+        r"""
+        Return copied node dates after bootstrapping.
+        """
+    def times(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied node times after bootstrapping.
+        """
+    def data(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied solved densities after bootstrapping.
+        """
+    def default_densities(self) -> builtins.list[builtins.float]:
+        r"""
+        Return copied solved densities after bootstrapping.
+        """
+    def nodes(self) -> builtins.list[tuple[time.Date, builtins.float]]:
+        r"""
+        Return copied date and density pairs after bootstrapping.
+        """
+
+@typing.final
 class PiecewiseFlatForward(YieldTermStructure):
     r"""
     A curve bootstrapped in forward-rate space, interpolating backward-flat.
@@ -2553,6 +2658,12 @@ class PiecewiseZeroInflationCurve(ZeroInflationTermStructure):
     A seasonality installed later through set_seasonality() invalidates the
     bootstrap, so the next read re-solves every node against the correction.
     """
+    @staticmethod
+    def with_last_fixing_date(reference_date: time.Date, index: indexes.ZeroInflationIndex, frequency: time.Frequency, day_counter: time.DayCounter, helpers: typing.Sequence[ZeroInflationHelper], seasonality: typing.Optional[MultiplicativePriceSeasonality] = None) -> PiecewiseZeroInflationCurve:
+        r"""
+        Build a curve whose base date follows the index's last historical fixing.
+        The curve retains an unlinked index clone, sharing fixings and settings without a forecast cycle.
+        """
     def __init__(self, reference_date: time.Date, base_date: time.Date, frequency: time.Frequency, day_counter: time.DayCounter, helpers: typing.Sequence[ZeroInflationHelper]) -> None:
         r"""
         Build the curve over helpers, registering on them without solving.
@@ -2944,6 +3055,11 @@ class SpreadCdsHelper(DefaultProbabilityHelper):
                 that has already matured, rather than building a schedule that
                 ends on the wrong date.
         """
+    @staticmethod
+    def with_terms(running_spread: quotes.SimpleQuote, tenor: time.Period, settlement_days: builtins.int, calendar: time.Calendar, frequency: time.Frequency, payment_convention: time.BusinessDayConvention, rule: time.DateGeneration, day_counter: time.DayCounter, recovery_rate: builtins.float, discount_curve: YieldTermStructure, settings: itofin.Settings, *, model: instruments.PricingModel = instruments.PricingModel.Midpoint, settles_accrual: builtins.bool = True, pays_at_default_time: builtins.bool = True, start_date: typing.Optional[time.Date] = None, last_period_day_counter: typing.Optional[time.DayCounter] = None, rebates_accrual: builtins.bool = True) -> SpreadCdsHelper:
+        r"""
+        Build a helper with explicit pricing and accrual conventions.
+        """
 
 @typing.final
 class StrippedOptionletAdapter(OptionletVolatilityStructure):
@@ -3078,12 +3194,31 @@ class SwaptionVolatilityMatrix(SwaptionVolatilityStructure):
             ItofinError: On an empty or ragged grid, a mismatched shifts shape,
                 and on whatever the core rejects about the axes.
         """
+    @staticmethod
+    def fixed_quotes(reference_date: time.Date, calendar: time.Calendar, business_day_convention: time.BusinessDayConvention, option_tenors: typing.Sequence[time.Period], swap_tenors: typing.Sequence[time.Period], volatilities: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], day_counter: time.DayCounter, volatility_type: VolatilityType, shifts: typing.Optional[typing.Sequence[typing.Sequence[builtins.float]]] = None, flat_extrapolation: builtins.bool = False) -> SwaptionVolatilityMatrix:
+        r"""
+        Build a fixed-reference grid retaining live volatility quotes.
+        """
+    @staticmethod
+    def moving_matrix(calendar: time.Calendar, business_day_convention: time.BusinessDayConvention, option_tenors: typing.Sequence[time.Period], swap_tenors: typing.Sequence[time.Period], volatilities: typing.Sequence[typing.Sequence[builtins.float]], day_counter: time.DayCounter, volatility_type: VolatilityType, settings: itofin.Settings, shifts: typing.Optional[typing.Sequence[typing.Sequence[builtins.float]]] = None, flat_extrapolation: builtins.bool = False) -> SwaptionVolatilityMatrix:
+        r"""
+        Build a moving-reference grid from copied volatility values.
+        """
+    @staticmethod
+    def with_option_dates(reference_date: time.Date, calendar: time.Calendar, business_day_convention: time.BusinessDayConvention, option_dates: typing.Sequence[time.Date], swap_tenors: typing.Sequence[time.Period], volatilities: typing.Sequence[typing.Sequence[builtins.float]], day_counter: time.DayCounter, volatility_type: VolatilityType, shifts: typing.Optional[typing.Sequence[typing.Sequence[builtins.float]]] = None, flat_extrapolation: builtins.bool = False) -> SwaptionVolatilityMatrix:
+        r"""
+        Build a fixed-reference grid with explicit option dates.
+        """
 
 class SwaptionVolatilityStructure:
     r"""
     Shared base for every swaption volatility surface: volatility, Black
     variance and lognormal shift, addressed by option and swap tenor.
     """
+    def volatility_date(self, option_date: time.Date, swap_length: builtins.float, strike: builtins.float, extrapolate: builtins.bool = False) -> builtins.float:
+        r"""
+        Return volatility at an explicit option date and swap length in years.
+        """
     def volatility(self, option_tenor: time.Period, swap_tenor: time.Period, strike: builtins.float, extrapolate: builtins.bool = False) -> builtins.float:
         r"""
         Return the volatility for an option tenor, swap tenor and strike.
@@ -3152,6 +3287,16 @@ class SwaptionVolatilityStructure:
         Raises:
             ItofinError: On a moving surface whose Settings has no evaluation
                 date set.
+        """
+
+@typing.final
+class UpfrontCdsHelper(DefaultProbabilityHelper):
+    r"""
+    Bootstrap helper fitting an upfront CDS quote with explicit model conventions.
+    """
+    def __init__(self, upfront: quotes.SimpleQuote, running_spread: builtins.float, tenor: time.Period, settlement_days: builtins.int, calendar: time.Calendar, frequency: time.Frequency, payment_convention: time.BusinessDayConvention, rule: time.DateGeneration, day_counter: time.DayCounter, recovery_rate: builtins.float, discount_curve: YieldTermStructure, settings: itofin.Settings, *, upfront_settlement_days: builtins.int = 3, model: instruments.PricingModel = instruments.PricingModel.Midpoint, settles_accrual: builtins.bool = True, pays_at_default_time: builtins.bool = True, start_date: typing.Optional[time.Date] = None, last_period_day_counter: typing.Optional[time.DayCounter] = None, rebates_accrual: builtins.bool = True) -> None:
+        r"""
+        Retain the upfront quote, discount curve and settings.
         """
 
 @typing.final

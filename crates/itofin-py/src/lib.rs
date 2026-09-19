@@ -12,6 +12,7 @@ mod capfloorengine;
 mod capfloortermvol;
 mod cashflows;
 mod credit;
+mod creditdensity;
 mod creditengine;
 mod credithelpers;
 mod currency;
@@ -21,6 +22,7 @@ mod helpers;
 mod heston;
 mod hullwhite;
 mod inflation;
+mod makeswaption;
 mod market;
 mod mcengine;
 mod ois;
@@ -51,10 +53,11 @@ use credit::{
     PyInterpolatedHazardRateCurve, PyMakeCreditDefaultSwap, PyPiecewiseDefaultCurve,
     PyPricingModel, PyProtectionSide,
 };
+use creditdensity::{PyInterpolatedDefaultDensityCurve, PyPiecewiseDefaultDensityCurve};
 use creditengine::{
     PyAccrualBias, PyForwardsInCouponPeriod, PyIsdaCdsEngine, PyMidPointCdsEngine, PyNumericalFix,
 };
-use credithelpers::{PyDefaultProbabilityHelper, PySpreadCdsHelper};
+use credithelpers::{PyDefaultProbabilityHelper, PySpreadCdsHelper, PyUpfrontCdsHelper};
 use currency::PyCurrency;
 use curve::{
     PyDiscountCurve, PyFlatForward, PyForwardCurve, PyPiecewiseConvexMonotoneForward,
@@ -63,7 +66,7 @@ use curve::{
 };
 use fra::{PyForwardRateAgreement, PyPosition};
 use helpers::{
-    PyBondPriceType, PyDepositRateHelper, PyEstr, PyFixedRateBondHelper, PyFraRateHelper,
+    PyBondPriceType, PyDepositRateHelper, PyEonia, PyEstr, PyFixedRateBondHelper, PyFraRateHelper,
     PyFuturesRateHelper, PyFuturesType, PyOISRateHelper, PyOvernightIndex, PyPillar,
     PyRateAveraging, PyRateHelper, PySwapRateHelper,
 };
@@ -75,7 +78,7 @@ use hullwhite::{
 use inflation::{
     PyConstantYoYOptionletVolatility, PyCpiInterpolationType, PyDiscountingSwapEngine,
     PyInterpolatedYoYInflationCurve, PyInterpolatedZeroInflationCurve,
-    PyKInterpolatedYoYOptionletVolatilitySurface, PyMakeYoYInflationCapFloor,
+    PyKInterpolatedYoYOptionletVolatilitySurface, PyKerkhofSeasonality, PyMakeYoYInflationCapFloor,
     PyMultiplicativePriceSeasonality, PyPiecewiseYoYInflationCurve, PyPiecewiseZeroInflationCurve,
     PyYearOnYearInflationSwap, PyYearOnYearInflationSwapHelper, PyYoYCapFloorTermPriceSurface,
     PyYoYInflationCapFloor, PyYoYInflationCapFloorEngine, PyYoYInflationHelper,
@@ -228,8 +231,11 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyDefaultProbabilityTermStructure>()?;
     termstructures.add_class::<PyFlatHazardRate>()?;
     termstructures.add_class::<PyInterpolatedHazardRateCurve>()?;
+    termstructures.add_class::<PyInterpolatedDefaultDensityCurve>()?;
+    termstructures.add_class::<PyPiecewiseDefaultDensityCurve>()?;
     termstructures.add_class::<PyDefaultProbabilityHelper>()?;
     termstructures.add_class::<PySpreadCdsHelper>()?;
+    termstructures.add_class::<PyUpfrontCdsHelper>()?;
     termstructures.add_class::<PyPiecewiseDefaultCurve>()?;
     termstructures.add_class::<PyZeroInflationTermStructure>()?;
     termstructures.add_class::<PyInterpolatedZeroInflationCurve>()?;
@@ -237,6 +243,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyZeroCouponInflationSwapHelper>()?;
     termstructures.add_class::<PyPiecewiseZeroInflationCurve>()?;
     termstructures.add_class::<PyMultiplicativePriceSeasonality>()?;
+    termstructures.add_class::<PyKerkhofSeasonality>()?;
     termstructures.add_class::<PyYoYInflationTermStructure>()?;
     termstructures.add_class::<PyInterpolatedYoYInflationCurve>()?;
     termstructures.add_class::<PyYoYInflationHelper>()?;
@@ -261,6 +268,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     indexes.add_class::<PyCustomIborIndex>()?;
     indexes.add_class::<PyOvernightIndex>()?;
     indexes.add_class::<PyEstr>()?;
+    indexes.add_class::<PyEonia>()?;
     indexes.add_class::<PySwapIndex>()?;
     indexes.add_class::<PyCpiInterpolationType>()?;
     indexes.add_class::<PyZeroInflationIndex>()?;
@@ -282,6 +290,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<PySwapType>()?;
     instruments.add_class::<PyVanillaSwap>()?;
     instruments.add_class::<PyMakeVanillaSwap>()?;
+    instruments.add_class::<makeswaption::PyMakeSwaption>()?;
     instruments.add_class::<PyPosition>()?;
     instruments.add_class::<PyForwardRateAgreement>()?;
     instruments.add_class::<PyOvernightIndexedSwap>()?;

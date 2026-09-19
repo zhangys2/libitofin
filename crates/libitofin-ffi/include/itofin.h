@@ -134,6 +134,15 @@ typedef struct ItofinSpreadCdsConfig {
   uint64_t settings;
 } ItofinSpreadCdsConfig;
 
+typedef struct ItofinCdsHelperTerms {
+  int32_t model;
+  int32_t settles_accrual;
+  int32_t pays_at_default_time;
+  int32_t start_date;
+  uint64_t last_period_day_counter;
+  int32_t rebates_accrual;
+} ItofinCdsHelperTerms;
+
 /**
  * kind 0 = midpoint, 1 = ISDA. Fidelity enums follow Python declaration order.
  */
@@ -677,6 +686,26 @@ typedef struct ItofinCapFloorConfig {
 } ItofinCapFloorConfig;
 
 /**
+ * Payer-only vanilla builder. Flags: 1 strike, 2 nominal, 4 fixing date,
+ * 8 exercise date, 16 indexed coupons. Zero calendar keeps index conventions.
+ */
+typedef struct ItofinMakeSwaptionConfig {
+  uint64_t index;
+  int32_t tenor_length;
+  int32_t tenor_unit;
+  uint32_t flags;
+  ItofinReal strike;
+  ItofinReal nominal;
+  int32_t fixing_date;
+  int32_t exercise_date;
+  uint64_t exercise_calendar;
+  int32_t option_convention;
+  int32_t settlement_type;
+  int32_t settlement_method;
+  uint8_t indexed_coupons;
+} ItofinMakeSwaptionConfig;
+
+/**
  * quote/settings zero select scalar volatility/fixed date respectively.
  */
 typedef struct ItofinConstantRateVolConfig {
@@ -1075,6 +1104,22 @@ int32_t itofin_flat_hazard_new(struct ItofinContext *ctx,
  * belong to the calling thread; serialize calls including destruction.
  * See the crate-level C caller contract for lifetime requirements.
  */
+int32_t itofin_flat_hazard_with_jumps_new(struct ItofinContext *ctx,
+                                          const struct ItofinFlatHazardConfig *config,
+                                          const uint64_t *jumps,
+                                          size_t jump_count,
+                                          const int32_t *dates,
+                                          size_t date_count,
+                                          uint64_t *out,
+                                          struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
 int32_t itofin_interpolated_hazard_new(struct ItofinContext *ctx,
                                        const int32_t *dates,
                                        const double *rates,
@@ -1097,6 +1142,39 @@ int32_t itofin_piecewise_default_new(struct ItofinContext *ctx,
                                      uint64_t dc,
                                      uint64_t *out,
                                      struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_interpolated_default_density_new(struct ItofinContext *ctx,
+                                                const int32_t *dates,
+                                                const double *densities,
+                                                size_t count,
+                                                uint64_t dc,
+                                                uint64_t calendar,
+                                                int32_t interpolation,
+                                                uint64_t *out,
+                                                struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_piecewise_default_density_new(struct ItofinContext *ctx,
+                                             int32_t reference,
+                                             const uint64_t *helpers,
+                                             size_t count,
+                                             uint64_t dc,
+                                             int32_t interpolation,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
 
 /**
  * kind: 0 survival, 1 default probability, 2 density, 3 hazard. use_date: 0 time, 1 date.
@@ -1141,6 +1219,52 @@ int32_t itofin_default_curve_nodes(struct ItofinContext *ctx,
 int32_t itofin_default_curve_calculate(struct ItofinContext *ctx,
                                        uint64_t id,
                                        struct ItofinError *error);
+
+/**
+ * Capacity zero queries the required length. Dates remain fixed when reference dates move.
+ * A null `times` pointer requests dates only, without resolving the reference date.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_default_curve_jumps(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   int32_t *dates,
+                                   double *times,
+                                   size_t capacity,
+                                   size_t *count,
+                                   struct ItofinError *error);
+
+/**
+ * Construct a spread (kind 0) or upfront (kind 1) helper with explicit terms.
+ * The config quote is the running spread for kind 0 and upfront for kind 1.
+ *
+ * # Safety
+ * Pointers must be aligned, live and valid. Output must not overlap inputs.
+ * The context and its handles must belong to the calling thread.
+ */
+int32_t itofin_cds_helper_with_terms(struct ItofinContext *ctx,
+                                     const struct ItofinSpreadCdsConfig *config,
+                                     const struct ItofinCdsHelperTerms *contract_terms,
+                                     int32_t kind,
+                                     double running_spread,
+                                     uint32_t upfront_settlement_days,
+                                     uint64_t *out,
+                                     struct ItofinError *error);
+
+/**
+ * Return a helper's implied spread or upfront after recalculation.
+ *
+ * # Safety
+ * Pointers must be aligned, live and valid. Output must not overlap inputs.
+ * The context and its handles must belong to the calling thread.
+ */
+int32_t itofin_cds_helper_implied_quote(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        double *out,
+                                        struct ItofinError *error);
 
 /**
  * # Safety
@@ -1229,6 +1353,18 @@ int32_t itofin_cds_value(struct ItofinContext *ctx,
                          int32_t query,
                          double *out,
                          struct ItofinError *error);
+
+/**
+ * Return the final premium coupon's accrual-end serial date.
+ *
+ * # Safety
+ * Pointers must be aligned, live and valid. Output must not overlap inputs.
+ * The context and its handles must belong to the calling thread.
+ */
+int32_t itofin_cds_protection_end_date(struct ItofinContext *ctx,
+                                       uint64_t id,
+                                       int32_t *serial,
+                                       struct ItofinError *error);
 
 /**
  * # Safety
@@ -1587,6 +1723,19 @@ int32_t itofin_estr_new(struct ItofinContext *ctx,
  * belong to the calling thread; serialize calls including destruction.
  * See the crate-level C caller contract for lifetime requirements.
  */
+int32_t itofin_eonia_new(struct ItofinContext *ctx,
+                         uint64_t forwarding,
+                         uint64_t settings_id,
+                         uint64_t *out,
+                         struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
 int32_t itofin_index_fixing(struct ItofinContext *ctx,
                             uint64_t id,
                             bool overnight,
@@ -1650,6 +1799,29 @@ int32_t itofin_ibor_name(struct ItofinContext *ctx,
                          size_t capacity,
                          size_t *length,
                          struct ItofinError *error);
+
+/**
+ * Components: 0 day counter, 1 fixing calendar, 2 currency. Returned handles
+ * retain their values independently of the overnight index.
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles must belong
+ * to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_overnight_component(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   int32_t query,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles must belong
+ * to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_overnight_fixing_days(struct ItofinContext *ctx,
+                                     uint64_t id,
+                                     uint32_t *out,
+                                     struct ItofinError *error);
 
 /**
  * kind 0 UK RPI, 1 UK HICP, 2 EU HICP.
@@ -2002,6 +2174,23 @@ int32_t itofin_piecewise_zero_inflation_new(struct ItofinContext *ctx,
                                             size_t n,
                                             uint64_t *out,
                                             struct ItofinError *error);
+
+/**
+ * Build a zero inflation curve using an unlinked index clone's last fixing date.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. The context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_piecewise_zero_inflation_last_fixing_new(struct ItofinContext *ctx,
+                                                        const struct ItofinInflationCurveConfig *a,
+                                                        uint64_t index,
+                                                        const uint64_t *helpers,
+                                                        size_t n,
+                                                        uint64_t seasonality,
+                                                        uint64_t *out,
+                                                        struct ItofinError *error);
 
 /**
  * query 0 time rate, 1 date rate, 2 base date serial, 3 frequency, 4 has seasonality, 5 calculate.
@@ -2500,6 +2689,22 @@ int32_t itofin_seasonality_factors(struct ItofinContext *ctx,
                                    size_t capacity,
                                    size_t *count,
                                    struct ItofinError *error);
+
+/**
+ * Creates twelve-factor monthly Kerkhof seasonality for zero inflation curves.
+ * Existing seasonality inspectors and curve setters accept the returned handle.
+ *
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_kerkhof_seasonality_new(struct ItofinContext *ctx,
+                                       int32_t base,
+                                       const double *factors,
+                                       size_t n,
+                                       uint64_t *out,
+                                       struct ItofinError *error);
 
 /**
  * # Safety
@@ -3247,6 +3452,22 @@ int32_t itofin_swaption_new(struct ItofinContext *ctx,
  * belong to the calling thread; serialize calls including destruction.
  * See the crate-level C caller contract for lifetime requirements.
  */
+int32_t itofin_swaption_from_ois(struct ItofinContext *ctx,
+                                 uint64_t swap,
+                                 uint64_t exercise,
+                                 int32_t settlement_type,
+                                 int32_t settlement_method,
+                                 uint64_t settings_id,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
 int32_t itofin_capfloor_new(struct ItofinContext *ctx,
                             struct ItofinCapFloorConfig a,
                             uint64_t *out,
@@ -3330,6 +3551,28 @@ int32_t itofin_capfloor_rates(struct ItofinContext *ctx,
 
 /**
  * # Safety
+ * Pointers must be aligned, live and valid. Context and handles must belong
+ * to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_make_swaption(struct ItofinContext *ctx,
+                             struct ItofinMakeSwaptionConfig a,
+                             uint64_t *out,
+                             struct ItofinError *error);
+
+/**
+ * Fields: 0 exercise-date serial, 1 underlying fixed rate, 2 underlying nominal.
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles must belong
+ * to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_swaption_details(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t field,
+                                ItofinReal *out,
+                                struct ItofinError *error);
+
+/**
+ * # Safety
  * Follow the crate C caller contract; arrays must have their stated lengths.
  */
 int32_t itofin_constant_swaption_vol_new(struct ItofinContext *ctx,
@@ -3347,7 +3590,7 @@ int32_t itofin_constant_optionlet_vol_new(struct ItofinContext *ctx,
                                           struct ItofinError *error);
 
 /**
- * Swaption query: 0 volatility, 1 variance, 2 date shift.
+ * Swaption query: 0 tenor volatility, 1 tenor variance, 2 date shift, 3 date volatility.
  * # Safety
  * Follow the crate C caller contract; arrays must have their stated lengths.
  */
@@ -3954,6 +4197,39 @@ int32_t itofin_swaption_vol_matrix_new(struct ItofinContext *ctx,
                                        const struct ItofinVolGridConfig *cfg,
                                        uint64_t *out,
                                        struct ItofinError *error);
+
+/**
+ * Fixed reference date with retained quote handles. Settings must be zero.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_swaption_vol_matrix_fixed_quotes(struct ItofinContext *ctx,
+                                                const struct ItofinVolGridConfig *cfg,
+                                                uint64_t *out,
+                                                struct ItofinError *error);
+
+/**
+ * Moving reference date with copied numeric data. Settings must be a valid handle.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_swaption_vol_matrix_moving_matrix(struct ItofinContext *ctx,
+                                                 const struct ItofinVolGridConfig *cfg,
+                                                 uint64_t *out,
+                                                 struct ItofinError *error);
+
+/**
+ * Fixed reference and exercise dates with copied numeric data.
+ * Settings must be zero; option tenor buffers are unused and may be null.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_swaption_vol_matrix_dates(struct ItofinContext *ctx,
+                                         const struct ItofinVolGridConfig *cfg,
+                                         const int32_t *option_dates,
+                                         size_t date_count,
+                                         uint64_t *out,
+                                         struct ItofinError *error);
 
 /**
  * # Safety
