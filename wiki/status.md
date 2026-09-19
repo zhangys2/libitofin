@@ -45,8 +45,8 @@ see the [Go validation record](../docs/go-binding-test-gaps.md).
 seasonality in Rust, Python and Go. The cumulative correction matches 72
 [independent QuantLib rows](../crates/libitofin/tests/fixtures/kerkhof_seasonality.md);
 installing or clearing it recalibrates zero-inflation curves. Exactly twelve
-factors are supported; YoY corrections are rejected. This addition is on main
-and will ship after v0.25.0.
+factors are supported; YoY corrections are rejected. This addition shipped in
+v0.26.0.
 
 [#1017](https://github.com/benbenbang/libitofin/issues/1017) adds lazy zero-inflation
 base dates. Python/C/Go expose a last-fixing constructor with linear interpolation;
@@ -64,7 +64,7 @@ Rust exposes `IborIborBasisSwapRateHelper` and the genuinely coupled 3M/6M
 Both helper sets read the opposite curve; QuantLib's FRA and swap repricing
 tolerances are preserved. Fixing-history updates on either index invalidate
 and recalibrate the live curve without observing its own forecast handle.
-This work will ship after v0.25.0. Concrete Python/C/Go joint-curve assembly
+This work shipped in v0.26.0. Concrete Python/C/Go joint-curve assembly
 remains [#1066](https://github.com/benbenbang/libitofin/issues/1066); the overnight
 basis-helper sibling remains [#1060](https://github.com/benbenbang/libitofin/issues/1060).
 
@@ -95,7 +95,7 @@ convenience ([#1049](https://github.com/benbenbang/libitofin/issues/1049)).
 [Python](../crates/itofin-py/tests/test_swaption_facades.py) and
 [C/Go](../sdk/go/swaption_facades_test.go) tests preserve the Eonia OIS cached NPV
 `0.014101075767` at `1e-12`, independent forecast pins, exercise-calendar overrides,
-retained dependencies and live repricing. These facades will ship after v0.25.0.
+retained dependencies and live repricing. These facades shipped in v0.26.0.
 MakeSwaption is payer-only and has no overnight-index builder; SwapIndex clone
 variants and swaption implied volatility remain deferred.
 
@@ -109,7 +109,7 @@ recovery through a test-only flat engine, and quote-handle relinks.
 Rust supports backward-flat SABR parameter cubes
 ([#606](https://github.com/benbenbang/libitofin/issues/606)), with independent
 QuantLib sparse/dense oracles and live quote/date recalculation checks. Both
-axes require at least two nodes. This feature will ship after v0.25.0;
+axes require at least two nodes. This feature shipped in v0.26.0;
 Python/C/Go flag exposure remains [#1065](https://github.com/benbenbang/libitofin/issues/1065).
 SABR variants [#586](https://github.com/benbenbang/libitofin/issues/586) and ZABR
 [#597](https://github.com/benbenbang/libitofin/issues/597) retain separate scope.
