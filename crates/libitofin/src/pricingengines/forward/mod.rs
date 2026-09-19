@@ -12,7 +12,7 @@ pub use analyticforwardperformancevanillaengine::{
     AnalyticForwardPerformanceVanillaEngine, set_analytic_forward_performance_vanilla_engine,
 };
 pub use analyticforwardvanillaengine::{
-    AnalyticForwardVanillaEngine, set_analytic_forward_vanilla_engine,
+    AnalyticForwardVanillaEngine, BinomialForwardVanillaEngine, set_analytic_forward_vanilla_engine,
 };
 pub use quantoforwardengine::{QuantoForwardEuropeanEngine, set_quanto_forward_european_engine};
 pub use quantoforwardperformanceengine::{
