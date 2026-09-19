@@ -16,7 +16,7 @@ pub mod swapindex;
 
 pub use ibor::{
     AUDLibor, CustomIborIndex, Eonia, Estr, EurLibor, Euribor, Euribor365, GbpLibor, JpyLibor,
-    Libor, Sofr, UsdLibor, USDLibor,
+    Libor, Sofr, USDLibor, UsdLibor,
 };
 pub use iborindex::{IborIndex, OvernightIndex};
 pub use index::Index;

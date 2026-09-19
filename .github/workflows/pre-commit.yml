@@ -18,16 +18,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Inline pre-commit (not the benbenbang reusable container job): that image
+  # lives on a private GHCR package the fork GITHUB_TOKEN cannot pull, which
+  # fails "Initialize containers" with `Error response from daemon: denied`.
   pre-commit:
     name: pre-commit checks
-    uses: benbenbang/reusable-workflows/.github/workflows/prek.yml@1.0.2
+    runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-    secrets: inherit
-    with:
-      go_version_file: sdk/go/go.mod
-      prek_skip: fmt,check,clippy,test
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: install pre-commit
+        run: python -m pip install --upgrade pip pre-commit
+
+      - name: run pre-commit on changed files
+        shell: bash
+        env:
+          # fmt/check/clippy/test rebuild the workspace; rust-ci already covers them.
+          SKIP: fmt,check,clippy,test
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            pre-commit run --from-ref "origin/${{ github.base_ref }}" --to-ref HEAD --show-diff-on-failure
+          else
+            pre-commit run --all-files --show-diff-on-failure
+          fi
 
   check-change-files:
     name: check-changed-files
