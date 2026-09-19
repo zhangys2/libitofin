@@ -230,6 +230,25 @@ jobs:
           pytest crates/itofin-py/tests -v
 
   python-bindings-required:
+    # Exact name branch protection expects (lowercase; not the matrix
+    # "python bindings (3.10)" / "(3.13)" variants, and not "Python bindings").
+    name: python bindings
+    needs: python-bindings
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require python-bindings matrix success
+        env:
+          RESULT: ${{ needs.python-bindings.result }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            exit 0
+          fi
+          echo "python-bindings result=$RESULT" >&2
+          exit 1
+
+  # Keep the title-case name too in case protection was saved that way.
+  python-bindings-required-titlecase:
     name: Python bindings
     needs: python-bindings
     if: ${{ always() && !cancelled() }}
