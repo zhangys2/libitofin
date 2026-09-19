@@ -1,9 +1,14 @@
 //! Markov-functional state process.
 //!
 //! Port of `ql/processes/mfstateprocess.{hpp,cpp}`: piecewise-constant
-//! volatility process `dx = σ(t) e^{a t} dW(t)` used by the Markov functional
-//! model. First Markov-functional / Gaussian-1D gap slice; model, smile, and
-//! engines remain deferred.
+//! volatility process used by the Markov functional model. The SDE is
+//! notionally `dx = σ(t) e^{a t} dW(t)`, but matching QuantLib,
+//! [`diffusion`](StochasticProcess1D::diffusion) returns the piecewise σ(t)
+//! only — the `e^{a t}` factor is carried by the analytic
+//! [`variance`](StochasticProcess1D::variance) / `std_deviation` path.
+//! Empty `times` use QL's unit-σ closed form (the supplied `vols[0]` is not
+//! applied). First Markov-functional / Gaussian-1D gap slice; model, smile,
+//! and engines remain deferred.
 
 use crate::errors::QlResult;
 use crate::patterns::observable::{AsObservable, Observable};
@@ -64,7 +69,7 @@ impl MfStateProcess {
         Ok(())
     }
 
-    /// Index `i` such that `times[i-1] < t ≤ times[i]` via C++ `upper_bound`.
+    /// Index `i` such that `times[i-1] ≤ t < times[i]` via C++ `upper_bound`.
     fn bucket(&self, t: Time) -> Size {
         self.times.partition_point(|&x| x <= t)
     }
@@ -89,6 +94,7 @@ impl StochasticProcess1D for MfStateProcess {
         Ok(0.0)
     }
 
+    /// Instantaneous σ(t) (piecewise); does **not** include `e^{a t}`.
     fn diffusion(&self, t: Time, _x: Real) -> QlResult<Real> {
         Ok(self.vols[self.bucket(t)])
     }
@@ -105,6 +111,7 @@ impl StochasticProcess1D for MfStateProcess {
         if dt < Real::EPSILON {
             return Ok(0.0);
         }
+        // Empty times: QL closed form assumes unit σ (vols[0] is ignored).
         if self.times.is_empty() {
             return Ok(if self.reversion_zero {
                 dt
@@ -205,6 +212,13 @@ mod tests {
         }
 
         let sp3 = MfStateProcess::new(0.01, times2, vols2).unwrap();
+        for (t, expected) in diffs {
+            let d = sp3.diffusion(t, 0.0).unwrap();
+            assert!(
+                (d - expected).abs() <= TOL,
+                "process 3 diffusion at {t}: {d} vs {expected} (raw σ, no e^{{at}})"
+            );
+        }
         let vars3 = [
             (0.0, 0.0, 0.0),
             (0.0, 0.5, 0.502508354208),
@@ -221,5 +235,13 @@ mod tests {
                 "process 3 variance t0={t0} dt={dt}: {v} vs {expected}"
             );
         }
+
+        // Empty times: QL variance ignores vols[0] (unit-σ closed form).
+        let sp_unit = MfStateProcess::new(0.0, vec![], vec![2.0]).unwrap();
+        let v_unit = sp_unit.variance(0.0, 0.0, 1.0).unwrap();
+        assert!(
+            (v_unit - 1.0).abs() <= TOL,
+            "empty-times variance must stay unit-σ: {v_unit}"
+        );
     }
 }
