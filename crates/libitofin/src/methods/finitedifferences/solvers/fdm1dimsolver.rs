@@ -117,6 +117,16 @@ impl Fdm1DimSolver {
             .derivative(x)
     }
 
+    /// `∂²/∂x²` of the solution (`fdm1dimsolver.cpp:93-96`).
+    pub fn derivative_xx(&self, x: Real) -> QlResult<Real> {
+        self.calculate()?;
+        self.interpolation
+            .borrow()
+            .as_ref()
+            .expect("interpolation is filled by calculate")
+            .second_derivative(x)
+    }
+
     fn calculate(&self) -> QlResult<()> {
         if !self.lazy.borrow_mut().start_calculation() {
             return Ok(());

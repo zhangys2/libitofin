@@ -102,6 +102,12 @@ impl FdmBlackScholesSolver {
         Ok(self.solver.derivative_x(s.ln())? / s)
     }
 
+    /// Gamma at spot `s` (`cpp:67-71`): `(d²V/d(ln S)² − dV/d(ln S)) / S²`.
+    pub fn gamma_at(&self, s: Real) -> QlResult<Real> {
+        let x = s.ln();
+        Ok((self.solver.derivative_xx(x)? - self.solver.derivative_x(x)?) / (s * s))
+    }
+
     /// Theta at spot `s` (`cpp:75-77`).
     pub fn theta_at(&self, s: Real) -> QlResult<Real> {
         self.solver.theta_at(s.ln())

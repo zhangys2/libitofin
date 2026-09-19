@@ -18,9 +18,12 @@
 //!   (`mclongstaffschwartzengine.hpp:218-231`). [`BermudanExercise`] itself is
 //!   ported and prices under the finite-difference engine; only the path
 //!   generator that would exercise it along a simulated path is missing.
-//! - **the latest-date-only `AmericanExercise` constructor**
-//!   (`exercise.cpp:43-50`): it opens the window at `Date::minDate()`, a
-//!   sentinel this stack has no date for.
+//!
+//! The latest-date-only [`AmericanExercise::from_latest`] constructor
+//! (`exercise.cpp:43-50`) is ported: it opens the window at
+//! [`Date::min_date()`](crate::time::date::Date::min_date)
+//! (`MINIMUM_SERIAL_NUMBER`). FD engines clamp
+//! `process.time(earliest).max(0.0)` so the unbounded start becomes t=0.
 
 use crate::errors::QlResult;
 use crate::require;

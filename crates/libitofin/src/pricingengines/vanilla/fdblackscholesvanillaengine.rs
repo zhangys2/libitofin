@@ -308,7 +308,7 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
         results.instrument.value = Some(solver.value_at(s)?);
         results.greeks = Greeks {
             delta: Some(solver.delta_at(s)?),
-            gamma: None,
+            gamma: Some(solver.gamma_at(s)?),
             theta: Some(solver.theta_at(s)?),
             ..Greeks::default()
         };
@@ -1120,5 +1120,272 @@ mod tests {
             berm + 1e-12 >= euro,
             "escrowed Bermudan {berm} should be ≥ European {euro}"
         );
+    }
+}
+
+#[cfg(test)]
+mod test_fd_engines {
+    //! The `testFdEngines` oracle of `test-suite/europeanoption.cpp:1241-1256`,
+    //! which runs the shared `testEngineConsistency` harness (`:192-278`) with
+    //! the finite-difference engine on a 500 by 500 grid and checks it against
+    //! the analytic engine over the full market sweep.
+
+    use std::time::Instant;
+
+    use super::super::test_market::{market, today};
+    use super::FdBlackScholesVanillaEngine;
+    use crate::instrument::Instrument;
+    use crate::instruments::{EuropeanOption, PlainVanillaPayoff};
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::pricingengine::PricingEngine;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::time::date::Date;
+    use crate::types::{Rate, Real, Size, Volatility};
+
+    /// `timeSteps` and `gridPoints` of `europeanoption.cpp:1246-1247`.
+    const T_GRID: Size = 500;
+    const X_GRID: Size = 500;
+
+    const UNDERLYING: Real = 100.0;
+
+    /// `relativeTol` of `europeanoption.cpp:1249-1252`.
+    const VALUE_TOLERANCE: Real = 1.0e-4;
+    const DELTA_TOLERANCE: Real = 1.0e-6;
+    const GAMMA_TOLERANCE: Real = 1.0e-6;
+    const THETA_TOLERANCE: Real = 1.0e-3;
+
+    fn relative_error(x1: Real, x2: Real, reference: Real) -> Real {
+        if reference != 0.0 {
+            (x1 - x2).abs() / reference
+        } else {
+            (x1 - x2).abs()
+        }
+    }
+
+    fn fd_option(
+        market: &super::super::test_market::Market,
+        option_type: OptionType,
+        strike: Real,
+        expiry: Date,
+    ) -> EuropeanOption {
+        let payoff = shared(PlainVanillaPayoff::new(option_type, strike));
+        let exercise = shared(crate::exercise::EuropeanExercise::new(expiry));
+        let mut option = EuropeanOption::new(payoff, exercise, Shared::clone(&market.settings));
+        let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&market.process),
+            Vec::new(),
+            T_GRID,
+            X_GRID,
+            0,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        option
+    }
+
+    /// Builds both options once per (type, strike) and mutates shared quotes,
+    /// so repricings run through the observer chain.
+    #[test]
+    fn fd_engine_matches_the_analytic_engine_over_the_market_sweep() {
+        let started = Instant::now();
+        let market = market();
+        let expiry = today() + 360;
+
+        let q_rates: [Rate; 2] = [0.00, 0.05];
+        let r_rates: [Rate; 3] = [0.01, 0.05, 0.15];
+        let vols: [Volatility; 3] = [0.11, 0.50, 1.20];
+
+        let mut worst = [
+            ("value", 0.0),
+            ("delta", 0.0),
+            ("gamma", 0.0),
+            ("theta", 0.0),
+        ];
+
+        for option_type in [Call, Put] {
+            for strike in [75.0, 100.0, 125.0] {
+                let mut reference = market.option(option_type, strike, expiry);
+                let mut option = fd_option(&market, option_type, strike, expiry);
+
+                for q in q_rates {
+                    for r in r_rates {
+                        for vol in vols {
+                            market.set(UNDERLYING, q, r, vol);
+
+                            let value = option.npv().unwrap();
+                            let mut checks =
+                                vec![("value", reference.npv().unwrap(), value, VALUE_TOLERANCE)];
+                            if value > UNDERLYING * 1.0e-5 {
+                                checks.push((
+                                    "delta",
+                                    reference.delta().unwrap(),
+                                    option.delta().unwrap(),
+                                    DELTA_TOLERANCE,
+                                ));
+                                checks.push((
+                                    "gamma",
+                                    reference.gamma().unwrap(),
+                                    option.gamma().unwrap(),
+                                    GAMMA_TOLERANCE,
+                                ));
+                                checks.push((
+                                    "theta",
+                                    reference.theta().unwrap(),
+                                    option.theta().unwrap(),
+                                    THETA_TOLERANCE,
+                                ));
+                            }
+
+                            for (name, expected, calculated, tolerance) in checks {
+                                let error = relative_error(expected, calculated, UNDERLYING);
+                                assert!(
+                                    error <= tolerance,
+                                    "{name} of {option_type:?} K={strike} q={q} r={r} v={vol}: \
+                                     analytic {expected} vs finite difference {calculated} \
+                                     (relative error {error} over {tolerance})"
+                                );
+                                for slot in &mut worst {
+                                    if slot.0 == name && error > slot.1 {
+                                        slot.1 = error;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println!(
+            "testFdEngines: {:?} for 108 combinations; worst relative errors {worst:?}",
+            started.elapsed()
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_fd_values {
+    //! American options on a 100 by 400 grid against the Ju-1998 table within
+    //! 8e-2 (`test-suite/americanoption.cpp:375-427`).
+
+    use super::super::test_market::{Market, market, time_to_days, today};
+    use super::FdBlackScholesVanillaEngine;
+    use crate::exercise::{AmericanExercise, Exercise};
+    use crate::instrument::Instrument;
+    use crate::instruments::{OneAssetOption, PlainVanillaPayoff};
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::pricingengine::PricingEngine;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::types::{Rate, Real, Size, Time, Volatility};
+
+    const T_GRID: Size = 100;
+    const X_GRID: Size = 400;
+    const TOLERANCE: Real = 8.0e-2;
+
+    struct JuValue {
+        option_type: OptionType,
+        strike: Real,
+        spot: Real,
+        q: Rate,
+        r: Rate,
+        t: Time,
+        vol: Volatility,
+        expected: Real,
+    }
+
+    fn price(market: &Market, ju: &JuValue) -> Real {
+        market.set(ju.spot, ju.q, ju.r, ju.vol);
+
+        let exercise = AmericanExercise::over(today(), today() + time_to_days(ju.t)).unwrap();
+        let mut option = OneAssetOption::new(
+            shared(PlainVanillaPayoff::new(ju.option_type, ju.strike)),
+            shared(exercise) as Shared<dyn Exercise>,
+            Shared::clone(&market.settings),
+        );
+        let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&market.process),
+            Vec::new(),
+            T_GRID,
+            X_GRID,
+            0,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        option.npv().unwrap()
+    }
+
+    #[test]
+    fn american_options_reproduce_the_ju_values() {
+        let market = market();
+        let rows = [
+            JuValue {
+                option_type: Put,
+                strike: 40.0,
+                spot: 40.0,
+                q: 0.0,
+                r: 0.0488,
+                t: 0.3333,
+                vol: 0.2,
+                expected: 1.576,
+            },
+            JuValue {
+                option_type: Put,
+                strike: 45.0,
+                spot: 40.0,
+                q: 0.0,
+                r: 0.0488,
+                t: 0.5833,
+                vol: 0.2,
+                expected: 5.260,
+            },
+            JuValue {
+                option_type: Call,
+                strike: 100.0,
+                spot: 100.0,
+                q: 0.07,
+                r: 0.03,
+                t: 3.0,
+                vol: 0.2,
+                expected: 9.065,
+            },
+            JuValue {
+                option_type: Call,
+                strike: 100.0,
+                spot: 120.0,
+                q: 0.07,
+                r: 0.03,
+                t: 3.0,
+                vol: 0.2,
+                expected: 21.398,
+            },
+        ];
+
+        for ju in &rows {
+            let calculated = price(&market, ju);
+            let error = (calculated - ju.expected).abs();
+            println!(
+                "testFdValues: {:?} K={} S={} t={}: Ju {} finite difference {calculated}",
+                ju.option_type, ju.strike, ju.spot, ju.t, ju.expected
+            );
+            assert!(
+                error <= TOLERANCE,
+                "{:?} K={} S={} q={} r={} t={} v={}: Ju {} vs finite difference {calculated} \
+                 (absolute error {error} over {TOLERANCE})",
+                ju.option_type,
+                ju.strike,
+                ju.spot,
+                ju.q,
+                ju.r,
+                ju.t,
+                ju.vol,
+                ju.expected
+            );
+        }
     }
 }

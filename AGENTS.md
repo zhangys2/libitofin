@@ -6,7 +6,8 @@
 `rust-toolchain.toml`) plus a PyO3/maturin Python-bindings crate `itofin`
 (`crates/itofin-py`, requires Python 3.13+). It is a library — there are no
 runtime services, ports, or databases. Standard dev commands live in the README
-"Getting started (development)" section and in `.github/workflows/pull-request.yml`.
+"Getting started (development)" section and in `.github/workflows/pre-commit.yml`
+(workflow name `pull-request`).
 
 ### Python 3.13 is required for workspace-level cargo commands
 `crates/itofin-py` pins PyO3's `abi3-py313`, so anything that builds the whole
