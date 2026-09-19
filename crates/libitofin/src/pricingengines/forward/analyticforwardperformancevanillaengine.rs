@@ -187,3 +187,146 @@ pub fn set_analytic_forward_performance_vanilla_engine(
         as SharedMut<dyn PricingEngine>;
     option.base_mut().set_pricing_engine(engine);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::exercise::EuropeanExercise;
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::instruments::{ForwardVanillaOption, PlainVanillaPayoff};
+    use crate::interestrate::Compounding;
+    use crate::option::OptionType;
+    use crate::processes::BlackScholesMertonProcess;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::{Shared, shared};
+    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
+    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::date::{Date, Month};
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::frequency::Frequency;
+    use crate::types::{Rate, Time, Volatility};
+
+    fn today() -> Date {
+        Date::new(15, Month::June, 2026)
+    }
+
+    fn time_to_days(t: Time) -> i32 {
+        (t * 360.0).round() as i32
+    }
+
+    fn flat_rate(rate: Rate) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
+            today(),
+            rate,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    }
+
+    fn flat_vol(vol: Volatility) -> Handle<dyn BlackVolTermStructure> {
+        Handle::new(
+            shared(BlackConstantVol::new(today(), None, vol, Actual360::new()))
+                as Shared<dyn BlackVolTermStructure>,
+        )
+    }
+
+    /// `forwardoption.cpp` `testPerformanceValues` — Haug forward × DF_r / S.
+    ///
+    /// QL's suite writes `Haug / S * e^{-q t}` which equals DF_r / S only when
+    /// `r = 2q` (this Haug market: r=0.08, q=0.04). See
+    /// [`performance_scales_by_risk_free_discount`] for `r ≠ 2q`.
+    #[test]
+    fn haug_forward_performance_values() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let disc = (-0.04_f64 * 0.25).exp();
+        let rows = [
+            (OptionType::Call, 4.4064 / 60.0 * disc),
+            (OptionType::Put, 8.2971 / 60.0 * disc),
+        ];
+        for (option_type, expected) in rows {
+            let process = shared(BlackScholesMertonProcess::new(
+                Handle::new(shared(SimpleQuote::new(60.0)) as Shared<dyn Quote>),
+                flat_rate(0.04),
+                flat_rate(0.08),
+                flat_vol(0.30),
+            ));
+            let payoff = shared(PlainVanillaPayoff::new(option_type, 0.0))
+                as Shared<dyn crate::instruments::StrikedTypePayoff>;
+            let exercise = shared(EuropeanExercise::new(today() + time_to_days(1.0)));
+            let mut option = ForwardVanillaOption::new(
+                1.1,
+                today() + time_to_days(0.25),
+                payoff,
+                exercise,
+                Shared::clone(&settings),
+            );
+            set_analytic_forward_performance_vanilla_engine(&mut option, process);
+            let calculated = option.npv().unwrap();
+            assert!(
+                (calculated - expected).abs() <= 1.0e-4,
+                "{option_type:?}: {calculated} vs {expected}"
+            );
+        }
+    }
+
+    /// Pin `forwardperformanceengine.hpp`: perf scales by DF_r / S, not DF_q / S.
+    ///
+    /// Identity: `perf * S * DF_q ≈ forward * DF_r`. At r=0.10, q=0.04 the
+    /// Haug-style `forward * e^{-q t} / S` formula differs by ~3.9e-4.
+    #[test]
+    fn performance_scales_by_risk_free_discount() {
+        use crate::pricingengines::set_analytic_forward_vanilla_engine;
+
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let spot = 60.0;
+        let q = 0.04;
+        let r = 0.10;
+        let reset = today() + time_to_days(0.25);
+        let process = shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(spot)) as Shared<dyn Quote>),
+            flat_rate(q),
+            flat_rate(r),
+            flat_vol(0.30),
+        ));
+        let payoff = shared(PlainVanillaPayoff::new(OptionType::Call, 0.0))
+            as Shared<dyn crate::instruments::StrikedTypePayoff>;
+        let exercise = shared(EuropeanExercise::new(today() + time_to_days(1.0)))
+            as Shared<dyn crate::exercise::Exercise>;
+
+        let mut forward = ForwardVanillaOption::new(
+            1.1,
+            reset,
+            Shared::clone(&payoff),
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        );
+        set_analytic_forward_vanilla_engine(&mut forward, Shared::clone(&process));
+        let forward_npv = forward.npv().unwrap();
+
+        let mut perf =
+            ForwardVanillaOption::new(1.1, reset, payoff, exercise, Shared::clone(&settings));
+        set_analytic_forward_performance_vanilla_engine(&mut perf, Shared::clone(&process));
+        let perf_npv = perf.npv().unwrap();
+
+        let disc_q = (-q * 0.25).exp();
+        let disc_r = (-r * 0.25).exp();
+        let lhs = perf_npv * spot * disc_q;
+        let rhs = forward_npv * disc_r;
+        assert!(
+            (lhs - rhs).abs() <= 1.0e-10,
+            "perf*S*DF_q={lhs} vs forward*DF_r={rhs}"
+        );
+        // Wrong q-only scaling must not match the engine at this market.
+        let wrong = forward_npv * disc_q / spot;
+        assert!(
+            (perf_npv - wrong).abs() > 1.0e-4,
+            "q-only scaling {wrong} should diverge from perf {perf_npv} when r≠2q"
+        );
+    }
+}
