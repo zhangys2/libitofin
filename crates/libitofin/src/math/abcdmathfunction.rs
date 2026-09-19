@@ -27,6 +27,15 @@ impl AbcdMathFunction {
         Ok(Self { a, b, c, d })
     }
 
+    /// QuantLib default coefficients (`a=-0.06, b=0.17, c=0.54, d=0.17`).
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn with_defaults() -> QlResult<Self> {
+        Self::new(-0.06, 0.17, 0.54, 0.17)
+    }
+
     pub fn a(&self) -> Real {
         self.a
     }

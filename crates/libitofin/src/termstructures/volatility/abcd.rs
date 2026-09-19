@@ -17,7 +17,7 @@ pub struct AbcdFunction {
 }
 
 impl AbcdFunction {
-    /// `AbcdFunction(a, b, c, d)` (defaults match QL: -0.06, 0.17, 0.54, 0.17).
+    /// `AbcdFunction(a, b, c, d)`.
     ///
     /// # Errors
     ///
@@ -26,6 +26,15 @@ impl AbcdFunction {
         Ok(Self {
             math: AbcdMathFunction::new(a, b, c, d)?,
         })
+    }
+
+    /// QuantLib default coefficients (`a=-0.06, b=0.17, c=0.54, d=0.17`).
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
+    pub fn with_defaults() -> QlResult<Self> {
+        Self::new(-0.06, 0.17, 0.54, 0.17)
     }
 
     /// `f(t)`.
@@ -46,7 +55,7 @@ impl AbcdFunction {
     pub fn covariance(&self, t1: Time, t2: Time, t_fix: Time, s_fix: Time) -> QlResult<Real> {
         require!(
             t1 <= t2,
-            "integrations bounds ({t1},{t2}) are in reverse order"
+            "integration bounds ({t1},{t2}) are in reverse order"
         );
         let mut cut_off = t_fix.min(s_fix);
         if t1 >= cut_off {
