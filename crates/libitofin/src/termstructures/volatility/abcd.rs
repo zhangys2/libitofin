@@ -142,8 +142,8 @@ impl AbcdSquared {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::integrals::segment::SegmentIntegral;
     use crate::math::integrals::Integrator;
+    use crate::math::integrals::segment::SegmentIntegral;
 
     /// `marketmodel.cpp` `testAbcdDegenerateCases`.
     #[test]
