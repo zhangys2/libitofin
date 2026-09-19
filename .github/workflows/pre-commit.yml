@@ -139,6 +139,42 @@ jobs:
       - name: run tests
         run: cargo test --workspace
 
+  # Branch protection still requires these legacy check names. Real work is in
+  # `rust-ci` / `python-bindings`; these only republish under the expected names.
+  rust-fmt-and-clippy:
+    name: Rust fmt and clippy
+    needs: [check-change-files, rust-ci]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require rust-ci success or intentional skip
+        env:
+          RUST: ${{ needs.check-change-files.outputs.rust }}
+          RESULT: ${{ needs.rust-ci.result }}
+        run: |
+          if [ "$RESULT" = "success" ] || { [ "$RUST" = "false" ] && [ "$RESULT" = "skipped" ]; }; then
+            exit 0
+          fi
+          echo "rust-ci result=$RESULT (rust paths=$RUST)" >&2
+          exit 1
+
+  rust-workspace:
+    name: Rust workspace
+    needs: [check-change-files, rust-ci]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require rust-ci success or intentional skip
+        env:
+          RUST: ${{ needs.check-change-files.outputs.rust }}
+          RESULT: ${{ needs.rust-ci.result }}
+        run: |
+          if [ "$RESULT" = "success" ] || { [ "$RUST" = "false" ] && [ "$RESULT" = "skipped" ]; }; then
+            exit 0
+          fi
+          echo "rust-ci result=$RESULT (rust paths=$RUST)" >&2
+          exit 1
+
   python-bindings:
     name: python bindings
     needs: check-change-files
@@ -192,6 +228,22 @@ jobs:
         run: |
           . .venv/bin/activate
           pytest crates/itofin-py/tests -v
+
+  python-bindings-required:
+    name: Python bindings
+    needs: python-bindings
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require python-bindings matrix success
+        env:
+          RESULT: ${{ needs.python-bindings.result }}
+        run: |
+          if [ "$RESULT" = "success" ]; then
+            exit 0
+          fi
+          echo "python-bindings result=$RESULT" >&2
+          exit 1
 
   pr-labeler:
     name: pr labeler
