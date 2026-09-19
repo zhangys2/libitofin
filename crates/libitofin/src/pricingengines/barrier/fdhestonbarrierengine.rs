@@ -797,4 +797,61 @@ mod tests {
             "FD Heston DownIn cached: {calculated} vs 7.7627"
         );
     }
+
+    /// `fdheston.cpp` `testFdmHestonBarrier`: UpOut call NPV 9.1530 @ 1e-2
+    /// (delta/gamma deferred — engine does not yet expose them).
+    #[test]
+    fn fdm_heston_barrier_npv() {
+        let today = Date::new(28, Month::March, 2004);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual365Fixed::new();
+        let flat = |rate| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let model = heston_model(
+            100.0,
+            0.04,
+            2.5,
+            0.04,
+            0.66,
+            -0.8,
+            flat(0.05),
+            flat(0.0),
+        );
+        let exercise: Shared<dyn Exercise> =
+            shared(EuropeanExercise::new(Date::new(28, Month::March, 2005)));
+        let mut option = BarrierOption::with_rebate(
+            BarrierType::UpOut,
+            135.0,
+            0.0,
+            PlainVanillaPayoff::new(OptionType::Call, 100.0),
+            exercise,
+            settings,
+        )
+        .unwrap();
+        set_fd_heston_barrier_engine(
+            &mut option,
+            shared_mut(FdHestonBarrierEngine::with_params(
+                model,
+                Vec::new(),
+                50,
+                400,
+                100,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            )),
+        );
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - 9.1530).abs() <= 0.01,
+            "FD Heston UpOut barrier: {calculated} vs 9.1530"
+        );
+    }
 }
