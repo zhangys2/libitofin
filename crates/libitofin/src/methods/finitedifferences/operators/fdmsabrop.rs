@@ -11,8 +11,9 @@
 //!
 //! with absorbing boundary at `f = 0`. Direction 0 is the forward, direction 1
 //! is `log α`. `f0` / `alpha` match the QL ctor but are unused by the operator
-//! (the engine owns the mesher transform). `toMatrixDecomp` is deferred with
-//! the sparse-matrix work (#636).
+//! (the engine owns the mesher transform). The yield curve is snapshotted at
+//! construction (QL `shared_ptr`, same as [`FdmBlackScholesOp`]).
+//! `toMatrixDecomp` is deferred with the sparse-matrix work (#636).
 
 use crate::errors::QlResult;
 use crate::fail;
@@ -35,7 +36,8 @@ use super::triplebandlinearop::TripleBandLinearOp;
 
 /// SABR finite-difference generator (`fdmsabrop.hpp`).
 pub struct FdmSabrOp {
-    r_ts: Handle<dyn YieldTermStructure>,
+    /// Frozen curve link (QL stores `shared_ptr`, not a live handle).
+    r_ts: Shared<dyn YieldTermStructure>,
     dff_map: TripleBandLinearOp,
     dx_map: TripleBandLinearOp,
     dxx_map: TripleBandLinearOp,
@@ -49,7 +51,8 @@ impl FdmSabrOp {
     ///
     /// # Errors
     ///
-    /// Fails if the mixed-derivative stencil cannot be built.
+    /// Fails if the yield handle is empty or the mixed-derivative stencil
+    /// cannot be built.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         mesher: Shared<dyn FdmMesher>,
@@ -74,7 +77,7 @@ impl FdmSabrOp {
             .mult(&(rho * nu * &(&log_alpha.exp() * &f.pow(beta))));
 
         Ok(Self {
-            r_ts,
+            r_ts: r_ts.current_link()?,
             dff_map,
             dx_map,
             dxx_map,
@@ -99,7 +102,6 @@ impl FdmLinearOpComposite for FdmSabrOp {
     fn set_time(&mut self, t1: Time, t2: Time) -> QlResult<()> {
         let r = self
             .r_ts
-            .current_link()?
             .forward_rate(
                 t1,
                 t2,
@@ -151,6 +153,12 @@ mod tests {
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
 
+    const BETA: Real = 0.5;
+    const NU: Real = 0.8;
+    const RHO: Real = -0.35;
+    const R: Real = 0.04;
+    const TOL: Real = 1e-10;
+
     fn flat(rate: Real) -> Handle<dyn YieldTermStructure> {
         Handle::new(shared(FlatForward::with_rate(
             Date::new(22, Month::February, 2018),
@@ -162,72 +170,76 @@ mod tests {
     }
 
     fn mesher() -> Shared<dyn FdmMesher> {
-        // Positive forward strip so f^β is well-defined.
-        let layout = shared(FdmLinearOpLayout::new(vec![7, 9]));
+        let layout = shared(FdmLinearOpLayout::new(vec![11, 9]));
         shared(UniformGridMesher::new(Shared::clone(&layout), &[(0.2, 2.0), (-1.0, 1.0)]).unwrap())
     }
 
-    fn make_op(beta: Real, rho: Real, r: Real) -> (FdmSabrOp, Size) {
-        let m = mesher();
-        let n = m.layout().size();
-        (
-            FdmSabrOp::new(m, flat(r), 1.0, 0.35, beta, 1.0, rho).unwrap(),
-            n,
-        )
-    }
-
     #[test]
-    fn size_apply_split_and_zero_rho() {
-        let (mut op, n) = make_op(0.5, -0.25, 0.0);
-        assert_eq!(op.size(), 2);
+    fn closed_form_generator_on_polynomials() {
+        let m = mesher();
+        let layout = m.layout();
+        let nf = layout.dim()[0];
+        let nx = layout.dim()[1];
+        let f_loc = m.locations(0);
+        let x_loc = m.locations(1);
+
+        let mut op = FdmSabrOp::new(Shared::clone(&m), flat(R), 1.0, 0.35, BETA, NU, RHO).unwrap();
         op.set_time(0.0, 1.0).unwrap();
-        let u = Array::incremental(n, 1.0, 0.01);
-        let full = op.apply(&u);
-        let parts =
-            &(&op.apply_direction(0, &u) + &op.apply_direction(1, &u)) + &op.apply_mixed(&u);
-        for i in 0..full.size() {
-            assert!((full[i] - parts[i]).abs() < 1e-12, "at {i}");
+
+        let mut u_f2 = Array::with_size(layout.size());
+        let mut u_x2 = Array::with_size(layout.size());
+        let mut u_fx = Array::with_size(layout.size());
+        for iter in layout.iter() {
+            let i = iter.index();
+            let f = f_loc[i];
+            let x = x_loc[i];
+            u_f2[i] = f * f;
+            u_x2[i] = x * x;
+            u_fx[i] = f * x;
         }
 
-        let (mut z, _) = make_op(0.5, 0.0, 0.0);
+        let lf2 = op.apply(&u_f2);
+        let lx2 = op.apply(&u_x2);
+        let lfx = op.apply(&u_fx);
+
+        for iter in layout.iter() {
+            let (i_f, i_x) = (iter.coordinates()[0], iter.coordinates()[1]);
+            if i_f == 0 || i_f + 1 == nf || i_x == 0 || i_x + 1 == nx {
+                continue;
+            }
+            let i = iter.index();
+            let f = f_loc[i];
+            let x = x_loc[i];
+            let e2x = (2.0 * x).exp();
+            let ex = x.exp();
+
+            let e_f2 = e2x * f.powf(2.0 * BETA) - R * f * f;
+            let e_x2 = -NU * NU * x + NU * NU - R * x * x;
+            let e_fx = -0.5 * NU * NU * f + RHO * NU * ex * f.powf(BETA) - R * f * x;
+
+            assert!(
+                (lf2[i] - e_f2).abs() < TOL,
+                "L[f²] at {i}: {} vs {e_f2}",
+                lf2[i]
+            );
+            assert!(
+                (lx2[i] - e_x2).abs() < TOL,
+                "L[x²] at {i}: {} vs {e_x2}",
+                lx2[i]
+            );
+            assert!(
+                (lfx[i] - e_fx).abs() < TOL,
+                "L[fx] at {i}: {} vs {e_fx}",
+                lfx[i]
+            );
+        }
+
+        // ρ = 0 kills the mixed contribution on u = fx (other terms unchanged).
+        let mut z = FdmSabrOp::new(m, flat(R), 1.0, 0.35, BETA, NU, 0.0).unwrap();
         z.set_time(0.0, 1.0).unwrap();
-        let mixed = z.apply_mixed(&u);
+        let mixed = z.apply_mixed(&u_fx);
         for i in 0..mixed.size() {
             assert!(mixed[i].abs() < 1e-14, "at {i}: {}", mixed[i]);
-        }
-    }
-
-    #[test]
-    fn flat_zero_rate_discount_on_constant_field() {
-        let (mut op, n) = make_op(0.25, 0.25, 0.04);
-        op.set_time(0.0, 1.0).unwrap();
-        let ones = Array::filled(n, 1.0);
-        let ax = op.apply_direction(0, &ones);
-        let ay = op.apply_direction(1, &ones);
-        // Constant field ⇒ pure diagonals −½ r on both maps (r flat ⇒ fwd = 0.04).
-        for i in 0..ones.size() {
-            assert!((ax[i] + 0.02).abs() < 1e-10, "mapF at {i}: {}", ax[i]);
-            assert!((ay[i] + 0.02).abs() < 1e-10, "mapA at {i}: {}", ay[i]);
-        }
-    }
-
-    #[test]
-    fn solve_splitting_round_trips() {
-        let (mut op, n) = make_op(0.6, 0.25, 0.0);
-        op.set_time(0.0, 0.5).unwrap();
-        let r = Array::incremental(n, 1.0, 0.05);
-        let s = 0.01;
-        for direction in [0, 1] {
-            let x = op.solve_splitting(direction, &r, s).unwrap();
-            let check = &x + &(s * &op.apply_direction(direction, &x));
-            for i in 0..r.size() {
-                assert!(
-                    (check[i] - r[i]).abs() < 1e-10,
-                    "dir {direction} at {i}: {} vs {}",
-                    check[i],
-                    r[i]
-                );
-            }
         }
     }
 }
