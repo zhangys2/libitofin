@@ -169,6 +169,7 @@ mod tests {
     use crate::math::abcdmathfunction::AbcdMathFunction;
     use crate::math::integrals::Integrator;
     use crate::math::integrals::segment::SegmentIntegral;
+    use crate::types::Size;
 
     /// Pin distinct QL default coefficient sets for math vs market-model Abcd.
     #[test]
@@ -206,7 +207,7 @@ mod tests {
     #[test]
     fn abcd_volatility_integration() {
         let (a, b, c, d) = (-0.0597, 0.1677, 0.5403, 0.1710);
-        let n = 10usize;
+        let n: Size = 10;
         let precision = 1.0e-4;
         let inst_vol = AbcdFunction::new(a, b, c, d).unwrap();
         let si = SegmentIntegral::new(20_000).unwrap();
