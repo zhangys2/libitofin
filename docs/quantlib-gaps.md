@@ -20,7 +20,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 |--------|---------|------------|--------------|-------------|---------------------|-------|
 | Rates | GSR (Gaussian short-rate) | `ql/models/shortrate/onefactormodels/gsr.hpp`, `gsrprocess` | `gsr.cpp` | partial | partial | Constant a/σ `GsrProcess` + `ForwardMeasureProcess1D`; piecewise core / `Gsr` model / engines deferred |
 | Rates | Libor market model | `ql/legacy/libormarketmodels/*` | `libormarketmodel.cpp`, `libormarketmodelprocess.cpp` | partial | partial | Exp corr + lin-exp vol + `LfmCovarianceProxy` (`testSimpleCovarianceModels`); process/cap/swaption/calibration deferred |
-| Rates | Generic market model / SMM / CMS-MM | `ql/models/marketmodels/*` | `marketmodel.cpp`, `marketmodel_cms.cpp`, `marketmodel_smm*.cpp` | false | none | Largest rates MC gap; grouped |
+| Rates | Generic market model / SMM / CMS-MM | `ql/models/marketmodels/*` | `marketmodel.cpp`, `marketmodel_cms.cpp`, `marketmodel_smm*.cpp` | partial | partial | `AbcdFunction`/`AbcdSquared` + `AbcdMathFunction` (`testAbcdDegenerateCases`, `testAbcdVolatilityIntegration`); evolvers/products/CMS/SMM deferred |
 | Rates | Markov functional / Gaussian 1D | `markovfunctional`, `gaussian1dmodel` | `markovfunctional.cpp`, `gaussian1dmodel.cpp` | false | none | Incl. Gaussian1d swaption/cap engines |
 | Rates | Black–Karasinski | `blackkarasinski.hpp` | `blackkarasinski.cpp` | false | none | |
 | Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | false | none | Process + analytic/FD/MC engines absent |
