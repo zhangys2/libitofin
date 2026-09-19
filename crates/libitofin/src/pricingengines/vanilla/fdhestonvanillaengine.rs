@@ -263,6 +263,7 @@ impl PricingEngine for FdHestonVanillaEngine {
         let value = solver.value_at(spot, v0)?;
         let results = self.base.results_mut();
         results.instrument.value = Some(value);
+        // Engine δ/γ/θ stay deferred until `theta_at` exists (QL fills all three).
         results.greeks = Greeks::default();
         results.more_greeks = MoreGreeks::default();
         Ok(())
