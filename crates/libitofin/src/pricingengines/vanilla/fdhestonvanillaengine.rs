@@ -534,8 +534,9 @@ mod tests {
             shared(PlainVanillaPayoff::new(OptionType::Put, 1.05));
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
         let mut option = VanillaOption::new(payoff, exercise, settings);
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdHestonVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                 model,
                 Vec::new(),
                 100,
@@ -543,8 +544,7 @@ mod tests {
                 100,
                 0,
                 FdmSchemeDesc::hundsdorfer(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         let expected = 0.06325;
         assert!(
@@ -584,8 +584,9 @@ mod tests {
             shared(PlainVanillaPayoff::new(OptionType::Call, 95.0));
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
         let mut option = VanillaOption::new(payoff, exercise, settings);
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdHestonVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                 model,
                 dividends,
                 200,
@@ -593,8 +594,7 @@ mod tests {
                 100,
                 0,
                 FdmSchemeDesc::hundsdorfer(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         let expected = 12.946;
         assert!(
@@ -639,8 +639,9 @@ mod tests {
             Shared::clone(&exercise),
             Shared::clone(&settings),
         );
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdHestonVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                 model,
                 Vec::new(),
                 200,
@@ -648,16 +649,11 @@ mod tests {
                 100,
                 0,
                 FdmSchemeDesc::hundsdorfer(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
 
-        let vol_ts = Handle::new(shared(BlackConstantVol::new(
-            settlement,
-            None,
-            0.2,
-            isda(),
-        )) as Shared<dyn BlackVolTermStructure>);
+        let vol_ts = Handle::new(shared(BlackConstantVol::new(settlement, None, 0.2, isda()))
+            as Shared<dyn BlackVolTermStructure>);
         let ref_process: Shared<GeneralizedBlackScholesProcess> =
             shared(BlackScholesMertonProcess::new(
                 Handle::clone(&s0),
@@ -665,16 +661,16 @@ mod tests {
                 Handle::clone(&r_ts),
                 vol_ts,
             ));
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdBlackScholesVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdBlackScholesVanillaEngine::with_params(
                 ref_process,
                 Vec::new(),
                 200,
                 400,
                 0,
                 FdmSchemeDesc::douglas(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let expected = option.npv().unwrap();
         assert!(
             (calculated - expected).abs() <= 1.0e-3,

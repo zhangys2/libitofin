@@ -83,12 +83,11 @@ impl FdmHestonVarianceMesher {
         // Degenerate p-grids (duplicate probabilities) show up for near-zero
         // vol-of-vol; QuantLib's `catch (const Error&)` falls back to a uniform
         // CIR mesh, and LinearInterpolation here is the equivalent failure.
-        let (mut v_grid, p_grid) =
-            if p_grid.windows(2).any(|w| !(w[1] > w[0])) {
-                fallback_grid(size, process, mixed_sigma)
-            } else {
-                (v_grid, p_grid)
-            };
+        let (mut v_grid, p_grid) = if p_grid.windows(2).any(|w| !(w[1] > w[0])) {
+            fallback_grid(size, process, mixed_sigma)
+        } else {
+            (v_grid, p_grid)
+        };
         let variance =
             LinearInterpolation::new(p_grid.clone(), v_grid.clone())?.with_extrapolation(true);
         let vola_estimate = GaussLobattoIntegral::new(100_000, 1e-4)?.integrate(
