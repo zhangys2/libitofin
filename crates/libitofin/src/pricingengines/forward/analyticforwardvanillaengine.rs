@@ -256,10 +256,7 @@ mod tests {
     fn haug_forward_vanilla_values() {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
-        let rows = [
-            (OptionType::Call, 4.4064),
-            (OptionType::Put, 8.2971),
-        ];
+        let rows = [(OptionType::Call, 4.4064), (OptionType::Put, 8.2971)];
         for (option_type, expected) in rows {
             let process = shared(BlackScholesMertonProcess::new(
                 Handle::new(shared(SimpleQuote::new(60.0)) as Shared<dyn Quote>),
