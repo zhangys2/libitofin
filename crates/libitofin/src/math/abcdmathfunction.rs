@@ -27,13 +27,13 @@ impl AbcdMathFunction {
         Ok(Self { a, b, c, d })
     }
 
-    /// QuantLib default coefficients (`a=-0.06, b=0.17, c=0.54, d=0.17`).
+    /// QuantLib default coefficients (`a=0.002, b=0.001, c=0.16, d=0.0005`).
     ///
     /// # Errors
     ///
     /// As [`new`](Self::new).
     pub fn with_defaults() -> QlResult<Self> {
-        Self::new(-0.06, 0.17, 0.54, 0.17)
+        Self::new(0.002, 0.001, 0.16, 0.0005)
     }
 
     pub fn a(&self) -> Real {
@@ -56,6 +56,12 @@ impl AbcdMathFunction {
         } else {
             (self.a + self.b * t) * (-self.c * t).exp() + self.d
         }
+    }
+}
+
+impl Default for AbcdMathFunction {
+    fn default() -> Self {
+        Self::with_defaults().expect("QuantLib AbcdMathFunction defaults are valid")
     }
 }
 

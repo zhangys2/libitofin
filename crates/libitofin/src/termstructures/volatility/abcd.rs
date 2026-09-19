@@ -66,7 +66,7 @@ impl AbcdFunction {
         }
     }
 
-    /// Average variance of the `T`-fixing rate on `[t_min, t_max]`.
+    /// Integrated variance of the `T`-fixing rate on `[t_min, t_max]`.
     ///
     /// # Errors
     ///
