@@ -9,7 +9,9 @@
 //! relinking moves that registration to the new pointee. The port mirrors the
 //! `handle.hpp` precondition "class T must inherit from Observable" with the
 //! [`AsObservable`] bound on handle pointees and forwards every pointee
-//! notification to the link's own observers.
+//! notification to the link's own observers - unless the handle was built
+//! through [`Handle::new_unregistered`], the port of the C++
+//! `registerAsObserver = false` constructor flag.
 
 use std::rc::Weak;
 
@@ -102,6 +104,31 @@ impl<T: AsObservable + ?Sized> Link<T> {
         self.weak = Some(pointee);
         self.observable.clone()
     }
+
+    /// Repoints the link at an OWNING pointee it does not observe, dropping any
+    /// previous owning pointee's subscription and registering none on the new
+    /// one.
+    ///
+    /// The port of C++ `Handle(pointee, registerAsObserver=false)`
+    /// (`handle.hpp:80-82`): the pointee is kept alive and resolves normally, but
+    /// its value changes never reach the handle's observers. The futures-
+    /// convexity oracle needs exactly this - a `FuturesRateHelper` must hold
+    /// the convexity quote whose volatility the global bootstrap varies, and
+    /// observing it would invalidate the curve on every optimizer step
+    /// (`piecewiseyieldcurve.cpp:1516-1519`).
+    ///
+    /// This is the third state of the two slots: [`link_to`](Link::link_to)
+    /// owns AND observes, [`link_weak`](Link::link_weak) neither owns nor
+    /// observes, and this one owns without observing.
+    fn link_unregistered(&mut self, pointee: Shared<T>) -> Shared<Observable> {
+        let forwarder = self.forwarder.clone() as SharedMut<dyn Observer>;
+        if let Some(old) = &self.current {
+            old.observable().unregister_observer(&forwarder);
+        }
+        self.current = Some(pointee);
+        self.weak = None;
+        self.observable.clone()
+    }
 }
 
 /// Shared handle to an observable pointee.
@@ -124,6 +151,21 @@ impl<T: AsObservable + ?Sized> Handle<T> {
     pub fn new(pointee: Shared<T>) -> Self {
         Handle {
             link: shared_mut(Link::new(Some(pointee))),
+        }
+    }
+
+    /// Creates a handle OWNING `pointee` but not observing it, the port of C++
+    /// `Handle(pointee, registerAsObserver=false)` (`handle.hpp:80-82`).
+    ///
+    /// The pointee is dereferenced exactly as through [`new`](Self::new); only
+    /// the notification path is cut, so a change inside the pointee never
+    /// reaches this handle's observers. See `Link::link_unregistered` for why
+    /// the global bootstrap's futures-convexity oracle needs it.
+    pub fn new_unregistered(pointee: Shared<T>) -> Self {
+        let mut link = Link::new(None);
+        link.link_unregistered(pointee);
+        Handle {
+            link: shared_mut(link),
         }
     }
 }
@@ -150,6 +192,17 @@ impl<T: ?Sized> Handle<T> {
     /// the current pointee notifies a change.
     pub fn register_observer(&self, observer: &SharedMut<dyn Observer>) -> bool {
         self.link.borrow().observable.register_observer(observer)
+    }
+
+    /// Unregisters an observer from the underlying link, returning `true` if it
+    /// had been registered.
+    ///
+    /// The port of C++ `unregisterWith(handle)`: an object built already
+    /// observing a handle can be detached from it again, which is how a bootstrap
+    /// helper stops its own index reacting to the handle it relinks each solver
+    /// step (`inflationhelpers.cpp:106-110`).
+    pub fn unregister_observer(&self, observer: &SharedMut<dyn Observer>) -> bool {
+        self.link.borrow().observable.unregister_observer(observer)
     }
 
     /// Two handles are equal when they share the same underlying link.
@@ -217,6 +270,18 @@ impl<T: ?Sized> RelinkableHandle<T> {
     /// Borrows this as a plain [`Handle`] (e.g. to hand out non-relinkable copies).
     pub fn handle(&self) -> Handle<T> {
         self.handle.clone()
+    }
+}
+
+/// Copies share the one underlying link, as C++ `RelinkableHandle` copies do:
+/// relinking any copy re-points them all and notifies their common observers.
+/// The optionlet stripper leans on this, its helpers re-pointing the same link
+/// the cap/floor engine reads (`yoyoptionlethelpers.cpp:74-89`).
+impl<T: ?Sized> Clone for RelinkableHandle<T> {
+    fn clone(&self) -> Self {
+        RelinkableHandle {
+            handle: self.handle.clone(),
+        }
     }
 }
 
@@ -354,6 +419,68 @@ mod tests {
             flag.borrow().up,
             "observer was not notified of quote change"
         );
+    }
+
+    /// The `registerAsObserver = false` half of the C++ constructor flag: a
+    /// pointee change does NOT reach observers of an unregistered handle,
+    /// while the pointee still resolves through it.
+    ///
+    /// The mutant twin below is what gives this arm teeth - a handle wired to
+    /// nothing would pass this half on its own.
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn an_unregistered_handle_hides_pointee_changes() {
+        let quote = shared(SimpleQuote::new(0.0));
+        let h: Handle<dyn Quote> = Handle::new_unregistered(quote.clone());
+        let flag = shared_mut(Flag::default());
+        h.register_observer(&(flag.clone() as SharedMut<dyn Observer>));
+
+        quote.set_value(3.14);
+
+        assert!(
+            !flag.borrow().up,
+            "an unregistered handle must not forward pointee changes"
+        );
+        assert_eq!(
+            h.current_link().unwrap().value().unwrap(),
+            3.14,
+            "the pointee must still resolve, and at its new value"
+        );
+    }
+
+    /// The mutant twin of the arm above: the SAME setup through the ordinary
+    /// observing [`Handle::new`] does notify.
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn an_ordinary_handle_forwards_the_same_pointee_change() {
+        let quote = shared(SimpleQuote::new(0.0));
+        let h: Handle<dyn Quote> = Handle::new(quote.clone());
+        let flag = shared_mut(Flag::default());
+        h.register_observer(&(flag.clone() as SharedMut<dyn Observer>));
+
+        quote.set_value(3.14);
+
+        assert!(
+            flag.borrow().up,
+            "an ordinary handle must forward pointee changes"
+        );
+    }
+
+    /// The OWNING half of the contract: the handle is the pointee's only
+    /// holder here, so a non-owning (weak) implementation would leave it
+    /// empty. Pinned directly because the futures helper reads an empty
+    /// convexity handle as a ZERO adjustment (`ratehelpers.rs`) - a dangling
+    /// handle there prices silently rather than failing (gate-probed: only the
+    /// convexity oracle's solved-vol pin caught a weak variant).
+    #[test]
+    fn an_unregistered_handle_keeps_its_pointee_alive() {
+        let h: Handle<dyn Quote> = Handle::new_unregistered(shared(SimpleQuote::new(0.25)));
+
+        assert!(
+            !h.is_empty(),
+            "the unregistered handle must own its pointee"
+        );
+        assert_eq!(h.current_link().unwrap().value().unwrap(), 0.25);
     }
 
     /// Port of `testObservableHandle` (test-suite/quotes.cpp), extended with

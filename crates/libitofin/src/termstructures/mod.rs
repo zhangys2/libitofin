@@ -34,16 +34,23 @@
 
 pub mod bootstraphelper;
 pub mod bootstraptraits;
+pub mod credit;
+pub mod globalbootstrap;
+pub mod globalbootstrapvars;
+pub mod inflation;
 pub mod interpolatedcurve;
 pub mod iterativebootstrap;
+pub mod localbootstrap;
+pub mod multicurve;
 pub mod volatility;
 pub mod yields;
 pub mod yieldtermstructure;
 
 pub use bootstraphelper::{
-    BootstrapHelperBase, RateHelper, RelativeDateRateHelper, compare_by_pillar_date,
-    sort_by_pillar_date,
+    BootstrapHelperBase, BootstrapHelperShared, RateHelper, RelativeDateRateHelper,
+    compare_by_pillar_date, sort_by_pillar_date,
 };
+pub use multicurve::MultiCurve;
 
 use std::cell::Cell;
 
@@ -266,6 +273,30 @@ impl TermStructureBase {
 pub trait TermStructure: AsObservable {
     /// The embedded shared holder.
     fn base(&self) -> &TermStructureBase;
+
+    /// The structure's observer half, for registering with an upstream
+    /// observable or delivering a fan-out to. Defaults to the base half; a
+    /// curve whose cache lives behind a private updater (a bootstrapped curve)
+    /// overrides this to return that half instead, so a notification reaches
+    /// the state that re-solves the curve rather than only its subscribers.
+    fn updater(&self) -> SharedMut<dyn Observer> {
+        self.base().updater()
+    }
+
+    /// Registers `observer` with the structure's UPSTREAM observables (its data
+    /// inputs), not with the structure itself.
+    ///
+    /// The port of C++ `Observer::registerWithObservables(curve)`
+    /// (`observable.hpp:132-139`), which registers with the observables *of* the
+    /// curve and, verbatim, "does not include registering with the observer
+    /// itself". A subscriber wired this way hears an input change (a quote move,
+    /// a relink, an eval-date change) as a sibling of the curve's own updater,
+    /// and is never notified from inside the curve's updater mid-calculation.
+    /// The default is a no-op: a structure with no observed inputs has no
+    /// upstream.
+    fn register_upstream(&self, observer: &SharedMut<dyn Observer>) {
+        let _ = observer;
+    }
 
     /// The latest date for which the curve can return values.
     fn max_date(&self) -> Date;

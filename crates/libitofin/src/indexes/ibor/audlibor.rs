@@ -79,10 +79,9 @@ mod tests {
             BusinessDayConvention::ModifiedFollowing
         );
         assert!(index.end_of_month());
-        assert!(index.joint_calendar().is_some());
         assert_eq!(
-            index.financial_center_calendar().map(|c| c.name()),
-            Some(Australia::new(Market::Settlement).name())
+            index.maturity_calendar().name(),
+            "JoinHolidays(London stock exchange, Australia settlement)"
         );
     }
 }

@@ -25,12 +25,15 @@
 //! Deferred, rejected visibly rather than silently ignored:
 //! - **separate control-variate path generator**: same-path CV is supported via
 //!   [`calculate_with_control_variate`](McSimulation::calculate_with_control_variate);
-//!   a distinct CV generator is not.
-//! - **antithetic variate** on single-factor generators remains a fail-loud
-//!   `Err` from [`PathGenerator`](crate::methods::montecarlo::PathGenerator).
+//!   a distinct CV generator is not. The constructor `control_variate` flag still
+//!   makes [`calculate`](McSimulation::calculate) return `Err` — callers that
+//!   want CV must use the dedicated method.
 //! - **`maxError` over a sequence** (`mcsimulation.hpp:89-95`): the multi-variate
 //!   `max_element` reduction is dropped; the single-variate `result_type = Real`
 //!   is its own error.
+//!
+//! Antithetic averaging is live on both single- and multi-factor generators
+//! when the constructor flag is set.
 //!
 //! [`new`]: McSimulation::new
 
@@ -167,7 +170,7 @@ where
     /// Errors if neither `required_tolerance` nor `required_samples` is set, if
     /// control variate was requested at construction (use
     /// [`calculate_with_control_variate`](McSimulation::calculate_with_control_variate)),
-    /// or on an accumulation failure (including a single-factor antithetic draw).
+    /// or on an accumulation failure.
     pub fn calculate(
         &mut self,
         path_generator: PG,

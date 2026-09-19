@@ -32,6 +32,7 @@ mod blackvariancesurface;
 mod capfloor;
 mod flatsmilesection;
 mod impliedvoltermstructure;
+mod inflation;
 mod interpolatedsmilesection;
 mod localconstantvol;
 mod localvolcurve;
@@ -50,6 +51,13 @@ pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
+pub use inflation::{
+    ConstantYoYOptionletVolatility, InterpolatedYoYOptionletStripper,
+    InterpolatedYoYOptionletVolatilityCurve, KInterpolatedYoYOptionletVolatilitySurface,
+    PiecewiseYoYOptionletVolatilityCurve, YoYInflationVolatilityTraits, YoYOptionletHelper,
+    YoYOptionletStripper, YoYOptionletVolHelperBase, YoYOptionletVolatilityHelper,
+    YoYOptionletVolatilitySurface, YoYOptionletVolatilitySurfaceBase,
+};
 pub use interpolatedsmilesection::InterpolatedSmileSection;
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;

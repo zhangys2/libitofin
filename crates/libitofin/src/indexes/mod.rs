@@ -8,11 +8,23 @@
 pub mod ibor;
 pub mod iborindex;
 pub mod index;
+pub mod inflation;
+pub mod inflationindex;
 pub mod interestrateindex;
+pub mod region;
 pub mod swapindex;
 
-pub use ibor::{AUDLibor, Estr, Euribor, Libor, Sofr, USDLibor};
+pub use ibor::{
+    AUDLibor, CustomIborIndex, Eonia, Estr, EurLibor, Euribor, Euribor365, GbpLibor, JpyLibor,
+    Libor, Sofr, USDLibor, UsdLibor,
+};
 pub use iborindex::{IborIndex, OvernightIndex};
 pub use index::Index;
+pub use inflation::{EuHicp, UkHicp, UkRpi, YyEuHicp, YyEuHicpXt, YyUkRpi};
+pub use inflationindex::{
+    Cpi, CpiInterpolationType, InflationIndex, InflationIndexBase, YoYInflationIndex,
+    ZeroInflationIndex, inflation_period,
+};
 pub use interestrateindex::{InterestRateIndex, InterestRateIndexBase};
+pub use region::Region;
 pub use swapindex::SwapIndex;

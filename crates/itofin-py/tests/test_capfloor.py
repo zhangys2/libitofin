@@ -1,14 +1,17 @@
-"""Oracle for the cap/floor + optionlet-vol + Black-engine facades (issue #621).
+"""Oracle for the cap/floor + optionlet-vol + Black-engine facades (#621, #626).
 
-The bindings oracle is the wrapped Rust numbers, and this pass is SMOKE and
-STRUCTURAL by design. The core's ``blackcapfloorengine.rs`` cached NPV is built
-over a hand-rolled ``IborLeg`` (notional 100, spot caplet kept) that ``MakeCapFloor``
-cannot reproduce - it uses a unit nominal and drops the spot caplet - and there is
-no ``IborLeg`` facade, so that literal is unreachable from Python. The
-discriminating numeric oracle for this vertical is the optionlet-stripper
-round-trip in #623, which is construction-agnostic.
+Two passes live here. The ``MakeCapFloor`` pass (#621) is SMOKE and STRUCTURAL:
+that builder uses a unit nominal and drops the spot caplet, so it cannot
+reproduce the core's cached literal and the arms below pin construction and
+engine agreement instead.
 
-What is pinned here:
+The raw-leg pass (#626) at the end of this file IS the numeric oracle. The
+core's ``blackcapfloorengine.rs`` cached NPV is built over a hand-rolled
+``IborLeg`` - notional 100, spot caplet kept - which the ``IborLeg`` facade now
+lets Python lay out, so ``CapFloor.cap`` / ``floor`` / ``collar`` reproduce that
+literal through the raw constructors. See the section header there.
+
+What is pinned by the MakeCapFloor pass:
 
 A. A 5Y Euribor6M cap at 4% on a flat 5% curve builds, refuses to price with no
    engine, and prices finite and positive once a Black engine is attached; the
@@ -22,29 +25,76 @@ B. The two engine constructors agree bit-for-bit. ``with_flat_vol`` wraps the
    what makes the smoke arms construction-pinning without a cached literal.
 C. The engine's displacement guard (``blackcapfloorengine.rs:75-82``) is reachable
    from Python: a displacement that differs from the surface's own is an error.
-D. ``CapFloorType`` exposes Cap and Floor only - Collar is deliberately absent.
+D. ``CapFloorType.Collar`` exists but is refused by this constructor:
+   ``MakeCapFloor`` builds caps and floors only. The collar is reachable through
+   the raw-leg pass below.
+
+What is pinned by the raw-leg pass:
+
+E. The core's cached cap 6.87570026732 and floor 2.65812927959, to 1e-11, over
+   the ``CommonVars`` fixture of ``blackcapfloorengine.rs:304-418``: it is
+   14-Mar-2002, a flat 5% Actual360 continuously compounded curve references
+   18-Mar-2002, Euribor 6M forecasts off it, and the leg runs 20 years
+   semiannually on TARGET, ModifiedFollowing at both ends, generated forwards,
+   on a notional of 100 with two fixing days and the index's own day counter.
+   The engine is Black at a flat 20% vol. The par arm is the one pinned:
+   ``using_at_par`` defaults true, so no flag is passed.
+F. That the raw-leg path is what produced them, but only in part. The literal
+   pins the notional (``MakeCapFloor`` uses a unit nominal, so that mis-wire is
+   off by a factor of 100), the schedule the coupons are laid on, and that the
+   default coupon pricer was attached - without it the rate query errors rather
+   than pricing. It does NOT pin everything the leg carries, and the three arms
+   below cover what it misses. Read F as the floor of what E proves, not the
+   ceiling.
+G. The collar, as the cap less the floor, and with it the argument order:
+   ``CapFloor.collar`` takes cap rates first, and swapping the lists builds a
+   long-3%-cap short-7%-floor instrument nowhere near the pinned value.
+H. That the payment adjustment reaches the coupons, which E cannot show - see
+   that test's own docstring.
+I. That the fixing days and the payment day counter reach the coupons, which E
+   also cannot show - see that test's own docstring.
+
+Three things E is blind to, each of which has its own arm above:
+
+- The spot caplet. Dropping the first coupon leaves both cached values bit
+  identical, because that optionlet is worth exactly zero here: its fixing date
+  IS the evaluation date, so it has no time value, and the ~5% forward sits
+  outside both the 7% cap and the 3% floor, so it has no intrinsic value
+  either. What catches a dropped spot coupon is the count arm, not the literal.
+- The fixing days and the payment day counter. The fixture passes each setter
+  the index's own default - Euribor 6M already fixes at two days and accrues
+  Actual/360 - so deleting either setter's wiring entirely leaves all three
+  cached values unchanged. Only moving each OFF the index default discriminates
+  it, which is what arm I does.
+- The payment adjustment, inert here for a different reason: see arm H.
 
 Every arm builds its own ``CapFloor``. An ``Instrument`` caches its NPV, so
-reusing one cap across two engines would let arm B pass on a stale number. One
-shared ``Settings`` drives everything: the instrument and the engine must agree
-on the evaluation date or the NPV is silently wrong.
+reusing one cap across two engines would let arm B pass on a stale number, and
+the raw-leg arms build a fresh engine per instrument as the core does.
+
+Two ``Settings`` objects live here, deliberately. The MakeCapFloor arms resolve
+against ``SETTINGS`` at 2026 and the raw-leg arms against ``ORACLE_SETTINGS`` at
+14-Mar-2002; moving the shared one would let test ordering decide the other
+pass's fate. Within each pass a single object drives the curve-backed index,
+every instrument and every engine, or the leg and the optionlets date
+differently with no error raised.
 """
 
+# standard library
 import math
 
+# pypi/conda library
 import pytest
 
+# itofin library
 from itofin import ItofinError, Settings
+from itofin.cashflows import IborLeg
 from itofin.indexes import Euribor
 from itofin.instruments import CapFloor, CapFloorType
 from itofin.pricingengines import BlackCapFloorEngine
 from itofin.quotes import SimpleQuote
-from itofin.termstructures import (
-    ConstantOptionletVolatility,
-    FlatForward,
-    VolatilityType,
-)
-from itofin.time import BusinessDayConvention, Calendar, DayCounter, Date, Period
+from itofin.termstructures import ConstantOptionletVolatility, FlatForward, VolatilityType
+from itofin.time import BusinessDayConvention, Calendar, Date, DayCounter, Frequency, Period, Schedule
 
 EVAL = Date(15, 1, 2026)
 
@@ -228,7 +278,206 @@ def test_quote_backed_surface_tracks_its_quote():
     assert surface.volatility(*one_year) == 0.25
 
 
-def test_cap_floor_type_exposes_cap_and_floor_only():
+def test_a_collar_is_refused_by_the_market_builder():
+    """The refusal is a ``MakeCapFloor`` property, not a gap: that builder
+    carries a single strike and rejects a collar outright
+    (``makecapfloor.rs:135``). A collar over a floating leg is built through
+    ``CapFloor.collar`` instead, which is pinned in the raw-leg pass below."""
     assert hasattr(CapFloorType, "Cap")
     assert hasattr(CapFloorType, "Floor")
-    assert not hasattr(CapFloorType, "Collar")
+    assert hasattr(CapFloorType, "Collar")
+
+    with pytest.raises(ItofinError) as raised:
+        _cap_floor(CapFloorType.Collar, CAP_STRIKE)
+    assert "not collars" in str(raised.value)
+
+
+ORACLE_EVAL = Date(14, 3, 2002)
+ORACLE_REFERENCE = Date(18, 3, 2002)
+ORACLE_RATE = 0.05
+ORACLE_VOL = 0.20
+ORACLE_NOTIONAL = 100.0
+ORACLE_YEARS = 20
+
+CACHED_CAP = 6.87570026732
+CACHED_FLOOR = 2.65812927959
+CACHED_COLLAR = CACHED_CAP - CACHED_FLOOR
+
+CAP_RATE = 0.07
+FLOOR_RATE = 0.03
+
+ORACLE_SETTINGS = Settings()
+ORACLE_SETTINGS.set_evaluation_date(ORACLE_EVAL)
+
+
+def _oracle_curve():
+    return FlatForward(ORACLE_REFERENCE, ORACLE_RATE, DayCounter.actual360())
+
+
+def _oracle_leg(curve):
+    """CommonVars::makeLeg: the 20Y semiannual leg the cached value is built
+    over, on the index day counter, ModifiedFollowing, two fixing days.
+
+    The end date is computed off the calendar rather than written out: a
+    literal that differed from the adjusted value would shift the whole
+    schedule and take the 1e-11 pins down with no useful message."""
+    calendar = Calendar.target()
+    modified_following = BusinessDayConvention.ModifiedFollowing
+    index = Euribor.six_months(curve, ORACLE_SETTINGS)
+    end = calendar.advance(
+        ORACLE_REFERENCE, ORACLE_YEARS, "Years", modified_following, False
+    )
+    schedule = Schedule(
+        ORACLE_REFERENCE,
+        end,
+        Frequency.Semiannual,
+        calendar,
+        modified_following,
+        termination_convention=modified_following,
+    )
+    return (
+        IborLeg(schedule, index)
+        .with_notional(ORACLE_NOTIONAL)
+        .with_payment_day_counter(index.day_counter())
+        .with_payment_adjustment(modified_following)
+        .with_fixing_days(2)
+    )
+
+
+def _oracle_engine(curve):
+    """CommonVars::makeEngine. A fresh engine per instrument, as the core builds
+    one per instrument: an Instrument caches its NPV."""
+    return BlackCapFloorEngine.with_flat_vol(
+        curve,
+        SimpleQuote(ORACLE_VOL),
+        DayCounter.actual365_fixed(),
+        0.0,
+        ORACLE_SETTINGS,
+    )
+
+
+def _priced(build):
+    curve = _oracle_curve()
+    instrument = build(_oracle_leg(curve))
+    instrument.set_black_engine(_oracle_engine(curve))
+    return instrument.npv()
+
+
+def test_the_raw_leg_cap_reproduces_the_cached_value():
+    npv = _priced(lambda leg: CapFloor.cap(leg, [CAP_RATE], ORACLE_SETTINGS))
+    print(f"\nraw-leg cap npv = {npv!r} (cached {CACHED_CAP})")
+    print(f"error = {abs(npv - CACHED_CAP)}")
+    assert abs(npv - CACHED_CAP) <= 1.0e-11, f"{npv!r} vs cached {CACHED_CAP}"
+
+
+def test_the_raw_leg_floor_reproduces_the_cached_value():
+    npv = _priced(lambda leg: CapFloor.floor(leg, [FLOOR_RATE], ORACLE_SETTINGS))
+    print(f"\nraw-leg floor npv = {npv!r} (cached {CACHED_FLOOR})")
+    print(f"error = {abs(npv - CACHED_FLOOR)}")
+    assert abs(npv - CACHED_FLOOR) <= 1.0e-11, f"{npv!r} vs cached {CACHED_FLOOR}"
+
+
+def test_the_raw_leg_collar_is_the_cap_less_the_floor():
+    """The tolerance is 1e-10 rather than the 1e-11 the two arms above carry:
+    the collar is the difference of two values each pinned at 1e-11, so it can
+    drift past that, and the core allows for it the same way at
+    ``blackcapfloorengine.rs:642-664``."""
+    npv = _priced(
+        lambda leg: CapFloor.collar(leg, [CAP_RATE], [FLOOR_RATE], ORACLE_SETTINGS)
+    )
+    print(f"\nraw-leg collar npv = {npv!r} (cached {CACHED_COLLAR})")
+    print(f"error = {abs(npv - CACHED_COLLAR)}")
+    assert abs(npv - CACHED_COLLAR) <= 1.0e-10, f"{npv!r} vs cached {CACHED_COLLAR}"
+
+
+def test_the_raw_leg_keeps_every_schedule_period():
+    """What separates this path from the MakeCapFloor one above: the spot caplet
+    survives, so the instrument carries one optionlet per schedule period rather
+    than one fewer."""
+    curve = _oracle_curve()
+    leg = _oracle_leg(curve)
+    cap = CapFloor.cap(leg, [CAP_RATE], ORACLE_SETTINGS)
+    assert cap.coupon_count() == leg.coupon_count()
+    assert cap.cap_rates() == [CAP_RATE] * cap.coupon_count()
+    assert cap.floor_rates() == []
+
+
+def test_a_raw_leg_constructor_needs_its_strikes():
+    leg = _oracle_leg(_oracle_curve())
+    with pytest.raises(ItofinError):
+        CapFloor.cap(leg, [], ORACLE_SETTINGS)
+    with pytest.raises(ItofinError):
+        CapFloor.collar(leg, [CAP_RATE], [], ORACLE_SETTINGS)
+
+
+def test_the_payment_adjustment_reaches_the_coupons():
+    """The cached fixture cannot pin this setter: its schedule is already rolled
+    ModifiedFollowing on TARGET, so every payment date is a business day and any
+    convention leaves it alone. An UNADJUSTED schedule puts the payment dates on
+    weekends, where Preceding discounts each coupon over a shorter period than
+    Following does. Without this the setter could be wired to nothing and the
+    three cached values above would not notice."""
+    calendar = Calendar.target()
+    unadjusted = BusinessDayConvention.Unadjusted
+    curve = _oracle_curve()
+    index = Euribor.six_months(curve, ORACLE_SETTINGS)
+    schedule = Schedule(
+        ORACLE_REFERENCE,
+        Date(18, 3, 2012),
+        Frequency.Semiannual,
+        calendar,
+        unadjusted,
+        termination_convention=unadjusted,
+    )
+    leg = (
+        IborLeg(schedule, index)
+        .with_notional(ORACLE_NOTIONAL)
+        .with_payment_day_counter(index.day_counter())
+        .with_fixing_days(2)
+    )
+
+    def npv(convention):
+        cap = CapFloor.cap(
+            leg.with_payment_adjustment(convention), [CAP_RATE], ORACLE_SETTINGS
+        )
+        cap.set_black_engine(_oracle_engine(curve))
+        return cap.npv()
+
+    following = npv(BusinessDayConvention.Following)
+    preceding = npv(BusinessDayConvention.Preceding)
+    print(f"\nfollowing = {following!r}\npreceding = {preceding!r}")
+    assert preceding > following
+
+
+def test_the_fixing_days_and_day_counter_reach_the_coupons():
+    """The cached values cannot pin either setter: the fixture hands each one
+    the index's OWN default, so both calls are no-ops there. Euribor 6M already
+    fixes at two days, and an unset payment day counter falls back to the
+    index's Actual/360, which is exactly what the fixture passes. Delete either
+    setter's wiring and all three cached arms stay bit identical.
+
+    Moving each off the index default is what discriminates it. Two fewer
+    fixing days shifts every optionlet expiry, and Actual/365 rescales every
+    accrual by 360/365, which is the ratio the second pair reproduces.
+
+    The fixing days move DOWN to zero rather than up: a fixing more than two
+    business days before the 18-Mar value date lands before the 14-Mar
+    evaluation date, and under the explicit-fixings design (D5/D11) that demands
+    a historical fixing and errors instead of pricing."""
+    curve = _oracle_curve()
+    leg = _oracle_leg(curve)
+
+    def npv(configured):
+        cap = CapFloor.cap(configured, [CAP_RATE], ORACLE_SETTINGS)
+        cap.set_black_engine(_oracle_engine(curve))
+        return cap.npv()
+
+    two_days = npv(leg)
+    no_days = npv(leg.with_fixing_days(0))
+    print(f"\nfixing_days=2 -> {two_days!r}\nfixing_days=0 -> {no_days!r}")
+    assert abs(two_days - no_days) > 1.0e-6
+
+    act_365 = npv(leg.with_payment_day_counter(DayCounter.actual365_fixed()))
+    print(f"act360 -> {two_days!r}\nact365 -> {act_365!r}")
+    assert abs(two_days - act_365) > 1.0e-3
+    assert act_365 < two_days

@@ -1,0 +1,35 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "crates/itofin-py/python/**"
+      - "crates/libitofin/examples/**"
+      - "example/**"
+      - "sdk/go/examples/**"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build site (strict)
+        working-directory: docs
+        run: uv run --frozen mkdocs build --strict
+      - name: Deploy to gh-pages
+        if: github.ref == 'refs/heads/main'
+        working-directory: docs
+        run: uv run --frozen mkdocs gh-deploy --force

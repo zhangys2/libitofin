@@ -14,6 +14,7 @@ mod impliedtermstructure;
 mod piecewiseyieldcurve;
 mod quantotermstructure;
 mod ratehelpers;
+mod simplezerocurve;
 mod zerocurve;
 mod zerospreadedtermstructure;
 mod zeroyieldstructure;
@@ -30,6 +31,7 @@ pub use quantotermstructure::QuantoTermStructure;
 pub use ratehelpers::{
     DepositRateHelper, FraRateHelper, FuturesRateHelper, OISRateHelper, Pillar, SwapRateHelper,
 };
+pub use simplezerocurve::{InterpolatedSimpleZeroCurve, SimpleZeroCurve};
 pub use zerocurve::{InterpolatedZeroCurve, ZeroCurve};
 pub use zerospreadedtermstructure::ZeroSpreadedTermStructure;
 pub use zeroyieldstructure::ZeroYieldStructure;

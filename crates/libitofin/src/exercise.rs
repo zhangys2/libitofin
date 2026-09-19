@@ -1,8 +1,29 @@
 //! Option exercise classes.
 //!
 //! Port of `ql/exercise.{hpp,cpp}`: the [`Exercise`] trait is the base exercise
-//! contract, with [`EuropeanExercise`], [`EarlyExercise`], [`AmericanExercise`]
-//! and [`BermudanExercise`] as the concrete styles.
+//! contract, [`EuropeanExercise`] its single-date implementation,
+//! [`AmericanExercise`] the continuous `[earliest, latest]` one and
+//! [`BermudanExercise`] the sorted multi-date one.
+//!
+//! Divergence: C++ puts the `payoffAtExpiry` flag on an intermediate
+//! `EarlyExercise` base (`exercise.hpp:57-65`). Rust has no class hierarchy to
+//! inherit it from, so the flag is a defaulted
+//! [`payoff_at_expiry`](Exercise::payoff_at_expiry) on the trait itself,
+//! reporting `false` for every exercise that is not an early one - which is
+//! what the C++ engines see when their `dynamic_pointer_cast<EarlyExercise>`
+//! is not attempted.
+//!
+//! Deferred, omitted visibly rather than accepted and ignored:
+//! - **the Bermudan simulation grid of the Monte Carlo engines**
+//!   (`mclongstaffschwartzengine.hpp:218-231`). [`BermudanExercise`] itself is
+//!   ported and prices under the finite-difference engine; only the path
+//!   generator that would exercise it along a simulated path is missing.
+//!
+//! The latest-date-only [`AmericanExercise::from_latest`] constructor
+//! (`exercise.cpp:43-50`) is ported: it opens the window at
+//! [`Date::min_date()`](crate::time::date::Date::min_date)
+//! (`MINIMUM_SERIAL_NUMBER`). FD engines clamp
+//! `process.time(earliest).max(0.0)` so the unbounded start becomes t=0.
 
 use crate::errors::QlResult;
 use crate::require;
@@ -38,13 +59,13 @@ pub trait Exercise {
             .last()
             .expect("no exercise date given (implementors guarantee at least one)")
     }
-}
 
-/// Early-exercise base: American or Bermudan, with an optional
-/// payoff-at-expiry flag (QuantLib's `EarlyExercise`).
-pub trait EarlyExercise: Exercise {
-    /// Whether the payoff is settled at expiry rather than at exercise.
-    fn payoff_at_expiry(&self) -> bool;
+    /// Whether an exercise pays off at expiry rather than on the exercise date
+    /// (the C++ `EarlyExercise::payoffAtExpiry`, `exercise.hpp:62`). Only an
+    /// early exercise can set it, so the default is `false`.
+    fn payoff_at_expiry(&self) -> bool {
+        false
+    }
 }
 
 /// European exercise: the option can only be exercised at one (expiry) date.
@@ -70,7 +91,12 @@ impl Exercise for EuropeanExercise {
     }
 }
 
-/// American exercise: any time between an earliest and a latest date.
+/// American exercise: the option can be exercised on any date between two
+/// given dates (`exercise.hpp:72-80`).
+///
+/// The window is carried as the two dates `[earliest, latest]`
+/// (`exercise.cpp:38-41`); a pricing engine reads the continuum between them
+/// from its own model, not from this list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AmericanExercise {
     dates: [Date; 2],
@@ -78,22 +104,34 @@ pub struct AmericanExercise {
 }
 
 impl AmericanExercise {
-    /// Builds an American exercise window `[earliest, latest]`.
+    /// Builds an American exercise over `[earliest, latest]`
+    /// (`exercise.cpp:33-41`). `payoff_at_expiry` defers the payment of an
+    /// early exercise to the expiry date.
     ///
     /// # Errors
     ///
-    /// Fails when `earliest > latest`.
-    pub fn new(earliest: Date, latest: Date, payoff_at_expiry: bool) -> QlResult<Self> {
+    /// Returns `Err` when `earliest` is after `latest` (`exercise.cpp:36-37`).
+    pub fn new(earliest: Date, latest: Date, payoff_at_expiry: bool) -> QlResult<AmericanExercise> {
         require!(earliest <= latest, "earliest > latest exercise date");
-        Ok(Self {
+        Ok(AmericanExercise {
             dates: [earliest, latest],
             payoff_at_expiry,
         })
     }
 
+    /// The window over `[earliest, latest]` paying on exercise, the C++
+    /// default (`exercise.hpp:76`).
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](AmericanExercise::new).
+    pub fn over(earliest: Date, latest: Date) -> QlResult<AmericanExercise> {
+        AmericanExercise::new(earliest, latest, false)
+    }
+
     /// Builds an American exercise from the minimum date through `latest`.
-    pub fn from_latest(latest: Date, payoff_at_expiry: bool) -> Self {
-        Self {
+    pub fn from_latest(latest: Date, payoff_at_expiry: bool) -> AmericanExercise {
+        AmericanExercise {
             dates: [Date::min_date(), latest],
             payoff_at_expiry,
         }
@@ -108,15 +146,23 @@ impl Exercise for AmericanExercise {
     fn dates(&self) -> &[Date] {
         &self.dates
     }
-}
 
-impl EarlyExercise for AmericanExercise {
     fn payoff_at_expiry(&self) -> bool {
         self.payoff_at_expiry
     }
 }
 
-/// Bermudan exercise: exercisable only on a discrete set of dates.
+/// Bermudan exercise: the option can be exercised on a fixed set of dates
+/// (`exercise.hpp:84-88`).
+///
+/// The dates are sorted on construction and **not** deduplicated
+/// (`exercise.cpp:56-57` calls `std::sort` and no `std::unique`), which the
+/// port keeps: a repeated date is harmless downstream, since the step-condition
+/// composite deduplicates the stopping times it merges and a repeated
+/// elementwise maximum is idempotent.
+///
+/// The dates are carried in a `Vec` rather than the fixed array the other two
+/// exercises use, so this is the one exercise that is not `Copy`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BermudanExercise {
     dates: Vec<Date>,
@@ -124,15 +170,18 @@ pub struct BermudanExercise {
 }
 
 impl BermudanExercise {
-    /// Builds a Bermudan exercise on the given dates (sorted ascending).
+    /// Builds a Bermudan exercise over `dates` (`exercise.cpp:52-58`).
+    /// `payoff_at_expiry` defers the payment of an early exercise to the expiry
+    /// date.
     ///
     /// # Errors
     ///
-    /// Fails when `dates` is empty.
-    pub fn new(mut dates: Vec<Date>, payoff_at_expiry: bool) -> QlResult<Self> {
+    /// Returns `Err` when `dates` is empty (`exercise.cpp:55`).
+    pub fn new(dates: Vec<Date>, payoff_at_expiry: bool) -> QlResult<BermudanExercise> {
         require!(!dates.is_empty(), "no exercise date given");
-        dates.sort();
-        Ok(Self {
+        let mut dates = dates;
+        dates.sort_unstable();
+        Ok(BermudanExercise {
             dates,
             payoff_at_expiry,
         })
@@ -147,9 +196,7 @@ impl Exercise for BermudanExercise {
     fn dates(&self) -> &[Date] {
         &self.dates
     }
-}
 
-impl EarlyExercise for BermudanExercise {
     fn payoff_at_expiry(&self) -> bool {
         self.payoff_at_expiry
     }
@@ -169,15 +216,91 @@ mod tests {
         assert_eq!(exercise.last_date(), expiry);
     }
 
+    /// `exercise.cpp:38-41`: the window is exactly the two bounding dates, in
+    /// that order, and `lastDate()` is the closing one.
     #[test]
     fn american_exercise_holds_the_window() {
-        let earliest = Date::new(15, Month::June, 2026);
-        let latest = Date::new(15, Month::June, 2027);
-        let exercise = AmericanExercise::new(earliest, latest, false).unwrap();
+        let earliest = Date::new(17, Month::May, 1998);
+        let latest = Date::new(17, Month::May, 1999);
+        let exercise = AmericanExercise::over(earliest, latest).unwrap();
+
         assert_eq!(exercise.exercise_type(), ExerciseType::American);
         assert_eq!(exercise.dates(), &[earliest, latest]);
         assert_eq!(exercise.last_date(), latest);
-        assert!(!exercise.payoff_at_expiry());
+        assert!(!exercise.payoff_at_expiry(), "the C++ default is false");
+    }
+
+    /// A one-day window is degenerate but legal (`exercise.cpp:36` compares
+    /// with `<=`), while an inverted one is not.
+    #[test]
+    fn an_inverted_window_is_rejected() {
+        let earlier = Date::new(17, Month::May, 1998);
+        let later = Date::new(17, Month::May, 1999);
+
+        assert!(AmericanExercise::over(earlier, earlier).is_ok());
+        match AmericanExercise::over(later, earlier) {
+            Err(e) => assert_eq!(e.message(), "earliest > latest exercise date"),
+            Ok(_) => panic!("earliest after latest must be rejected"),
+        }
+    }
+
+    /// The `payoffAtExpiry` flag of `exercise.hpp:60-62` round trips, and it is
+    /// the only exercise that can report `true`.
+    #[test]
+    fn payoff_at_expiry_round_trips_and_defaults_to_false() {
+        let earliest = Date::new(17, Month::May, 1998);
+        let latest = Date::new(17, Month::May, 1999);
+
+        assert!(
+            AmericanExercise::new(earliest, latest, true)
+                .unwrap()
+                .payoff_at_expiry()
+        );
+        assert!(!EuropeanExercise::new(latest).payoff_at_expiry());
+    }
+
+    /// `exercise.cpp:56-57`: the dates come out sorted whatever order they go
+    /// in, and `lastDate()` is the latest of them.
+    #[test]
+    fn bermudan_exercise_sorts_its_dates() {
+        let first = Date::new(17, Month::May, 1998);
+        let second = Date::new(17, Month::November, 1998);
+        let third = Date::new(17, Month::May, 1999);
+
+        let exercise = BermudanExercise::new(vec![third, first, second], false).unwrap();
+
+        assert_eq!(exercise.exercise_type(), ExerciseType::Bermudan);
+        assert_eq!(exercise.dates(), &[first, second, third]);
+        assert_eq!(exercise.last_date(), third);
+        assert!(!exercise.payoff_at_expiry(), "the C++ default is false");
+    }
+
+    /// C++ sorts and stops there (`exercise.cpp:57`), with no `std::unique`, so
+    /// a repeated date survives construction rather than being folded away.
+    #[test]
+    fn bermudan_exercise_keeps_repeated_dates() {
+        let date = Date::new(17, Month::May, 1999);
+        let exercise = BermudanExercise::new(vec![date, date], false).unwrap();
+
+        assert_eq!(exercise.dates(), &[date, date]);
+    }
+
+    #[test]
+    fn an_empty_bermudan_date_set_is_rejected() {
+        match BermudanExercise::new(Vec::new(), false) {
+            Err(e) => assert_eq!(e.message(), "no exercise date given"),
+            Ok(_) => panic!("an empty date set must be rejected"),
+        }
+    }
+
+    #[test]
+    fn a_bermudan_exercise_carries_payoff_at_expiry() {
+        let date = Date::new(17, Month::May, 1999);
+        assert!(
+            BermudanExercise::new(vec![date], true)
+                .unwrap()
+                .payoff_at_expiry()
+        );
     }
 
     #[test]
@@ -187,16 +310,6 @@ mod tests {
         assert_eq!(exercise.dates()[0], Date::min_date());
         assert_eq!(exercise.last_date(), latest);
         assert!(exercise.payoff_at_expiry());
-    }
-
-    #[test]
-    fn bermudan_exercise_sorts_dates() {
-        let d1 = Date::new(15, Month::January, 2027);
-        let d2 = Date::new(15, Month::July, 2027);
-        let d3 = Date::new(15, Month::April, 2027);
-        let exercise = BermudanExercise::new(vec![d2, d1, d3], false).unwrap();
-        assert_eq!(exercise.dates(), &[d1, d3, d2]);
-        assert_eq!(exercise.exercise_type(), ExerciseType::Bermudan);
     }
 
     #[test]

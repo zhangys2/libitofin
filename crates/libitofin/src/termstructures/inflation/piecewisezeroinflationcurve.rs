@@ -1,0 +1,1210 @@
+//! Piecewise-bootstrapped zero-coupon inflation term structure.
+//!
+//! Port of `ql/termstructures/inflation/piecewisezeroinflationcurve.hpp:55-72`.
+//! A [`PiecewiseZeroInflationCurve`] is built from
+//! [`ZeroInflationHelper`]s - in practice zero-coupon inflation swaps - whose
+//! observed fixing periods mark the segment boundaries; each node is solved so
+//! the helper reprices its quoted rate off the curve, by the same
+//! [`IterativeBootstrap`] the yield and credit sides run.
+//!
+//! It mirrors
+//! [`PiecewiseDefaultCurve`](crate::termstructures::credit::piecewisedefaultcurve::PiecewiseDefaultCurve)
+//! field for field: the laziness contract, the pre-set `calculated` flag, the
+//! observer registration on every helper and the [`PiecewiseCurve`] surface the
+//! bootstrap drives are all the same. C++ derives from
+//! `InterpolatedZeroInflationCurve<Interpolator>` *and* `LazyObject`
+//! (`:41-43`); Rust has no inheritance, so the node storage lives here and
+//! [`zero_rate_impl`](ZeroInflationTermStructure::zero_rate_impl) reads it the
+//! way [`InterpolatedZeroInflationCurve`] reads its own
+//! (`interpolatedzeroinflationcurve.hpp:137`).
+//!
+//! ## The base date, not the reference date, anchors node zero
+//!
+//! This is the one structural difference from every other piecewise curve.
+//! C++'s `ZeroInflationTraits::initialDate` returns the curve's `baseDate()`
+//! (`inflationtraits.hpp:46-48`), the last date for which a fixing is known,
+//! which *precedes* the reference date. The port carries that decision on the
+//! curve as [`PiecewiseCurve::initial_date`], overridden below, so the first
+//! bootstrap node lands on the base date while `time_from_reference` stays
+//! anchored at the reference date - leaving `times()[0]` negative.
+//!
+//! [`InterpolatedZeroInflationCurve`]: super::interpolatedzeroinflationcurve::InterpolatedZeroInflationCurve
+//!
+//! ## Divergences from QuantLib
+//!
+//! - The seasonality argument (`:61`) is ported, and so is C++'s virtual
+//!   `update()` behind
+//!   [`set_seasonality`](InflationTermStructure::set_seasonality): installing
+//!   one invalidates the bootstrap, so the next read re-solves every node
+//!   against the corrected rates. The consistency gate runs from this
+//!   constructor rather than from the base one; see the
+//!   [`inflationtermstructure`](super::inflationtermstructure) divergences.
+//! - The `BaseDateFunc` constructor overload (`:73-90`), whose base date is
+//!   resolved lazily inside `performCalculations` (`:168-169`), is deferred
+//!   with it, and with it its oracle `testZeroTermStructureLazyBaseDate`
+//!   (`inflation.cpp:512-593`); the base date here is always the caller's.
+//! - Only [`Linear`] is constructible ([`new`](PiecewiseZeroInflationCurve::new)
+//!   builds the interpolator itself), so the C++ `Interpolator` argument
+//!   (`:63`) has no counterpart. The impls below are generic, so a second
+//!   constructor is all another local interpolator needs.
+
+use std::cell::RefCell;
+use std::rc::Weak;
+
+use crate::errors::QlResult;
+use crate::math::interpolations::linear::Linear;
+use crate::math::interpolations::{Interpolation, Interpolator};
+use crate::patterns::lazyobject::LazyObject;
+use crate::patterns::observable::{AsObservable, Observable, Observer};
+use crate::require;
+use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::termstructures::bootstraptraits::CurveData;
+use crate::termstructures::inflation::inflationhelpers::ZeroInflationHelper;
+use crate::termstructures::inflation::inflationtermstructure::{
+    InflationTermStructure, InflationTermStructureBase, ZeroInflationTermStructure,
+};
+use crate::termstructures::inflation::inflationtraits::ZeroInflationTraits;
+use crate::termstructures::inflation::seasonality::Seasonality;
+use crate::termstructures::iterativebootstrap::{IterativeBootstrap, PiecewiseCurve};
+use crate::termstructures::{TermStructure, TermStructureBase};
+use crate::time::date::Date;
+use crate::time::daycounter::DayCounter;
+use crate::time::frequency::Frequency;
+use crate::types::{Rate, Real, Time};
+
+/// Feeds a helper-quote or evaluation-date notification into the curve's lazy
+/// core: it invalidates the bootstrap cache and re-broadcasts to the curve's own
+/// observers (the port of `update()`, `:180-183`).
+struct CurveUpdater {
+    lazy: SharedMut<LazyObject>,
+}
+
+impl Observer for CurveUpdater {
+    fn update(&mut self) {
+        if let Some(update) = LazyObject::deferred_update(&self.lazy) {
+            update.notify_observers();
+        }
+    }
+}
+
+/// Zero-coupon inflation term structure bootstrapped from inflation helpers.
+///
+/// `I` is the interpolation factory ([`Linear`]); the curve shape traits are
+/// always [`ZeroInflationTraits`], the nodes being the zero-coupon inflation
+/// rates themselves. The node data lives in a `RefCell` the bootstrap mutates
+/// and the zero-rate lookups read back.
+pub struct PiecewiseZeroInflationCurve<I: Interpolator> {
+    inflation: InflationTermStructureBase,
+    instruments: Vec<Shared<dyn ZeroInflationHelper>>,
+    interpolator: I,
+    data: RefCell<CurveData<I>>,
+    lazy: SharedMut<LazyObject>,
+    observable: Shared<Observable>,
+    updater: SharedMut<CurveUpdater>,
+    bootstrap: IterativeBootstrap,
+    accuracy: Real,
+    self_weak: Weak<dyn ZeroInflationTermStructure>,
+}
+
+impl PiecewiseZeroInflationCurve<Linear> {
+    /// Builds a linearly interpolated curve over `instruments` with a fixed
+    /// `reference_date` (`:55-72`). Construction is cheap; the bootstrap runs on
+    /// first use.
+    ///
+    /// `base_date` is the last date for which a fixing is known - in practice
+    /// [`ZeroInflationIndex::last_fixing_date`] - and precedes the reference
+    /// date.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an empty helper set.
+    ///
+    /// [`ZeroInflationIndex::last_fixing_date`]: crate::indexes::inflationindex::ZeroInflationIndex::last_fixing_date
+    pub fn new(
+        reference_date: Date,
+        base_date: Date,
+        frequency: Frequency,
+        day_counter: DayCounter,
+        instruments: Vec<Shared<dyn ZeroInflationHelper>>,
+        seasonality: Option<Shared<dyn Seasonality>>,
+    ) -> QlResult<Shared<PiecewiseZeroInflationCurve<Linear>>> {
+        require!(!instruments.is_empty(), "no bootstrap helpers given");
+
+        let curve = Shared::new_cyclic(|weak: &Weak<PiecewiseZeroInflationCurve<Linear>>| {
+            let self_weak: Weak<dyn ZeroInflationTermStructure> = weak.clone();
+            let lazy = shared_mut(LazyObject::new(true));
+            let observable = lazy.borrow().observable_handle();
+            let updater = shared_mut(CurveUpdater {
+                lazy: SharedMut::clone(&lazy),
+            });
+            PiecewiseZeroInflationCurve {
+                inflation: InflationTermStructureBase::with_reference_date(
+                    reference_date,
+                    base_date,
+                    frequency,
+                    Some(day_counter),
+                    None,
+                    seasonality,
+                ),
+                instruments,
+                interpolator: Linear,
+                data: RefCell::new(CurveData::new()),
+                lazy,
+                observable,
+                updater,
+                bootstrap: IterativeBootstrap::new(),
+                accuracy: 1.0e-14,
+                self_weak,
+            }
+        });
+
+        let observer = SharedMut::clone(&curve.updater) as SharedMut<dyn Observer>;
+        for helper in &curve.instruments {
+            helper.observable().register_observer(&observer);
+        }
+        curve.check_seasonality()?;
+        Ok(curve)
+    }
+}
+
+impl<I: Interpolator + 'static> PiecewiseZeroInflationCurve<I> {
+    /// Runs the bootstrap if the cache is stale, caching the result
+    /// (`performCalculations`, `:166-171`). The lazy core is not borrowed while
+    /// the bootstrap runs, so a helper reading the curve mid-bootstrap - which
+    /// every one of them does, through the index it forecasts with - re-enters
+    /// here and returns on the pre-set flag, answering off the partially solved
+    /// node prefix.
+    pub fn calculate(&self) -> QlResult<()> {
+        if self.lazy.borrow().is_calculated() {
+            return Ok(());
+        }
+        if !self.lazy.borrow_mut().start_calculation() {
+            return Ok(());
+        }
+        let result = self.bootstrap.calculate(self);
+        self.lazy.borrow_mut().finish_calculation(&result);
+        result
+    }
+
+    /// The node times, after bootstrapping (`:141-145`). The first is negative,
+    /// the base date preceding the reference date.
+    pub fn times(&self) -> QlResult<Vec<Time>> {
+        self.calculate()?;
+        Ok(self.data.borrow().times().to_vec())
+    }
+
+    /// The node dates, after bootstrapping (`:147-151`). The first is the base
+    /// date.
+    pub fn dates(&self) -> QlResult<Vec<Date>> {
+        self.calculate()?;
+        Ok(self.data.borrow().dates().to_vec())
+    }
+
+    /// The node zero-coupon inflation rates, after bootstrapping (`:153-157`).
+    pub fn data(&self) -> QlResult<Vec<Real>> {
+        self.calculate()?;
+        Ok(self.data.borrow().data().to_vec())
+    }
+
+    /// The (date, zero rate) nodes, after bootstrapping (`:159-164`).
+    pub fn nodes(&self) -> QlResult<Vec<(Date, Real)>> {
+        self.calculate()?;
+        Ok(self.data.borrow().nodes())
+    }
+
+    /// Registers a downstream observer of the curve's notifications.
+    pub fn register_observer(&self, observer: &SharedMut<dyn Observer>) -> bool {
+        self.observable.register_observer(observer)
+    }
+}
+
+impl<I: Interpolator> AsObservable for PiecewiseZeroInflationCurve<I> {
+    fn observable(&self) -> &Observable {
+        &self.observable
+    }
+}
+
+impl<I: Interpolator + 'static> TermStructure for PiecewiseZeroInflationCurve<I> {
+    fn base(&self) -> &TermStructureBase {
+        self.inflation.term_structure_base()
+    }
+
+    fn max_date(&self) -> Date {
+        // Trigger the bootstrap so the maximum reflects the solved curve
+        // (`:135-139`); a bootstrap failure is surfaced by the reads, so fall
+        // back here.
+        let _ = self.calculate();
+        self.data
+            .borrow()
+            .max_date()
+            .or_else(|| self.inflation.term_structure_base().reference_date().ok())
+            .unwrap_or_else(Date::null)
+    }
+}
+
+impl<I: Interpolator + 'static> InflationTermStructure for PiecewiseZeroInflationCurve<I> {
+    fn inflation_base(&self) -> &InflationTermStructureBase {
+        &self.inflation
+    }
+
+    fn as_inflation_term_structure(&self) -> &dyn InflationTermStructure {
+        self
+    }
+
+    /// Invalidates the bootstrap before broadcasting: a seasonality change
+    /// moves the rates the helpers reprice against, so the solved nodes are
+    /// stale and every one of them has to be solved again. This is the curve's
+    /// own `update()` (`:180-183`), which the base default cannot reach.
+    fn update_after_seasonality_change(&self) {
+        if let Some(update) = LazyObject::deferred_update(&self.lazy) {
+            update.notify_observers();
+        }
+    }
+}
+
+impl<I: Interpolator + 'static> ZeroInflationTermStructure for PiecewiseZeroInflationCurve<I> {
+    /// C++ evaluates with extrapolation allowed at the interpolation level,
+    /// `interpolation_(t, true)` (`interpolatedzeroinflationcurve.hpp:137`);
+    /// range policy lives in the callers above, and this impl must assume
+    /// extrapolation is required. That is load-bearing *mid-bootstrap*: an
+    /// interpolated (CPI Linear) helper reads one node past its own pillar, so
+    /// while node `i` is being solved the interpolation spans the prefix
+    /// `[0, i]` and the helper's far fixing lands beyond it. Past the last node
+    /// the last segment continues on its own slope, which for the one
+    /// constructible interpolator ([`Linear`]) is exactly C++'s extension.
+    fn zero_rate_impl(&self, t: Time) -> QlResult<Rate> {
+        self.calculate()?;
+        let data = self.data.borrow();
+        let interpolation = data.interpolation()?;
+        let t_max = interpolation.x_max();
+        if t <= t_max {
+            return interpolation.value(t);
+        }
+        let value_max = interpolation.value(t_max)?;
+        let slope_max = interpolation.derivative(t_max)?;
+        Ok(value_max + slope_max * (t - t_max))
+    }
+}
+
+impl<I: Interpolator + 'static> PiecewiseCurve for PiecewiseZeroInflationCurve<I> {
+    type Traits = ZeroInflationTraits;
+    type Interp = I;
+    type TS = dyn ZeroInflationTermStructure;
+    type Helper = dyn ZeroInflationHelper;
+
+    fn instruments(&self) -> &[Shared<dyn ZeroInflationHelper>] {
+        &self.instruments
+    }
+
+    fn interpolator(&self) -> &I {
+        &self.interpolator
+    }
+
+    fn curve_data(&self) -> &RefCell<CurveData<I>> {
+        &self.data
+    }
+
+    fn accuracy(&self) -> Real {
+        self.accuracy
+    }
+
+    fn reference_date(&self) -> QlResult<Date> {
+        self.inflation.term_structure_base().reference_date()
+    }
+
+    /// The base date, where every other piecewise curve answers its reference
+    /// date (`ZeroInflationTraits::initialDate`, `inflationtraits.hpp:46-48`).
+    fn initial_date(&self) -> QlResult<Date> {
+        Ok(InflationTermStructure::base_date(self))
+    }
+
+    fn time_from_reference(&self, date: Date) -> QlResult<Time> {
+        TermStructure::time_from_reference(self, date)
+    }
+
+    fn term_structure_shared(&self) -> QlResult<Shared<dyn ZeroInflationTermStructure>> {
+        match self.self_weak.upgrade() {
+            Some(curve) => Ok(curve),
+            None => crate::fail!("curve dropped before bootstrap"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! The full oracle - `inflation.cpp`'s `testZeroTermStructure`, which
+    //! reprices fourteen quoted swaps off the bootstrapped curve - is the
+    //! sibling module below. What is checked here is what the curve decides on
+    //! its own: that the bootstrap runs lazily, that it lays its first node on
+    //! the base date at a negative time rather than on the reference date, and
+    //! that every helper reprices its own quote off the result.
+
+    use super::*;
+    use crate::handle::Handle;
+    use crate::indexes::Index;
+    use crate::indexes::inflation::UkRpi;
+    use crate::indexes::inflationindex::{CpiInterpolationType, ZeroInflationIndex};
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::shared;
+    use crate::termstructures::inflation::inflationhelpers::ZeroCouponInflationSwapHelper;
+    use crate::termstructures::yields::Pillar;
+    use crate::time::businessdayconvention::BusinessDayConvention;
+    use crate::time::calendars::unitedkingdom::{Market, UnitedKingdom};
+    use crate::time::date::Month::{April, August, July, June, May};
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+
+    const QUOTES: [Real; 3] = [0.029, 0.030, 0.031];
+    const MATURITY_YEARS: [i32; 3] = [1, 3, 5];
+
+    fn today() -> Date {
+        Date::new(13, August, 2007)
+    }
+
+    fn base_date() -> Date {
+        Date::new(1, July, 2007)
+    }
+
+    fn day_counter() -> DayCounter {
+        Thirty360::with_convention(Convention::BondBasis)
+    }
+
+    fn settings_today() -> Shared<Settings<Date>> {
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today());
+        settings
+    }
+
+    /// UK RPI with the four figures the fixture needs: the swaps' own base
+    /// observation (May 2007, three months before the evaluation date) and the
+    /// run up to the curve's base date, which every forecast compounds off.
+    fn an_index(settings: &Shared<Settings<Date>>) -> Shared<ZeroInflationIndex> {
+        let index = shared(UkRpi::new(Shared::clone(settings)));
+        for (date, fixing) in [
+            (Date::new(1, April, 2007), 204.4),
+            (Date::new(1, May, 2007), 205.4),
+            (Date::new(1, June, 2007), 206.2),
+            (base_date(), 207.3),
+        ] {
+            index.add_fixing(date, fixing).expect("a published figure");
+        }
+        index
+    }
+
+    fn helpers(
+        settings: &Shared<Settings<Date>>,
+        index: &Shared<ZeroInflationIndex>,
+    ) -> Vec<Shared<dyn ZeroInflationHelper>> {
+        QUOTES
+            .iter()
+            .zip(MATURITY_YEARS)
+            .map(|(quote, years)| {
+                ZeroCouponInflationSwapHelper::new(
+                    Handle::new(shared(SimpleQuote::new(Some(*quote))) as Shared<dyn Quote>),
+                    Period::new(3, TimeUnit::Months),
+                    today() + Period::new(years, TimeUnit::Years),
+                    UnitedKingdom::new(Market::Settlement),
+                    BusinessDayConvention::ModifiedFollowing,
+                    day_counter(),
+                    index,
+                    CpiInterpolationType::Flat,
+                    Pillar::LastRelevantDate,
+                    Shared::clone(settings),
+                )
+                .expect("a three-month lag covers UK RPI's availability")
+                    as Shared<dyn ZeroInflationHelper>
+            })
+            .collect()
+    }
+
+    struct Fixture {
+        _settings: Shared<Settings<Date>>,
+        helpers: Vec<Shared<dyn ZeroInflationHelper>>,
+        curve: Shared<PiecewiseZeroInflationCurve<Linear>>,
+    }
+
+    fn a_curve() -> Fixture {
+        let settings = settings_today();
+        let index = an_index(&settings);
+        assert_eq!(
+            index.last_fixing_date().unwrap(),
+            base_date(),
+            "the curve's base date is the index's last published period"
+        );
+        let helpers = helpers(&settings, &index);
+        let curve = PiecewiseZeroInflationCurve::new(
+            today(),
+            base_date(),
+            Frequency::Monthly,
+            day_counter(),
+            helpers.clone(),
+            None,
+        )
+        .unwrap();
+        Fixture {
+            _settings: settings,
+            helpers,
+            curve,
+        }
+    }
+
+    /// The T3 seam: node zero sits on the base date, at the negative time that
+    /// separates it from the reference date. A curve that took the driver's
+    /// default `initial_date` would put it on 13 August 2007 at time zero.
+    ///
+    /// The time is pinned exactly rather than by sign, so it discriminates the
+    /// day counter too: `Thirty360(BondBasis)` from 13 August 2007 back to 1
+    /// July 2007 is `(30 * (7 - 8) + (1 - 13)) / 360 = -42/360`.
+    #[test]
+    fn the_first_node_is_the_base_date_at_a_negative_time() {
+        let fixture = a_curve();
+        let (helpers, curve) = (&fixture.helpers, &fixture.curve);
+
+        assert_eq!(curve.dates().unwrap()[0], base_date());
+        assert_eq!(curve.times().unwrap()[0], -42.0 / 360.0);
+        assert_eq!(
+            curve.times().unwrap()[0],
+            TermStructure::time_from_reference(curve.as_ref(), base_date()).unwrap()
+        );
+        assert_eq!(
+            curve.dates().unwrap().len(),
+            helpers.len() + 1,
+            "one node per helper, plus the base-date node"
+        );
+        assert_eq!(curve.nodes().unwrap()[0].0, base_date());
+    }
+
+    /// Every helper reprices its own quoted rate off the bootstrapped curve.
+    #[test]
+    fn the_bootstrapped_curve_reproduces_the_quoted_swap_rates() {
+        let fixture = a_curve();
+        let (helpers, curve) = (&fixture.helpers, &fixture.curve);
+        curve.calculate().unwrap();
+
+        for (helper, quote) in helpers.iter().zip(QUOTES) {
+            let error = helper.quote_error().unwrap();
+            assert!(
+                error.abs() < 1.0e-12,
+                "quote error {error} on the {quote} helper"
+            );
+        }
+    }
+
+    /// The pillars are the helpers' observed fixing periods, and the node rates
+    /// are plausible inflation rates rather than the traits' `0.02` seed.
+    #[test]
+    fn the_pillars_are_the_helpers_fixing_periods() {
+        let fixture = a_curve();
+        let (helpers, curve) = (&fixture.helpers, &fixture.curve);
+        let dates = curve.dates().unwrap();
+
+        for (i, helper) in helpers.iter().enumerate() {
+            assert_eq!(dates[i + 1], helper.pillar_date());
+        }
+        assert_eq!(dates[1], Date::new(1, May, 2008));
+        assert_eq!(curve.max_date(), *dates.last().unwrap());
+
+        for rate in curve.data().unwrap() {
+            assert!((0.01..0.05).contains(&rate), "node rate {rate}");
+        }
+    }
+
+    /// Construction lays down no nodes and runs no solver; the first read
+    /// bootstraps; a quote move invalidates the cache and the next read
+    /// re-bootstraps to a higher curve (the C++ `LazyObject` contract, and the
+    /// [`CurveUpdater`] registration that carries the quote's notification).
+    #[test]
+    fn the_bootstrap_is_lazy_and_reruns_on_a_quote_change() {
+        let settings = settings_today();
+        let index = an_index(&settings);
+        let quote = shared(SimpleQuote::new(Some(0.029)));
+        let helper = ZeroCouponInflationSwapHelper::new(
+            Handle::new(Shared::clone(&quote) as Shared<dyn Quote>),
+            Period::new(3, TimeUnit::Months),
+            today() + Period::new(5, TimeUnit::Years),
+            UnitedKingdom::new(Market::Settlement),
+            BusinessDayConvention::ModifiedFollowing,
+            day_counter(),
+            &index,
+            CpiInterpolationType::Flat,
+            Pillar::LastRelevantDate,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        let curve = PiecewiseZeroInflationCurve::new(
+            today(),
+            base_date(),
+            Frequency::Monthly,
+            day_counter(),
+            vec![Shared::clone(&helper) as Shared<dyn ZeroInflationHelper>],
+            None,
+        )
+        .unwrap();
+
+        assert!(!curve.lazy.borrow().is_calculated());
+        let first = curve.data().unwrap()[1];
+        assert!(curve.lazy.borrow().is_calculated());
+        assert!((0.01..0.05).contains(&first), "solved {first}");
+
+        quote.set_value(Some(0.04));
+        assert!(!curve.lazy.borrow().is_calculated());
+        let second = curve.data().unwrap()[1];
+        assert!(
+            second > first,
+            "a higher quoted rate must lift the curve: {second} vs {first}"
+        );
+    }
+
+    #[test]
+    fn an_empty_helper_set_is_rejected() {
+        let built = PiecewiseZeroInflationCurve::new(
+            today(),
+            base_date(),
+            Frequency::Monthly,
+            day_counter(),
+            Vec::new(),
+            None,
+        );
+        let err = match built {
+            Ok(_) => panic!("expected a construction error"),
+            Err(err) => err,
+        };
+        assert!(err.message().contains("no bootstrap helpers"));
+    }
+}
+
+#[cfg(test)]
+mod zero_term_structure_oracle {
+    //! `test-suite/inflation.cpp` `testZeroTermStructure` (`:320-463`): the UK
+    //! RPI fixture of August 2007, where fourteen quoted zero-coupon inflation
+    //! swaps bootstrap the curve and are then repriced off it - standalone
+    //! contracts on the *real* 5 % nominal curve, not the helpers' own
+    //! zero-strike swaps on their flat 0 % one - and must come back worth
+    //! nothing.
+    //!
+    //! That reprice-to-zero is the milestone assertion of EPIC Inflation
+    //! (#705). It is an absolute check rather than a self-consistent round
+    //! trip: it discriminates the bootstrap's convergence, the base-date node
+    //! placement, the fixing-period quantization and the forecast formula all
+    //! at once, at the C++ tolerance of 1e-7.
+    //!
+    //! Phase 3 (`:465-506`) installs a twelve-factor monthly price seasonality
+    //! on the bootstrapped curve and reprices the same fourteen swaps. The
+    //! factors are not one, so the corrected rates move and the curve has to
+    //! re-solve every node against them to come back to zero: a curve that
+    //! stored the correction without invalidating its bootstrap fails it.
+    //!
+    //! `testZeroTermStructureWithNominalCurve` (`:597-763`), which reruns the
+    //! same fixture through the deprecated nominal-curve helper constructor, is
+    //! omitted with that constructor (see the
+    //! [`inflationhelpers`](crate::termstructures::inflation::inflationhelpers)
+    //! deferrals).
+
+    use super::*;
+    use crate::handle::{Handle, RelinkableHandle};
+    use crate::indexes::Index;
+    use crate::indexes::inflation::UkRpi;
+    use crate::indexes::inflationindex::{
+        CpiInterpolationType, ZeroInflationIndex, inflation_period,
+    };
+    use crate::instrument::Instrument;
+    use crate::instruments::{SwapType, ZeroCouponInflationSwap};
+    use crate::interestrate::Compounding;
+    use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::DiscountingSwapEngine;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::termstructures::inflation::inflationhelpers::ZeroCouponInflationSwapHelper;
+    use crate::termstructures::inflation::seasonality::MultiplicativePriceSeasonality;
+    use crate::termstructures::yields::{FlatForward, Pillar};
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::businessdayconvention::BusinessDayConvention;
+    use crate::time::calendar::Calendar;
+    use crate::time::calendars::unitedkingdom::{Market, UnitedKingdom};
+    use crate::time::date::Month::{August, January, July, May};
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
+    use crate::time::period::Period;
+    use crate::time::schedule::MakeSchedule;
+    use crate::time::timeunit::TimeUnit;
+
+    /// The C++ tolerance both phases run at (`:402`).
+    const EPS: Real = 1.0e-7;
+    /// The shift the fixed-leg BPS is checked against (`:403`).
+    const BASIS_POINT: Real = 1.0e-4;
+    const NOMINAL: Real = 1_000_000.0;
+
+    /// The UK RPI figures published monthly from January 2005 to July 2007
+    /// (`:342-348`).
+    const FIX_DATA: [Real; 31] = [
+        189.9, 189.9, 189.6, 190.5, 191.6, 192.0, 192.2, 192.2, 192.6, 193.1, 193.3, 193.6, 194.1,
+        193.4, 194.2, 195.0, 196.5, 197.7, 198.5, 198.5, 199.2, 200.1, 200.4, 201.1, 202.7, 201.6,
+        203.1, 204.4, 205.4, 206.2, 207.3,
+    ];
+
+    /// The quoted zero-coupon inflation swap rates, in per cent (`:358-373`).
+    fn zc_data() -> Vec<(Date, Real)> {
+        vec![
+            (Date::new(13, August, 2008), 2.93),
+            (Date::new(13, August, 2009), 2.95),
+            (Date::new(13, August, 2010), 2.965),
+            (Date::new(15, August, 2011), 2.98),
+            (Date::new(13, August, 2012), 3.0),
+            (Date::new(13, August, 2014), 3.06),
+            (Date::new(13, August, 2017), 3.175),
+            (Date::new(13, August, 2019), 3.243),
+            (Date::new(15, August, 2022), 3.293),
+            (Date::new(14, August, 2027), 3.338),
+            (Date::new(13, August, 2032), 3.348),
+            (Date::new(15, August, 2037), 3.348),
+            (Date::new(13, August, 2047), 3.308),
+            (Date::new(13, August, 2057), 3.228),
+        ]
+    }
+
+    fn calendar() -> Calendar {
+        UnitedKingdom::new(Market::Settlement)
+    }
+
+    fn evaluation_date() -> Date {
+        Date::new(13, August, 2007)
+    }
+
+    fn day_counter() -> DayCounter {
+        Thirty360::with_convention(Convention::BondBasis)
+    }
+
+    fn observation_lag() -> Period {
+        Period::new(3, TimeUnit::Months)
+    }
+
+    struct Fixture {
+        settings: Shared<Settings<Date>>,
+        index: Shared<ZeroInflationIndex>,
+        nominal_ts: Handle<dyn YieldTermStructure>,
+        curve: Shared<PiecewiseZeroInflationCurve<Linear>>,
+        first_helper: Shared<ZeroCouponInflationSwapHelper>,
+        /// Kept alive for the length of the fixture: it is the link the index
+        /// forecasts through once the curve is bootstrapped.
+        _hz: RelinkableHandle<dyn ZeroInflationTermStructure>,
+    }
+
+    impl Fixture {
+        /// A standalone quoted swap on the *real* nominal curve (`:406-417`).
+        /// The helper's own swap is struck at zero on a flat 0 % curve and would
+        /// not answer this.
+        fn a_swap(&self, maturity: Date, fixed_rate: Rate) -> ZeroCouponInflationSwap {
+            let mut swap = ZeroCouponInflationSwap::new(
+                SwapType::Payer,
+                NOMINAL,
+                evaluation_date(),
+                maturity,
+                calendar(),
+                BusinessDayConvention::ModifiedFollowing,
+                day_counter(),
+                fixed_rate,
+                Shared::clone(&self.index),
+                observation_lag(),
+                CpiInterpolationType::Flat,
+                None,
+                None,
+                Shared::clone(&self.settings),
+            )
+            .expect("a three-month lag covers UK RPI's availability");
+            let engine = DiscountingSwapEngine::new(
+                self.nominal_ts.clone(),
+                None,
+                None,
+                None,
+                Shared::clone(&self.settings),
+            );
+            swap.base_mut()
+                .set_pricing_engine(shared_mut(engine) as SharedMut<dyn PricingEngine>);
+            swap
+        }
+    }
+
+    /// The whole C++ wiring (`:322-397`). The index is built on an empty
+    /// relinkable handle and only relinked to the curve once that is
+    /// constructed, as C++ does: the helpers forecast through copies of the
+    /// index linked to their own handles, so this one matters only to the
+    /// standalone swaps and to phase 2.
+    fn a_fixture() -> Fixture {
+        assert_eq!(
+            calendar().adjust(evaluation_date(), BusinessDayConvention::ModifiedFollowing),
+            evaluation_date(),
+            "13 August 2007 is a UK business day, so C++'s adjust is the identity"
+        );
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(evaluation_date());
+
+        let hz: RelinkableHandle<dyn ZeroInflationTermStructure> = RelinkableHandle::empty();
+        let index = shared(UkRpi::new(Shared::clone(&settings)).with_term_structure(hz.handle()));
+        // The C++ fixing schedule is monthly from 1 January 2005 and is never
+        // adjusted, the first of the month being what a monthly index is filed
+        // under.
+        let first_fixing_date = Date::new(1, January, 2005);
+        for (i, fixing) in FIX_DATA.iter().enumerate() {
+            let date = first_fixing_date + Period::new(i as i32, TimeUnit::Months);
+            index.add_fixing(date, *fixing).expect("a published figure");
+        }
+
+        let nominal_ts: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                evaluation_date(),
+                0.05,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+
+        let built: Vec<Shared<ZeroCouponInflationSwapHelper>> = zc_data()
+            .iter()
+            .map(|(maturity, rate)| {
+                ZeroCouponInflationSwapHelper::new(
+                    Handle::new(shared(SimpleQuote::new(Some(rate / 100.0))) as Shared<dyn Quote>),
+                    observation_lag(),
+                    *maturity,
+                    calendar(),
+                    BusinessDayConvention::ModifiedFollowing,
+                    day_counter(),
+                    &index,
+                    CpiInterpolationType::Flat,
+                    Pillar::LastRelevantDate,
+                    Shared::clone(&settings),
+                )
+                .expect("a three-month lag covers UK RPI's availability")
+            })
+            .collect();
+        let helpers: Vec<Shared<dyn ZeroInflationHelper>> = built
+            .iter()
+            .map(|helper| Shared::clone(helper) as Shared<dyn ZeroInflationHelper>)
+            .collect();
+
+        let base_date = index.last_fixing_date().expect("the fixings are on record");
+        assert_eq!(
+            base_date,
+            Date::new(1, July, 2007),
+            "the base date is the period of the last published figure"
+        );
+        let curve = PiecewiseZeroInflationCurve::new(
+            evaluation_date(),
+            base_date,
+            Frequency::Monthly,
+            day_counter(),
+            helpers,
+            None,
+        )
+        .unwrap();
+        hz.link_to(Shared::clone(&curve) as Shared<dyn ZeroInflationTermStructure>);
+
+        Fixture {
+            settings,
+            index,
+            nominal_ts,
+            first_helper: Shared::clone(&built[0]),
+            curve,
+            _hz: hz,
+        }
+    }
+
+    /// Phase 1 (`:400-434`), the milestone: every quoted swap, rebuilt
+    /// standalone and discounted on the 5 % nominal curve, prices to zero off
+    /// the bootstrapped inflation curve; and the analytic fixed-leg BPS matches
+    /// a repriced one-basis-point bump of the same contract.
+    ///
+    /// The two PINs that come first are what make a failure readable. The
+    /// helper's observation date is checked before the bootstrap (`:385`), and
+    /// the base-date node placement is checked through
+    /// [`dates`](PiecewiseZeroInflationCurve::dates), which propagates a
+    /// bootstrap error - a range-checked query would instead report the
+    /// evaluation date as the maximum and hide it.
+    #[test]
+    fn the_bootstrapped_curve_reprices_the_quoted_swaps_to_zero() {
+        let fixture = a_fixture();
+        assert_eq!(
+            fixture
+                .first_helper
+                .swap()
+                .as_ref()
+                .expect("the helper's swap builds")
+                .inflation_cash_flow()
+                .fixing_date(),
+            Date::new(13, May, 2008)
+        );
+
+        let curve = &fixture.curve;
+        assert_eq!(curve.dates().unwrap()[0], curve.base_date());
+        assert!(
+            curve.times().unwrap()[0] < 0.0,
+            "the base node precedes the reference date: {}",
+            curve.times().unwrap()[0]
+        );
+
+        let (mut worst_npv, mut worst_bps) = (0.0_f64, 0.0_f64);
+        for (maturity, rate) in zc_data() {
+            let mut swap = fixture.a_swap(maturity, rate / 100.0);
+            worst_npv = worst_npv.max(swap.npv().unwrap().abs());
+
+            let mut bumped = fixture.a_swap(maturity, rate / 100.0 + BASIS_POINT);
+            let expected = bumped.fixed_leg_npv().unwrap() - swap.fixed_leg_npv().unwrap();
+            worst_bps = worst_bps.max((swap.fixed_leg_bps().unwrap() - expected).abs());
+        }
+        println!("worst |NPV| {worst_npv:e}, worst fixed-leg BPS error {worst_bps:e}");
+        assert!(worst_npv < EPS, "worst |NPV| {worst_npv}");
+        assert!(worst_bps < EPS, "worst fixed-leg BPS error {worst_bps}");
+    }
+
+    /// The twelve monthly factors phase 3 installs (`:469-483`), anchored on 31
+    /// January of the year the curve's base period ends in (`:467-468`).
+    const SEASONALITY_FACTORS: [Real; 12] = [
+        1.003245, 1.000000, 0.999715, 1.000495, 1.000929, 0.998687, 0.995949, 0.994682, 0.995949,
+        1.000519, 1.003705, 1.004186,
+    ];
+
+    fn a_seasonality(curve: &PiecewiseZeroInflationCurve<Linear>) -> Shared<dyn Seasonality> {
+        let (_, next_base_date) =
+            inflation_period(curve.base_date(), Frequency::Monthly).expect("a monthly curve");
+        shared(
+            MultiplicativePriceSeasonality::new(
+                Date::new(31, January, next_base_date.year()),
+                Frequency::Monthly,
+                SEASONALITY_FACTORS.to_vec(),
+            )
+            .expect("twelve monthly factors"),
+        ) as Shared<dyn Seasonality>
+    }
+
+    /// Phase 3 (`:465-506`): the same fourteen swaps still reprice to zero once
+    /// a non-unit seasonality is installed on the bootstrapped curve.
+    ///
+    /// The direct pin comes first and is what makes the reprice loop mean
+    /// anything. Phase 3 on its own is degenerate: if the correction were
+    /// stored but never folded into the published rate, the re-bootstrap would
+    /// hit the very same nodes off the very same quotes and every swap would
+    /// still come back worth nothing - a false pass. So the index's own
+    /// forecast, which is the path every helper and every swap reaches the
+    /// curve through, is required to *move*. The reprice loop then covers the
+    /// other half: with the correction live, only a bootstrap that re-solved
+    /// against it can return to zero.
+    #[test]
+    fn a_seasonality_moves_the_forecast_and_the_curve_reprices_the_swaps_again() {
+        let fixture = a_fixture();
+        let curve = &fixture.curve;
+        let a_date = Date::new(1, August, 2012);
+
+        let (maturity, rate) = zc_data()[6];
+        let mut held = fixture.a_swap(maturity, rate / 100.0);
+        let held_npv = held.npv().unwrap();
+
+        let before = fixture.index.fixing(a_date, true).unwrap();
+        curve
+            .set_seasonality(Some(a_seasonality(curve.as_ref())))
+            .unwrap();
+        assert_ne!(
+            held.npv().unwrap(),
+            held_npv,
+            "an already-priced swap was never told the curve moved"
+        );
+        let after = fixture.index.fixing(a_date, true).unwrap();
+        println!("forecast at {a_date}: {before} -> {after}");
+        assert!(
+            (after - before).abs() > 1.0e-3,
+            "the seasonality never reached the forecast: {before} vs {after}"
+        );
+        assert!(curve.has_seasonality());
+
+        let mut worst_npv = 0.0_f64;
+        for (maturity, rate) in zc_data() {
+            let mut swap = fixture.a_swap(maturity, rate / 100.0);
+            worst_npv = worst_npv.max(swap.npv().unwrap().abs());
+        }
+        println!("worst |NPV| under seasonality {worst_npv:e}");
+        assert!(worst_npv < EPS, "worst |NPV| {worst_npv}");
+    }
+
+    /// Phase 2 (`:437-463`): the index, forecasting off the bootstrapped curve,
+    /// reproduces the curve's own zero rate compounded off the base fixing at
+    /// every monthly date from the reference date to a month short of the
+    /// maximum.
+    ///
+    /// The `t <= 0` branch is the C++ one for a date still inside history; this
+    /// fixture never takes it, the schedule starting after the base period.
+    #[test]
+    fn the_index_forecasts_off_the_bootstrapped_curve() {
+        let fixture = a_fixture();
+        let curve = &fixture.curve;
+        let schedule = MakeSchedule::new()
+            .from(TermStructure::reference_date(curve.as_ref()).unwrap())
+            .to(curve.max_date() - Period::new(1, TimeUnit::Months))
+            .with_tenor(Period::new(1, TimeUnit::Months))
+            .with_calendar(calendar())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .build();
+
+        let base_date = curve.base_date();
+        let base_fixing = fixture.index.fixing(base_date, false).unwrap();
+        let curve_day_counter = curve.require_day_counter().unwrap();
+
+        let mut worst = 0.0_f64;
+        for &date in schedule.dates() {
+            let z = curve.zero_rate_date(date, false).unwrap();
+            let period_start = inflation_period(date, Frequency::Monthly).unwrap().0;
+            let t = curve_day_counter.year_fraction(base_date, period_start);
+            let calc = if t <= 0.0 {
+                fixture.index.fixing(date, false).unwrap()
+            } else {
+                base_fixing * (1.0 + z).powf(t)
+            };
+            let forecast = fixture.index.fixing(date, true).unwrap();
+            worst = worst.max((calc - forecast).abs());
+        }
+        println!(
+            "worst forecast error {worst:e} over {} dates",
+            schedule.len()
+        );
+        assert!(worst < EPS, "worst forecast error {worst}");
+    }
+}
+
+#[cfg(test)]
+mod us_cpi_linear_bootstrap_oracles {
+    //! The two CPI::Linear bootstrap robustness loops of
+    //! `test-suite/inflation.cpp` (#806): `testUsCpiLinearBootstrapAtMonthStart`
+    //! (`:1728-1806`) and `testPillarCollisionWithDifferentMonthLengths`
+    //! (`:2072-2160`). Both sweep the evaluation date day by day, rebuild the US
+    //! CPI market off fixed-date helpers each day, bootstrap, query a zero rate,
+    //! and assert no day failed (`BOOST_CHECK_EQUAL(failureCount, 0)`,
+    //! `:1804`/`:2158`) - no numerical literals, only the no-throw sweep that
+    //! reproduces QuantLib issue #2454's "root not bracketed" collisions when
+    //! the interpolated pillar is weighed on the maturity instead of the shared
+    //! start date.
+    //!
+    //! Two strengthenings over the C++ count (per the #806 gate): the queried
+    //! zero rate must be finite, and every helper must reprice its own quote off
+    //! the bootstrapped curve - so a stub that swallowed errors, or a bootstrap
+    //! that converged to garbage, cannot pass on the count alone. The repricing
+    //! tolerance is 1e-3, not the solver's 1e-14: an interpolated helper's far
+    //! fixing reads the node *after* its own pillar, and the single-pass
+    //! bootstrap (C++ loops only for global interpolators) solves node `i`
+    //! before node `i+1` takes its final value, leaving a genuine residual on
+    //! the shortest tenors - worst observed 4.4e-4, identically in C++, which
+    //! is why the upstream tests assert only the count.
+
+    use super::*;
+    use crate::handle::{Handle, RelinkableHandle};
+    use crate::indexes::Index;
+    use crate::indexes::inflation::UsCpi;
+    use crate::indexes::inflationindex::CpiInterpolationType;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::shared;
+    use crate::termstructures::inflation::inflationhelpers::ZeroCouponInflationSwapHelper;
+    use crate::termstructures::yields::Pillar;
+    use crate::time::businessdayconvention::BusinessDayConvention;
+    use crate::time::calendar::Calendar;
+    use crate::time::calendars::NullCalendar;
+    use crate::time::calendars::unitedstates::{Market, UnitedStates};
+    use crate::time::date::Month;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+
+    /// The quoted swap tenors and rates both loops share (`:1743-1752`); the
+    /// pillar-collision loop inserts the 13-month tenor (`:2106`) whose maturity
+    /// month differs in length from its neighbours'.
+    fn swap_data(with_thirteen_month_tenor: bool) -> Vec<(Period, Real)> {
+        let mut data = vec![
+            (Period::new(3, TimeUnit::Months), 0.0285),
+            (Period::new(4, TimeUnit::Months), 0.0268),
+            (Period::new(5, TimeUnit::Months), 0.0252),
+            (Period::new(6, TimeUnit::Months), 0.0241),
+            (Period::new(7, TimeUnit::Months), 0.0237),
+            (Period::new(8, TimeUnit::Months), 0.0232),
+            (Period::new(9, TimeUnit::Months), 0.0229),
+            (Period::new(10, TimeUnit::Months), 0.0225),
+            (Period::new(11, TimeUnit::Months), 0.0223),
+            (Period::new(1, TimeUnit::Years), 0.0221),
+            (Period::new(18, TimeUnit::Months), 0.0230),
+            (Period::new(2, TimeUnit::Years), 0.0238),
+            (Period::new(5, TimeUnit::Years), 0.0245),
+            (Period::new(10, TimeUnit::Years), 0.0252),
+            (Period::new(30, TimeUnit::Years), 0.0260),
+        ];
+        if with_thirteen_month_tenor {
+            data.insert(10, (Period::new(13, TimeUnit::Months), 0.0220));
+        }
+        data
+    }
+
+    /// US CPI-U (NSA) monthly figures for 2025, approximate (`:1760-1767`).
+    fn fixings_2025() -> Vec<(Date, Real)> {
+        vec![
+            (Date::new(1, Month::January, 2025), 309.685),
+            (Date::new(1, Month::February, 2025), 310.326),
+            (Date::new(1, Month::March, 2025), 311.054),
+            (Date::new(1, Month::April, 2025), 311.538),
+            (Date::new(1, Month::May, 2025), 311.862),
+            (Date::new(1, Month::June, 2025), 312.104),
+            (Date::new(1, Month::July, 2025), 312.332),
+            (Date::new(1, Month::August, 2025), 312.558),
+            (Date::new(1, Month::September, 2025), 312.816),
+            (Date::new(1, Month::October, 2025), 313.025),
+            (Date::new(1, Month::November, 2025), 313.314),
+            (Date::new(1, Month::December, 2025), 313.580),
+        ]
+    }
+
+    /// The C++ loop body (`:1774-1802`/`:2126-2156`), one settlement convention
+    /// per caller: each evaluation date rebuilds the fixed-date helper set from
+    /// `start_date = calendar.advance(eval, settlement_days)` (T+0 when zero,
+    /// as `startDate = evalDate` reads), bootstraps a monthly piecewise curve
+    /// off the 1 November 2025 base date, links the index's handle to it and
+    /// queries the one-year zero rate inside the failure-collecting region; the
+    /// fixings are cleared before the date moves on, as C++'s `clearFixings()`.
+    /// Helper construction sits outside that region, exactly where the C++ try
+    /// begins: a throw there would abort the whole test, not count a failure.
+    #[allow(clippy::too_many_arguments)]
+    fn failures_across_evaluation_dates(
+        first_eval: Date,
+        last_eval: Date,
+        calendar: Calendar,
+        payment_convention: BusinessDayConvention,
+        settlement_days: i32,
+        fixings: &[(Date, Real)],
+        swap_data: &[(Period, Real)],
+    ) -> Vec<String> {
+        let settings = shared(Settings::<Date>::new());
+        let base_date = Date::new(1, Month::November, 2025);
+        let day_counter = Thirty360::with_convention(Convention::BondBasis);
+        let observation_lag = Period::new(3, TimeUnit::Months);
+
+        let mut failures = Vec::new();
+        let mut eval_date = first_eval;
+        while eval_date <= last_eval {
+            settings.set_evaluation_date(eval_date);
+
+            let hz = RelinkableHandle::empty();
+            let index = shared(UsCpi::new(Shared::clone(&settings)).clone_linked_to(hz.handle()));
+            for (date, value) in fixings {
+                index.add_fixing(*date, *value).expect("a published figure");
+            }
+
+            let start_date = if settlement_days == 0 {
+                eval_date
+            } else {
+                calendar.advance(
+                    eval_date,
+                    settlement_days,
+                    TimeUnit::Days,
+                    BusinessDayConvention::Following,
+                    false,
+                )
+            };
+            let helpers: Vec<Shared<dyn ZeroInflationHelper>> = swap_data
+                .iter()
+                .map(|(tenor, rate)| {
+                    ZeroCouponInflationSwapHelper::with_start_date(
+                        Handle::new(shared(SimpleQuote::new(Some(*rate))) as Shared<dyn Quote>),
+                        observation_lag,
+                        start_date,
+                        start_date + *tenor,
+                        calendar.clone(),
+                        payment_convention,
+                        day_counter.clone(),
+                        &index,
+                        CpiInterpolationType::Linear,
+                        Pillar::LastRelevantDate,
+                        Shared::clone(&settings),
+                    )
+                    .expect("helper construction sits outside the C++ try")
+                        as Shared<dyn ZeroInflationHelper>
+                })
+                .collect();
+
+            let outcome = (|| -> QlResult<()> {
+                let curve = PiecewiseZeroInflationCurve::new(
+                    eval_date,
+                    base_date,
+                    Frequency::Monthly,
+                    day_counter.clone(),
+                    helpers.clone(),
+                    None,
+                )?;
+                hz.link_to(Shared::clone(&curve) as Shared<dyn ZeroInflationTermStructure>);
+                let zero_rate =
+                    curve.zero_rate_date(eval_date + Period::new(1, TimeUnit::Years), false)?;
+                require!(zero_rate.is_finite(), "zero rate {zero_rate} is not finite");
+                for (helper, (_, rate)) in helpers.iter().zip(swap_data) {
+                    let implied = helper.implied_quote()?;
+                    let residual = (implied - rate).abs();
+                    require!(
+                        residual
+                            .partial_cmp(&1.0e-3)
+                            .is_some_and(std::cmp::Ordering::is_lt),
+                        "the {rate} helper reprices to {implied}"
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(error) = outcome {
+                failures.push(format!("{eval_date}: {error}"));
+            }
+
+            index.clear_fixings();
+            eval_date += 1;
+        }
+        failures
+    }
+
+    /// `testUsCpiLinearBootstrapAtMonthStart` (`inflation.cpp:1728-1806`):
+    /// every February 2026 evaluation date bootstraps under TIPS conventions -
+    /// T+2 settlement on the US government-bond calendar, three-month lag,
+    /// modified-following payments. At month start the interpolation weight of
+    /// sub-annual helpers sits near the left node, where a maturity-weighed
+    /// pillar produced "root not bracketed" failures (QuantLib issue #2454).
+    #[test]
+    fn us_cpi_linear_bootstrap_succeeds_at_every_february_evaluation_date() {
+        let failures = failures_across_evaluation_dates(
+            Date::new(1, Month::February, 2026),
+            Date::new(28, Month::February, 2026),
+            UnitedStates::new(Market::GovernmentBond),
+            BusinessDayConvention::ModifiedFollowing,
+            2,
+            &fixings_2025(),
+            &swap_data(false),
+        );
+        assert!(failures.is_empty(), "failing dates: {failures:#?}");
+    }
+
+    /// `testPillarCollisionWithDifferentMonthLengths` (`inflation.cpp:2072-2160`):
+    /// T+0 settlement and a 13-month tenor make consecutive helpers mature in
+    /// months of different length, so near mid-month a maturity-weighed pillar
+    /// crosses the 0.5 threshold in one month but not the other - two helpers
+    /// then collide on one node and the bootstrap fails. Weighing on the shared
+    /// start date keeps every helper on the same side; the relative-date helper,
+    /// whose weight date is the maturity, reproduces the collision this loop is
+    /// built to catch.
+    #[test]
+    fn pillar_assignment_survives_months_of_different_length() {
+        let mut fixings = fixings_2025();
+        fixings.extend([
+            (Date::new(1, Month::January, 2026), 314.012),
+            (Date::new(1, Month::February, 2026), 314.382),
+            (Date::new(1, Month::March, 2026), 314.715),
+        ]);
+        let failures = failures_across_evaluation_dates(
+            Date::new(1, Month::February, 2026),
+            Date::new(31, Month::March, 2026),
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            0,
+            &fixings,
+            &swap_data(true),
+        );
+        assert!(failures.is_empty(), "failing dates: {failures:#?}");
+    }
+}

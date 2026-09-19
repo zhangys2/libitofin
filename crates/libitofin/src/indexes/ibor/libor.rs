@@ -1,9 +1,28 @@
-//! ICE Libor indexes (non-EUR).
+//! The Libor family base constructor.
 //!
-//! Port of `ql/indexes/ibor/libor.{hpp,cpp}`. [`Libor`] configures an
-//! [`IborIndex`] with the London Exchange fixing calendar and a joint
-//! (UK Exchange ∪ financial-centre) calendar for value and maturity dates.
-//! Daily tenors and EUR are rejected (dedicated constructors, not ported).
+//! Port of `ql/indexes/ibor/libor.{hpp,cpp}`. `Libor` is the base
+//! configuration for all ICE LIBOR indexes but the EUR, O/N, and S/N ones:
+//! the fixing (and value) calendar is UK Exchange, the maturity calendar is
+//! the joint UK-plus-financial-center calendar under `JoinHolidays`
+//! (`libor.cpp:78-84`), and the convention and end-of-month flag derive from
+//! the tenor unit (`liborConvention`/`liborEOM`, `libor.cpp:31-56`).
+//!
+//! C++ makes `Libor` an `IborIndex` subclass overriding
+//! `valueDate`/`maturityDate` (`libor.cpp:86-113`). The port folds those two
+//! calendars into [`IborIndex`] as data instead, so the joint roll keeps
+//! dispatching through every site that holds the concrete index (a
+//! [`SwapRateHelper`] pricing through `MakeVanillaSwap`,
+//! `makevanillaswap.rs:440`), where a newtype override would be bypassed.
+//! [`Libor::new`] is thus a configuring constructor in the [`Euribor`] style,
+//! returning a plain [`IborIndex`]; the named currencies (#306) hang off it.
+//!
+//! Deferred visibly: `DailyTenorLibor` (the O/N-S/N constructors need the
+//! dedicated daily-tenor semantics) and the non-USD Libor currencies (#306).
+//! `EurLibor` is a separate C++ subclass with its own spot lag, not a
+//! branch of `libor.cpp` - it only guards against EUR (`libor.cpp:82-84`).
+//!
+//! [`Euribor`]: crate::indexes::ibor::Euribor
+//! [`SwapRateHelper`]: crate::termstructures::yields::SwapRateHelper
 
 use crate::currency::Currency;
 use crate::errors::QlResult;
@@ -24,16 +43,25 @@ use crate::time::timeunit::TimeUnit;
 use crate::types::Natural;
 use crate::{fail, require};
 
-/// ICE Libor family constructors (`ql/indexes/ibor/libor.hpp`).
+/// The Libor base configuration (`ql/indexes/ibor/libor.hpp`).
+///
+/// A zero-sized namespace for the shared Libor constructor; the named
+/// currency indexes ([`UsdLibor`](crate::indexes::ibor::UsdLibor), the rest
+/// under #306) are thin wrappers over it.
 pub struct Libor;
 
 impl Libor {
-    /// Builds a Libor index of the given `tenor` over `forwarding`
-    /// (`libor.cpp:59-84`).
+    /// Builds a Libor index of the given `tenor` over the `forwarding` curve.
     ///
-    /// # Errors
-    /// Daily tenors and EUR are rejected with the QuantLib messages.
-    #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
+    /// Mirrors the C++ `Libor` constructor (`libor.cpp:60-85`): fixing on UK
+    /// Exchange with the tenor-dependent convention and end-of-month flag,
+    /// the maturity roll on the joint UK-plus-`financial_center_calendar`
+    /// calendar. Daily tenors are rejected (they need the dedicated
+    /// `DailyTenor` constructor, not ported yet), as is EUR (its Libor has a
+    /// dedicated `EurLibor` constructor with a different spot lag, not
+    /// ported yet).
+    #[allow(clippy::new_ret_no_self)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         family_name: String,
         tenor: Period,
@@ -44,24 +72,13 @@ impl Libor {
         forwarding: Handle<dyn YieldTermStructure>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<IborIndex> {
-        require!(
-            currency != Currency::eur(),
-            "for EUR Libor dedicated EurLibor constructor must be used"
-        );
         let uk_exchange = UnitedKingdom::new(UkMarket::Exchange);
-        let joint = JointCalendar::of_two(
-            uk_exchange.clone(),
-            financial_center_calendar.clone(),
-            JointCalendarRule::JoinHolidays,
-        );
-        let index = IborIndex::new_with_joint_calendars(
+        let mut index = IborIndex::new(
             family_name,
             tenor,
             settlement_days,
-            currency,
-            uk_exchange,
-            financial_center_calendar,
-            joint,
+            currency.clone(),
+            uk_exchange.clone(),
             libor_convention(tenor)?,
             libor_eom(tenor)?,
             day_counter,
@@ -73,11 +90,22 @@ impl Libor {
             "for daily tenors ({}) dedicated DailyTenor constructor must be used",
             index.tenor()
         );
+        require!(
+            currency != Currency::eur(),
+            "for EUR Libor dedicated EurLibor constructor must be used"
+        );
+        index.set_value_calendar(uk_exchange.clone());
+        index.set_maturity_calendar(JointCalendar::of_two(
+            uk_exchange,
+            financial_center_calendar,
+            JointCalendarRule::JoinHolidays,
+        ));
         Ok(index)
     }
 }
 
-fn libor_convention(tenor: Period) -> QlResult<BusinessDayConvention> {
+/// The tenor-dependent business-day convention (`liborConvention`).
+pub(crate) fn libor_convention(tenor: Period) -> QlResult<BusinessDayConvention> {
     match tenor.units() {
         TimeUnit::Days | TimeUnit::Weeks => Ok(BusinessDayConvention::Following),
         TimeUnit::Months | TimeUnit::Years => Ok(BusinessDayConvention::ModifiedFollowing),
@@ -85,7 +113,8 @@ fn libor_convention(tenor: Period) -> QlResult<BusinessDayConvention> {
     }
 }
 
-fn libor_eom(tenor: Period) -> QlResult<bool> {
+/// The tenor-dependent end-of-month flag (`liborEOM`).
+pub(crate) fn libor_eom(tenor: Period) -> QlResult<bool> {
     match tenor.units() {
         TimeUnit::Days | TimeUnit::Weeks => Ok(false),
         TimeUnit::Months | TimeUnit::Years => Ok(true),
@@ -95,88 +124,77 @@ fn libor_eom(tenor: Period) -> QlResult<bool> {
 
 #[cfg(test)]
 mod tests {
+    //! Constructor-guard oracles for the Libor base (`libor.cpp:81-85`).
+
     use super::*;
-    use crate::indexes::index::Index;
     use crate::shared::shared;
     use crate::time::calendars::unitedstates::{Market as UsMarket, UnitedStates};
-    use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
 
+    fn libor(tenor: Period, currency: Currency) -> QlResult<IborIndex> {
+        Libor::new(
+            "TestLibor".into(),
+            tenor,
+            2,
+            currency,
+            UnitedStates::new(UsMarket::LiborImpact),
+            Actual360::new(),
+            Handle::empty(),
+            shared(Settings::<Date>::new()),
+        )
+    }
+
+    /// The daily-tenor guard: `QL_REQUIRE(tenor().units() != Days)` becomes a
+    /// D4 `Err` carrying the C++ message.
     #[test]
     fn daily_tenor_is_rejected() {
-        let settings = shared(Settings::<Date>::new());
-        match Libor::new(
-            "USDLibor".into(),
-            Period::new(1, TimeUnit::Days),
-            2,
-            Currency::usd(),
-            UnitedStates::new(UsMarket::LiborImpact),
-            Actual360::new(),
-            Handle::empty(),
-            settings,
-        ) {
-            Ok(_) => panic!("daily tenor must fail"),
-            Err(err) => assert!(err.message().contains("dedicated DailyTenor constructor")),
-        }
+        let err = libor(Period::new(3, TimeUnit::Days), Currency::usd())
+            .err()
+            .expect("daily tenors must be rejected");
+        assert!(err.to_string().contains("dedicated DailyTenor constructor"));
     }
 
+    /// The currency guard: `QL_REQUIRE(currency != EURCurrency())` becomes a
+    /// D4 `Err` carrying the C++ message.
     #[test]
-    fn eur_is_rejected() {
-        let settings = shared(Settings::<Date>::new());
-        match Libor::new(
-            "EURLibor".into(),
-            Period::new(6, TimeUnit::Months),
-            2,
-            Currency::eur(),
-            UnitedKingdom::new(UkMarket::Exchange),
-            Actual360::new(),
-            Handle::empty(),
-            settings,
-        ) {
-            Ok(_) => panic!("EUR must fail"),
-            Err(err) => assert!(err.message().contains("EurLibor")),
-        }
+    fn eur_currency_is_rejected() {
+        let err = libor(Period::new(3, TimeUnit::Months), Currency::eur())
+            .err()
+            .expect("EUR must be rejected");
+        assert!(err.to_string().contains("dedicated EurLibor constructor"));
     }
 
+    /// `liborConvention`/`liborEOM` (`libor.cpp:31-56`) keyed on the tenor
+    /// unit: weeks roll `Following` off month-end, months roll
+    /// `ModifiedFollowing` on month-end.
     #[test]
-    fn value_date_joint_adjusts_when_us_is_closed() {
-        // 2004-07-05 is a Monday; US Independence Day observed 5 Jul 2004.
-        // London is open. Libor value date after a Fri 2-Jul fixing should
-        // skip the US holiday via the joint calendar.
-        let settings = shared(Settings::<Date>::new());
-        settings.set_evaluation_date(Date::new(1, Month::July, 2004));
-        let index = Libor::new(
-            "USDLibor".into(),
-            Period::new(6, TimeUnit::Months),
-            2,
-            Currency::usd(),
-            UnitedStates::new(UsMarket::LiborImpact),
-            Actual360::new(),
-            Handle::empty(),
-            settings,
-        )
-        .unwrap();
-        let fixing = Date::new(2, Month::July, 2004); // Friday
-        assert!(index.is_valid_fixing_date(fixing));
-        let value = index.value_date(fixing).unwrap();
-        // London advance by 2 BD → Tue 6 Jul; joint adjust is still 6 Jul
-        // (5 Jul is US holiday but advance already landed on 6 Jul).
-        // Stronger pin: a fixing whose London+2 lands on a US holiday.
-        let fixing2 = Date::new(1, Month::July, 2004); // Thursday
-        let london_plus_2 = UnitedKingdom::new(UkMarket::Exchange).advance(
-            fixing2,
-            2,
-            TimeUnit::Days,
-            BusinessDayConvention::Following,
-            false,
-        );
-        assert_eq!(london_plus_2, Date::new(5, Month::July, 2004));
-        let value2 = index.value_date(fixing2).unwrap();
+    fn convention_and_eom_derive_from_the_tenor_unit() {
+        let weekly = libor(Period::new(1, TimeUnit::Weeks), Currency::usd()).unwrap();
         assert_eq!(
-            value2,
-            Date::new(6, Month::July, 2004),
-            "joint calendar must skip US Independence Day observed 5 Jul"
+            weekly.business_day_convention(),
+            BusinessDayConvention::Following
         );
-        assert_eq!(value, Date::new(6, Month::July, 2004));
+        assert!(!weekly.end_of_month());
+
+        let monthly = libor(Period::new(3, TimeUnit::Months), Currency::usd()).unwrap();
+        assert_eq!(
+            monthly.business_day_convention(),
+            BusinessDayConvention::ModifiedFollowing
+        );
+        assert!(monthly.end_of_month());
+    }
+
+    /// The calendar wiring (`libor.cpp:69-84`): fixing and value on UK
+    /// Exchange, maturity on the joint UK-plus-financial-center calendar.
+    #[test]
+    fn calendars_are_uk_exchange_and_the_joint_calendar() {
+        use crate::indexes::index::Index;
+        let index = libor(Period::new(3, TimeUnit::Months), Currency::usd()).unwrap();
+        assert_eq!(index.fixing_calendar().name(), "London stock exchange");
+        assert_eq!(index.value_calendar().name(), "London stock exchange");
+        assert_eq!(
+            index.maturity_calendar().name(),
+            "JoinHolidays(London stock exchange, US with Libor impact)"
+        );
     }
 }

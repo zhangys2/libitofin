@@ -13,10 +13,13 @@ pub mod blackformula;
 pub mod bond;
 pub mod capfloor;
 pub mod cliquet;
+pub mod credit;
 pub mod exotic;
 pub mod forward;
 pub mod greeks;
+pub mod inflation;
 pub mod lookback;
+pub mod mclongstaffschwartzengine;
 pub mod swap;
 pub mod swaption;
 pub mod vanilla;
@@ -62,6 +65,7 @@ pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
 pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
 pub use cliquet::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
+pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{
     AnalyticComplexChooserEngine, AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,
     set_analytic_simple_chooser_engine,
@@ -73,6 +77,7 @@ pub use forward::{
     set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
 };
 pub use greeks::{black_scholes_theta, default_theta_per_day};
+pub use inflation::{YoYInflationCapFloorEngine, yoy_optionlet_price};
 pub use lookback::{
     AnalyticContinuousFixedLookbackEngine, AnalyticContinuousFloatingLookbackEngine,
     AnalyticContinuousPartialFixedLookbackEngine, AnalyticContinuousPartialFloatingLookbackEngine,
@@ -86,6 +91,7 @@ pub use lookback::{
     set_mc_continuous_partial_fixed_lookback_engine,
     set_mc_continuous_partial_floating_lookback_engine,
 };
+pub use mclongstaffschwartzengine::McLongstaffSchwartzEngineBase;
 pub use swap::DiscountingSwapEngine;
 pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,

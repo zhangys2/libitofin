@@ -4,16 +4,15 @@
 
 `libitofin` is a Rust Cargo workspace (a QuantLib port; pinned Rust 1.96.0 via
 `rust-toolchain.toml`) plus a PyO3/maturin Python-bindings crate `itofin`
-(`crates/itofin-py`, requires Python 3.13+). It is a library — there are no
-runtime services, ports, or databases. Standard dev commands live in the README
-"Getting started (development)" section and in `.github/workflows/pull-request.yml`.
+(`crates/itofin-py`, CPython 3.10+ via `abi3-py310`; 3.13 is the primary CI
+target). It is a library — there are no runtime services, ports, or databases.
+Standard dev commands live in the README "Getting started (development)" section
+and in `.github/workflows/pre-commit.yml` (workflow name `pull-request`).
 
-### Python 3.13 is required for workspace-level cargo commands
-`crates/itofin-py` pins PyO3's `abi3-py313`, so anything that builds the whole
-workspace needs a Python **3.13** interpreter visible to PyO3. The system Python
-is 3.12, so a bare `cargo build` / `cargo test --workspace` fails with
-`cannot set a minimum Python version 3.13 higher than the interpreter version 3.12`.
-Two ways to work:
+### Python 3.10+ is required for workspace-level cargo commands
+`crates/itofin-py` pins PyO3's `abi3-py310`, so anything that builds the whole
+workspace needs a Python **≥ 3.10** interpreter visible to PyO3. Prefer the
+repo venv (3.13) so local builds match CI's primary target:
 - Activate the prebuilt venv first: `source /workspace/.venv/bin/activate`, then
   run `cargo build --workspace` / `cargo test --workspace --locked`. The venv
   supplies Python 3.13 that PyO3 discovers automatically.
