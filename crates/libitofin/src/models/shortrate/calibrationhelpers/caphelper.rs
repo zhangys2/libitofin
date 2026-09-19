@@ -19,13 +19,6 @@
 //!
 //! ## Deferred (visible, not silently stubbed)
 //!
-//! - **The Normal/Bachelier `black_price` branch** (`caphelper.cpp:78-81`): the
-//!   C++ switch prices a `Normal` volatility through a `BachelierCapFloorEngine`,
-//!   which is not ported (only [`BlackCapFloorEngine`] is on main). The
-//!   [`ShiftedLognormal`](VolatilityType::ShiftedLognormal) arm is ported; the
-//!   [`Normal`](VolatilityType::Normal) arm returns an error naming the deferral.
-//!   `ShiftedLognormal` is the C++ default, so the calibration oracle is
-//!   unaffected.
 //! - **`addTimesTo`** (`caphelper.cpp:51-61`) builds a `DiscretizedCapFloor` for
 //!   the tree/lattice pricing path, which is unported; it is already omitted from
 //!   the [`BlackCalibrationHelper`] trait surface (the lattice deferral of
@@ -73,7 +66,7 @@ use crate::models::calibrationhelper::{
     BlackCalibrationHelper, BlackCalibrationHelperBase, CalibrationErrorType,
 };
 use crate::pricingengine::PricingEngine;
-use crate::pricingengines::{BlackCapFloorEngine, DiscountingSwapEngine};
+use crate::pricingengines::{BachelierCapFloorEngine, BlackCapFloorEngine, DiscountingSwapEngine};
 use crate::quotes::{Quote, SimpleQuote};
 use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared, shared_mut};
@@ -279,28 +272,30 @@ impl BlackCalibrationHelper for CapHelper {
     }
 
     /// `blackPrice` (`caphelper.cpp:69-89`): prices the cap through a
-    /// [`BlackCapFloorEngine`] (shifted-lognormal) at `sigma`, then restores the
-    /// model engine (`:87`) so a later price on the installed engine reflects the
-    /// model, not this temporary Black engine. The `Normal` branch's
-    /// `BachelierCapFloorEngine` is not ported (see the module docs).
+    /// [`BlackCapFloorEngine`] (shifted-lognormal) or
+    /// [`BachelierCapFloorEngine`] (normal) at `sigma`, then restores the model
+    /// engine (`:87`) so a later price on the installed engine reflects the
+    /// model, not this temporary market engine.
     fn black_price(&self, sigma: Real) -> QlResult<Real> {
         let cap = self.build_and_store()?;
 
+        let vol: Handle<dyn Quote> =
+            Handle::new(shared(SimpleQuote::new(sigma)) as Shared<dyn Quote>);
+        let dc = crate::time::daycounters::actual365fixed::Actual365Fixed::new();
         let engine: SharedMut<dyn PricingEngine> = match self.base.volatility_type() {
-            VolatilityType::ShiftedLognormal => {
-                let vol: Handle<dyn Quote> =
-                    Handle::new(shared(SimpleQuote::new(sigma)) as Shared<dyn Quote>);
-                shared_mut(BlackCapFloorEngine::with_flat_vol(
-                    self.term_structure.clone(),
-                    vol,
-                    crate::time::daycounters::actual365fixed::Actual365Fixed::new(),
-                    self.base.shift(),
-                    Shared::clone(&self.settings),
-                )?) as SharedMut<dyn PricingEngine>
-            }
-            VolatilityType::Normal => fail!(
-                "CapHelper Normal volatility needs a BachelierCapFloorEngine, which is not ported"
-            ),
+            VolatilityType::ShiftedLognormal => shared_mut(BlackCapFloorEngine::with_flat_vol(
+                self.term_structure.clone(),
+                vol,
+                dc,
+                self.base.shift(),
+                Shared::clone(&self.settings),
+            )?) as SharedMut<dyn PricingEngine>,
+            VolatilityType::Normal => shared_mut(BachelierCapFloorEngine::with_flat_vol(
+                self.term_structure.clone(),
+                vol,
+                dc,
+                Shared::clone(&self.settings),
+            )?) as SharedMut<dyn PricingEngine>,
         };
 
         cap.borrow_mut().base_mut().set_pricing_engine(engine);
@@ -514,6 +509,23 @@ mod tests {
             cap.borrow_mut().npv().unwrap()
         }
 
+        /// Prices a cap through the Bachelier engine (`caphelper.cpp:78-81`).
+        fn bachelier_price_of(&self, cap: &SharedMut<CapFloor>, vol: Real) -> Real {
+            let vol_handle: Handle<dyn Quote> =
+                Handle::new(shared(SimpleQuote::new(vol)) as Shared<dyn Quote>);
+            let engine = shared_mut(
+                BachelierCapFloorEngine::with_flat_vol(
+                    self.curve.clone(),
+                    vol_handle,
+                    Actual365Fixed::new(),
+                    Shared::clone(&self.settings),
+                )
+                .unwrap(),
+            ) as SharedMut<dyn PricingEngine>;
+            cap.borrow_mut().base_mut().set_pricing_engine(engine);
+            cap.borrow_mut().npv().unwrap()
+        }
+
         fn hw_model(&self) -> SharedMut<HullWhite> {
             HullWhite::new(self.curve.clone(), A, SIGMA).unwrap()
         }
@@ -592,15 +604,16 @@ mod tests {
         );
     }
 
-    /// The Normal/Bachelier deferral (`caphelper.cpp:78-81`): `black_price` under
-    /// [`VolatilityType::Normal`] returns an error naming the unported engine
-    /// rather than silently pricing through the lognormal one.
+    /// Normal/Bachelier market arm (`caphelper.cpp:78-81`): helper
+    /// `market_value` under [`VolatilityType::Normal`] matches an independently
+    /// built ATM cap on [`BachelierCapFloorEngine`].
     #[test]
-    fn normal_volatility_black_price_is_a_visible_deferral() {
+    fn normal_market_value_matches_an_independently_built_bachelier_cap() {
         let fixture = Fixture::new();
+        const NORMAL_VOL: Real = 0.01;
         let vol: Handle<dyn Quote> =
-            Handle::new(shared(SimpleQuote::new(0.01)) as Shared<dyn Quote>);
-        let helper = CapHelper::new(
+            Handle::new(shared(SimpleQuote::new(NORMAL_VOL)) as Shared<dyn Quote>);
+        let mut helper = CapHelper::new(
             years(5),
             vol,
             Shared::clone(&fixture.index),
@@ -613,11 +626,14 @@ mod tests {
             0.0,
         );
 
-        let err = helper.black_price(0.01).unwrap_err();
+        let market = helper.market_value().unwrap();
+        let reference =
+            fixture.bachelier_price_of(&fixture.reference_cap(true, years(5)), NORMAL_VOL);
+
         assert!(
-            err.message().contains("BachelierCapFloorEngine"),
-            "unexpected error message: {}",
-            err.message()
+            (market - reference).abs() <= 1.0e-12,
+            "market {market} vs independently-built bachelier cap {reference} (error {})",
+            (market - reference).abs()
         );
     }
 

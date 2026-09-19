@@ -63,7 +63,7 @@ pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsR
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
-pub use capfloor::{AnalyticCapFloorEngine, BlackCapFloorEngine};
+pub use capfloor::{AnalyticCapFloorEngine, BachelierCapFloorEngine, BlackCapFloorEngine};
 pub use cliquet::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
 pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{

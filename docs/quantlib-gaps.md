@@ -26,7 +26,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | partial | none | `HullWhiteForwardProcess` (α/B/M_T + forward drift); hybrid join / evolve / engines deferred |
 | Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | partial | none | `HestonSLVProcess` (drift/diffusion/apply/evolve + const-L identity); FDM/MC model calibration deferred |
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | partial | none | `FdmSabrOp` (dir/mixed/split identity); `FdSabrVanillaEngine` / `NoArbSabr*` deferred |
-| Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | false | none | Blocks normal vol in CapHelper / stripper |
+| Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | partial | none | Engine NPV/vega + CapHelper Normal `black_price`; `optionletsDelta` / stripper Normal / `testBachelierOptionLetsDelta` deferred |
 | Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | false | none | Only Analytic + Black cap/floor today |
 | Rates | Cap/floor Black extras | `CapFloor`, Black engine | `capfloor.cpp` (implied vol, Bachelier δ, ATM, parity) | true | partial | Cached NPV/vega pinned; extras open |
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` (implied vol*, Bachelier) | true | partial | Cached NPV/vega/cash-settled pinned |
