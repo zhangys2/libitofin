@@ -14,6 +14,7 @@ mod forwardmeasureprocess;
 mod g2process;
 mod gsrprocess;
 mod hestonprocess;
+mod mfstateprocess;
 mod ornsteinuhlenbeckprocess;
 mod stochasticprocessarray;
 
@@ -26,5 +27,6 @@ pub use forwardmeasureprocess::{ForwardMeasureProcess1D, ForwardMeasureTime};
 pub use g2process::G2Process;
 pub use gsrprocess::GsrProcess;
 pub use hestonprocess::HestonProcess;
+pub use mfstateprocess::MfStateProcess;
 pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
 pub use stochasticprocessarray::StochasticProcessArray;
