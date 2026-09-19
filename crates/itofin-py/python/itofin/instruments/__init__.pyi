@@ -20,6 +20,7 @@ __all__ = [
     "ForwardRateAgreement",
     "MakeCreditDefaultSwap",
     "MakeOis",
+    "MakeSwaption",
     "MakeVanillaSwap",
     "MakeYoYInflationCapFloor",
     "OptionType",
@@ -413,6 +414,16 @@ class CreditDefaultSwap:
         Returns:
             float: The contract notional.
         """
+    def protection_end_date(self) -> time.Date:
+        r"""
+        Return the final premium coupon's accrual end before payment adjustment.
+
+        Returns:
+            Date: The final date covered by protection.
+
+        Raises:
+            ItofinError: If the premium leg has no final coupon.
+        """
     def accrual_rebate_amount(self) -> typing.Optional[builtins.float]:
         r"""
         Return the accrued coupon the protection seller rebates.
@@ -685,13 +696,13 @@ class MakeOis:
 
     The core builder is a consumed-self fluent chain, which does not cross the
     FFI boundary; this facade takes the overrides as constructor keywords and
-    assembles the chain inside build(). Only five overrides are exposed; every
-    other core one keeps its default, and the four the core rejects outright
+    assembles the chain inside build(). Unexposed core overrides keep their defaults;
+    the four the core rejects outright
     (telescopic value dates, lookback, lockout and observation shift) are
     unreachable from here by construction. The built swap already carries its
     DiscountingSwapEngine.
     """
-    def __init__(self, swap_tenor: time.Period, overnight_index: indexes.OvernightIndex, settings: itofin.Settings, fixed_rate: typing.Optional[builtins.float] = None, forward_start: typing.Optional[time.Period] = None, effective_date: typing.Optional[time.Date] = None, nominal: typing.Optional[builtins.float] = None, payment_lag: typing.Optional[builtins.int] = None, discounting_term_structure: typing.Optional[termstructures.YieldTermStructure] = None, averaging_method: typing.Optional[termstructures.RateAveraging] = None) -> None:
+    def __init__(self, swap_tenor: time.Period, overnight_index: indexes.OvernightIndex, settings: itofin.Settings, fixed_rate: typing.Optional[builtins.float] = None, forward_start: typing.Optional[time.Period] = None, effective_date: typing.Optional[time.Date] = None, nominal: typing.Optional[builtins.float] = None, payment_lag: typing.Optional[builtins.int] = None, discounting_term_structure: typing.Optional[termstructures.YieldTermStructure] = None, averaging_method: typing.Optional[termstructures.RateAveraging] = None, fixed_leg_day_count: typing.Optional[time.DayCounter] = None) -> None:
         r"""
         Store the configuration the chain is assembled from in build().
 
@@ -712,6 +723,7 @@ class MakeOis:
                 None keeps the core default.
             discounting_term_structure (YieldTermStructure | None): The curve
                 the flows discount on; None keeps the core default.
+            fixed_leg_day_count (DayCounter | None): Override the fixed-leg day count.
             averaging_method (RateAveraging | None): Whether the overnight
                 fixings compound or are averaged; None keeps the core default.
         """
@@ -727,6 +739,24 @@ class MakeOis:
             ItofinError: If effective_date is unset and no evaluation date is
                 set to derive the start from; if the schedule or the overnight
                 leg is degenerate; or if the par-rate fill fails to price.
+        """
+
+@typing.final
+class MakeSwaption:
+    r"""
+    Build a payer vanilla swaption from a SwapIndex and exactly one option date source.
+
+    Specify option_tenor or fixing_date. A missing strike requests the forward
+    swap's fair rate. Overnight swap indexes and underlying-type selection are
+    not supported. Attach a pricing engine to the resulting Swaption separately.
+    """
+    def __init__(self, swap_index: indexes.SwapIndex, option_tenor: typing.Optional[time.Period] = None, strike: typing.Optional[builtins.float] = None, *, fixing_date: typing.Optional[time.Date] = None, nominal: builtins.float = 1.0, settlement_type: SettlementType = SettlementType.Physical, settlement_method: SettlementMethod = SettlementMethod.PhysicalOTC, option_convention: time.BusinessDayConvention = time.BusinessDayConvention.ModifiedFollowing, exercise_date: typing.Optional[time.Date] = None, exercise_calendar: typing.Optional[time.Calendar] = None, indexed_coupons: typing.Optional[builtins.bool] = None) -> None:
+        r"""
+        Retain the index and overrides for repeatable build calls.
+        """
+    def build(self) -> Swaption:
+        r"""
+        Build the swaption, propagating date, forwarding and coupon-setting errors.
         """
 
 @typing.final
@@ -953,7 +983,7 @@ class OvernightIndexedSwap:
 @typing.final
 class Swaption:
     r"""
-    A European option to enter a vanilla swap.
+    A European option to enter a vanilla or overnight swap.
 
     The swaption registers with the underlying swap and with the evaluation
     date on the Settings it was built with (D5). Pricing needs an engine: call
@@ -974,6 +1004,23 @@ class Swaption:
                 type; an inconsistent pair surfaces from npv(), not here.
             settings (Settings): The explicit settings supplying the evaluation
                 date the swaption prices against.
+        """
+    @staticmethod
+    def from_ois(swap: OvernightIndexedSwap, exercise: EuropeanExercise, settlement_type: SettlementType, settlement_method: SettlementMethod, settings: itofin.Settings) -> Swaption:
+        r"""
+        Build an option on an overnight swap, retaining the same shared underlying.
+        """
+    def exercise_date(self) -> time.Date:
+        r"""
+        Return the single European exercise date.
+        """
+    def underlying_fixed_rate(self) -> builtins.float:
+        r"""
+        Return the underlying swap's fixed rate.
+        """
+    def underlying_nominal(self) -> builtins.float:
+        r"""
+        Return the underlying swap's nominal.
         """
     def set_jamshidian_engine(self, model: models.HullWhite) -> None:
         r"""

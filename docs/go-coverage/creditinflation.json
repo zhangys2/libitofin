@@ -9,7 +9,8 @@
   "scope": [
     "credit.rs",
     "creditengine.rs",
-    "credithelpers.rs"
+    "credithelpers.rs",
+    "creditdensity.rs"
   ],
   "symbols": [
     {
@@ -519,6 +520,203 @@
       "status": "implemented",
       "tests": [
         "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "itofin_cds_protection_end_date",
+      "go": "CreditDefaultSwap.ProtectionEndDate",
+      "python": "CreditDefaultSwap.protection_end_date",
+      "status": "implemented",
+      "tests": [
+        "TestCreditProtectionEndDate",
+        "protection_end_rejects_invalid_outputs_and_handles"
+      ]
+    },
+    {
+      "c": "itofin_interpolated_default_density_new",
+      "go": "Session.NewInterpolatedDefaultDensityCurve",
+      "python": "InterpolatedDefaultDensityCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedDefaultDensityCurve.Dates",
+      "python": "InterpolatedDefaultDensityCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedDefaultDensityCurve.Times",
+      "python": "InterpolatedDefaultDensityCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedDefaultDensityCurve.Data",
+      "python": "InterpolatedDefaultDensityCurve.data",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedDefaultDensityCurve.DefaultDensities",
+      "python": "InterpolatedDefaultDensityCurve.default_densities",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedDefaultDensityCurve.Nodes",
+      "python": "InterpolatedDefaultDensityCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityInterpolationAndBoundary"
+      ]
+    },
+    {
+      "c": "itofin_piecewise_default_density_new",
+      "go": "Session.NewPiecewiseDefaultDensityCurve",
+      "python": "PiecewiseDefaultDensityCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultDensityCurve.Dates",
+      "python": "PiecewiseDefaultDensityCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultDensityCurve.Times",
+      "python": "PiecewiseDefaultDensityCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultDensityCurve.Data",
+      "python": "PiecewiseDefaultDensityCurve.data",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultDensityCurve.DefaultDensities",
+      "python": "PiecewiseDefaultDensityCurve.default_densities",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultDensityCurve.Nodes",
+      "python": "PiecewiseDefaultDensityCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_calculate",
+      "go": "PiecewiseDefaultDensityCurve.Calculate",
+      "python": "PiecewiseDefaultDensityCurve.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestDefaultDensityBootstrapLiveHelpers"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_jumps",
+      "go": "DefaultProbabilityTermStructure.JumpDates",
+      "python": "DefaultProbabilityTermStructure.jump_dates",
+      "status": "implemented",
+      "tests": [
+        "TestCreditJumpsQuantLibOracle",
+        "TestCreditJumpsInvalidArguments"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_jumps",
+      "go": "DefaultProbabilityTermStructure.JumpTimes",
+      "python": "DefaultProbabilityTermStructure.jump_times",
+      "status": "implemented",
+      "tests": [
+        "TestCreditJumpsQuantLibOracle",
+        "TestCreditJumpsInvalidArguments"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_with_jumps_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.with_jumps",
+      "status": "implemented",
+      "tests": [
+        "TestCreditJumpsQuantLibOracle",
+        "TestCreditJumpsInvalidArguments"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_with_jumps_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.moving_with_jumps",
+      "status": "implemented",
+      "tests": [
+        "TestCreditJumpsQuantLibOracle",
+        "TestCreditJumpsInvalidArguments"
+      ]
+    },
+    {
+      "c": "itofin_cds_helper_implied_quote",
+      "go": "DefaultProbabilityHelper.ImpliedQuote",
+      "python": "DefaultProbabilityHelper.implied_quote",
+      "status": "implemented",
+      "tests": [
+        "TestIsdaCreditHelpersOracleAndRetention",
+        "TestCreditHelperExplicitTermsErrors"
+      ]
+    },
+    {
+      "c": "itofin_cds_helper_with_terms",
+      "go": "Session.NewSpreadCdsHelperWithTerms",
+      "python": "SpreadCdsHelper.with_terms",
+      "status": "implemented",
+      "tests": [
+        "TestIsdaCreditHelpersOracleAndRetention",
+        "TestCreditHelperExplicitTermsErrors"
+      ]
+    },
+    {
+      "c": "itofin_cds_helper_with_terms",
+      "go": "Session.NewUpfrontCdsHelper",
+      "python": "UpfrontCdsHelper.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestIsdaCreditHelpersOracleAndRetention",
+        "TestCreditHelperExplicitTermsErrors"
       ]
     }
   ]

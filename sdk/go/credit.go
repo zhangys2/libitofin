@@ -8,8 +8,97 @@ type DefaultProbabilityTermStructure struct{ object }
 type FlatHazardRate = DefaultProbabilityTermStructure
 type InterpolatedHazardRateCurve = DefaultProbabilityTermStructure
 type PiecewiseDefaultCurve = DefaultProbabilityTermStructure
+type InterpolatedDefaultDensityCurve = DefaultProbabilityTermStructure
+type PiecewiseDefaultDensityCurve = DefaultProbabilityTermStructure
+
+type CreditDensityInterpolation int32
+
+const (
+	DensityBackwardFlat CreditDensityInterpolation = iota
+	DensityLinear
+)
+
+type DefaultDensityCurveConfig struct {
+	Dates         []Date
+	Densities     []float64
+	DayCounter    *DayCounter
+	Calendar      *Calendar
+	Interpolation CreditDensityInterpolation
+}
+
+func (s *Session) NewInterpolatedDefaultDensityCurve(a DefaultDensityCurveConfig) (*InterpolatedDefaultDensityCurve, error) {
+	if a.DayCounter == nil {
+		return nil, errNilArgument("day counter")
+	}
+	if len(a.Dates) != len(a.Densities) {
+		return nil, creditArgumentError("dates/densities length mismatch")
+	}
+	args := []object{a.DayCounter.object}
+	var calendar C.uint64_t
+	if a.Calendar != nil {
+		args = append(args, a.Calendar.object)
+		calendar = C.uint64_t(a.Calendar.id)
+	}
+	dates := make([]C.int32_t, len(a.Dates))
+	for i, d := range a.Dates {
+		dates[i] = C.int32_t(d.Serial())
+	}
+	var dp *C.int32_t
+	var vp *C.double
+	if len(dates) > 0 {
+		dp = &dates[0]
+		vp = (*C.double)(unsafe.Pointer(&a.Densities[0]))
+	}
+	var id C.uint64_t
+	err := s.invoke(func() error {
+		if e := sameSession(s, args...); e != nil {
+			return e
+		}
+		var e C.ItofinError
+		return ffiError(C.itofin_interpolated_default_density_new(s.ctx, dp, vp, C.size_t(len(dates)), C.uint64_t(a.DayCounter.id), calendar, C.int32_t(a.Interpolation), &id, &e), &e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &InterpolatedDefaultDensityCurve{object{s, uint64(id)}}, nil
+}
+
+func (s *Session) NewPiecewiseDefaultDensityCurve(reference Date, helpers []*DefaultProbabilityHelper, dc *DayCounter, interpolation CreditDensityInterpolation) (*PiecewiseDefaultDensityCurve, error) {
+	if dc == nil {
+		return nil, errNilArgument("day counter")
+	}
+	args := []object{dc.object}
+	ids := make([]C.uint64_t, len(helpers))
+	for i, h := range helpers {
+		if h == nil {
+			return nil, errNilArgument("credit helper")
+		}
+		args = append(args, h.object)
+		ids[i] = C.uint64_t(h.id)
+	}
+	var ptr *C.uint64_t
+	if len(ids) > 0 {
+		ptr = &ids[0]
+	}
+	var id C.uint64_t
+	err := s.invoke(func() error {
+		if e := sameSession(s, args...); e != nil {
+			return e
+		}
+		var e C.ItofinError
+		return ffiError(C.itofin_piecewise_default_density_new(s.ctx, C.int32_t(reference.Serial()), ptr, C.size_t(len(ids)), C.uint64_t(dc.id), C.int32_t(interpolation), &id, &e), &e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &PiecewiseDefaultDensityCurve{object{s, uint64(id)}}, nil
+}
+
+func (c *DefaultProbabilityTermStructure) DefaultDensities() ([]float64, error) { return c.Data() }
 
 type FlatHazardConfig struct {
+	JumpQuotes     []*SimpleQuote
+	JumpDates      []Date
 	ReferenceDate  Date
 	SettlementDays uint32
 	Calendar       *Calendar
@@ -38,13 +127,33 @@ func (s *Session) NewFlatHazardRate(a FlatHazardConfig) (*FlatHazardRate, error)
 		c.settings = C.uint64_t(a.Settings.id)
 		c.calendar = C.uint64_t(a.Calendar.id)
 	}
+	jumps := make([]C.uint64_t, len(a.JumpQuotes))
+	for i, q := range a.JumpQuotes {
+		if q == nil {
+			return nil, errNilArgument("jump quote")
+		}
+		args = append(args, q.object)
+		jumps[i] = C.uint64_t(q.id)
+	}
+	dates := make([]C.int32_t, len(a.JumpDates))
+	for i, d := range a.JumpDates {
+		dates[i] = C.int32_t(d.Serial())
+	}
+	var qp *C.uint64_t
+	var dp *C.int32_t
+	if len(jumps) > 0 {
+		qp = &jumps[0]
+	}
+	if len(dates) > 0 {
+		dp = &dates[0]
+	}
 	var id C.uint64_t
 	err := s.invoke(func() error {
 		if e := sameSession(s, args...); e != nil {
 			return e
 		}
 		var e C.ItofinError
-		return ffiError(C.itofin_flat_hazard_new(s.ctx, &c, &id, &e), &e)
+		return ffiError(C.itofin_flat_hazard_with_jumps_new(s.ctx, &c, qp, C.size_t(len(jumps)), dp, C.size_t(len(dates)), &id, &e), &e)
 	})
 	if err != nil {
 		return nil, err
@@ -244,3 +353,52 @@ func creditBool(v bool) C.int32_t {
 type creditArgumentError string
 
 func (e creditArgumentError) Error() string { return string(e) }
+
+func (c *DefaultProbabilityTermStructure) jumpData(includeTimes bool) ([]Date, []float64, error) {
+	if c == nil {
+		return nil, nil, errNilArgument("credit curve")
+	}
+	var dates []Date
+	var times []float64
+	err := c.session.invoke(func() error {
+		if e := sameSession(c.session, c.object); e != nil {
+			return e
+		}
+		var n C.size_t
+		var e C.ItofinError
+		if err := ffiError(C.itofin_default_curve_jumps(c.session.ctx, C.uint64_t(c.id), nil, nil, 0, &n, &e), &e); err != nil {
+			return err
+		}
+		dates, times = make([]Date, int(n)), make([]float64, int(n))
+		if n == 0 {
+			return nil
+		}
+		ds := make([]C.int32_t, int(n))
+		var tp *C.double
+		if includeTimes {
+			tp = (*C.double)(unsafe.Pointer(&times[0]))
+		}
+		if err := ffiError(C.itofin_default_curve_jumps(c.session.ctx, C.uint64_t(c.id), &ds[0], tp, n, &n, &e), &e); err != nil {
+			return err
+		}
+		for i, d := range ds {
+			parsed, err := DateFromSerial(int32(d))
+			if err != nil {
+				return err
+			}
+			dates[i] = parsed
+		}
+		return nil
+	})
+	return dates, times, err
+}
+
+func (c *DefaultProbabilityTermStructure) JumpDates() ([]Date, error) {
+	dates, _, err := c.jumpData(false)
+	return dates, err
+}
+
+func (c *DefaultProbabilityTermStructure) JumpTimes() ([]float64, error) {
+	_, times, err := c.jumpData(true)
+	return times, err
+}

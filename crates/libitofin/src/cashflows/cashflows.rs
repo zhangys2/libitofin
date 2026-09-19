@@ -44,11 +44,11 @@
 //! C++ computes the coupon split twice: `bps` and `atmRate` through a
 //! `BPSCalculator` `AcyclicVisitor`, `npvbps` through `coupon_cast`. The port
 //! keeps only the `coupon_cast` path ([`CashFlow::as_coupon`]) and runs every
-//! analytic off one pass. One consequence: `bps` evaluates the amount of every
-//! surviving flow, where the visitor evaluates it only for the flows that are
-//! not coupons. A coupon whose [`amount`](CashFlow::amount) fails - a floating
-//! one missing its fixing - therefore makes `bps` fail, where C++ returns a
-//! number.
+//! analytic off one pass, which `bps` runs without asking the coupons for
+//! their amount, as the visitor never does. A coupon whose
+//! [`amount`](CashFlow::amount) fails - a floating one with no pricer or no
+//! fixing - therefore still has a `bps`, as in C++, while `npv`, `npvbps` and
+//! `atm_rate`, which need the amount, fail as C++ throws.
 //!
 //! Each yield analytic has two C++ overloads: one taking an `InterestRate`, one
 //! taking the `(Rate, DayCounter, Compounding, Frequency)` it is built from and
@@ -108,7 +108,8 @@ const BASIS_POINT: Spread = 1.0e-4;
 /// unscaled by [`BASIS_POINT`], which is how [`CashFlows::atm_rate`] needs them.
 #[derive(Default)]
 struct Totals {
-    /// `sum(amount * df)` over every surviving flow.
+    /// `sum(amount * df)` over every surviving flow, or over the surviving
+    /// flows that are not coupons when the pass skips the coupons' amounts.
     npv: Real,
     /// `sum(nominal * accrual_period * df)` over the surviving coupons.
     bps: Real,
@@ -460,6 +461,7 @@ impl CashFlows {
             include_settlement_date_flows,
             settlement_date,
             npv_date,
+            true,
         )?;
         Ok(totals.npv / discount)
     }
@@ -572,7 +574,8 @@ impl CashFlows {
     ///
     /// # Errors
     ///
-    /// As [`npv`](Self::npv).
+    /// As [`npv`](Self::npv), except that the coupons are never asked for
+    /// their amount, so a coupon that cannot price still has a sensitivity.
     pub fn bps(
         leg: &Leg,
         discount_curve: &dyn YieldTermStructure,
@@ -591,6 +594,7 @@ impl CashFlows {
             include_settlement_date_flows,
             settlement_date,
             npv_date,
+            false,
         )?;
         Ok(BASIS_POINT * totals.bps / discount)
     }
@@ -619,6 +623,7 @@ impl CashFlows {
             include_settlement_date_flows,
             settlement_date,
             npv_date,
+            true,
         )?;
         Ok((totals.npv / discount, BASIS_POINT * totals.bps / discount))
     }
@@ -654,6 +659,7 @@ impl CashFlows {
             include_settlement_date_flows,
             settlement_date,
             npv_date,
+            true,
         )?;
 
         let required = match target_npv {
@@ -1131,6 +1137,11 @@ impl CashFlows {
 
     /// The single pass the analytics share, and the discount factor at the NPV
     /// date they all divide by.
+    ///
+    /// `coupon_amounts` says whether the coupons are asked for their amount,
+    /// which only [`bps`](Self::bps) can do without: C++'s `BPSCalculator`
+    /// reads a coupon's nominal and accrual period and never its amount, and
+    /// a coupon that cannot price would otherwise fail the whole pass.
     fn measure(
         leg: &Leg,
         discount_curve: &dyn YieldTermStructure,
@@ -1138,6 +1149,7 @@ impl CashFlows {
         include_settlement_date_flows: Option<bool>,
         settlement_date: Option<Date>,
         npv_date: Option<Date>,
+        coupon_amounts: bool,
     ) -> QlResult<(Totals, DiscountFactor)> {
         let settlement = reference_date(settings, settlement_date)?;
         let npv_date = npv_date.unwrap_or(settlement);
@@ -1147,6 +1159,7 @@ impl CashFlows {
             settings,
             include_settlement_date_flows,
             settlement,
+            coupon_amounts,
         )?;
         Ok((totals, discount_curve.discount_date(npv_date, false)?))
     }
@@ -1157,6 +1170,7 @@ impl CashFlows {
         settings: &Settings<Date>,
         include_settlement_date_flows: Option<bool>,
         settlement: Date,
+        coupon_amounts: bool,
     ) -> QlResult<Totals> {
         let settlement = Some(settlement);
         let mut totals = Totals::default();
@@ -1167,11 +1181,18 @@ impl CashFlows {
                 continue;
             }
             let discount = discount_curve.discount_date(flow.date(), false)?;
-            let amount = flow.amount()? * discount;
-            totals.npv += amount;
             match flow.as_coupon() {
-                Some(coupon) => totals.bps += coupon.nominal() * coupon.accrual_period() * discount,
-                None => totals.non_sens_npv += amount,
+                Some(coupon) => {
+                    totals.bps += coupon.nominal() * coupon.accrual_period() * discount;
+                    if coupon_amounts {
+                        totals.npv += flow.amount()? * discount;
+                    }
+                }
+                None => {
+                    let amount = flow.amount()? * discount;
+                    totals.npv += amount;
+                    totals.non_sens_npv += amount;
+                }
             }
         }
         Ok(totals)
@@ -1417,7 +1438,11 @@ mod analytics_tests {
     use super::*;
     use crate::cashflows::fixedratecoupon::FixedRateCoupon;
     use crate::cashflows::fixedrateleg::FixedRateLeg;
+    use crate::cashflows::iborcoupon::IborCoupon;
     use crate::cashflows::simplecashflow::{Redemption, SimpleCashFlow};
+    use crate::currency::Currency;
+    use crate::handle::Handle;
+    use crate::indexes::iborindex::IborIndex;
     use crate::interestrate::{Compounding, InterestRate};
     use crate::shared::shared;
     use crate::termstructures::yields::FlatForward;
@@ -1636,6 +1661,69 @@ mod analytics_tests {
         let bumped = npv(RATE + 1.0e-4) - npv(RATE);
         let bps = CashFlows::bps(&fixed_leg(RATE), &curve, &settings, None, None, None).unwrap();
         assert!((bumped - bps).abs() < 1e-12);
+    }
+
+    /// An ibor coupon with no pricer attached, whose `amount` fails with
+    /// "pricer not set" (`iborcoupon.rs`), paying on its accrual end.
+    fn unpriced_ibor_coupon(settings: Shared<Settings<Date>>) -> Shared<IborCoupon> {
+        let index = shared(IborIndex::new(
+            "unpriced".into(),
+            Period::new(6, TimeUnit::Months),
+            2,
+            Currency::eur(),
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            Actual360::new(),
+            Handle::empty(),
+            settings,
+        ));
+        let (start, end) = periods()[0];
+        shared(
+            IborCoupon::new(
+                end,
+                NOMINAL,
+                start,
+                end,
+                None,
+                index,
+                1.0,
+                0.0,
+                None,
+                None,
+                None,
+                false,
+                None,
+                BusinessDayConvention::Unadjusted,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// `BPSCalculator::visit(Coupon&)` (`cashflows.cpp:404-409`) reads a
+    /// coupon's nominal, accrual period and discount and never its amount, so
+    /// `bps` is a number for a coupon that cannot price, while `npv`, `npvbps`
+    /// and `atm_rate`, which read `cf.amount()` (`:443`, `:497`, `:531`),
+    /// fail on it. A non-coupon beside it goes through `visit(CashFlow&)`,
+    /// which does read the amount (`:411`), and adds nothing to the bps.
+    #[test]
+    fn the_bps_never_asks_a_coupon_for_its_amount() {
+        let (settings, curve) = (shared(settings()), curve(FORWARD));
+        let coupon = unpriced_ibor_coupon(settings.clone());
+        let (start, end) = periods()[0];
+        let expected = 1.0e-4 * NOMINAL * accrual(start, end) * df(end);
+        let leg: Leg = vec![
+            coupon as Shared<dyn CashFlow>,
+            shared(Redemption::new(NOMINAL, maturity()).unwrap()),
+        ];
+
+        let bps = CashFlows::bps(&leg, &curve, &settings, None, None, None).unwrap();
+        assert!((bps - expected).abs() < 1e-12, "bps {bps} vs {expected}");
+
+        let npv = CashFlows::npv(&leg, &curve, &settings, None, None, None);
+        assert!(npv.unwrap_err().to_string().contains("pricer not set"));
+        assert!(CashFlows::npvbps(&leg, &curve, &settings, None, None, None).is_err());
+        assert!(CashFlows::atm_rate(&leg, &curve, &settings, None, None, None, None).is_err());
     }
 
     /// A coupon trading ex-coupon is dropped though it has not been paid: the

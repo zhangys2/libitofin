@@ -62,7 +62,7 @@ use libitofin::termstructures::inflation::interpolatedzeroinflationcurve::Interp
 use libitofin::termstructures::inflation::piecewiseyoyinflationcurve::PiecewiseYoYInflationCurve;
 use libitofin::termstructures::inflation::piecewisezeroinflationcurve::PiecewiseZeroInflationCurve;
 use libitofin::termstructures::inflation::seasonality::{
-    MultiplicativePriceSeasonality, Seasonality,
+    KerkhofSeasonality, MultiplicativePriceSeasonality, Seasonality,
 };
 use libitofin::termstructures::inflation::yoycapfloortermpricesurface::{
     InterpolatedYoYCapFloorTermPriceSurface, YoYCapFloorTermPriceSurface,
@@ -389,11 +389,13 @@ impl PyZeroInflationIndex {
 #[gen_stub_pyclass]
 #[pyclass(
     name = "MultiplicativePriceSeasonality",
+    subclass,
     unsendable,
     module = "itofin.termstructures"
 )]
 pub struct PyMultiplicativePriceSeasonality {
     inner: Shared<MultiplicativePriceSeasonality>,
+    kerkhof: Option<Shared<KerkhofSeasonality>>,
 }
 
 #[gen_stub_pymethods]
@@ -419,6 +421,7 @@ impl PyMultiplicativePriceSeasonality {
         seasonality_factors: Vec<f64>,
     ) -> PyResult<Self> {
         Ok(PyMultiplicativePriceSeasonality {
+            kerkhof: None,
             inner: shared(
                 MultiplicativePriceSeasonality::new(
                     seasonality_base_date.inner(),
@@ -482,7 +485,54 @@ impl PyMultiplicativePriceSeasonality {
 impl PyMultiplicativePriceSeasonality {
     /// The upcast correction, for the curve facade that installs one.
     pub(crate) fn shared(&self) -> Shared<dyn Seasonality> {
-        Shared::clone(&self.inner) as Shared<dyn Seasonality>
+        match &self.kerkhof {
+            Some(seasonality) => seasonality.clone(),
+            None => self.inner.clone(),
+        }
+    }
+}
+
+/// Monthly cumulative Kerkhof correction for zero inflation; YoY curves reject it.
+#[gen_stub_pyclass]
+#[pyclass(name = "KerkhofSeasonality", extends = PyMultiplicativePriceSeasonality, unsendable, module = "itofin.termstructures")]
+pub struct PyKerkhofSeasonality;
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyKerkhofSeasonality {
+    /// Build from exactly twelve monthly factors, retaining a copied factor set.
+    #[new]
+    #[gen_stub(override_return_type(type_repr = "KerkhofSeasonality"))]
+    fn new(base_date: &PyDate, factors: Vec<f64>) -> PyResult<PyClassInitializer<Self>> {
+        let kerkhof = shared(
+            KerkhofSeasonality::new(base_date.inner(), factors.clone()).map_err(PyQlError::from)?,
+        );
+        let inner = shared(
+            MultiplicativePriceSeasonality::new(
+                base_date.inner(),
+                libitofin::time::frequency::Frequency::Monthly,
+                factors,
+            )
+            .map_err(PyQlError::from)?,
+        );
+        Ok(PyClassInitializer::from(PyMultiplicativePriceSeasonality {
+            inner,
+            kerkhof: Some(kerkhof),
+        })
+        .add_subclass(Self))
+    }
+
+    /// Return the cumulative monthly factor relative to the anchor date.
+    fn seasonality_factor(slf: PyRef<'_, Self>, to: &PyDate) -> PyResult<f64> {
+        let base = slf.into_super();
+        let Some(kerkhof) = base.kerkhof.as_ref() else {
+            return Err(crate::ItofinError::new_err(
+                "KerkhofSeasonality missing its Kerkhof correction",
+            ));
+        };
+        Ok(kerkhof
+            .seasonality_factor(to.inner())
+            .map_err(PyQlError::from)?)
     }
 }
 
@@ -572,7 +622,8 @@ impl PyZeroInflationTermStructure {
             self.inner
                 .current_link()
                 .map_err(PyQlError::from)?
-                .base_date(),
+                .try_base_date()
+                .map_err(PyQlError::from)?,
         ))
     }
 
@@ -953,6 +1004,38 @@ pub struct PyPiecewiseZeroInflationCurve {
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyPiecewiseZeroInflationCurve {
+    /// Build a curve whose base date follows the index's last historical fixing.
+    /// The curve retains an unlinked index clone, sharing fixings and settings without a forecast cycle.
+    #[staticmethod]
+    #[pyo3(signature = (reference_date, index, frequency, day_counter, helpers, seasonality = None))]
+    fn with_last_fixing_date(
+        py: Python<'_>,
+        reference_date: &PyDate,
+        index: &PyZeroInflationIndex,
+        frequency: &PyFrequency,
+        day_counter: &PyDayCounter,
+        helpers: Vec<PyRef<PyZeroInflationHelper>>,
+        seasonality: Option<&PyMultiplicativePriceSeasonality>,
+    ) -> PyResult<Py<Self>> {
+        let concrete = PiecewiseZeroInflationCurve::with_last_fixing_date(
+            reference_date.inner(),
+            &index.shared(),
+            frequency.inner(),
+            day_counter.inner(),
+            helpers.iter().map(|helper| helper.shared()).collect(),
+            seasonality.map(PyMultiplicativePriceSeasonality::shared),
+        )
+        .map_err(PyQlError::from)?;
+        let erased = concrete.clone() as Shared<dyn ZeroInflationTermStructure>;
+        Py::new(
+            py,
+            PyClassInitializer::from(PyZeroInflationTermStructure::from_handle(Handle::new(
+                erased,
+            )))
+            .add_subclass(Self { concrete }),
+        )
+    }
+
     /// Build the curve over helpers, registering on them without solving.
     ///
     /// Args:
