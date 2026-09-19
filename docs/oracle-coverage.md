@@ -25,6 +25,7 @@ credit.
 | Analytic forward vanilla (non-quanto) | `AnalyticForwardVanillaEngine` | `forwardoption.cpp` `testValues` | Haug p.37 call 4.4064 / put 8.2971 @ 1e-4 |
 | Analytic forward vanilla greeks | `AnalyticForwardVanillaEngine` | `forwardoption.cpp` `testGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega) @ 1e-5 relative to spot; reset 6/9mo |
 | Analytic forward vanilla greeks-init | `BinomialForwardVanillaEngine` CRR 300 | `forwardoption.cpp` `testGreeksInitialization` | Inner leaves ρ/divRho/vega Null (forward too); forward δ Null because `strikeSensitivity` is missing |
+| Forward-start MC (BS) | `McForwardEuropeanBsEngine` PR 100×5000 seed 42 | `forwardoption.cpp` `testMCPrices` | Call moneyness 0.8..1.2 vs analytic, relativeError vs S=100 @ [0.002, 0.001, 0.0006, 5e-4, 5e-4] |
 | Analytic forward performance (non-quanto) | `AnalyticForwardPerformanceVanillaEngine` | `forwardoption.cpp` `testPerformanceValues` | Haug × e^{-q t_reset}/S @ 1e-4 |
 | Analytic forward performance greeks | `AnalyticForwardPerformanceVanillaEngine` | `forwardoption.cpp` `testPerformanceGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega) @ 1e-5 relative to spot; reset 6/9mo |
 | Analytic quanto double-barrier | `QuantoDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `quantooption.cpp` `testDoubleBarrierValues` | KnockOut call 3.4623 / 0.5236, put 1.1320; KnockIn call 2.6313 / 1.9305 @ 1e-4; NPV ≡ quanto-q double barrier |
