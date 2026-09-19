@@ -65,7 +65,7 @@ credit.
 | Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | FDM SABR operator | `FdmSabrOp` | identity (`fdsabr.cpp` `testFdmSabrOp` needs engine) | closed-form L[f²]/L[x²]/L[fx] interior pins (ν≠1); Shared yield snapshot; engine/NoArb deferred |
 | Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | identity (`testBachelierOptionLetsDelta` needs δ) | parity / collar / vega FD / optionletsPrice sum; CapHelper Normal ≡ independent Bachelier ATM; stripper Normal deferred |
-| Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | identity (no QL cached tree NPV) | HW tree → Analytic convergence; collar ≡ cap−floor; MC/G1d deferred |
+| Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |

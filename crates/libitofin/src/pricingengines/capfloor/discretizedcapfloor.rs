@@ -1,8 +1,13 @@
 //! Cap/floor on a short-rate lattice.
 //!
 //! Port of `ql/pricingengines/capfloor/discretizedcapfloor.{hpp,cpp}`:
-//! at each optionlet start, prices a discount-bond put/call (cap/floor);
-//! past-start optionlets contribute their known fixing at the end node.
+//! at each optionlet start, prices a discount-bond put/call (cap/floor).
+//!
+//! The past-start intrinsic path (`post_adjust_values_impl`) matches QL but is
+//! unreachable through [`TreeCapFloorEngine`](super::TreeCapFloorEngine)'s
+//! time-steps ctor: `mandatory_times` still includes negative starts (QL
+//! parity), and `TimeGrid::with_mandatory_times` rejects them. A fixed-grid
+//! ctor (deferred) is the escape hatch.
 
 use crate::discretizedasset::{DiscretizedAsset, DiscretizedAssetBase, DiscretizedDiscountBond};
 use crate::errors::QlResult;
@@ -93,7 +98,9 @@ impl DiscretizedAsset for DiscretizedCapFloor {
             let has_floor = matches!(cap_floor_type, CapFloorType::Floor | CapFloorType::Collar);
 
             if has_cap {
-                let cap = self.arguments.cap_rates[i].expect("cap rate set");
+                let Some(cap) = self.arguments.cap_rates[i] else {
+                    fail!("cap rate not set for a cap/collar");
+                };
                 let accrual = 1.0 + cap * tenor;
                 let strike = 1.0 / accrual;
                 let values = self.values_mut();
@@ -102,7 +109,9 @@ impl DiscretizedAsset for DiscretizedCapFloor {
                 }
             }
             if has_floor {
-                let floor = self.arguments.floor_rates[i].expect("floor rate set");
+                let Some(floor) = self.arguments.floor_rates[i] else {
+                    fail!("floor rate not set for a floor/collar");
+                };
                 let accrual = 1.0 + floor * tenor;
                 let strike = 1.0 / accrual;
                 let mult: Real = if cap_floor_type == CapFloorType::Floor {
@@ -139,7 +148,9 @@ impl DiscretizedAsset for DiscretizedCapFloor {
             let scale = accrual * nominal * gearing;
 
             if matches!(cap_floor_type, CapFloorType::Cap | CapFloorType::Collar) {
-                let cap = self.arguments.cap_rates[i].expect("cap rate set");
+                let Some(cap) = self.arguments.cap_rates[i] else {
+                    fail!("cap rate not set for a cap/collar");
+                };
                 let add = (fixing - cap).max(0.0) * scale;
                 let values = self.values_mut();
                 for j in 0..values.size() {
@@ -147,7 +158,9 @@ impl DiscretizedAsset for DiscretizedCapFloor {
                 }
             }
             if matches!(cap_floor_type, CapFloorType::Floor | CapFloorType::Collar) {
-                let floor = self.arguments.floor_rates[i].expect("floor rate set");
+                let Some(floor) = self.arguments.floor_rates[i] else {
+                    fail!("floor rate not set for a floor/collar");
+                };
                 let add = (floor - fixing).max(0.0) * scale;
                 let values = self.values_mut();
                 if cap_floor_type == CapFloorType::Floor {

@@ -6,6 +6,10 @@
 //! model tree over [`DiscretizedCapFloor`] mandatory times and rolls back to
 //! the first start date.
 //!
+//! The time-steps path requires `start_dates[0] >= reference_date` (negative
+//! mandatory times are rejected by [`TimeGrid::with_mandatory_times`], same as
+//! QL). Past-start optionlets need the deferred fixed-`TimeGrid` ctor.
+//!
 //! Deferred: fixed-`TimeGrid` ctor, non-TS-consistent `termStructure_` fallback,
 //! MC / Gaussian1d cap engines, `CapHelper::addTimesTo`.
 
@@ -84,6 +88,12 @@ impl PricingEngine for TreeCapFloorEngine {
         };
         let first_time: Time = day_counter.year_fraction(reference_date, first_start);
         let last_time: Time = day_counter.year_fraction(reference_date, last_end);
+        require!(
+            first_time >= 0.0,
+            "TreeCapFloorEngine time-steps path needs start_dates[0] >= reference date \
+             (got first start {first_time}); past-start optionlets need the deferred \
+             fixed-TimeGrid ctor"
+        );
 
         let mut capfloor = DiscretizedCapFloor::new(args, reference_date, &day_counter);
         let times = capfloor.mandatory_times();
@@ -206,23 +216,42 @@ mod tests {
 
     #[test]
     fn tree_converges_toward_analytic() {
-        let reference = analytic_npv(true);
-        let e_coarse = (tree_npv(true, 40) - reference).abs() / reference.max(1e-8);
-        let e_fine = (tree_npv(true, 400) - reference).abs() / reference.max(1e-8);
+        // Fixture analytic pins (flat 3%, HW(0.05,0.01), 2Y 6M Euribor, K=3%).
+        const CAP_ANALYTIC: Real = 0.91417378;
+        const FLOOR_ANALYTIC: Real = 0.94978244;
+
+        let cap_ref = analytic_npv(true);
+        assert!(
+            (cap_ref - CAP_ANALYTIC).abs() < 1.0e-6,
+            "cap analytic fixture drifted: {cap_ref} vs {CAP_ANALYTIC}"
+        );
+        let floor_ref = analytic_npv(false);
+        assert!(
+            (floor_ref - FLOOR_ANALYTIC).abs() < 1.0e-6,
+            "floor analytic fixture drifted: {floor_ref} vs {FLOOR_ANALYTIC}"
+        );
+
+        let e_coarse = (tree_npv(true, 40) - cap_ref).abs() / cap_ref;
+        let e_fine = (tree_npv(true, 400) - cap_ref).abs() / cap_ref;
         assert!(
             e_fine < 5.0e-3,
-            "tree(400) rel err {e_fine} vs analytic {reference}"
+            "cap tree(400) rel err {e_fine} vs analytic {cap_ref}"
         );
         assert!(
             e_fine < e_coarse,
-            "error must shrink 40->400: coarse {e_coarse} fine {e_fine}"
+            "cap error must shrink 40->400: coarse {e_coarse} fine {e_fine}"
         );
-        let floor_e = (tree_npv(false, 200) - analytic_npv(false)).abs();
-        assert!(floor_e < 0.05, "floor tree vs analytic abs err {floor_e}");
+
+        let floor_e = (tree_npv(false, 400) - floor_ref).abs() / floor_ref;
+        assert!(
+            floor_e < 5.0e-3,
+            "floor tree(400) rel err {floor_e} vs analytic {floor_ref}"
+        );
     }
 
+    /// Type-dispatch smoke: collar = long cap + short floor on one tree.
     #[test]
-    fn collar_equals_cap_minus_floor() {
+    fn collar_type_dispatch_matches_cap_minus_floor() {
         let settings = settings();
         let c = coupons(&settings);
         let eng = || {
