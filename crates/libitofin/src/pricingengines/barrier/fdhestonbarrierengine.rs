@@ -153,10 +153,13 @@ impl PricingEngine for FdHestonBarrierEngine {
             BarrierType::UpIn | BarrierType::UpOut => (None, Some(barrier.ln())),
         };
 
+        // Same `processHelper(s0, dividendYield, riskFreeRate, vol)` call as
+        // C++ `FdHestonBarrierEngine` / `FdHestonVanillaEngine` (r/q swapped
+        // on the equity mesher only).
         let bs_process = process_helper(
             process.s0(),
-            process.risk_free_rate(),
             process.dividend_yield(),
+            process.risk_free_rate(),
             v_mesher.vola_estimate(),
         )?;
         let equity = fdm_black_scholes_mesher(
@@ -719,5 +722,127 @@ mod tests {
                 "Heston {barrier_type:?} H={barrier}: {with_npv} vs {without_npv} (diff {diff})"
             );
         }
+    }
+
+    /// `hestonmodel.cpp` `testFdBarrierVsCached`: DownOut 9.0246 / DownIn 7.7627 @ 1e-3.
+    #[test]
+    fn fd_barrier_vs_cached() {
+        use crate::time::daycounters::actual360::Actual360;
+
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual360::new();
+        let flat = |rate| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let model = heston_model(
+            100.0,
+            0.25 * 0.25,
+            1.0,
+            0.25 * 0.25,
+            0.001,
+            0.0,
+            flat(0.08),
+            flat(0.04),
+        );
+        let ex_date = today + 180;
+        let payoff = PlainVanillaPayoff::new(OptionType::Call, 90.0);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(ex_date));
+        let engine = shared_mut(FdHestonBarrierEngine::with_params(
+            model,
+            Vec::new(),
+            200,
+            400,
+            100,
+            0,
+            FdmSchemeDesc::hundsdorfer(),
+        ));
+
+        let mut down_out = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            95.0,
+            3.0,
+            payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        set_fd_heston_barrier_engine(&mut down_out, SharedMut::clone(&engine));
+        let calculated = down_out.npv().unwrap();
+        assert!(
+            (calculated - 9.0246).abs() <= 1.0e-3,
+            "FD Heston DownOut cached: {calculated} vs 9.0246"
+        );
+
+        let mut down_in = BarrierOption::with_rebate(
+            BarrierType::DownIn,
+            95.0,
+            3.0,
+            PlainVanillaPayoff::new(OptionType::Call, 90.0),
+            exercise,
+            settings,
+        )
+        .unwrap();
+        set_fd_heston_barrier_engine(&mut down_in, engine);
+        let calculated = down_in.npv().unwrap();
+        assert!(
+            (calculated - 7.7627).abs() <= 1.0e-3,
+            "FD Heston DownIn cached: {calculated} vs 7.7627"
+        );
+    }
+
+    /// `fdheston.cpp` `testFdmHestonBarrier`: UpOut call NPV 9.1530 @ 1e-2
+    /// (delta/gamma deferred — engine does not yet expose them).
+    #[test]
+    fn fdm_heston_barrier_npv() {
+        let today = Date::new(28, Month::March, 2004);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual365Fixed::new();
+        let flat = |rate| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let model = heston_model(100.0, 0.04, 2.5, 0.04, 0.66, -0.8, flat(0.05), flat(0.0));
+        let exercise: Shared<dyn Exercise> =
+            shared(EuropeanExercise::new(Date::new(28, Month::March, 2005)));
+        let mut option = BarrierOption::with_rebate(
+            BarrierType::UpOut,
+            135.0,
+            0.0,
+            PlainVanillaPayoff::new(OptionType::Call, 100.0),
+            exercise,
+            settings,
+        )
+        .unwrap();
+        set_fd_heston_barrier_engine(
+            &mut option,
+            shared_mut(FdHestonBarrierEngine::with_params(
+                model,
+                Vec::new(),
+                50,
+                400,
+                100,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            )),
+        );
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - 9.1530).abs() <= 0.01,
+            "FD Heston UpOut barrier: {calculated} vs 9.1530"
+        );
     }
 }

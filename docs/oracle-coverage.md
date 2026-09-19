@@ -35,6 +35,16 @@ credit.
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |
 | Heston | analytic + calibration | `hestonmodel.cpp` | Core done |
+| Heston FD barrier cached | `FdHestonBarrierEngine` 200×400×100 | `hestonmodel.cpp` `testFdBarrierVsCached` | DownOut 9.0246 / DownIn 7.7627 @ 1e-3 |
+| Heston FD vanilla cached | `FdHestonVanillaEngine` 100×200×100 | `hestonmodel.cpp` `testFdVanillaVsCached` | put 0.06325 @ 1e-4 |
+| Heston FD vanilla + cash dividends | `FdHestonVanillaEngine` 200×400×100 | `hestonmodel.cpp` `testFdVanillaWithDividendsVsCached` | call 12.946 @ 5e-3 |
+| Heston FD American vs BS FD | `FdHestonVanillaEngine` / `FdBlackScholesVanillaEngine` 200×400 | `hestonmodel.cpp` `testFdAmerican` | near-Black Heston put ≡ BS FD @ 1e-3 |
+| Heston FD vs Black (Hundsdorfer) | `FdHestonVanillaEngine` 100×400×3 | `fdheston.cpp` `testFdmHestonBlackScholes` | near-Black puts S=8..12 ≡ analytic European @ 1e-4 (ExplicitEuler deferred) |
+| Heston FD American NPV | `FdHestonVanillaEngine` 200×100×50 | `fdheston.cpp` `testFdmHestonAmerican` | put 5.66032 @ 1e-2 (δ/γ deferred) |
+| Heston FD Ikonen–Toivanen | `FdHestonVanillaEngine` 100×400 | `fdheston.cpp` `testFdmHestonIkonenToivanen` | American puts S=8..12 table @ 1e-3 |
+| Heston FD American + cash div | `FdHestonVanillaEngine` 50×100×50 | `fdheston.cpp` `testFdmHestonEuropeanWithDividends` | put 7.38216 @ 1e-2 (δ/γ deferred) |
+| Heston FD ADI convergence | `FdHestonVanillaEngine` 60×101×51 | `fdheston.cpp` `testFdmHestonConvergence` | Hundsdorfer / MCS / mod-Hundsdorfer / Craig–Sneyd vs analytic @ 2% or 0.002 (TrBDF2 #636; CN deferred) |
+| Heston FD UpOut barrier NPV | `FdHestonBarrierEngine` 50×400×100 | `fdheston.cpp` `testFdmHestonBarrier` | UpOut call 9.1530 @ 1e-2 (δ/γ deferred) |
 | Hull–White / short rate | calibration, tree swaption | `shortratemodels.cpp`, swaption suite | Core done |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
@@ -133,14 +143,11 @@ credit.
 | FX forward | `FxForward` | money layer (covered interest parity) | Outright; parity-identity verified |
 | C ABI | `libitofin-ffi` | n/a | Version + error stubs only |
 
-## Not started (rates+equity desk)
+## Gaps (rates + equity)
 
-| Domain | QuantLib location | Priority |
-|--------|-------------------|----------|
-| GSR / LMM | `ql/models/shortrate`, `ql/models/marketmodels` | P2 |
-| Credit / CDS | `ql/termstructures/credit`, `ql/pricingengines/credit` | P2 (demoted) |
-| Inflation | `ql/termstructures/inflation`, CPI/YoY instruments | P2 (demoted) |
-| Full cbindgen C ABI | planned `libitofin-ffi` | P2 |
+Still-missing surface/oracle gaps (rates + equity) live in
+[`quantlib-gaps.md`](quantlib-gaps.md). This document tracks **covered** oracles
+only.
 
 ## How to extend this map
 
