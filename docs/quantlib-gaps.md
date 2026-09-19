@@ -23,7 +23,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Generic market model / SMM / CMS-MM | `ql/models/marketmodels/*` | `marketmodel.cpp`, `marketmodel_cms.cpp`, `marketmodel_smm*.cpp` | partial | partial | `AbcdFunction`/`AbcdSquared` + `AbcdMathFunction` (`testAbcdDegenerateCases`, `testAbcdVolatilityIntegration`); evolvers/products/CMS/SMM deferred |
 | Rates | Markov functional / Gaussian 1D | `markovfunctional`, `gaussian1dmodel` | `markovfunctional.cpp`, `gaussian1dmodel.cpp` | partial | partial | `MfStateProcess` (`testMfStateProcess`); `MarkovFunctional` / Gaussian1d model + engines deferred |
 | Rates | Black–Karasinski | `blackkarasinski.hpp` | (no QL suite) | partial | none | Model + `BlackKarasinskiDynamics` log transform (identity); `tree()` / Brent fit deferred |
-| Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | false | none | Process + analytic/FD/MC engines absent |
+| Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | partial | none | `HullWhiteForwardProcess` (α/B/M_T + forward drift); hybrid join / evolve / engines deferred |
 | Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | false | none | Coverage only SLV mesher via quanto-American |
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | false | none | SABR **cube** interpolation ≠ these models |
 | Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | false | none | Blocks normal vol in CapHelper / stripper |
