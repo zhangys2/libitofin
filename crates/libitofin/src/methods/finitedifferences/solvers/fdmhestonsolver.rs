@@ -122,6 +122,28 @@ impl FdmHestonSolver {
             .interpolate_at(s.ln(), v)
     }
 
+    /// Delta at spot `s` and variance `v` (`cpp:61-64`).
+    pub fn delta_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        Ok(self
+            .solver
+            .borrow()
+            .as_ref()
+            .expect("solver is filled by calculate")
+            .derivative_x(s.ln(), v)?
+            / s)
+    }
+
+    /// Gamma at spot `s` and variance `v` (`cpp:66-70`):
+    /// `(d²V/d(ln S)² − dV/d(ln S)) / S²`.
+    pub fn gamma_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        let x = s.ln();
+        let solver = self.solver.borrow();
+        let solver = solver.as_ref().expect("solver is filled by calculate");
+        Ok((solver.derivative_xx(x, v)? - solver.derivative_x(x, v)?) / (s * s))
+    }
+
     fn calculate(&self) -> QlResult<()> {
         if !self.lazy.borrow_mut().start_calculation() {
             return Ok(());
@@ -231,5 +253,63 @@ mod tests {
     fn zero_payoff_is_zero() {
         let v = solver(0.0).value_at(100.0, 0.04).unwrap();
         assert!(v.abs() < 1e-10, "got {v}");
+    }
+
+    /// Pins `delta_at`/`gamma_at` log-space conversion (`cpp:61-70`).
+    struct SpotSquared {
+        mesher: Shared<dyn FdmMesher>,
+    }
+
+    impl FdmInnerValueCalculator for SpotSquared {
+        fn inner_value(&self, iter: &FdmLinearOpIterator, _t: Time) -> Real {
+            let s = self.mesher.location(iter, 0).exp();
+            s * s
+        }
+
+        fn avg_inner_value(&self, iter: &FdmLinearOpIterator, t: Time) -> Real {
+            self.inner_value(iter, t)
+        }
+    }
+
+    #[test]
+    fn delta_gamma_at_match_value_at_differences() {
+        let flat = solver(1.0);
+        let d0 = flat.delta_at(100.0, 0.04).unwrap();
+        let g0 = flat.gamma_at(100.0, 0.04).unwrap();
+        assert!(d0.abs() < 1e-4, "constant δ={d0}");
+        assert!(g0.abs() < 1e-4, "constant γ={g0}");
+
+        let mesher: Shared<dyn FdmMesher> = shared(FdmMesherComposite::new(vec![
+            uniform_1d_mesher((80.0_f64).ln(), (120.0_f64).ln(), 11).unwrap(),
+            uniform_1d_mesher(0.01, 0.09, 9).unwrap(),
+        ])) as Shared<dyn FdmMesher>;
+        let desc = FdmSolverDesc {
+            mesher: Shared::clone(&mesher),
+            bc_set: Vec::new(),
+            condition: shared(FdmStepConditionComposite::new(&[], Vec::new())),
+            calculator: shared(SpotSquared { mesher }) as Shared<dyn FdmInnerValueCalculator>,
+            maturity: 0.5,
+            time_steps: 20,
+            damping_steps: 0,
+        };
+        let slv = FdmHestonSolver::new(process(), desc, FdmSchemeDesc::hundsdorfer(), 1.0);
+        let s0 = 100.0;
+        let v = 0.04;
+        let h = 1.0;
+        let val = slv.value_at(s0, v).unwrap();
+        let vp = slv.value_at(s0 + h, v).unwrap();
+        let vm = slv.value_at(s0 - h, v).unwrap();
+        let fd_d = (vp - vm) / (2.0 * h);
+        let fd_g = (vp - 2.0 * val + vm) / (h * h);
+        let d = slv.delta_at(s0, v).unwrap();
+        let g = slv.gamma_at(s0, v).unwrap();
+        assert!(
+            (d - fd_d).abs() < 0.05 * fd_d.abs().max(1.0),
+            "δ={d} fd={fd_d}"
+        );
+        assert!(
+            (g - fd_g).abs() < 0.05 * fd_g.abs().max(1.0),
+            "γ={g} fd={fd_g}"
+        );
     }
 }
