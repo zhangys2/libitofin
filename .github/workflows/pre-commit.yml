@@ -238,7 +238,11 @@ jobs:
   workflow-success:
     name: workflow-success
     needs: [check-change-files, pre-commit, rust-ci, python-bindings, go-bindings, go-package, docs]
-    if: ${{ always() }}
+    # Skip when the workflow itself is cancelled (e.g. superseded by a newer
+    # synchronize/edited run under cancel-in-progress). Otherwise `always()`
+    # leaves a failing workflow-success check on the commit that blocks merge
+    # even after a later green run on the same SHA.
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require successful validation
