@@ -37,6 +37,19 @@ impl AbcdFunction {
         Self::new(-0.06, 0.17, 0.54, 0.17)
     }
 
+    pub fn a(&self) -> Real {
+        self.math.a()
+    }
+    pub fn b(&self) -> Real {
+        self.math.b()
+    }
+    pub fn c(&self) -> Real {
+        self.math.c()
+    }
+    pub fn d(&self) -> Real {
+        self.math.d()
+    }
+
     /// `f(t)`.
     pub fn value(&self, t: Time) -> Real {
         self.math.value(t)
@@ -66,7 +79,9 @@ impl AbcdFunction {
         }
     }
 
-    /// Integrated variance of the `T`-fixing rate on `[t_min, t_max]`.
+    /// Integrated variance of the `T`-fixing rate on `[t_min, t_max]`
+    /// (`∫ f²`; QL `variance`). Duration normalization belongs on
+    /// `volatility` when that method is ported.
     ///
     /// # Errors
     ///
@@ -151,8 +166,24 @@ impl AbcdSquared {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::abcdmathfunction::AbcdMathFunction;
     use crate::math::integrals::Integrator;
     use crate::math::integrals::segment::SegmentIntegral;
+
+    /// Pin distinct QL default coefficient sets for math vs market-model Abcd.
+    #[test]
+    fn abcd_ql_defaults() {
+        let math = AbcdMathFunction::with_defaults().unwrap();
+        assert_eq!(
+            (math.a(), math.b(), math.c(), math.d()),
+            (0.002, 0.001, 0.16, 0.0005)
+        );
+        let vol = AbcdFunction::with_defaults().unwrap();
+        assert_eq!(
+            (vol.a(), vol.b(), vol.c(), vol.d()),
+            (-0.06, 0.17, 0.54, 0.17)
+        );
+    }
 
     /// `marketmodel.cpp` `testAbcdDegenerateCases`.
     #[test]
