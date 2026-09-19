@@ -123,46 +123,9 @@ impl FdHestonVanillaEngine {
         self
     }
 
-    /// Fills the arguments and returns the NPV.
-    pub fn price(
-        &mut self,
-        payoff: Shared<dyn StrikedTypePayoff>,
-        exercise: Shared<dyn Exercise>,
-    ) -> QlResult<Real> {
-        {
-            let args = self.base.arguments_mut();
-            args.payoff = Some(payoff);
-            args.exercise = Some(exercise);
-        }
-        self.calculate()?;
-        match self.base.results().instrument.value {
-            Some(value) => Ok(value),
-            None => fail!("no results returned"),
-        }
-    }
-}
-
-impl AsObservable for FdHestonVanillaEngine {
-    fn observable(&self) -> &Observable {
-        self.base.observable()
-    }
-}
-
-impl PricingEngine for FdHestonVanillaEngine {
-    fn arguments_mut(&mut self) -> &mut dyn Arguments {
-        self.base.arguments_mut()
-    }
-
-    fn results(&self) -> &dyn Results {
-        self.base.results()
-    }
-
-    fn reset(&mut self) {
-        self.base.reset();
-    }
-
+    /// `FdHestonVanillaEngine::getSolverDesc` (single-strike path, scale 2.0).
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    fn calculate(&mut self) -> QlResult<()> {
+    fn solver_desc(&self) -> QlResult<FdmSolverDesc> {
         let arguments = self.base.arguments();
         let Some(exercise) = arguments.exercise.as_ref() else {
             fail!("no exercise given");
@@ -175,9 +138,6 @@ impl PricingEngine for FdHestonVanillaEngine {
 
         let process = self.model.borrow().process();
         let maturity = process.time(&exercise.last_date())?;
-        let spot = process.s0().current_link()?.value()?;
-        require!(spot > 0.0, "negative or null underlying given");
-
         let t_avg_steps = 5.max(self.t_grid / 50);
         // C++ `FdHestonVanillaEngine::getSolverDesc` uses
         // `FdmHestonLocalVolatilityVarianceMesher` whenever a leverage
@@ -222,14 +182,12 @@ impl PricingEngine for FdHestonVanillaEngine {
             v_mesher.into_mesher(),
         ]));
         let mesher_dyn: Shared<dyn FdmMesher> = mesher.clone() as Shared<dyn FdmMesher>;
-
         let payoff_dyn: Shared<dyn Payoff> = Shared::clone(payoff) as Shared<dyn Payoff>;
         let calculator: Shared<dyn FdmInnerValueCalculator> = shared(fdm_log_inner_value(
             payoff_dyn,
             Shared::clone(&mesher_dyn),
             0,
         ));
-
         let r_ts = process.risk_free_rate().current_link()?;
         let conditions = FdmStepConditionComposite::vanilla_composite(
             &self.dividends,
@@ -239,8 +197,7 @@ impl PricingEngine for FdHestonVanillaEngine {
             r_ts.reference_date()?,
             r_ts.require_day_counter()?,
         )?;
-
-        let solver_desc = FdmSolverDesc {
+        Ok(FdmSolverDesc {
             mesher: mesher_dyn,
             bc_set: Vec::new(),
             condition: conditions,
@@ -248,7 +205,52 @@ impl PricingEngine for FdHestonVanillaEngine {
             maturity,
             time_steps: self.t_grid,
             damping_steps: self.damping_steps,
-        };
+        })
+    }
+
+    /// Fills the arguments and returns the NPV.
+    pub fn price(
+        &mut self,
+        payoff: Shared<dyn StrikedTypePayoff>,
+        exercise: Shared<dyn Exercise>,
+    ) -> QlResult<Real> {
+        {
+            let args = self.base.arguments_mut();
+            args.payoff = Some(payoff);
+            args.exercise = Some(exercise);
+        }
+        self.calculate()?;
+        match self.base.results().instrument.value {
+            Some(value) => Ok(value),
+            None => fail!("no results returned"),
+        }
+    }
+}
+
+impl AsObservable for FdHestonVanillaEngine {
+    fn observable(&self) -> &Observable {
+        self.base.observable()
+    }
+}
+
+impl PricingEngine for FdHestonVanillaEngine {
+    fn arguments_mut(&mut self) -> &mut dyn Arguments {
+        self.base.arguments_mut()
+    }
+
+    fn results(&self) -> &dyn Results {
+        self.base.results()
+    }
+
+    fn reset(&mut self) {
+        self.base.reset();
+    }
+
+    fn calculate(&mut self) -> QlResult<()> {
+        let process = self.model.borrow().process();
+        let spot = process.s0().current_link()?.value()?;
+        require!(spot > 0.0, "negative or null underlying given");
+        let solver_desc = self.solver_desc()?;
         let solver = FdmHestonSolver::with_leverage(
             process,
             solver_desc,
@@ -261,6 +263,7 @@ impl PricingEngine for FdHestonVanillaEngine {
         let value = solver.value_at(spot, v0)?;
         let results = self.base.results_mut();
         results.instrument.value = Some(value);
+        // Engine δ/γ/θ stay deferred until `theta_at` exists (QL fills all three).
         results.greeks = Greeks::default();
         results.more_greeks = MoreGreeks::default();
         Ok(())
@@ -275,6 +278,7 @@ mod tests {
     use crate::instrument::Instrument;
     use crate::instruments::{BarrierOption, BarrierType, PlainVanillaPayoff, VanillaOption};
     use crate::interestrate::Compounding;
+    use crate::methods::finitedifferences::solvers::FdmHestonSolver;
     use crate::option::OptionType;
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::barrier::{FdHestonBarrierEngine, set_fd_heston_barrier_engine};
@@ -1147,6 +1151,64 @@ mod tests {
             assert!(
                 (put_npv - call_npv).abs() <= 0.025,
                 "American call/put parity: put={put_npv} call={call_npv}"
+            );
+        }
+    }
+
+    /// `fdheston.cpp` `testSpuriousOscillations` ADI arms: max |Δγ| along
+    /// S∈[99,101] exceeds 0.01. Implicit/TrBDF2/CN deferred (#636).
+    #[test]
+    fn fdm_heston_spurious_oscillations() {
+        let today = Date::new(7, Month::June, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let model = heston_model(100.0, 0.005, 1.0, 0.005, 0.4, -0.75, 0.0, 0.1, today);
+        let process = model.borrow().process();
+        let v0 = process.v0();
+        let engine = shared_mut(FdHestonVanillaEngine::with_params(
+            SharedMut::clone(&model),
+            Vec::new(),
+            6,
+            200,
+            13,
+            0,
+            FdmSchemeDesc::hundsdorfer(),
+        ));
+        let mut option = VanillaOption::new(
+            shared(PlainVanillaPayoff::new(OptionType::Call, 100.0)),
+            shared(EuropeanExercise::new(
+                today + Period::new(1, TimeUnit::Years),
+            )),
+            settings,
+        );
+        option
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>);
+        option.npv().unwrap();
+        let solver_desc = engine.borrow().solver_desc().unwrap();
+        let schemes = [
+            (FdmSchemeDesc::craig_sneyd(), "Craig-Sneyd"),
+            (FdmSchemeDesc::hundsdorfer(), "Hundsdorfer"),
+            (FdmSchemeDesc::modified_hundsdorfer(), "Mod. Hundsdorfer"),
+            (FdmSchemeDesc::douglas(), "Douglas"),
+        ];
+        for (scheme, name) in schemes {
+            let solver =
+                FdmHestonSolver::new(Shared::clone(&process), solver_desc.clone(), scheme, 1.0);
+            let mut max_jump: Real = 0.0;
+            let mut prev: Option<Real> = None;
+            let mut x: Real = 99.0;
+            while x < 101.001 {
+                let g = solver.gamma_at(x, v0).unwrap();
+                if let Some(p) = prev {
+                    max_jump = max_jump.max((g - p).abs());
+                }
+                prev = Some(g);
+                x += 0.1;
+            }
+            assert!(
+                max_jump > 0.01,
+                "{name}: expected spurious oscillations, max |Δγ|={max_jump}"
             );
         }
     }
