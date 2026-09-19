@@ -50,7 +50,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Fitted bond discount curve | Nelson–Siegel / Svensson-style helpers | `fittedbondcurve.cpp` | false | none | Piecewise bootstrap only |
 | Rates | Tree discounting swap engine | `TreeSwapEngine` | `swap.cpp` | false | none | `DiscountingSwapEngine` only |
 | Rates | Overnight index future | `OvernightIndexFuture` | `overnightindexfuture.cpp` | false | none | |
-| Rates | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
+| Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
 | Rates | Caplet vol stripping (normal / shifted / ON) | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Flat Black strip pinned; normal/shifted/ON open |
 | Rates | Swaption vol matrix observability | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | true | partial | Coherence pinned; observability open |
 | Rates | Swaption SABR/ZABR cube extras | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` | true | partial | Some SABR fixtures; ZABR/smile/ATM grid open |

@@ -26,4 +26,7 @@ Confirmed 2026-09-19 by named ask:
 - **Sibling (not selected as the primary row):** Equity — Heston FD scheme grid (`fdheston.cpp`) remains a related partial; fold in only when it unblocks or completes the same ambition.
 - **Out of this pick:** Hybrid Heston–HW, Heston SLV, piecewise TD Heston, rough Heston, FD Heston double-barrier (greenfield / other rows).
 
-Execution not started here. Narrow which `hestonmodel.cpp` cases to close first via [Which Heston oracle cases next](which-heston-oracle-cases-next.md) before implementing.
+Execution of this pick landed 2026-09-19: the narrowed FD-cached cluster
+([Which Heston oracle cases next](which-heston-oracle-cases-next.md)) is
+implemented with coverage rows on `docs/oracle-coverage.md`. Further
+`hestonmodel.cpp` cases remain later ambitions.

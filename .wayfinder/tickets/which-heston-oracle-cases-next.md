@@ -28,4 +28,4 @@ Confirmed 2026-09-19:
   - `testFdAmerican`
 - **Done bar:** those cases pass at QuantLib tolerances and appear as covered rows (or an updated Heston row) on `docs/oracle-coverage.md`.
 - **Deferred:** analytic refs (Lewis/Kahl–Jaeckel), COS/AP/integrals, piecewise TD, and other `hestonmodel.cpp` cases — later ambitions.
-- **Not started:** implementation / GitHub execution issue (ask explicitly to begin).
+- **Implemented 2026-09-19:** all four FD-cached oracles + coverage rows. Mesher: keep successful chi-square `v` and nudge non-strict `p` for Rust `LinearInterpolation` (QL `Error` catch is construction-only; not the uniform CIR fallback).

@@ -31,7 +31,7 @@ Decide *how* to inventory and prioritize what libitofin still lacks versus C++ Q
 
 - Whether Python/Go binding gaps count in a later sibling map (out of this Destination’s core fence unless promoted).
 - Criteria to promote credit or inflation out of demotion.
-- How suite cases not yet on an `oracle-coverage.md` ambition get promoted onto that ambition (this Heston FD-cached slice is the worked example once implemented).
+- How suite cases not yet on an `oracle-coverage.md` ambition get promoted onto that ambition (this Heston FD-cached slice is the worked example: ambition locked → implemented 2026-09-19 → coverage rows).
 - When/how to open a GitHub execution issue for further Heston ambitions (FD-cached slice implemented 2026-09-19).
 
 ## Out of scope
@@ -44,7 +44,7 @@ Decide *how* to inventory and prioritize what libitofin still lacks versus C++ Q
 
 ## Frontier (open, unblocked, unclaimed)
 
-_(none — Heston FD-cached ambition locked; start implementation only on explicit request)_
+_(none — Heston FD-cached ambition locked and implemented 2026-09-19; pick the next Heston / rates+equity slice via a new gap-decision ticket)_
 
 ## Blocked (not frontier)
 
