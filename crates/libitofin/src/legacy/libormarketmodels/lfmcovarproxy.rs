@@ -56,7 +56,7 @@ impl LfmCovarianceProxy {
 
     /// Diffusion matrix `σ(t)` (`lfmcovarproxy.cpp:47`).
     pub fn diffusion(&self, t: Time) -> Matrix {
-        let mut pca = self.corr.pseudo_sqrt(t);
+        let mut pca = self.corr.pseudo_sqrt(t).clone();
         let vol = self.vola.volatility(t);
         for i in 0..self.size {
             for j in 0..pca.columns() {

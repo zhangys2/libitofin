@@ -51,8 +51,8 @@ impl LmExponentialCorrelationModel {
     }
 
     /// Correlation matrix (time-independent).
-    pub fn correlation(&self, _t: Time) -> Matrix {
-        self.corr_matrix.clone()
+    pub fn correlation(&self, _t: Time) -> &Matrix {
+        &self.corr_matrix
     }
 
     /// Element `ρ_{i,j}`.
@@ -70,8 +70,8 @@ impl LmExponentialCorrelationModel {
     }
 
     /// Cached spectral pseudo square root.
-    pub fn pseudo_sqrt(&self, _t: Time) -> Matrix {
-        self.pseudo_sqrt.clone()
+    pub fn pseudo_sqrt(&self, _t: Time) -> &Matrix {
+        &self.pseudo_sqrt
     }
 
     /// Whether the correlation is independent of calendar time.

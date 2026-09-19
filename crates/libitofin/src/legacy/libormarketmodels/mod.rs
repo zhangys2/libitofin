@@ -30,7 +30,7 @@ mod tests {
         assert!((c[(0, 0)] - 1.0).abs() <= tol);
         assert!((c[(0, 1)] - (-0.1_f64).exp()).abs() <= tol);
         assert!((c[(2, 5)] - (-0.3_f64).exp()).abs() <= tol);
-        let recon = &c - &(&corr.pseudo_sqrt(0.0) * &corr.pseudo_sqrt(0.0).transpose());
+        let recon = c - &(corr.pseudo_sqrt(0.0) * &corr.pseudo_sqrt(0.0).transpose());
         for i in 0..size {
             for j in 0..size {
                 assert!(
