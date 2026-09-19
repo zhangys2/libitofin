@@ -122,6 +122,28 @@ impl FdmHestonSolver {
             .interpolate_at(s.ln(), v)
     }
 
+    /// Delta at spot `s` and variance `v` (`cpp:61-64`).
+    pub fn delta_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        Ok(self
+            .solver
+            .borrow()
+            .as_ref()
+            .expect("solver is filled by calculate")
+            .derivative_x(s.ln(), v)?
+            / s)
+    }
+
+    /// Gamma at spot `s` and variance `v` (`cpp:66-70`):
+    /// `(d²V/d(ln S)² − dV/d(ln S)) / S²`.
+    pub fn gamma_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        let x = s.ln();
+        let solver = self.solver.borrow();
+        let solver = solver.as_ref().expect("solver is filled by calculate");
+        Ok((solver.derivative_xx(x, v)? - solver.derivative_x(x, v)?) / (s * s))
+    }
+
     fn calculate(&self) -> QlResult<()> {
         if !self.lazy.borrow_mut().start_calculation() {
             return Ok(());
