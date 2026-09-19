@@ -52,8 +52,8 @@ jobs:
       - name: run pre-commit on changed files
         shell: bash
         env:
-          # fmt/check/clippy/test rebuild the workspace; rust-ci already covers them.
-          SKIP: fmt,check,clippy,test
+          # Workspace compile/test is rust-ci (clippy --all-targets + cargo test).
+          SKIP: fmt,check,clippy,test,cargo-check-examples
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             pre-commit run --from-ref "origin/${{ github.base_ref }}" --to-ref HEAD --show-diff-on-failure
@@ -141,12 +141,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: check formatting
         run: cargo fmt --all -- --check
-      - name: run cargo check
-        run: cargo check --workspace --all-targets
+      # clippy --all-targets is a stricter cargo check; cargo test builds.
       - name: run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: build
-        run: cargo build --workspace
       - name: run tests
         run: cargo test --workspace
 
