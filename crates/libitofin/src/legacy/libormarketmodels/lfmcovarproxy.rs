@@ -1,32 +1,34 @@
 //! Covariance proxy combining LMM vol and correlation models.
 //!
 //! Port of `ql/legacy/libormarketmodels/lfmcovarproxy.{hpp,cpp}` diffusion and
-//! covariance (integrated covariance deferred).
+//! covariance (integrated covariance deferred). Owns the vol/corr models via
+//! [`Shared`] (QL `shared_ptr`), matching `setCovarParam` ownership.
 
 use crate::errors::QlResult;
 use crate::legacy::libormarketmodels::lmexpcorrmodel::LmExponentialCorrelationModel;
 use crate::legacy::libormarketmodels::lmlinexpvolmodel::LmLinearExponentialVolatilityModel;
 use crate::math::matrix::Matrix;
 use crate::require;
+use crate::shared::Shared;
 use crate::types::{Size, Time};
 
 /// `LfmCovarianceProxy(volaModel, corrModel)` for the linear-exp / exponential pair.
-pub struct LfmCovarianceProxy<'a> {
+pub struct LfmCovarianceProxy {
     size: Size,
     factors: Size,
-    vola: &'a LmLinearExponentialVolatilityModel,
-    corr: &'a LmExponentialCorrelationModel,
+    vola: Shared<LmLinearExponentialVolatilityModel>,
+    corr: Shared<LmExponentialCorrelationModel>,
 }
 
-impl<'a> LfmCovarianceProxy<'a> {
+impl LfmCovarianceProxy {
     /// Builds the proxy; sizes must match.
     ///
     /// # Errors
     ///
     /// Fails when volatility and correlation sizes differ.
     pub fn new(
-        vola: &'a LmLinearExponentialVolatilityModel,
-        corr: &'a LmExponentialCorrelationModel,
+        vola: Shared<LmLinearExponentialVolatilityModel>,
+        corr: Shared<LmExponentialCorrelationModel>,
     ) -> QlResult<Self> {
         require!(
             vola.size() == corr.size(),

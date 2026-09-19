@@ -15,6 +15,7 @@ pub use lmlinexpvolmodel::LmLinearExponentialVolatilityModel;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::{Shared, shared};
     use crate::types::{Real, Size, Time};
 
     /// `libormarketmodel.cpp` `testSimpleCovarianceModels` (corr + vol + proxy).
@@ -23,9 +24,13 @@ mod tests {
         let size: Size = 10;
         let tol = 1.0e-14;
 
-        let corr = LmExponentialCorrelationModel::new(size, 0.1).unwrap();
-        let recon =
-            &corr.correlation(0.0) - &(&corr.pseudo_sqrt(0.0) * &corr.pseudo_sqrt(0.0).transpose());
+        let corr = shared(LmExponentialCorrelationModel::new(size, 0.1).unwrap());
+        let c = corr.correlation(0.0);
+        // Pin ρ_ij = exp(-β|i-j|) (not just C ≈ L Lᵀ).
+        assert!((c[(0, 0)] - 1.0).abs() <= tol);
+        assert!((c[(0, 1)] - (-0.1_f64).exp()).abs() <= tol);
+        assert!((c[(2, 5)] - (-0.3_f64).exp()).abs() <= tol);
+        let recon = &c - &(&corr.pseudo_sqrt(0.0) * &corr.pseudo_sqrt(0.0).transpose());
         for i in 0..size {
             for j in 0..size {
                 assert!(
@@ -37,10 +42,21 @@ mod tests {
         }
 
         let fixing_times: Vec<Time> = (0..size).map(|i| 0.5 * i as Real).collect();
-        let (a, b, c, d) = (0.2, 0.1, 2.1, 0.3);
-        let vola =
-            LmLinearExponentialVolatilityModel::new(fixing_times.clone(), a, b, c, d).unwrap();
-        let covar = LfmCovarianceProxy::new(&vola, &corr).unwrap();
+        let (a, b, c_param, d) = (0.2, 0.1, 2.1, 0.3);
+        let vola = shared(
+            LmLinearExponentialVolatilityModel::new(fixing_times.clone(), a, b, c_param, d)
+                .unwrap(),
+        );
+        // Scalar path: live forward and expired forward.
+        assert!(
+            (vola.volatility_i(4, 0.5)
+                - ((a * (2.0 - 0.5) + d) * (-b * (2.0 - 0.5)).exp() + c_param))
+                .abs()
+                <= tol
+        );
+        assert_eq!(vola.volatility_i(1, 1.0), 0.0);
+
+        let covar = LfmCovarianceProxy::new(Shared::clone(&vola), Shared::clone(&corr)).unwrap();
 
         let mut t = 0.0;
         while t < 4.6 {
@@ -59,7 +75,7 @@ mod tests {
             for k in 0..size {
                 let expected = if (k as Real) > 2.0 * t {
                     let t_fix = fixing_times[k];
-                    (a * (t_fix - t) + d) * (-b * (t_fix - t)).exp() + c
+                    (a * (t_fix - t) + d) * (-b * (t_fix - t)).exp() + c_param
                 } else {
                     0.0
                 };
