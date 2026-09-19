@@ -14,8 +14,8 @@ use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::math::optimization::constraint::PositiveConstraint;
 use crate::models::model::{
-    register_with_term_structure, CalibratedModel, CalibratedModelHolder,
-    TermStructureConsistentModel,
+    CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel,
+    register_with_term_structure,
 };
 use crate::models::parameter::{
     ConstantParameter, NumericalImpl, Parameter, ParameterValue, TermStructureFittingParameter,
@@ -23,7 +23,7 @@ use crate::models::parameter::{
 use crate::models::shortrate::onefactormodel::ShortRateDynamics;
 use crate::patterns::observable::Observer;
 use crate::processes::OrnsteinUhlenbeckProcess;
-use crate::shared::{shared, shared_mut, Shared, SharedMut};
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::types::{Rate, Real, Time};
