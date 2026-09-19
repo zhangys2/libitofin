@@ -273,11 +273,11 @@ mod tests {
     use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
-    use crate::instruments::PlainVanillaPayoff;
-    use crate::instruments::VanillaOption;
+    use crate::instruments::{BarrierOption, BarrierType, PlainVanillaPayoff, VanillaOption};
     use crate::interestrate::Compounding;
     use crate::option::OptionType;
     use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::barrier::{FdHestonBarrierEngine, set_fd_heston_barrier_engine};
     use crate::pricingengines::vanilla::analytichestonengine::AnalyticHestonEngine;
     use crate::processes::HestonProcess;
     use crate::quotes::{Quote, SimpleQuote};
@@ -1017,5 +1017,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `fdheston.cpp` `testMethodOfLinesAndCN` MOL arm: American put vs
+    /// Hundsdorfer 10×21×7 @ 0.005; DownOut barrier 100×31×11 @ 0.01.
+    /// CN deferred: Rust `CrankNicolsonScheme` is Douglas θ=0.5 (1-D only);
+    /// 2-D CN needs ImplicitEuler iterative solvers (#636).
+    #[test]
+    fn fdm_heston_method_of_lines_and_cn() {
+        let today = Date::new(21, Month::February, 2018);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let maturity = today + Period::new(3, TimeUnit::Months);
+        let model = heston_model(100.0, 0.09, 1.0, 0.09, 0.4, -0.75, 0.0, 0.0, today);
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Put, 100.0));
+        let exercise: Shared<dyn Exercise> = shared(AmericanExercise::from_latest(maturity, false));
+        let mut option = VanillaOption::new(payoff, exercise, Shared::clone(&settings));
+        let vanilla = |scheme| {
+            shared_mut(FdHestonVanillaEngine::with_params(
+                SharedMut::clone(&model),
+                Vec::new(),
+                10,
+                21,
+                7,
+                0,
+                scheme,
+            )) as SharedMut<dyn PricingEngine>
+        };
+        option
+            .base_mut()
+            .set_pricing_engine(vanilla(FdmSchemeDesc::hundsdorfer()));
+        let expected = option.npv().unwrap();
+        option
+            .base_mut()
+            .set_pricing_engine(vanilla(FdmSchemeDesc::method_of_lines()));
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - expected).abs() <= 0.005,
+            "MOL American: {calculated} vs Hundsdorfer {expected}"
+        );
+
+        let mut barrier = BarrierOption::with_rebate(
+            BarrierType::DownOut,
+            85.0,
+            10.0,
+            PlainVanillaPayoff::new(OptionType::Put, 100.0),
+            shared(EuropeanExercise::new(maturity)),
+            settings,
+        )
+        .unwrap();
+        let barrier_engine = |scheme| {
+            shared_mut(FdHestonBarrierEngine::with_params(
+                SharedMut::clone(&model),
+                Vec::new(),
+                100,
+                31,
+                11,
+                0,
+                scheme,
+            ))
+        };
+        set_fd_heston_barrier_engine(&mut barrier, barrier_engine(FdmSchemeDesc::hundsdorfer()));
+        let expected_barrier = barrier.npv().unwrap();
+        set_fd_heston_barrier_engine(
+            &mut barrier,
+            barrier_engine(FdmSchemeDesc::method_of_lines()),
+        );
+        let calculated = barrier.npv().unwrap();
+        assert!(
+            (calculated - expected_barrier).abs() <= 0.01,
+            "MOL barrier: {calculated} vs Hundsdorfer {expected_barrier}"
+        );
     }
 }

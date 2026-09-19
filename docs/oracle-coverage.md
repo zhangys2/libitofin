@@ -49,6 +49,7 @@ credit.
 | Heston FD Ikonen–Toivanen | `FdHestonVanillaEngine` 100×400 | `fdheston.cpp` `testFdmHestonIkonenToivanen` | American puts S=8..12 table @ 1e-3 |
 | Heston FD American + cash div | `FdHestonVanillaEngine` 50×100×50 | `fdheston.cpp` `testFdmHestonEuropeanWithDividends` | put 7.38216 @ 1e-2 (δ/γ deferred) |
 | Heston FD ADI convergence | `FdHestonVanillaEngine` 60×101×51 | `fdheston.cpp` `testFdmHestonConvergence` | Hundsdorfer / MCS / mod-Hundsdorfer / Craig–Sneyd vs analytic @ 2% or 0.002 (TrBDF2 #636; CN deferred) |
+| Heston FD Method of Lines | `FdHestonVanillaEngine` 10×21×7 / `FdHestonBarrierEngine` 100×31×11 | `fdheston.cpp` `testMethodOfLinesAndCN` | American put / DownOut barrier MOL ≡ Hundsdorfer @ 0.005 / 0.01; CN still #636 (true 2-D `CrankNicolsonScheme`, not Douglas θ=0.5) |
 | Heston FD UpOut barrier NPV | `FdHestonBarrierEngine` 50×400×100 | `fdheston.cpp` `testFdmHestonBarrier` | UpOut call 9.1530 @ 1e-2 (δ/γ deferred) |
 | Hull–White / short rate | calibration, tree swaption | `shortratemodels.cpp`, swaption suite | Core done |
 | GSR process (constant a/σ) | `GsrProcess` + `ForwardMeasureProcess1D` | `gsr.cpp` `testGsrProcess` | E/V vs Hull–White forward (f≡0) @ 1e-8; flat≡stepwise-equal; piecewise core deferred |
