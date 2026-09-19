@@ -65,6 +65,10 @@ jobs:
     name: check-changed-files
     outputs:
       rust: ${{ steps.check-changes.outputs.rust_any_modified }}
+      rust_workspace: ${{ steps.check-changes.outputs.rust_workspace_any_modified }}
+      libitofin: ${{ steps.check-changes.outputs.libitofin_any_modified }}
+      itofin_py: ${{ steps.check-changes.outputs.itofin_py_any_modified }}
+      libitofin_ffi: ${{ steps.check-changes.outputs.libitofin_ffi_any_modified }}
       go: ${{ steps.check-changes.outputs.go_any_modified }}
       docs: ${{ steps.check-changes.outputs.docs_any_modified }}
     runs-on: ubuntu-latest
@@ -85,6 +89,21 @@ jobs:
               - Cargo.lock
               - rust-toolchain.toml
               - .github/workflows/*.yml
+
+            rust_workspace:
+              - Cargo.toml
+              - Cargo.lock
+              - rust-toolchain.toml
+              - .github/workflows/*.yml
+
+            libitofin:
+              - crates/libitofin/**
+
+            itofin_py:
+              - crates/itofin-py/**
+
+            libitofin_ffi:
+              - crates/libitofin-ffi/**
 
             # FFI / Go SDK / PyO3 mixed-build only. Align with
             # go-bindings-tests hook files: and go-bindings.yml on.push.paths.
@@ -145,7 +164,23 @@ jobs:
       - name: run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: run tests
-        run: cargo test --workspace
+        env:
+          RUST_WORKSPACE: ${{ needs.check-change-files.outputs.rust_workspace }}
+          LIBITOFIN: ${{ needs.check-change-files.outputs.libitofin }}
+          ITOFIN_PY: ${{ needs.check-change-files.outputs.itofin_py }}
+          LIBITOFIN_FFI: ${{ needs.check-change-files.outputs.libitofin_ffi }}
+        run: |
+          pkgs=()
+          [ "$LIBITOFIN" = true ] && pkgs+=(-p libitofin)
+          [ "$ITOFIN_PY" = true ] && pkgs+=(-p itofin-py)
+          [ "$LIBITOFIN_FFI" = true ] && pkgs+=(-p libitofin-ffi)
+          if [ "$RUST_WORKSPACE" = true ] || [ "${#pkgs[@]}" -eq 0 ]; then
+            echo "cargo test --workspace"
+            cargo test --workspace
+          else
+            echo "cargo test ${pkgs[*]}"
+            cargo test "${pkgs[@]}"
+          fi
 
   # Branch protection still requires these legacy check names. Real work is in
   # `rust-ci` / `python-bindings`; these only republish under the expected names.
