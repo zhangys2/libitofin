@@ -1090,4 +1090,64 @@ mod tests {
             "MOL barrier: {calculated} vs Hundsdorfer {expected_barrier}"
         );
     }
+
+    /// `fdheston.cpp` `testAmericanCallPutParity`: Battauz Heston symmetry,
+    /// American call vs transformed put @ 0.025 (200×25, 50 steps/year).
+    #[test]
+    fn fdm_heston_american_call_put_parity() {
+        let today = Date::new(15, Month::April, 2022);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let dc = Actual365Fixed::new();
+        // spot, strike, days, r, q, v0, kappa, theta, sig, rho
+        let specs = [
+            (100.0, 90.0, 365, 0.02, 0.15, 0.25, 1.0, 0.09, 0.5, -0.75),
+            (100.0, 90.0, 365, 0.05, 0.20, 0.5, 1.0, 0.05, 0.75, -0.9),
+        ];
+        for (spot, strike, days, r, q, v0, kappa, theta, sig, rho) in specs {
+            let maturity = today + Period::new(days, TimeUnit::Days);
+            let t_grid = (dc.year_fraction(today, maturity) * 50.0) as Size;
+            let exercise: Shared<dyn Exercise> =
+                shared(AmericanExercise::new(today, maturity, false).unwrap());
+            let mut call = VanillaOption::new(
+                shared(PlainVanillaPayoff::new(OptionType::Call, strike)),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            );
+            call.base_mut()
+                .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
+                    heston_model(spot, v0, kappa, theta, sig, rho, r, q, today),
+                    Vec::new(),
+                    t_grid,
+                    200,
+                    25,
+                    0,
+                    FdmSchemeDesc::hundsdorfer(),
+                )) as SharedMut<dyn PricingEngine>);
+            let call_npv = call.npv().unwrap();
+
+            let kappa_put = kappa - sig * rho;
+            let theta_put = kappa * theta / kappa_put;
+            let mut put = VanillaOption::new(
+                shared(PlainVanillaPayoff::new(OptionType::Put, spot)),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            );
+            put.base_mut()
+                .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
+                    heston_model(strike, v0, kappa_put, theta_put, sig, -rho, q, r, today),
+                    Vec::new(),
+                    t_grid,
+                    200,
+                    25,
+                    0,
+                    FdmSchemeDesc::hundsdorfer(),
+                )) as SharedMut<dyn PricingEngine>);
+            let put_npv = put.npv().unwrap();
+            assert!(
+                (put_npv - call_npv).abs() <= 0.025,
+                "American call/put parity: put={put_npv} call={call_npv}"
+            );
+        }
+    }
 }
