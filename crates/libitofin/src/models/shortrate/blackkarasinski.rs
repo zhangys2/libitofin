@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::math::optimization::constraint::PositiveConstraint;
-use crate::models::model::{CalibratedModel, TermStructureConsistentModel};
+use crate::models::model::{CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel};
 use crate::models::parameter::{ConstantParameter, Parameter};
 use crate::models::shortrate::onefactormodel::ShortRateDynamics;
 use crate::processes::OrnsteinUhlenbeckProcess;
@@ -71,6 +71,16 @@ impl BlackKarasinski {
     /// Fitted yield curve handle.
     pub fn term_structure(&self) -> &Handle<dyn YieldTermStructure> {
         self.ts_model.term_structure()
+    }
+}
+
+impl CalibratedModelHolder for BlackKarasinski {
+    fn calibrated_model(&self) -> &CalibratedModel {
+        &self.model
+    }
+
+    fn calibrated_model_mut(&mut self) -> &mut CalibratedModel {
+        &mut self.model
     }
 }
 
@@ -140,6 +150,16 @@ mod tests {
         assert!((model.sigma() - 0.1).abs() < 1e-15);
         assert!(BlackKarasinski::new(curve, 0.0, 0.1).is_err());
         assert!(BlackKarasinski::new(Handle::new(flat(0.05)), 0.1, -0.01).is_err());
+    }
+
+    #[test]
+    fn set_params_updates_a_and_sigma() {
+        use crate::math::array::Array;
+        let mut model = BlackKarasinski::with_defaults(Handle::new(flat(0.05))).unwrap();
+        let params = Array::from(vec![0.2, 0.05]);
+        model.set_params(&params).unwrap();
+        assert!((model.a() - 0.2).abs() < 1e-15);
+        assert!((model.sigma() - 0.05).abs() < 1e-15);
     }
 
     /// `blackkarasinski.hpp` Dynamics: `shortRate` / `variable` are inverses.
