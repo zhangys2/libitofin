@@ -3,6 +3,7 @@
 //! Port of `ql/models/shortrate/`. Flat re-exports of the one-factor affine
 //! surface and its concrete models.
 
+pub mod blackkarasinski;
 pub mod calibrationhelpers;
 pub mod coxingersollross;
 pub mod extendedcoxingersollross;
@@ -12,6 +13,7 @@ pub mod onefactormodel;
 pub mod twofactormodel;
 pub mod vasicek;
 
+pub use blackkarasinski::{BlackKarasinski, BlackKarasinskiDynamics};
 pub use calibrationhelpers::SwaptionHelper;
 pub use coxingersollross::{CoxIngersollRoss, VolatilityConstraint};
 pub use extendedcoxingersollross::ExtendedCoxIngersollRoss;
