@@ -313,12 +313,32 @@ mod tests {
     use crate::exercise::EuropeanExercise;
     use crate::instrument::Instrument;
     use crate::instruments::ForwardVanillaOption;
-    use crate::math::randomnumbers::rngtraits::LowDiscrepancy;
+    use crate::math::randomnumbers::rngtraits::{LowDiscrepancy, PseudoRandom};
     use crate::pricingengines::forward::set_analytic_forward_vanilla_engine;
     use crate::pricingengines::vanilla::test_market::{market, today};
     use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::time::period::Period;
     use crate::time::timeunit::TimeUnit;
+
+    fn heston() -> Shared<HestonProcess> {
+        let mkt = market();
+        let sigma_bs = 0.245;
+        mkt.set(100.0, 0.04, 0.01, sigma_bs);
+        shared(HestonProcess::new(
+            mkt.process.risk_free_rate(),
+            mkt.process.dividend_yield(),
+            mkt.process.state_variable(),
+            sigma_bs * sigma_bs,
+            1e-8,
+            sigma_bs * sigma_bs,
+            1e-8,
+            -0.93,
+        ))
+    }
+
+    fn maker() -> MakeMcForwardEuropeanHestonEngine<PseudoRandom> {
+        MakeMcForwardEuropeanHestonEngine::new(heston())
+    }
 
     /// `forwardoption.cpp` `testHestonMCPrices` Test 1: flat Heston vs analytic BS.
     #[test]
@@ -375,5 +395,41 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn factory_rejects_samples_and_tolerance() {
+        assert!(
+            maker()
+                .with_steps(2)
+                .with_samples(10)
+                .with_absolute_tolerance(1e-4)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn factory_threads_antithetic_and_max_samples() {
+        assert!(
+            maker()
+                .with_steps(2)
+                .with_samples(10)
+                .with_max_samples(20)
+                .with_antithetic_variate(true)
+                .build()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn factory_rejects_tolerance_on_low_discrepancy() {
+        assert!(
+            MakeMcForwardEuropeanHestonEngine::<LowDiscrepancy>::new(heston())
+                .with_steps(2)
+                .with_absolute_tolerance(1e-4)
+                .build()
+                .is_err()
+        );
     }
 }
