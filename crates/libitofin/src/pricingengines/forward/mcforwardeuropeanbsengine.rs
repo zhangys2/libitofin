@@ -258,8 +258,26 @@ impl<RNG: McRngTraits> MakeMcForwardEuropeanBsEngine<RNG> {
     }
 
     #[must_use]
+    pub fn with_absolute_tolerance(mut self, tolerance: Real) -> Self {
+        self.tolerance = Some(tolerance);
+        self
+    }
+
+    #[must_use]
+    pub fn with_max_samples(mut self, samples: Size) -> Self {
+        self.max_samples = Some(samples);
+        self
+    }
+
+    #[must_use]
     pub fn with_seed(mut self, seed: u32) -> Self {
         self.seed = seed;
+        self
+    }
+
+    #[must_use]
+    pub fn with_antithetic_variate(mut self, antithetic: bool) -> Self {
+        self.antithetic = antithetic;
         self
     }
 
@@ -269,6 +287,12 @@ impl<RNG: McRngTraits> MakeMcForwardEuropeanBsEngine<RNG> {
             !(self.samples.is_some() && self.tolerance.is_some()),
             "number of samples already set"
         );
+        if self.tolerance.is_some() {
+            require!(
+                RNG::ALLOWS_ERROR_ESTIMATE,
+                "chosen random generator policy does not allow an error estimate"
+            );
+        }
         McForwardEuropeanBsEngine::new(
             self.process,
             self.steps,
@@ -310,11 +334,16 @@ mod tests {
     use crate::exercise::EuropeanExercise;
     use crate::instrument::Instrument;
     use crate::instruments::ForwardVanillaOption;
+    use crate::math::randomnumbers::rngtraits::PseudoRandom;
     use crate::pricingengines::forward::set_analytic_forward_vanilla_engine;
     use crate::pricingengines::vanilla::test_market::{market, today};
     use crate::shared::shared;
     use crate::time::period::Period;
     use crate::time::timeunit::TimeUnit;
+
+    fn maker() -> MakeMcForwardEuropeanBsEngine<PseudoRandom> {
+        MakeMcForwardEuropeanBsEngine::new(market().process)
+    }
 
     /// `forwardoption.cpp` `testMCPrices`: MC vs analytic, tols vs S=100.
     #[test]
@@ -353,5 +382,30 @@ mod tests {
                 "moneyness={m}: analytic={analytic} mc={mc} rel={error} tol={tol}"
             );
         }
+    }
+
+    #[test]
+    fn factory_rejects_samples_and_tolerance() {
+        assert!(
+            maker()
+                .with_steps(2)
+                .with_samples(10)
+                .with_absolute_tolerance(1e-4)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn factory_threads_antithetic_and_max_samples() {
+        assert!(
+            maker()
+                .with_steps(2)
+                .with_samples(10)
+                .with_max_samples(20)
+                .with_antithetic_variate(true)
+                .build()
+                .is_ok()
+        );
     }
 }
