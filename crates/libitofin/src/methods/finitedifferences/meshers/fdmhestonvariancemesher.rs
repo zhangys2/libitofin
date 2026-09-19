@@ -339,7 +339,7 @@ fn snap_v0(v_grid: &mut [Real], v0: Real) {
 /// representable float above its predecessor.
 fn repair_strictly_increasing(p: &mut [Real]) {
     for i in 1..p.len() {
-        if !(p[i] > p[i - 1]) {
+        if p[i] <= p[i - 1] {
             p[i] = p[i - 1].next_up();
         }
     }
