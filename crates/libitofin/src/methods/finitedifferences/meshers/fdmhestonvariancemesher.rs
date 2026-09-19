@@ -43,7 +43,12 @@ impl FdmHestonVarianceMesher {
     /// QuantLib defaults: `tAvgSteps = 10`, `epsilon = 0.0001`, `mixingFactor = 1`.
     ///
     /// Inverse-chi-square construction failures fall back to a uniform grid
-    /// around `θ ± 4 vol`, matching C++'s `catch (const Error&)`.
+    /// around `θ ± 4 vol`, matching C++'s `catch (const Error&)`. When the
+    /// chi-square grid succeeds but `p` is not strictly increasing (near-zero
+    /// vol-of-vol can leave a duplicate tail probability), only `p` is nudged
+    /// for [`LinearInterpolation`]; the chi-square `v` locations are kept.
+    /// That is deliberate: QuantLib's default `LinearInterpolation` does not
+    /// require strict `x` unless `QL_EXTRA_SAFETY_CHECKS` is on.
     ///
     /// # Errors
     ///
@@ -67,7 +72,7 @@ impl FdmHestonVarianceMesher {
         crate::require!(t_avg_steps >= 1, "tAvgSteps must be positive");
 
         let mixed_sigma = process.sigma() * mixing_factor;
-        let (v_grid, mut p_grid) =
+        let (mut v_grid, mut p_grid) =
             match chi_square_grid(size, process, maturity, t_avg_steps, epsilon, mixed_sigma) {
                 Ok(grids) => grids,
                 Err(_) => fallback_grid(size, process, mixed_sigma),
@@ -80,14 +85,10 @@ impl FdmHestonVarianceMesher {
         };
 
         p_grid.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        // Degenerate p-grids (duplicate probabilities) show up for near-zero
-        // vol-of-vol; QuantLib's `catch (const Error&)` falls back to a uniform
-        // CIR mesh, and LinearInterpolation here is the equivalent failure.
-        let (mut v_grid, p_grid) = if p_grid.windows(2).any(|w| !(w[1] > w[0])) {
-            fallback_grid(size, process, mixed_sigma)
-        } else {
-            (v_grid, p_grid)
-        };
+        // Rust `LinearInterpolation` requires strict x; QuantLib's default
+        // interpolant does not. Nudge duplicate probabilities in place so the
+        // Lobatto integrand can run without replacing a successful v-grid.
+        repair_strictly_increasing(&mut p_grid);
         let variance =
             LinearInterpolation::new(p_grid.clone(), v_grid.clone())?.with_extrapolation(true);
         let vola_estimate = GaussLobattoIntegral::new(100_000, 1e-4)?.integrate(
@@ -333,6 +334,17 @@ fn snap_v0(v_grid: &mut [Real], v0: Real) {
     }
 }
 
+/// Make `p` strictly increasing for [`LinearInterpolation`] without changing
+/// the paired `v` nodes. Each non-increasing entry is nudged to the next
+/// representable float above its predecessor.
+fn repair_strictly_increasing(p: &mut [Real]) {
+    for i in 1..p.len() {
+        if !(p[i] > p[i - 1]) {
+            p[i] = p[i - 1].next_up();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +445,52 @@ mod tests {
             let loc = mesher.mesher().location(i);
             assert!((loc - exp).abs() < 1e-6, "location[{i}]={loc} vs {exp}");
         }
+    }
+
+    /// `hestonmodel.cpp` `testFdBarrierVsCached` mesher: tiny σ leaves a
+    /// duplicate p-tail, but chi-square v-locations must be kept (not the
+    /// uniform CIR `θ ± 4 vol` fallback).
+    #[test]
+    fn tiny_vol_of_vol_keeps_chi_square_locations() {
+        let dc = Actual365Fixed::new();
+        let today = Date::new(15, Month::June, 2026);
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let process = HestonProcess::new(
+            flat(0.08),
+            flat(0.04),
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            0.0625,
+            1.0,
+            0.0625,
+            0.001,
+            0.0,
+        );
+        let mesher = FdmHestonVarianceMesher::new(100, &process, 0.5, 5, 0.0001, 1.0).unwrap();
+        let locs = mesher.mesher().locations();
+        assert_eq!(locs[0], 0.0, "chi-square mesh starts at 0, got {locs:?}");
+        let (fallback_v, _) = fallback_grid(100, &process, process.sigma());
+        assert!(
+            (locs[locs.len() - 1] - fallback_v[fallback_v.len() - 1]).abs() > 1e-4
+                || (locs[1] - fallback_v[1]).abs() > 1e-6,
+            "tiny-σ mesh must not be the uniform CIR fallback: locs={locs:?} fallback={fallback_v:?}"
+        );
+        assert!(
+            locs[locs.len() - 1] > 0.063,
+            "chi-square qMax is above θ; got {}",
+            locs[locs.len() - 1]
+        );
+        assert!(
+            locs.windows(2).all(|w| w[1] > w[0]),
+            "locations must stay strictly increasing: {locs:?}"
+        );
     }
 
     #[test]
