@@ -1,7 +1,7 @@
 //! Exponential Libor-forward correlation model.
 //!
 //! Port of `ql/legacy/libormarketmodels/lmexpcorrmodel.{hpp,cpp}`:
-//! `ρ_{i,j} = exp(-β |i-j|)`.
+//! `ρ_{i,j} = exp(-ρ |i-j|)`.
 
 use std::rc::Rc;
 

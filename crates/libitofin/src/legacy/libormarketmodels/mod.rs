@@ -26,7 +26,7 @@ mod tests {
 
         let corr = shared(LmExponentialCorrelationModel::new(size, 0.1).unwrap());
         let c = corr.correlation(0.0);
-        // Pin ρ_ij = exp(-β|i-j|) (not just C ≈ L Lᵀ).
+        // Pin ρ_ij = exp(-rho|i-j|) (not just C ≈ L Lᵀ).
         assert!((c[(0, 0)] - 1.0).abs() <= tol);
         assert!((c[(0, 1)] - (-0.1_f64).exp()).abs() <= tol);
         assert!((c[(2, 5)] - (-0.3_f64).exp()).abs() <= tol);
