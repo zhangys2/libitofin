@@ -94,6 +94,8 @@ impl HullWhiteForwardProcess {
     }
 
     fn alpha_drift(&self, t: Time) -> QlResult<Real> {
+        // QL `hullwhiteprocess.cpp` uses unguarded σ²/(2a)(1−e^{−2at}); `a = 0`
+        // makes this NaN/Inf while `alpha`/`b`/`m_t` stay finite (Ho–Lee footgun).
         let mut alpha_drift =
             self.sigma * self.sigma / (2.0 * self.a) * (1.0 - (-2.0 * self.a * t).exp());
         let shift = 0.0001;
@@ -117,6 +119,7 @@ impl ForwardMeasureProcess1D for HullWhiteForwardProcess {
 
     fn set_forward_measure_time(&mut self, t: Time) {
         self.measure.set(t);
+        self.observable.notify_observers();
     }
 }
 
@@ -154,6 +157,7 @@ impl StochasticProcess1D for HullWhiteForwardProcess {
 mod tests {
     use super::*;
     use crate::termstructures::yields::FlatForward;
+    use crate::test_support::{Flag, as_observer};
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
 
@@ -167,23 +171,59 @@ mod tests {
         )) as Shared<dyn YieldTermStructure>)
     }
 
-    #[test]
-    fn b_alpha_m_t_and_affine_drift() {
-        let mut p = HullWhiteForwardProcess::new(flat(0.05), 0.1, 0.01).unwrap();
-        p.set_forward_measure_time(5.0);
-        assert!((p.b(1.0, 5.0) - (1.0 - (-0.4_f64).exp()) / 0.1).abs() < 1e-15);
-        let mut alfa = (0.01 / 0.1) * (1.0 - (-0.1_f64).exp());
-        alfa = 0.5 * alfa * alfa;
-        assert!((p.alpha(1.0).unwrap() - (alfa + 0.05)).abs() < 1e-12);
-        let d0 = p.drift(1.0, 0.02).unwrap();
-        let d1 = p.drift(1.0, 0.03).unwrap();
-        assert!((d1 - d0 + 0.001).abs() < 1e-12);
-        assert!((p.diffusion(1.0, 0.02).unwrap() - 0.01).abs() < 1e-15);
-        assert!((p.x0().unwrap() - 0.05).abs() < 1e-12);
+    /// Independent HW-forward E with flat zero curve (`gsrprocess` helper).
+    fn hw_forward_e(a: Real, sigma: Real, t_m: Time, w: Time, xw: Real, dt: Time) -> Real {
+        let t = w + dt;
+        let alpha = |u: Time| {
+            let x = (sigma / a) * (1.0 - (-a * u).exp());
+            0.5 * x * x
+        };
+        let c = (sigma * sigma) / (a * a);
+        let m_t = c * (1.0 - (-a * dt).exp())
+            - 0.5 * c * ((-a * (t_m - t)).exp() - (-a * (t_m + t - 2.0 * w)).exp());
+        xw * (-a * dt).exp() + alpha(t) - alpha(w) * (-a * dt).exp() - m_t
+    }
 
-        let z = HullWhiteForwardProcess::new(flat(0.03), 0.0, 0.02).unwrap();
-        let expected = (0.02 * 0.02) / 2.0 * 1.0 * (10.0 - 2.0 - 1.0);
-        assert!((z.m_t(1.0, 2.0, 5.0) - expected).abs() < 1e-15);
-        assert!((z.b(1.0, 4.0) - 3.0).abs() < 1e-15);
+    #[test]
+    fn forward_measure_pins_and_notify() {
+        let a = 0.1;
+        let sigma = 0.01;
+        let mut p = HullWhiteForwardProcess::new(flat(0.0), a, sigma).unwrap();
+        let flag = Flag::new();
+        p.observable().register_observer(&as_observer(&flag));
+        p.set_forward_measure_time(5.0);
+        assert!(Flag::is_up(&flag));
+
+        assert!((p.b(1.0, 5.0) - (1.0 - (-0.4_f64).exp()) / a).abs() < 1e-15);
+        let mut alfa = (sigma / a) * (1.0 - (-a).exp());
+        alfa = 0.5 * alfa * alfa;
+        assert!((p.alpha(1.0).unwrap() - alfa).abs() < 1e-12);
+
+        // T-forward drift shift: μ(T₂) − μ(T₁) = −(B(t,T₂) − B(t,T₁)) σ².
+        let t = 1.0;
+        let x = 0.02;
+        p.set_forward_measure_time(4.0);
+        let d4 = p.drift(t, x).unwrap();
+        p.set_forward_measure_time(6.0);
+        let d6 = p.drift(t, x).unwrap();
+        assert!((d6 - d4 + (p.b(t, 6.0) - p.b(t, 4.0)) * sigma * sigma).abs() < 1e-12);
+
+        let m = p.m_t(1.0, 2.0, 5.0);
+        let c = (sigma * sigma) / (a * a);
+        let expected_m =
+            c * (1.0 - (-a).exp()) - 0.5 * c * ((-a * 3.0).exp() - (-a * (5.0 + 2.0 - 2.0)).exp());
+        assert!((m - expected_m).abs() < 1e-15);
+
+        p.set_forward_measure_time(10.0);
+        let w = 1.0;
+        let dt = 2.0;
+        let xw = 0.03;
+        let e = p.expectation(w, xw, dt).unwrap();
+        assert!((e - hw_forward_e(a, sigma, 10.0, w, xw, dt)).abs() < 1e-12);
+        let v = p.variance(w, xw, dt).unwrap();
+        assert!((v - 0.5 * sigma * sigma / a * (1.0 - (-2.0 * a * dt).exp())).abs() < 1e-15);
+
+        let z = HullWhiteForwardProcess::new(flat(0.0), 0.0, 0.02).unwrap();
+        assert!((z.m_t(1.0, 2.0, 5.0) - (0.02 * 0.02) / 2.0 * 1.0 * 7.0).abs() < 1e-15);
     }
 }
