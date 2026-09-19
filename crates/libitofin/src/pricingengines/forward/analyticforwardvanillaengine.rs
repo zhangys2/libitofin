@@ -401,8 +401,9 @@ mod tests {
         }
     }
 
-    /// `forwardoption.cpp` `testGreeksInitialization`: inner CRR binomial
-    /// omits δ/ρ/divRho/vega, so `ForwardVanillaEngine` must omit them too.
+    /// `forwardoption.cpp` `testGreeksInitialization`: CRR binomial leaves
+    /// ρ/divRho/vega Null (forward must too). Forward δ stays Null because
+    /// binomial never fills `strikeSensitivity` (QL tree still sets vanilla δ).
     #[test]
     fn forward_greeks_initialization() {
         use crate::exercise::Exercise;
@@ -442,16 +443,32 @@ mod tests {
             BinomialForwardVanillaEngine::new(process, 300).unwrap(),
         ) as SharedMut<dyn PricingEngine>);
 
-        let check = |name: &str,
-                     ctrl: crate::errors::QlResult<Real>,
-                     fwd: crate::errors::QlResult<Real>| {
-            if ctrl.is_err() {
-                assert!(fwd.is_err(), "Forward {name} invalid");
-            }
+        let ctrl_npv = ctrl.npv().unwrap();
+        let fwd_npv = option.npv().unwrap();
+        assert!(
+            ctrl_npv.is_finite() && ctrl_npv > 0.0,
+            "ctrl NPV={ctrl_npv}"
+        );
+        assert!(fwd_npv.is_finite() && fwd_npv > 0.0, "fwd NPV={fwd_npv}");
+
+        let not_provided = |err: crate::errors::QlResult<Real>, name: &str| {
+            let msg = err
+                .expect_err("greek should be omitted")
+                .message()
+                .to_string();
+            assert!(
+                msg.contains("not provided"),
+                "{name}: expected 'not provided', got {msg}"
+            );
         };
-        check("delta", ctrl.delta(), option.delta());
-        check("rho", ctrl.rho(), option.rho());
-        check("dividendRho", ctrl.dividend_rho(), option.dividend_rho());
-        check("vega", ctrl.vega(), option.vega());
+        // Forward δ is gated on strikeSensitivity (always Null on binomial), not
+        // on inner δ. QL ctrl.delta() succeeds; Rust tree δ/γ/θ are still unported.
+        not_provided(option.delta(), "forward delta");
+        not_provided(ctrl.rho(), "ctrl rho");
+        not_provided(option.rho(), "forward rho");
+        not_provided(ctrl.dividend_rho(), "ctrl dividendRho");
+        not_provided(option.dividend_rho(), "forward dividendRho");
+        not_provided(ctrl.vega(), "ctrl vega");
+        not_provided(option.vega(), "forward vega");
     }
 }
