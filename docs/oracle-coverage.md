@@ -44,6 +44,7 @@ credit.
 | Heston FD vanilla + cash dividends | `FdHestonVanillaEngine` 200×400×100 | `hestonmodel.cpp` `testFdVanillaWithDividendsVsCached` | call 12.946 @ 5e-3 |
 | Heston FD American vs BS FD | `FdHestonVanillaEngine` / `FdBlackScholesVanillaEngine` 200×400 | `hestonmodel.cpp` `testFdAmerican` | near-Black Heston put ≡ BS FD @ 1e-3 |
 | Heston FD vs Black (Hundsdorfer) | `FdHestonVanillaEngine` 100×400×3 | `fdheston.cpp` `testFdmHestonBlackScholes` | near-Black puts S=8..12 ≡ analytic European @ 1e-4 (ExplicitEuler deferred) |
+| Heston FD Haug barrier vs BS | `FdHestonBarrierEngine` 200×101×3 | `fdheston.cpp` `testFdmHestonBarrierVsBlackScholes` | Haug p.72 72-row table vs `AnalyticBarrierEngine` @ 0.25% relative |
 | Heston FD American NPV | `FdHestonVanillaEngine` 200×100×50 | `fdheston.cpp` `testFdmHestonAmerican` | put 5.66032 @ 1e-2 (δ/γ deferred) |
 | Heston FD Ikonen–Toivanen | `FdHestonVanillaEngine` 100×400 | `fdheston.cpp` `testFdmHestonIkonenToivanen` | American puts S=8..12 table @ 1e-3 |
 | Heston FD American + cash div | `FdHestonVanillaEngine` 50×100×50 | `fdheston.cpp` `testFdmHestonEuropeanWithDividends` | put 7.38216 @ 1e-2 (δ/γ deferred) |
