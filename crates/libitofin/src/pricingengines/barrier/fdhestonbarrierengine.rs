@@ -153,10 +153,13 @@ impl PricingEngine for FdHestonBarrierEngine {
             BarrierType::UpIn | BarrierType::UpOut => (None, Some(barrier.ln())),
         };
 
+        // Same `processHelper(s0, dividendYield, riskFreeRate, vol)` call as
+        // C++ `FdHestonBarrierEngine` / `FdHestonVanillaEngine` (r/q swapped
+        // on the equity mesher only).
         let bs_process = process_helper(
             process.s0(),
-            process.risk_free_rate(),
             process.dividend_yield(),
+            process.risk_free_rate(),
             v_mesher.vola_estimate(),
         )?;
         let equity = fdm_black_scholes_mesher(
