@@ -9,6 +9,7 @@ use crate::errors::QlResult;
 use crate::math::array::Array;
 use crate::math::optimization::constraint::PositiveConstraint;
 use crate::models::parameter::{ConstantParameter, Parameter};
+use crate::require;
 use crate::types::{Real, Size, Time};
 
 /// Caplet volatility model with linear-exponential time structure.
@@ -59,14 +60,23 @@ impl LmLinearExponentialVolatilityModel {
     }
 
     /// Instantaneous volatility of forward `i` at `t`.
-    pub fn volatility_i(&self, i: Size, t: Time) -> Real {
+    ///
+    /// # Errors
+    ///
+    /// Fails when `i >= size`.
+    pub fn volatility_i(&self, i: Size, t: Time) -> QlResult<Real> {
+        require!(
+            i < self.size,
+            "libor index ({i}) out of range [0..{})",
+            self.size
+        );
         let (a, b, c, d) = self.abcd();
         let t_fix = self.fixing_times[i];
-        if t_fix > t {
+        Ok(if t_fix > t {
             (a * (t_fix - t) + d) * (-b * (t_fix - t)).exp() + c
         } else {
             0.0
-        }
+        })
     }
 
     fn abcd(&self) -> (Real, Real, Real, Real) {

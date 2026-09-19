@@ -49,12 +49,13 @@ mod tests {
         );
         // Scalar path: live forward and expired forward.
         assert!(
-            (vola.volatility_i(4, 0.5)
+            (vola.volatility_i(4, 0.5).unwrap()
                 - ((a * (2.0 - 0.5) + d) * (-b * (2.0 - 0.5)).exp() + c_param))
                 .abs()
                 <= tol
         );
-        assert_eq!(vola.volatility_i(1, 1.0), 0.0);
+        assert_eq!(vola.volatility_i(1, 1.0).unwrap(), 0.0);
+        assert!(vola.volatility_i(size, 0.0).is_err());
 
         let covar = LfmCovarianceProxy::new(Shared::clone(&vola), Shared::clone(&corr)).unwrap();
 

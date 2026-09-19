@@ -10,6 +10,7 @@ use crate::math::matrix::Matrix;
 use crate::math::matrixutilities::{SalvagingAlgorithm, pseudo_sqrt};
 use crate::math::optimization::constraint::PositiveConstraint;
 use crate::models::parameter::{ConstantParameter, Parameter};
+use crate::require;
 use crate::types::{Real, Size, Time};
 
 /// Exponential correlation model (`lmexpcorrmodel.hpp`).
@@ -55,8 +56,17 @@ impl LmExponentialCorrelationModel {
     }
 
     /// Element `ρ_{i,j}`.
-    pub fn correlation_ij(&self, i: Size, j: Size, _t: Time) -> Real {
-        self.corr_matrix[(i, j)]
+    ///
+    /// # Errors
+    ///
+    /// Fails when `i` or `j` is out of range.
+    pub fn correlation_ij(&self, i: Size, j: Size, _t: Time) -> QlResult<Real> {
+        require!(
+            i < self.size && j < self.size,
+            "correlation index ({i},{j}) out of range [0..{})",
+            self.size
+        );
+        Ok(self.corr_matrix[(i, j)])
     }
 
     /// Cached spectral pseudo square root.
