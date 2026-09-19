@@ -86,11 +86,12 @@ jobs:
               - rust-toolchain.toml
               - .github/workflows/*.yml
 
-            # FFI + Go SDK only. `crates/libitofin/src/**` is covered by rust-ci
-            # (workspace build includes libitofin-ffi); oracle-test PRs should
-            # not wait on macos Go bindings.
+            # FFI / Go SDK / PyO3 mixed-build only. Align with
+            # go-bindings-tests hook files: and go-bindings.yml on.push.paths.
+            # rust-ci compiles libitofin-ffi; it does not run cbindgen/cgo.
             go:
               - crates/libitofin-ffi/**
+              - crates/itofin-py/**
               - sdk/go/**
               - scripts/check_go_*
               - scripts/package_go_native.sh
@@ -104,6 +105,8 @@ jobs:
               - Cargo.toml
               - Cargo.lock
               - rust-toolchain.toml
+              - .pre-commit-config.yaml
+              - .github/workflows/pre-commit.yml
               - .github/workflows/go-bindings.yml
               - .github/workflows/go-package.yml
               - .github/workflows/go-release.yml
