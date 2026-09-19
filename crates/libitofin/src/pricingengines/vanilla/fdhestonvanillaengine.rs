@@ -270,7 +270,7 @@ impl PricingEngine for FdHestonVanillaEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exercise::{AmericanExercise, EuropeanExercise};
+    use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::PlainVanillaPayoff;
@@ -489,6 +489,196 @@ mod tests {
         assert!(
             (calculated - expected).abs() < 1e-4,
             "Heston-SLV American quanto {calculated} vs {expected}"
+        );
+    }
+
+    fn settlement_2004() -> Date {
+        Date::new(27, Month::December, 2004)
+    }
+
+    fn isda() -> crate::time::daycounter::DayCounter {
+        crate::time::daycounters::actualactual::ActualActual::with_convention(
+            crate::time::daycounters::actualactual::Convention::ISDA,
+        )
+    }
+
+    fn flat_isda(today: Date, rate: Real) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
+            today,
+            rate,
+            isda(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    }
+
+    /// `hestonmodel.cpp` `testFdVanillaVsCached`: put NPV 0.06325 @ 1e-4.
+    #[test]
+    fn fd_vanilla_vs_cached() {
+        let settlement = settlement_2004();
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(settlement);
+        let exercise_date = Date::new(28, Month::March, 2005);
+        let process = shared(HestonProcess::new(
+            flat_isda(settlement, 0.7),
+            flat_isda(settlement, 0.4),
+            Handle::new(shared(SimpleQuote::new(1.05)) as Shared<dyn Quote>),
+            0.3,
+            1.16,
+            0.2,
+            0.8,
+            0.8,
+        ));
+        let model = HestonModel::new(process).unwrap();
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Put, 1.05));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
+        let mut option = VanillaOption::new(payoff, exercise, settings);
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdHestonVanillaEngine::with_params(
+                model,
+                Vec::new(),
+                100,
+                200,
+                100,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            ),
+        ) as SharedMut<dyn PricingEngine>);
+        let calculated = option.npv().unwrap();
+        let expected = 0.06325;
+        assert!(
+            (calculated - expected).abs() <= 1.0e-4,
+            "FD Heston vanilla cached: {calculated} vs {expected}"
+        );
+    }
+
+    /// `hestonmodel.cpp` `testFdVanillaWithDividendsVsCached`: call NPV 12.946 @ 5e-3.
+    #[test]
+    fn fd_vanilla_with_dividends_vs_cached() {
+        let settlement = settlement_2004();
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(settlement);
+        let exercise_date = Date::new(28, Month::March, 2006);
+        let process = shared(HestonProcess::new(
+            flat_isda(settlement, 0.05),
+            flat_isda(settlement, 0.0),
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            0.04,
+            1.0,
+            0.04,
+            0.001,
+            0.0,
+        ));
+        let model = HestonModel::new(process).unwrap();
+        let mut dividend_dates = Vec::new();
+        let mut amounts = Vec::new();
+        let mut d = settlement + Period::new(3, TimeUnit::Months);
+        while d < exercise_date {
+            dividend_dates.push(d);
+            amounts.push(1.0);
+            d = d + Period::new(6, TimeUnit::Months);
+        }
+        let dividends = crate::cashflows::dividend_vector(&dividend_dates, &amounts).unwrap();
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, 95.0));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
+        let mut option = VanillaOption::new(payoff, exercise, settings);
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdHestonVanillaEngine::with_params(
+                model,
+                dividends,
+                200,
+                400,
+                100,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            ),
+        ) as SharedMut<dyn PricingEngine>);
+        let calculated = option.npv().unwrap();
+        let expected = 12.946;
+        assert!(
+            (calculated - expected).abs() <= 5.0e-3,
+            "FD Heston discrete-div: {calculated} vs {expected}"
+        );
+    }
+
+    /// `hestonmodel.cpp` `testFdAmerican`: near-Black Heston American put vs
+    /// `FdBlackScholesVanillaEngine` @ 1e-3.
+    #[test]
+    fn fd_american_vs_black_scholes_fd() {
+        use crate::pricingengines::vanilla::FdBlackScholesVanillaEngine;
+        use crate::processes::BlackScholesMertonProcess;
+        use crate::processes::GeneralizedBlackScholesProcess;
+
+        let settlement = settlement_2004();
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(settlement);
+        let exercise_date = Date::new(28, Month::March, 2006);
+        let s0 = Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>);
+        let r_ts = flat_isda(settlement, 0.05);
+        let q_ts = flat_isda(settlement, 0.03);
+        let process = shared(HestonProcess::new(
+            Handle::clone(&r_ts),
+            Handle::clone(&q_ts),
+            Handle::clone(&s0),
+            0.04,
+            1.0,
+            0.04,
+            0.001,
+            0.0,
+        ));
+        let model = HestonModel::new(process).unwrap();
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Put, 95.0));
+        let exercise: Shared<dyn Exercise> =
+            shared(AmericanExercise::new(settlement, exercise_date, false).unwrap());
+
+        let mut option = VanillaOption::new(
+            Shared::clone(&payoff),
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        );
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdHestonVanillaEngine::with_params(
+                model,
+                Vec::new(),
+                200,
+                400,
+                100,
+                0,
+                FdmSchemeDesc::hundsdorfer(),
+            ),
+        ) as SharedMut<dyn PricingEngine>);
+        let calculated = option.npv().unwrap();
+
+        let vol_ts = Handle::new(shared(BlackConstantVol::new(
+            settlement,
+            None,
+            0.2,
+            isda(),
+        )) as Shared<dyn BlackVolTermStructure>);
+        let ref_process: Shared<GeneralizedBlackScholesProcess> =
+            shared(BlackScholesMertonProcess::new(
+                Handle::clone(&s0),
+                Handle::clone(&q_ts),
+                Handle::clone(&r_ts),
+                vol_ts,
+            ));
+        option.base_mut().set_pricing_engine(shared_mut(
+            FdBlackScholesVanillaEngine::with_params(
+                ref_process,
+                Vec::new(),
+                200,
+                400,
+                0,
+                FdmSchemeDesc::douglas(),
+            ),
+        ) as SharedMut<dyn PricingEngine>);
+        let expected = option.npv().unwrap();
+        assert!(
+            (calculated - expected).abs() <= 1.0e-3,
+            "FD Heston American {calculated} vs BS FD {expected}"
         );
     }
 }
