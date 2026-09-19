@@ -24,7 +24,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Markov functional / Gaussian 1D | `markovfunctional`, `gaussian1dmodel` | `markovfunctional.cpp`, `gaussian1dmodel.cpp` | partial | partial | `MfStateProcess` (`testMfStateProcess`); `MarkovFunctional` / Gaussian1d model + engines deferred |
 | Rates | Black–Karasinski | `blackkarasinski.hpp` | (no QL suite) | partial | none | Model + `BlackKarasinskiDynamics` log transform (identity); `tree()` / Brent fit deferred |
 | Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | partial | none | `HullWhiteForwardProcess` (α/B/M_T + forward drift); hybrid join / evolve / engines deferred |
-| Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | false | none | Coverage only SLV mesher via quanto-American |
+| Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | partial | none | `HestonSLVProcess` (drift/diffusion/apply/evolve + const-L identity); FDM/MC model calibration deferred |
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | false | none | SABR **cube** interpolation ≠ these models |
 | Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | false | none | Blocks normal vol in CapHelper / stripper |
 | Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | false | none | Only Analytic + Black cap/floor today |

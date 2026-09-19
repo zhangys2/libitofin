@@ -60,6 +60,7 @@ credit.
 | MF state process | `MfStateProcess` | `markovfunctional.cpp` `testMfStateProcess` | diffusion buckets + variance (a=0 / a=0.01) @ 1e-10; MarkovFunctional model/engines deferred |
 | Black–Karasinski dynamics | `BlackKarasinski` + `BlackKarasinskiDynamics` | identity (no QL suite) | log transform round-trip @ 1e-15; OU α/σ pins; `tree()`/fit deferred |
 | Hull–White forward process | `HullWhiteForwardProcess` | identity (hybrid suite is engines) | f≡0 E/V vs closed form; T-forward drift Δ; `a>0`/`a=0` `M_T`; notify on set T @ 1e-12; hybrid join deferred |
+| Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
