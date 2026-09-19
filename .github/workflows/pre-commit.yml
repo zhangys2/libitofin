@@ -37,6 +37,16 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: set up go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: sdk/go/go.mod
+
+      - name: install rust toolchain
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: rustfmt, clippy
+
       - name: install pre-commit
         run: python -m pip install --upgrade pip pre-commit
 
