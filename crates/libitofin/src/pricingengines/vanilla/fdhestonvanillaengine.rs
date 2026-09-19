@@ -725,9 +725,10 @@ mod tests {
                 Shared::clone(&exercise),
                 Shared::clone(&settings),
             );
-            option.base_mut().set_pricing_engine(shared_mut(
-                AnalyticEuropeanEngine::new(Shared::clone(&bs)),
-            ) as SharedMut<dyn PricingEngine>);
+            option
+                .base_mut()
+                .set_pricing_engine(shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&bs)))
+                    as SharedMut<dyn PricingEngine>);
             let expected = option.npv().unwrap();
 
             let heston = shared(HestonProcess::new(
@@ -742,8 +743,9 @@ mod tests {
             ));
             let model = HestonModel::new(heston).unwrap();
 
-            option.base_mut().set_pricing_engine(shared_mut(
-                FdHestonVanillaEngine::with_params(
+            option
+                .base_mut()
+                .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                     SharedMut::clone(&model),
                     Vec::new(),
                     100,
@@ -751,8 +753,7 @@ mod tests {
                     3,
                     0,
                     FdmSchemeDesc::hundsdorfer(),
-                ),
-            ) as SharedMut<dyn PricingEngine>);
+                )) as SharedMut<dyn PricingEngine>);
             let calculated = option.npv().unwrap();
             assert!(
                 (calculated - expected).abs() <= tol,
@@ -798,8 +799,9 @@ mod tests {
         let exercise: Shared<dyn Exercise> =
             shared(AmericanExercise::new(today, exercise_date, false).unwrap());
         let mut option = VanillaOption::new(payoff, exercise, settings);
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdHestonVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                 model,
                 Vec::new(),
                 200,
@@ -807,8 +809,7 @@ mod tests {
                 50,
                 0,
                 FdmSchemeDesc::hundsdorfer(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         assert!(
             (calculated - 5.66032).abs() <= 0.01,
@@ -860,8 +861,9 @@ mod tests {
                 Shared::clone(&exercise),
                 Shared::clone(&settings),
             );
-            option.base_mut().set_pricing_engine(shared_mut(
-                FdHestonVanillaEngine::with_params(
+            option
+                .base_mut()
+                .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                     model,
                     Vec::new(),
                     100,
@@ -869,8 +871,7 @@ mod tests {
                     50,
                     0,
                     FdmSchemeDesc::hundsdorfer(),
-                ),
-            ) as SharedMut<dyn PricingEngine>);
+                )) as SharedMut<dyn PricingEngine>);
             let calculated = option.npv().unwrap();
             assert!(
                 (calculated - expected[i]).abs() <= 0.001,
@@ -909,18 +910,17 @@ mod tests {
             -0.8,
         ));
         let model = HestonModel::new(process).unwrap();
-        let dividends = crate::cashflows::dividend_vector(
-            &[Date::new(28, Month::September, 2004)],
-            &[5.0],
-        )
-        .unwrap();
+        let dividends =
+            crate::cashflows::dividend_vector(&[Date::new(28, Month::September, 2004)], &[5.0])
+                .unwrap();
         let payoff: Shared<dyn StrikedTypePayoff> =
             shared(PlainVanillaPayoff::new(OptionType::Put, 100.0));
         let exercise: Shared<dyn Exercise> =
             shared(AmericanExercise::new(today, exercise_date, false).unwrap());
         let mut option = VanillaOption::new(payoff, exercise, settings);
-        option.base_mut().set_pricing_engine(shared_mut(
-            FdHestonVanillaEngine::with_params(
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(FdHestonVanillaEngine::with_params(
                 model,
                 dividends,
                 50,
@@ -928,8 +928,7 @@ mod tests {
                 50,
                 0,
                 FdmSchemeDesc::hundsdorfer(),
-            ),
-        ) as SharedMut<dyn PricingEngine>);
+            )) as SharedMut<dyn PricingEngine>);
         let calculated = option.npv().unwrap();
         assert!(
             (calculated - 7.38216).abs() <= 0.01,
@@ -992,8 +991,8 @@ mod tests {
                     Shared::clone(&exercise),
                     Shared::clone(&settings),
                 );
-                option.base_mut().set_pricing_engine(shared_mut(
-                    FdHestonVanillaEngine::with_params(
+                option.base_mut().set_pricing_engine(
+                    shared_mut(FdHestonVanillaEngine::with_params(
                         SharedMut::clone(&model),
                         Vec::new(),
                         60,
@@ -1001,12 +1000,14 @@ mod tests {
                         51,
                         0,
                         scheme,
-                    ),
-                ) as SharedMut<dyn PricingEngine>);
+                    )) as SharedMut<dyn PricingEngine>,
+                );
                 let calculated = option.npv().unwrap();
-                option.base_mut().set_pricing_engine(shared_mut(
-                    AnalyticHestonEngine::with_default_order(SharedMut::clone(&model)).unwrap(),
-                ) as SharedMut<dyn PricingEngine>);
+                option
+                    .base_mut()
+                    .set_pricing_engine(shared_mut(
+                        AnalyticHestonEngine::with_default_order(SharedMut::clone(&model)).unwrap(),
+                    ) as SharedMut<dyn PricingEngine>);
                 let expected = option.npv().unwrap();
                 let ok = (expected - calculated).abs() / expected <= 0.02
                     || (expected - calculated).abs() <= 0.002;

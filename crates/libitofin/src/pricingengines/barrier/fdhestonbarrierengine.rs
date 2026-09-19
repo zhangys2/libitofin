@@ -815,16 +815,7 @@ mod tests {
                 Frequency::Annual,
             )) as Shared<dyn YieldTermStructure>)
         };
-        let model = heston_model(
-            100.0,
-            0.04,
-            2.5,
-            0.04,
-            0.66,
-            -0.8,
-            flat(0.05),
-            flat(0.0),
-        );
+        let model = heston_model(100.0, 0.04, 2.5, 0.04, 0.66, -0.8, flat(0.05), flat(0.0));
         let exercise: Shared<dyn Exercise> =
             shared(EuropeanExercise::new(Date::new(28, Month::March, 2005)));
         let mut option = BarrierOption::with_rebate(
