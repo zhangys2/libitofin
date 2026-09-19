@@ -7,6 +7,12 @@ use crate::errors::QlResult;
 use crate::require;
 use crate::types::{Real, Time};
 
+/// QuantLib `AbcdMathFunction()` defaults.
+const DEFAULT_A: Real = 0.002;
+const DEFAULT_B: Real = 0.001;
+const DEFAULT_C: Real = 0.16;
+const DEFAULT_D: Real = 0.0005;
+
 /// Abcd functional form (`abcdmathfunction.hpp`).
 #[derive(Clone, Debug)]
 pub struct AbcdMathFunction {
@@ -33,7 +39,7 @@ impl AbcdMathFunction {
     ///
     /// As [`new`](Self::new).
     pub fn with_defaults() -> QlResult<Self> {
-        Self::new(0.002, 0.001, 0.16, 0.0005)
+        Self::new(DEFAULT_A, DEFAULT_B, DEFAULT_C, DEFAULT_D)
     }
 
     pub fn a(&self) -> Real {
@@ -61,7 +67,13 @@ impl AbcdMathFunction {
 
 impl Default for AbcdMathFunction {
     fn default() -> Self {
-        Self::with_defaults().expect("QuantLib AbcdMathFunction defaults are valid")
+        // Fixed QL defaults; known to pass [`validate`].
+        Self {
+            a: DEFAULT_A,
+            b: DEFAULT_B,
+            c: DEFAULT_C,
+            d: DEFAULT_D,
+        }
     }
 }
 

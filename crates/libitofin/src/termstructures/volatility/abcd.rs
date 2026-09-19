@@ -179,6 +179,16 @@ mod tests {
             (math.a(), math.b(), math.c(), math.d()),
             (0.002, 0.001, 0.16, 0.0005)
         );
+        let math_default = AbcdMathFunction::default();
+        assert_eq!(
+            (
+                math_default.a(),
+                math_default.b(),
+                math_default.c(),
+                math_default.d()
+            ),
+            (math.a(), math.b(), math.c(), math.d())
+        );
         let vol = AbcdFunction::with_defaults().unwrap();
         assert_eq!(
             (vol.a(), vol.b(), vol.c(), vol.d()),
