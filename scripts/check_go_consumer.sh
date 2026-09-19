@@ -13,8 +13,8 @@ export ITOFIN_EXPECTED_VERSION
 cp "$repo_root/scripts/fixtures/go-consumer/"* "$consumer_root/"
 cp -R "$go_source" "$consumer_root/binding"
 export GOWORK=off GOPROXY=off CGO_ENABLED=1
-export CGO_CFLAGS="\"-I$native_root/include\""
-export CGO_LDFLAGS="\"-L$native_root/lib\" -litofin_ffi \"-Wl,-rpath,$native_root/lib\""
+export CGO_CFLAGS="-I$native_root/include"
+export CGO_LDFLAGS="-L$native_root/lib -litofin_ffi -Wl,-rpath,$native_root/lib"
 unset LD_LIBRARY_PATH DYLD_LIBRARY_PATH
 cd "$consumer_root"
 go version
