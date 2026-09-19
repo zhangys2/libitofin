@@ -58,6 +58,7 @@ credit.
 | LMM simple covariance | `LmExponentialCorrelationModel` + `LmLinearExponentialVolatilityModel` + `LfmCovarianceProxy` | `libormarketmodel.cpp` `testSimpleCovarianceModels` | corr/covar reconstr. @ 1e-14; lin-exp vol formula; process/engines deferred |
 | Abcd market-model vol | `AbcdFunction` + `AbcdSquared` + `AbcdMathFunction` | `marketmodel.cpp` `testAbcdDegenerateCases`, `testAbcdVolatilityIntegration` | covar @ 1e-14 (degenerate); analytical vs SegmentIntegral @ 1e-4; evolvers/products deferred |
 | MF state process | `MfStateProcess` | `markovfunctional.cpp` `testMfStateProcess` | diffusion buckets + variance (a=0 / a=0.01) @ 1e-10; MarkovFunctional model/engines deferred |
+| Black–Karasinski dynamics | `BlackKarasinski` + `BlackKarasinskiDynamics` | identity (no QL suite) | log transform round-trip @ 1e-15; OU α/σ pins; `tree()`/fit deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
