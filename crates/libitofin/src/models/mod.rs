@@ -25,7 +25,7 @@ pub use parameter::{
     ConstantParameter, NullParameter, Parameter, ParameterValue, TermStructureFittingParameter,
 };
 pub use shortrate::{
-    AffineModel, CoxIngersollRoss, ExtendedCoxIngersollRoss, G2, G2Dynamics, HullWhite,
-    OneFactorAffineModel, TwoFactorShortRateDynamics, Vasicek, VolatilityConstraint,
-    convexity_bias,
+    AffineModel, BlackKarasinski, BlackKarasinskiDynamics, CoxIngersollRoss,
+    ExtendedCoxIngersollRoss, G2, G2Dynamics, HullWhite, OneFactorAffineModel,
+    TwoFactorShortRateDynamics, Vasicek, VolatilityConstraint, convexity_bias,
 };
