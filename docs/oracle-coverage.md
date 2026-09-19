@@ -52,6 +52,7 @@ credit.
 | Heston FD UpOut barrier NPV | `FdHestonBarrierEngine` 50×400×100 | `fdheston.cpp` `testFdmHestonBarrier` | UpOut call 9.1530 @ 1e-2 (δ/γ deferred) |
 | Hull–White / short rate | calibration, tree swaption | `shortratemodels.cpp`, swaption suite | Core done |
 | GSR process (constant a/σ) | `GsrProcess` + `ForwardMeasureProcess1D` | `gsr.cpp` `testGsrProcess` | E/V vs Hull–White forward (f≡0) @ 1e-8; flat≡stepwise-equal; piecewise core deferred |
+| LMM simple covariance | `LmExponentialCorrelationModel` + `LmLinearExponentialVolatilityModel` + `LfmCovarianceProxy` | `libormarketmodel.cpp` `testSimpleCovarianceModels` | corr/covar reconstr. @ 1e-14; lin-exp vol formula; process/engines deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
