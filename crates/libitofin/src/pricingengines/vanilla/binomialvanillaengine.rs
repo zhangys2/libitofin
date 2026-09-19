@@ -171,6 +171,21 @@ impl BinomialVanillaEngine {
             time_steps,
         })
     }
+
+    /// Fills the arguments and calculates; used by the binomial forward engine.
+    pub(crate) fn calculate_from_arguments(
+        &mut self,
+        payoff: Shared<dyn StrikedTypePayoff>,
+        exercise: Shared<dyn Exercise>,
+    ) -> QlResult<&OneAssetOptionResults> {
+        {
+            let args = self.base.arguments_mut();
+            args.payoff = Some(payoff);
+            args.exercise = Some(exercise);
+        }
+        PricingEngine::calculate(self)?;
+        Ok(self.base.results())
+    }
 }
 
 impl AsObservable for BinomialVanillaEngine {
