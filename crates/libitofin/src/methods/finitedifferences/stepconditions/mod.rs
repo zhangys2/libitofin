@@ -6,10 +6,10 @@
 //! [`stepcondition`](super::StepCondition) and this directory coexist by
 //! design.
 //!
-//! `FdmStepConditionComposite::vanillaComposite` (`cpp:80-145`) still omits the
-//! dividend handler (`FdmDividendHandler` lives in `utilities` and is wired by
-//! the FD barrier engine directly); American and Bermudan step conditions are
-//! ported below.
+//! [`FdmStepConditionComposite::vanilla_composite`] (`cpp:80-145`) carries the
+//! European, American and Bermudan branches. Its one other site is deferred and
+//! omitted visibly: `FdmDividendHandler` (`cpp:104`) to #828, so an exercise
+//! type without a branch is an error rather than an empty condition list.
 
 mod fdmamericanstepcondition;
 mod fdmbermudanstepcondition;

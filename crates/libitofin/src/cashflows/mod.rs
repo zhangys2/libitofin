@@ -4,9 +4,13 @@
 //! base. The items are re-exported flat, so a coupon is `cashflows::Coupon`
 //! rather than `cashflows::coupon::Coupon`.
 
+mod arithmeticaveragedovernightindexedcouponpricer;
 mod capflooredcoupon;
 #[cfg(test)]
 mod capflooredcoupon_oracle;
+mod capflooredyoyinflationcoupon;
+#[cfg(test)]
+mod capflooredyoyinflationcoupon_oracle;
 #[allow(clippy::module_inception)]
 mod cashflows;
 mod cmscoupon;
@@ -20,13 +24,19 @@ mod fixedrateleg;
 mod floatingratecoupon;
 mod iborcoupon;
 mod iborleg;
+mod indexedcashflow;
 mod overnightindexedcoupon;
 mod overnightindexedcouponpricer;
 mod overnightleg;
 mod rateaveraging;
 mod simplecashflow;
+mod yoyinflationcoupon;
+mod yoyinflationleg;
+mod yoyinflationoptionletpricer;
+mod zeroinflationcashflow;
 
 pub use capflooredcoupon::{CappedFlooredCoupon, CappedFlooredIborCoupon};
+pub use capflooredyoyinflationcoupon::CappedFlooredYoYInflationCoupon;
 pub use cashflows::CashFlows;
 pub use cmscoupon::CmsCoupon;
 pub use coupon::{Coupon, CouponBase};
@@ -39,6 +49,7 @@ pub use fixedrateleg::FixedRateLeg;
 pub use floatingratecoupon::{FloatingIndex, FloatingRateCoupon};
 pub use iborcoupon::IborCoupon;
 pub use iborleg::{AttachPricer, IborLeg, set_coupon_pricer};
+pub use indexedcashflow::IndexedCashFlow;
 pub use overnightindexedcoupon::OvernightIndexedCoupon;
 pub use overnightindexedcouponpricer::{
     CompoundingOvernightIndexedCouponPricer, OvernightSchedule,
@@ -46,3 +57,11 @@ pub use overnightindexedcouponpricer::{
 pub use overnightleg::OvernightLeg;
 pub use rateaveraging::RateAveraging;
 pub use simplecashflow::{AmortizingPayment, Redemption, SimpleCashFlow};
+pub use yoyinflationcoupon::{
+    SwapletYoYInflationCouponPricer, YoYInflationCoupon, YoYInflationCouponPricer,
+};
+pub use yoyinflationleg::{AttachYoYInflationPricer, YoYInflationLeg, set_yoy_coupon_pricer};
+pub use yoyinflationoptionletpricer::{
+    YoYInflationOptionletCouponPricer, YoYOptionletDistribution,
+};
+pub use zeroinflationcashflow::ZeroInflationCashFlow;

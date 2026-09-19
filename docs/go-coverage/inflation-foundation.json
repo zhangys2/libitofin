@@ -1,0 +1,600 @@
+{
+  "notes": [
+    "Constructors consolidate Python inheritance through typed Go curve aliases.",
+    "Empty tests arrays mean no direct test yet; implemented is not a validation claim.",
+    "Inflation products, coupons and volatility are tracked separately."
+  ],
+  "scope": "inflation.rs: indices, curves, helpers, seasonality",
+  "symbols": [
+    {
+      "c": "itofin_inflation_index_name",
+      "go": "ZeroInflationIndex.String",
+      "python": "ZeroInflationIndex.__repr__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionIndexRepresentations"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_add_fixing",
+      "go": "ZeroInflationIndex.AddFixing",
+      "python": "ZeroInflationIndex.add_fixing",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_zero_index_new",
+      "go": "Session.NewEUHICP",
+      "python": "ZeroInflationIndex.eu_hicp",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_fixing",
+      "go": "ZeroInflationIndex.Fixing",
+      "python": "ZeroInflationIndex.fixing",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_info",
+      "go": "ZeroInflationIndex.LastFixingDate",
+      "python": "ZeroInflationIndex.last_fixing_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_link",
+      "go": "ZeroInflationIndex.LinkTo",
+      "python": "ZeroInflationIndex.link_to",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationRelinkingRetainsIndependentForecast"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_name",
+      "go": "ZeroInflationIndex.Name",
+      "python": "ZeroInflationIndex.name",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_info",
+      "go": "ZeroInflationIndex.NeedsForecast",
+      "python": "ZeroInflationIndex.needs_forecast",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_zero_index_new",
+      "go": "Session.NewUKHICP",
+      "python": "ZeroInflationIndex.uk_hicp",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_zero_index_new",
+      "go": "Session.NewUKRPI",
+      "python": "ZeroInflationIndex.uk_rpi",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_seasonality_value",
+      "go": "MultiplicativePriceSeasonality.Frequency",
+      "python": "MultiplicativePriceSeasonality.frequency",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_seasonality_new",
+      "go": "Session.NewMultiplicativePriceSeasonality",
+      "python": "MultiplicativePriceSeasonality.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_seasonality_value",
+      "go": "MultiplicativePriceSeasonality.SeasonalityBaseDate",
+      "python": "MultiplicativePriceSeasonality.seasonality_base_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_seasonality_value",
+      "go": "MultiplicativePriceSeasonality.SeasonalityFactor",
+      "python": "MultiplicativePriceSeasonality.seasonality_factor",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_seasonality_factors",
+      "go": "MultiplicativePriceSeasonality.SeasonalityFactors",
+      "python": "MultiplicativePriceSeasonality.seasonality_factors",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "ZeroInflationTermStructure.BaseDate",
+      "python": "ZeroInflationTermStructure.base_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "ZeroInflationTermStructure.Frequency",
+      "python": "ZeroInflationTermStructure.frequency",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "ZeroInflationTermStructure.HasSeasonality",
+      "python": "ZeroInflationTermStructure.has_seasonality",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_set_seasonality",
+      "go": "ZeroInflationTermStructure.SetSeasonality",
+      "python": "ZeroInflationTermStructure.set_seasonality",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "ZeroInflationTermStructure.ZeroRate",
+      "python": "ZeroInflationTermStructure.zero_rate",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "ZeroInflationTermStructure.ZeroRateDate",
+      "python": "ZeroInflationTermStructure.zero_rate_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "InterpolatedZeroInflationCurve.Dates",
+      "python": "InterpolatedZeroInflationCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_new",
+      "go": "Session.NewInterpolatedZeroInflationCurve",
+      "python": "InterpolatedZeroInflationCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "InterpolatedZeroInflationCurve.Nodes",
+      "python": "InterpolatedZeroInflationCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "InterpolatedZeroInflationCurve.Times",
+      "python": "InterpolatedZeroInflationCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_date",
+      "go": "ZeroInflationHelper.LatestDate",
+      "python": "ZeroInflationHelper.latest_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionHelperDates"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_date",
+      "go": "ZeroInflationHelper.PillarDate",
+      "python": "ZeroInflationHelper.pillar_date",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_date",
+      "go": "ZeroCouponInflationSwapHelper.InflationFixingDate",
+      "python": "ZeroCouponInflationSwapHelper.inflation_fixing_date",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_new",
+      "go": "Session.NewZeroCouponInflationSwapHelper",
+      "python": "ZeroCouponInflationSwapHelper.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_curve_value",
+      "go": "PiecewiseZeroInflationCurve.Calculate",
+      "python": "PiecewiseZeroInflationCurve.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "PiecewiseZeroInflationCurve.Dates",
+      "python": "PiecewiseZeroInflationCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionPiecewiseDetachedOutputs"
+      ]
+    },
+    {
+      "c": "itofin_piecewise_zero_inflation_new",
+      "go": "Session.NewPiecewiseZeroInflationCurve",
+      "python": "PiecewiseZeroInflationCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "PiecewiseZeroInflationCurve.Nodes",
+      "python": "PiecewiseZeroInflationCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestZeroInflationBootstrapHelperDatesAndQuoteUpdate"
+      ]
+    },
+    {
+      "c": "itofin_zero_inflation_nodes",
+      "go": "PiecewiseZeroInflationCurve.Times",
+      "python": "PiecewiseZeroInflationCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionPiecewiseDetachedOutputs"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.BaseDate",
+      "python": "YoYInflationTermStructure.base_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.BaseRate",
+      "python": "YoYInflationTermStructure.base_rate",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.Frequency",
+      "python": "YoYInflationTermStructure.frequency",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.HasSeasonality",
+      "python": "YoYInflationTermStructure.has_seasonality",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_set_seasonality",
+      "go": "YoYInflationTermStructure.SetSeasonality",
+      "python": "YoYInflationTermStructure.set_seasonality",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.YoYRate",
+      "python": "YoYInflationTermStructure.yoy_rate",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "YoYInflationTermStructure.YoYRateDate",
+      "python": "YoYInflationTermStructure.yoy_rate_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "InterpolatedYoYInflationCurve.Dates",
+      "python": "InterpolatedYoYInflationCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_new",
+      "go": "Session.NewInterpolatedYoYInflationCurve",
+      "python": "InterpolatedYoYInflationCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurvePeriodQuantizationAndSeasonality"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "InterpolatedYoYInflationCurve.Nodes",
+      "python": "InterpolatedYoYInflationCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "InterpolatedYoYInflationCurve.Times",
+      "python": "InterpolatedYoYInflationCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCurveMetadataAndDetachedNodes"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_date",
+      "go": "YoYInflationHelper.LatestDate",
+      "python": "YoYInflationHelper.latest_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionHelperDates"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_date",
+      "go": "YoYInflationHelper.PillarDate",
+      "python": "YoYInflationHelper.pillar_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionHelperDates"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_name",
+      "go": "YoYInflationIndex.String",
+      "python": "YoYInflationIndex.__repr__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionIndexRepresentations"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_add_fixing",
+      "go": "YoYInflationIndex.AddFixing",
+      "python": "YoYInflationIndex.add_fixing",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_fixing",
+      "go": "YoYInflationIndex.Fixing",
+      "python": "YoYInflationIndex.fixing",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_yoy_index_from_underlying",
+      "go": "Session.NewYoYInflationIndexFromUnderlying",
+      "python": "YoYInflationIndex.from_underlying",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_info",
+      "go": "YoYInflationIndex.LastFixingDate",
+      "python": "YoYInflationIndex.last_fixing_date",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_link",
+      "go": "YoYInflationIndex.LinkTo",
+      "python": "YoYInflationIndex.link_to",
+      "status": "implemented",
+      "tests": [
+        "TestYoYInflationBootstrapRelinkingAndRetainedCurves"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_name",
+      "go": "YoYInflationIndex.Name",
+      "python": "YoYInflationIndex.name",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_info",
+      "go": "YoYInflationIndex.NeedsForecast",
+      "python": "YoYInflationIndex.needs_forecast",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_yoy_index_new",
+      "go": "Session.NewYoYInflationIndex",
+      "python": "YoYInflationIndex.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_index_info",
+      "go": "YoYInflationIndex.Ratio",
+      "python": "YoYInflationIndex.ratio",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_yoy_index_underlying",
+      "go": "YoYInflationIndex.UnderlyingIndex",
+      "python": "YoYInflationIndex.underlying_index",
+      "status": "implemented",
+      "tests": [
+        "TestInflationPublishedFixingsAndUnderlyingLifetime"
+      ]
+    },
+    {
+      "c": "itofin_inflation_helper_new",
+      "go": "Session.NewYearOnYearInflationSwapHelper",
+      "python": "YearOnYearInflationSwapHelper.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestYoYInflationBootstrapRelinkingAndRetainedCurves"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_curve_value",
+      "go": "PiecewiseYoYInflationCurve.Calculate",
+      "python": "PiecewiseYoYInflationCurve.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestYoYInflationBootstrapRelinkingAndRetainedCurves"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "PiecewiseYoYInflationCurve.Dates",
+      "python": "PiecewiseYoYInflationCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestYoYInflationBootstrapRelinkingAndRetainedCurves"
+      ]
+    },
+    {
+      "c": "itofin_piecewise_yoy_inflation_new",
+      "go": "Session.NewPiecewiseYoYInflationCurve",
+      "python": "PiecewiseYoYInflationCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestYoYInflationBootstrapRelinkingAndRetainedCurves"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "PiecewiseYoYInflationCurve.Nodes",
+      "python": "PiecewiseYoYInflationCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionPiecewiseDetachedOutputs"
+      ]
+    },
+    {
+      "c": "itofin_yoy_inflation_nodes",
+      "go": "PiecewiseYoYInflationCurve.Times",
+      "python": "PiecewiseYoYInflationCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestInflationCompletionPiecewiseDetachedOutputs"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "CpiFlat",
+      "python": "CpiInterpolationType.Flat",
+      "status": "implemented",
+      "tests": []
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "CpiLinear",
+      "python": "CpiInterpolationType.Linear",
+      "status": "implemented",
+      "tests": []
+    }
+  ]
+}

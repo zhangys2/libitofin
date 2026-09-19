@@ -1,0 +1,1969 @@
+//! Bootstrap helpers for inflation term structures.
+//!
+//! Port of the helper base `ZeroCouponInflationSwapHelper` derives from
+//! (`ql/termstructures/inflation/inflationhelpers.hpp:36-37`, a
+//! `RelativeDateBootstrapHelper<ZeroInflationTermStructure>`) together with the
+//! plain `BootstrapHelper<ZeroInflationTermStructure>` the traits name as their
+//! helper type (`inflationtraits.hpp:43`) and its year-on-year twin
+//! (`:121`). They are the inflation twins of
+//! [`RateHelper`](crate::termstructures::bootstraphelper::RateHelper) and
+//! [`DefaultProbabilityHelper`](crate::termstructures::credit::defaultprobabilityhelpers::DefaultProbabilityHelper),
+//! and they carry no behaviour of their own: everything is inherited from the
+//! shared [`BootstrapHelperBase`], instantiated here over
+//! [`ZeroInflationTermStructure`].
+//!
+//! Where C++ gets every family from one class template, this port needs one
+//! trait per family, because a trait generic over its term structure cannot be
+//! made into the bare trait object the curves are typed on. The shared driver
+//! reaches all three through [`BootstrapHelperShared`], implemented below on
+//! `dyn ZeroInflationHelper`.
+//!
+//! [`ZeroCouponInflationSwapHelper`] (`inflationhelpers.hpp:35`) and
+//! [`YearOnYearInflationSwapHelper`] (`:118`) are the concrete helpers, one per
+//! family, and each plugs into its own base.
+//!
+//! ## Deferred within EPIC Inflation (#705)
+//!
+//! - The zero-coupon helper's **start/end-date constructor** (`cpp:52-69`)
+//!   landed with #806 as [`with_start_date`](ZeroCouponInflationSwapHelper::with_start_date);
+//!   the year-on-year helper stays relative-date only, and the deprecated
+//!   nominal-curve constructor (`cpp:71-86`) stays out.
+//! - The `Pillar::CustomDate` choice, on both helpers (`cpp:140-150` and
+//!   `cpp:271-281`, #808), which needs an explicit pillar date threaded through
+//!   construction plus its bounds check.
+
+use std::cell::{Ref, RefCell, RefMut};
+use std::rc::Weak;
+
+use crate::errors::QlResult;
+use crate::handle::{Handle, RelinkableHandle};
+use crate::indexes::Index;
+use crate::indexes::inflationindex::{
+    CpiInterpolationType, InflationIndex, YoYInflationIndex, ZeroInflationIndex, inflation_period,
+};
+use crate::instrument::Instrument;
+use crate::instruments::{SwapType, YearOnYearInflationSwap, ZeroCouponInflationSwap};
+use crate::interestrate::Compounding;
+use crate::patterns::observable::AsObservable;
+use crate::pricingengine::PricingEngine;
+use crate::pricingengines::DiscountingSwapEngine;
+use crate::quotes::Quote;
+use crate::require;
+use crate::settings::Settings;
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
+use crate::termstructures::bootstraphelper::{BootstrapHelperBase, BootstrapHelperShared};
+use crate::termstructures::inflation::inflationtermstructure::{
+    YoYInflationTermStructure, ZeroInflationTermStructure,
+};
+use crate::termstructures::yields::{FlatForward, Pillar};
+use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::businessdayconvention::BusinessDayConvention;
+use crate::time::calendar::Calendar;
+use crate::time::calendars::NullCalendar;
+use crate::time::date::Date;
+use crate::time::daycounter::DayCounter;
+use crate::time::frequency::Frequency;
+use crate::time::period::Period;
+use crate::time::schedule::MakeSchedule;
+use crate::time::timeunit::TimeUnit;
+use crate::types::Real;
+
+/// The shared state of an inflation bootstrap helper: a
+/// [`BootstrapHelperBase`] whose back-pointer is a zero-inflation curve.
+pub type ZeroInflationHelperBase = BootstrapHelperBase<dyn ZeroInflationTermStructure>;
+
+/// Bootstrap helper for the zero-inflation-curve bootstrap
+/// (`BootstrapHelper<ZeroInflationTermStructure>`).
+///
+/// Mirrors [`RateHelper`](crate::termstructures::bootstraphelper::RateHelper)
+/// exactly, over [`ZeroInflationTermStructure`]: a concrete helper embeds a
+/// [`ZeroInflationHelperBase`], returns it from [`base`](Self::base) and
+/// supplies [`implied_quote`](Self::implied_quote); the rest of the interface
+/// is derived from the base. The same ownership contract holds - the curve is
+/// held [`Weak`](std::rc::Weak) and never observed - since it is the one base
+/// that enforces it.
+pub trait ZeroInflationHelper: AsObservable {
+    /// The embedded shared state.
+    fn base(&self) -> &ZeroInflationHelperBase;
+
+    /// The quote implied by the current curve, computed by the concrete helper.
+    ///
+    /// The helper does not observe the curve, so this must force any
+    /// recalculation it needs itself rather than trusting a cached value.
+    fn implied_quote(&self) -> QlResult<Real>;
+
+    /// The market quote the helper fits the curve to.
+    fn quote(&self) -> &Handle<dyn Quote> {
+        self.base().quote()
+    }
+
+    /// The bootstrap's root: market quote minus implied quote, driven to zero.
+    fn quote_error(&self) -> QlResult<Real> {
+        Ok(self.base().quote_value()? - self.implied_quote()?)
+    }
+
+    /// Sets the curve being bootstrapped (non-owning, unobserved).
+    ///
+    /// A concrete helper that hands the curve to an instrument overrides this
+    /// to relink that handle first, then delegates here.
+    fn set_term_structure(&self, term_structure: &Shared<dyn ZeroInflationTermStructure>) {
+        self.base().set_term_structure(term_structure);
+    }
+
+    /// The earliest date data are needed at.
+    fn earliest_date(&self) -> Date {
+        self.base().earliest_date()
+    }
+
+    /// The instrument's maturity date.
+    fn maturity_date(&self) -> Date {
+        self.base().maturity_date()
+    }
+
+    /// The latest date data are needed at.
+    fn latest_relevant_date(&self) -> Date {
+        self.base().latest_relevant_date()
+    }
+
+    /// The pillar date, at which the curve node this helper sets sits.
+    fn pillar_date(&self) -> Date {
+        self.base().pillar_date()
+    }
+
+    /// The latest date, equal to the pillar date.
+    fn latest_date(&self) -> Date {
+        self.base().latest_date()
+    }
+}
+
+/// The shared state of a year-on-year inflation bootstrap helper: a
+/// [`BootstrapHelperBase`] whose back-pointer is a year-on-year curve.
+pub type YoYInflationHelperBase = BootstrapHelperBase<dyn YoYInflationTermStructure>;
+
+/// Bootstrap helper for the year-on-year-inflation-curve bootstrap
+/// (`BootstrapHelper<YoYInflationTermStructure>`, `inflationtraits.hpp:121`).
+///
+/// The zero twin above over [`YoYInflationTermStructure`], and separate from it
+/// for the same reason the two curve families are separate: the term structure
+/// a helper is handed is part of its interface, and a single trait generic over
+/// it could not be made into the bare trait object
+/// [`PiecewiseYoYInflationCurve`](super::piecewiseyoyinflationcurve::PiecewiseYoYInflationCurve)
+/// names as its helper family.
+///
+/// [`YearOnYearInflationSwapHelper`] (`inflationhelpers.cpp:209-346`) is the
+/// concrete helper implementing it.
+pub trait YoYInflationHelper: AsObservable {
+    /// The embedded shared state.
+    fn base(&self) -> &YoYInflationHelperBase;
+
+    /// The quote implied by the current curve, computed by the concrete helper.
+    ///
+    /// The helper does not observe the curve, so this must force any
+    /// recalculation it needs itself rather than trusting a cached value.
+    fn implied_quote(&self) -> QlResult<Real>;
+
+    /// The market quote the helper fits the curve to.
+    fn quote(&self) -> &Handle<dyn Quote> {
+        self.base().quote()
+    }
+
+    /// The bootstrap's root: market quote minus implied quote, driven to zero.
+    fn quote_error(&self) -> QlResult<Real> {
+        Ok(self.base().quote_value()? - self.implied_quote()?)
+    }
+
+    /// Sets the curve being bootstrapped (non-owning, unobserved).
+    ///
+    /// A concrete helper that hands the curve to an instrument overrides this
+    /// to relink that handle first, then delegates here.
+    fn set_term_structure(&self, term_structure: &Shared<dyn YoYInflationTermStructure>) {
+        self.base().set_term_structure(term_structure);
+    }
+
+    /// The earliest date data are needed at.
+    fn earliest_date(&self) -> Date {
+        self.base().earliest_date()
+    }
+
+    /// The instrument's maturity date.
+    fn maturity_date(&self) -> Date {
+        self.base().maturity_date()
+    }
+
+    /// The latest date data are needed at.
+    fn latest_relevant_date(&self) -> Date {
+        self.base().latest_relevant_date()
+    }
+
+    /// The pillar date, at which the curve node this helper sets sits.
+    fn pillar_date(&self) -> Date {
+        self.base().pillar_date()
+    }
+
+    /// The latest date, equal to the pillar date.
+    fn latest_date(&self) -> Date {
+        self.base().latest_date()
+    }
+}
+
+/// Inflation bootstrap helper whose date schedule is relative to the
+/// evaluation date (`RelativeDateBootstrapHelper<ZeroInflationTermStructure>`).
+///
+/// `ZeroCouponInflationSwapHelper` derives from this
+/// (`inflationhelpers.hpp:36-37`): its swap schedule is rebuilt whenever the
+/// evaluation date moves. The concrete helper builds its base with
+/// [`BootstrapHelperBase::new_relative`], passing a closure that calls
+/// [`initialize_dates`](Self::initialize_dates).
+pub trait RelativeDateZeroInflationHelper: ZeroInflationHelper {
+    /// Rebuilds the helper's date schedule off the current evaluation date.
+    fn initialize_dates(&self);
+}
+
+/// The year-on-year twin of [`RelativeDateZeroInflationHelper`], the port of
+/// `RelativeDateBootstrapHelper<YoYInflationTermStructure>`
+/// (`inflationhelpers.hpp:119`).
+///
+/// [`YearOnYearInflationSwapHelper`] derives from it: its swap schedule runs
+/// from the evaluation date, so the contract is rebuilt whenever that moves.
+pub trait RelativeDateYoYInflationHelper: YoYInflationHelper {
+    /// Rebuilds the helper's contract off the current evaluation date.
+    fn initialize_dates(&self);
+}
+
+/// The inflation half of the driver bound. Like the yield and credit impls,
+/// every method routes through the [`ZeroInflationHelper`] trait rather than
+/// straight to the base, so a concrete helper's override still runs -
+/// `set_term_structure` in particular, which a helper overrides to relink its
+/// own pricing handle before recording the curve.
+impl BootstrapHelperShared for dyn ZeroInflationHelper {
+    type TS = dyn ZeroInflationTermStructure;
+
+    fn set_term_structure(&self, term_structure: &Shared<dyn ZeroInflationTermStructure>) {
+        ZeroInflationHelper::set_term_structure(self, term_structure);
+    }
+
+    fn quote_value(&self) -> QlResult<Real> {
+        self.base().quote_value()
+    }
+
+    fn quote_error(&self) -> QlResult<Real> {
+        ZeroInflationHelper::quote_error(self)
+    }
+
+    fn pillar_date(&self) -> Date {
+        ZeroInflationHelper::pillar_date(self)
+    }
+
+    fn latest_relevant_date(&self) -> Date {
+        ZeroInflationHelper::latest_relevant_date(self)
+    }
+
+    fn maturity_date(&self) -> Date {
+        ZeroInflationHelper::maturity_date(self)
+    }
+}
+
+/// The year-on-year half of the driver bound, routing through
+/// [`YoYInflationHelper`] for the reason the zero impl routes through its own
+/// trait: a concrete helper's `set_term_structure` override has to run.
+impl BootstrapHelperShared for dyn YoYInflationHelper {
+    type TS = dyn YoYInflationTermStructure;
+
+    fn set_term_structure(&self, term_structure: &Shared<dyn YoYInflationTermStructure>) {
+        YoYInflationHelper::set_term_structure(self, term_structure);
+    }
+
+    fn quote_value(&self) -> QlResult<Real> {
+        self.base().quote_value()
+    }
+
+    fn quote_error(&self) -> QlResult<Real> {
+        YoYInflationHelper::quote_error(self)
+    }
+
+    fn pillar_date(&self) -> Date {
+        YoYInflationHelper::pillar_date(self)
+    }
+
+    fn latest_relevant_date(&self) -> Date {
+        YoYInflationHelper::latest_relevant_date(self)
+    }
+
+    fn maturity_date(&self) -> Date {
+        YoYInflationHelper::maturity_date(self)
+    }
+}
+
+/// Bootstrap helper quoting a zero-coupon inflation swap
+/// (`ZeroCouponInflationSwapHelper`, `inflationhelpers.hpp:35`).
+///
+/// The helper prices a unit-notional zero-strike swap of its own against the
+/// curve being bootstrapped and reports that contract's
+/// [`fair_rate`](ZeroCouponInflationSwap::fair_rate) as
+/// [`implied_quote`](ZeroInflationHelper::implied_quote); the bootstrap drives
+/// `quoted rate - fair rate` to zero. **Not** the contract's NPV: the fair rate
+/// is the only quantity here that is discount-invariant, both legs paying on the
+/// same adjusted maturity so their discount factors cancel (`cpp:66-68`).
+///
+/// That invariance is why the helper needs no nominal curve from its caller and
+/// builds a flat 0 % one itself (`cpp:48`). The curve reaches the contract's
+/// [`DiscountingSwapEngine`] and hence its NPV, which is consequently **not**
+/// zero at the bootstrapped solution; [`fair_rate`](ZeroCouponInflationSwap::fair_rate)
+/// reads the indexed flow directly and never consults it.
+///
+/// The helper prices through a copy of the caller's index
+/// ([`clone_linked_to`](ZeroInflationIndex::clone_linked_to), `cpp:106`) linked to
+/// its own relinkable handle, so [`set_term_structure`](ZeroInflationHelper::set_term_structure)
+/// can point the copy at the curve under construction while the caller's index
+/// keeps whatever curve it had. The copy is then unregistered from that handle
+/// (`cpp:107-110`): a relink per solver step would otherwise notify the copy,
+/// the copy the helper, and the helper the curve that is relinking it.
+pub struct ZeroCouponInflationSwapHelper {
+    base: ZeroInflationHelperBase,
+    swap_obs_lag: Period,
+    start_date: Option<Date>,
+    maturity: Date,
+    calendar: Calendar,
+    payment_convention: BusinessDayConvention,
+    day_counter: DayCounter,
+    index: Shared<ZeroInflationIndex>,
+    observation_interpolation: CpiInterpolationType,
+    nominal_term_structure: Handle<dyn YieldTermStructure>,
+    term_structure_handle: RelinkableHandle<dyn ZeroInflationTermStructure>,
+    settings: Shared<Settings<Date>>,
+    swap: RefCell<QlResult<ZeroCouponInflationSwap>>,
+}
+
+impl ZeroCouponInflationSwapHelper {
+    /// A helper on a swap maturing at `maturity` (`cpp:34-49`).
+    ///
+    /// The swap's start date is the evaluation date and follows it: this is the
+    /// constructor C++ marks relative by passing a null start date (`cpp:100`),
+    /// so the contract is rebuilt whenever the evaluation date moves.
+    ///
+    /// The helper observes its quote, the index copy it prices through, and the
+    /// nominal curve (`cpp:173-174`); it does **not** observe the curve it is
+    /// bootstrapped against.
+    ///
+    /// `pillar` picks which of the two nodes the interpolated swap straddles the
+    /// helper fits (`cpp:118-139`); the flat swap reads one fixing, so its single
+    /// node is the pillar whatever the choice (`cpp:154-159`). C++ defaults the
+    /// argument to [`Pillar::LastRelevantDate`] (`hpp:48`).
+    ///
+    /// On the interpolated path C++ weights that choice by the swap's *start*
+    /// date where it has one, falling back to the maturity (`cpp:132`), so that
+    /// helpers sharing a start date all pick the same side. This constructor is
+    /// the relative-date one, whose start date is the moving evaluation date and
+    /// not a schedule input, so it is always the maturity arm - the fixed-date
+    /// [`with_start_date`](Self::with_start_date) supplies the other.
+    ///
+    /// # Errors
+    ///
+    /// The swap the helper prices is built here, so a `swap_obs_lag` the index
+    /// cannot observe through fails at construction, as the C++ constructor's
+    /// `initializeDates` throws. The interpolated path needs a further whole
+    /// index period of lag on top of the index's availability lag
+    /// (`cpp:165-171`), reading as it does the fixing of the month *after* the
+    /// one the lag lands in; a pair of lags [`Period`]'s partial ordering cannot
+    /// decide fails there too, where C++ throws out of the comparison itself.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        quote: Handle<dyn Quote>,
+        swap_obs_lag: Period,
+        maturity: Date,
+        calendar: Calendar,
+        payment_convention: BusinessDayConvention,
+        day_counter: DayCounter,
+        zii: &Shared<ZeroInflationIndex>,
+        observation_interpolation: CpiInterpolationType,
+        pillar: Pillar,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Shared<ZeroCouponInflationSwapHelper>> {
+        Self::build(
+            quote,
+            swap_obs_lag,
+            None,
+            maturity,
+            calendar,
+            payment_convention,
+            day_counter,
+            zii,
+            observation_interpolation,
+            pillar,
+            settings,
+        )
+    }
+
+    /// A helper on a swap running from `start_date` to `end_date`, the port of
+    /// the public fixed-date constructor (`cpp:52-69`, #806).
+    ///
+    /// C++ marks a helper relative iff its start date is null,
+    /// `updateDates_ = (startDate == Date())` (`cpp:100`); this constructor
+    /// always has a real `start_date`, so the helper never registers with the
+    /// evaluation date and its swap starts at `start_date` rather than at the
+    /// moving evaluation date (`cpp:193`). On the interpolated
+    /// [`Pillar::LastRelevantDate`] path the pillar weight is read off
+    /// `start_date` (`cpp:132`), so helpers sharing a start date all make the
+    /// same left/right choice however long their maturity months are.
+    ///
+    /// # Errors
+    ///
+    /// As for [`new`](Self::new): the swap is built here and an observation lag
+    /// the index cannot cover fails at construction.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_start_date(
+        quote: Handle<dyn Quote>,
+        swap_obs_lag: Period,
+        start_date: Date,
+        end_date: Date,
+        calendar: Calendar,
+        payment_convention: BusinessDayConvention,
+        day_counter: DayCounter,
+        zii: &Shared<ZeroInflationIndex>,
+        observation_interpolation: CpiInterpolationType,
+        pillar: Pillar,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Shared<ZeroCouponInflationSwapHelper>> {
+        Self::build(
+            quote,
+            swap_obs_lag,
+            Some(start_date),
+            end_date,
+            calendar,
+            payment_convention,
+            day_counter,
+            zii,
+            observation_interpolation,
+            pillar,
+            settings,
+        )
+    }
+
+    /// The shared body of the two constructors (the C++ main constructor,
+    /// `cpp:87-176`): `start_date` is `None` on the relative-date path, where
+    /// C++ passes a null start date.
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        quote: Handle<dyn Quote>,
+        swap_obs_lag: Period,
+        start_date: Option<Date>,
+        maturity: Date,
+        calendar: Calendar,
+        payment_convention: BusinessDayConvention,
+        day_counter: DayCounter,
+        zii: &Shared<ZeroInflationIndex>,
+        observation_interpolation: CpiInterpolationType,
+        pillar: Pillar,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Shared<ZeroCouponInflationSwapHelper>> {
+        let fixing_period = inflation_period(maturity - swap_obs_lag, zii.frequency())?;
+        let (earliest_date, latest_date, pillar_date) = Self::dates(
+            fixing_period,
+            start_date,
+            maturity,
+            zii,
+            observation_interpolation,
+            pillar,
+        )?;
+        if observation_interpolation == CpiInterpolationType::Linear {
+            let period_shift = Period::try_from(zii.frequency())?;
+            let availability_lag = zii.availability_lag();
+            let excess = swap_obs_lag - period_shift;
+            require!(
+                excess
+                    .partial_cmp(&availability_lag)
+                    .is_some_and(std::cmp::Ordering::is_ge),
+                "inconsistency between swap observation lag {swap_obs_lag}, index period \
+                 {period_shift} and index availability {availability_lag}: need (obsLag-index \
+                 period) >= availLag"
+            );
+        }
+        let nominal_term_structure = Handle::new(shared(FlatForward::moving_with_rate(
+            0,
+            NullCalendar::new(),
+            0.0,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+            Shared::clone(&settings),
+        )) as Shared<dyn YieldTermStructure>);
+
+        let helper = Shared::new_cyclic(|weak: &Weak<ZeroCouponInflationSwapHelper>| {
+            let weak = weak.clone();
+            let on_eval_change = Box::new(move || {
+                if let Some(helper) = weak.upgrade() {
+                    helper.initialize_dates();
+                }
+            });
+            let base = ZeroInflationHelperBase::new_relative(
+                quote,
+                Shared::clone(&settings),
+                start_date.is_none(),
+                on_eval_change,
+            );
+            let term_structure_handle = RelinkableHandle::empty();
+            let index = shared(zii.clone_linked_to(term_structure_handle.handle()));
+            term_structure_handle
+                .handle()
+                .unregister_observer(&index.inflation_base().observer());
+            index.observable().register_observer(&base.observer());
+            nominal_term_structure.register_observer(&base.observer());
+
+            base.set_earliest_date(earliest_date);
+            base.set_latest_date(latest_date);
+            if let Some(pillar_date) = pillar_date {
+                base.set_pillar_date(pillar_date);
+            }
+
+            let helper = ZeroCouponInflationSwapHelper {
+                base,
+                swap_obs_lag,
+                start_date,
+                maturity,
+                calendar,
+                payment_convention,
+                day_counter,
+                index,
+                observation_interpolation,
+                nominal_term_structure,
+                term_structure_handle,
+                settings,
+                swap: RefCell::new(Err(crate::errors::QlError::new(
+                    "the helper's swap is built by initialize_dates",
+                    file!(),
+                    line!(),
+                ))),
+            };
+            helper.initialize_dates();
+            helper
+        });
+        if let Err(error) = helper.swap.borrow().as_ref() {
+            return Err(error.clone());
+        }
+        Ok(helper)
+    }
+
+    /// The helper's earliest and latest dates and its pillar, if it pins one
+    /// (`cpp:114-160`).
+    ///
+    /// The flat swap reads a single fixing, so all three collapse onto the first
+    /// day of the observed fixing period (`cpp:154-159`). The interpolated swap
+    /// reads the fixings bracketing its observation date, so its window opens on
+    /// that day and closes the day after the period ends (`cpp:115-116`), and the
+    /// pillar goes to whichever end carries the dominant interpolation weight
+    /// (`cpp:118-139`).
+    ///
+    /// `None` is the C++ `pillarDate_ == Date()` the `dt/dp > 0.5` arm leaves
+    /// behind (`cpp:136-137`): the pillar is not the fixing period's start there,
+    /// it is unset, and
+    /// [`BootstrapHelperBase::pillar_date`](crate::termstructures::bootstraphelper::BootstrapHelperBase::pillar_date)
+    /// answers with the latest date exactly as `bootstraphelper.hpp:193-197`
+    /// does.
+    ///
+    /// On the weighted choice C++ reads the interpolation weight off
+    /// `startDate_` where it has one, falling back to the maturity (`cpp:132`):
+    /// `start_date` is the fixed-date constructor's schedule start, `None` on
+    /// the relative-date path.
+    fn dates(
+        fixing_period: (Date, Date),
+        start_date: Option<Date>,
+        maturity: Date,
+        zii: &Shared<ZeroInflationIndex>,
+        observation_interpolation: CpiInterpolationType,
+        pillar: Pillar,
+    ) -> QlResult<(Date, Date, Option<Date>)> {
+        match observation_interpolation {
+            CpiInterpolationType::Flat => {
+                Ok((fixing_period.0, fixing_period.0, Some(fixing_period.0)))
+            }
+            CpiInterpolationType::Linear => {
+                let latest_date = fixing_period.1 + 1;
+                let pillar_date = match pillar {
+                    Pillar::MaturityDate => Some(latest_date),
+                    Pillar::LastRelevantDate => {
+                        let weight_date = start_date.unwrap_or(maturity);
+                        let weight_period = inflation_period(weight_date, zii.frequency())?;
+                        let dp = Real::from(weight_period.1 + 1 - weight_period.0);
+                        let dt = Real::from(weight_date - weight_period.0);
+                        (dt / dp <= 0.5).then_some(fixing_period.0)
+                    }
+                };
+                Ok((fixing_period.0, latest_date, pillar_date))
+            }
+        }
+    }
+
+    /// The cached swap, or the error that stopped it being built (`swap()`,
+    /// `hpp:84`).
+    pub fn swap(&self) -> Ref<'_, QlResult<ZeroCouponInflationSwap>> {
+        self.swap.borrow()
+    }
+
+    /// The cached swap, mutably, for its on-demand pricing accessors.
+    pub fn swap_mut(&self) -> RefMut<'_, QlResult<ZeroCouponInflationSwap>> {
+        self.swap.borrow_mut()
+    }
+
+    /// The index copy the helper prices through, linked to its own handle.
+    pub fn inflation_index(&self) -> &Shared<ZeroInflationIndex> {
+        &self.index
+    }
+
+    /// The self-built flat 0 % curve the contract's engine discounts on
+    /// (`cpp:48`).
+    pub fn nominal_term_structure(&self) -> &Handle<dyn YieldTermStructure> {
+        &self.nominal_term_structure
+    }
+
+    /// The unit-notional, zero-strike swap the helper quotes, under a discounting
+    /// engine over the flat 0 % curve (`initializeDates`, `cpp:186-195`).
+    ///
+    /// The start date is the swap's, `updateDates_ ? evaluationDate_ :
+    /// startDate_` (`cpp:193`): the fixed-date helper's own schedule start, and
+    /// on the relative-date path the evaluation date, which that helper always
+    /// tracks. An evaluation date that was never set is an error rather than a
+    /// panic (D10), surfaced when the cached result is next read.
+    fn build_swap(&self) -> QlResult<ZeroCouponInflationSwap> {
+        let start_date = match self.start_date {
+            Some(date) => date,
+            None => match self.base.evaluation_date() {
+                Some(date) => date,
+                None => crate::fail!("no evaluation date set: the helper's swap starts at it"),
+            },
+        };
+        let mut swap = ZeroCouponInflationSwap::new(
+            SwapType::Payer,
+            1.0,
+            start_date,
+            self.maturity,
+            self.calendar.clone(),
+            self.payment_convention,
+            self.day_counter.clone(),
+            0.0,
+            Shared::clone(&self.index),
+            self.swap_obs_lag,
+            self.observation_interpolation,
+            None,
+            None,
+            Shared::clone(&self.settings),
+        )?;
+        let engine = DiscountingSwapEngine::new(
+            self.nominal_term_structure.clone(),
+            None,
+            None,
+            None,
+            Shared::clone(&self.settings),
+        );
+        swap.base_mut()
+            .set_pricing_engine(shared_mut(engine) as SharedMut<dyn PricingEngine>);
+        Ok(swap)
+    }
+}
+
+impl AsObservable for ZeroCouponInflationSwapHelper {
+    fn observable(&self) -> &crate::patterns::observable::Observable {
+        self.base.observable()
+    }
+}
+
+impl ZeroInflationHelper for ZeroCouponInflationSwapHelper {
+    fn base(&self) -> &ZeroInflationHelperBase {
+        &self.base
+    }
+
+    /// The swap's fair rate (`impliedQuote`, `cpp:181-184`).
+    ///
+    /// The `deepUpdate` is kept for fidelity but carries no value here: the fair
+    /// rate is read off the indexed flow, which forecasts through the index copy
+    /// on every call and caches nothing, so it already reflects a node the
+    /// bootstrap has just moved.
+    fn implied_quote(&self) -> QlResult<Real> {
+        let mut swap = self.swap.borrow_mut();
+        let swap = swap.as_mut().map_err(|error| error.clone())?;
+        swap.swap_mut().deep_update();
+        swap.fair_rate()
+    }
+
+    /// Points the index copy's handle at the curve, then records it
+    /// (`setTermStructure`, `cpp:197-206`).
+    ///
+    /// The link is weak and unobserved, the port of the C++ `null_deleter` plus
+    /// `observer = false`: the curve owns this helper, which owns the swap, which
+    /// owns the index copy, and an owning link would close that ring.
+    fn set_term_structure(&self, term_structure: &Shared<dyn ZeroInflationTermStructure>) {
+        self.term_structure_handle
+            .link_to_weak(Shared::downgrade(term_structure));
+        self.base.set_term_structure(term_structure);
+    }
+}
+
+impl RelativeDateZeroInflationHelper for ZeroCouponInflationSwapHelper {
+    /// Rebuilds the swap off the current evaluation date (`initializeDates`,
+    /// `cpp:186-195`).
+    ///
+    /// The helper's own dates are not rebuilt: they come from the fixing period
+    /// of `maturity - swap_obs_lag`, which no evaluation date moves.
+    fn initialize_dates(&self) {
+        *self.swap.borrow_mut() = self.build_swap();
+    }
+}
+
+/// Bootstrap helper quoting a year-on-year inflation swap
+/// (`YearOnYearInflationSwapHelper`, `inflationhelpers.hpp:118-166`).
+///
+/// The helper prices a unit-notional, zero-strike [`YearOnYearInflationSwap`]
+/// of its own against the curve being bootstrapped and reports that contract's
+/// [`fair_rate`](YearOnYearInflationSwap::fair_rate) as
+/// [`implied_quote`](YoYInflationHelper::implied_quote); the bootstrap drives
+/// `quoted rate - fair rate` to zero.
+///
+/// ## It is handed its nominal curve; it does not build one
+///
+/// The zero-coupon twin above builds its own flat 0 % discount curve, which it
+/// can because both of its legs pay one flow on the same date, so the discount
+/// factors cancel out of its fair rate (`cpp:66-68`). That does not hold here:
+/// this swap pays annually over its whole life, and the fair rate is a
+/// discount-weighted average of the forward year-on-year rates. C++ therefore
+/// takes the nominal curve as a constructor argument (`hpp:129`, member
+/// `:165`) and hands it to the contract's [`DiscountingSwapEngine`]
+/// (`cpp:333-334`), and so does this.
+///
+/// As in the zero twin, the helper prices through a copy of the caller's index
+/// ([`clone_linked_to`](YoYInflationIndex::clone_linked_to), `cpp:246`) linked
+/// to its own relinkable handle and unregistered from it (`cpp:247-250`), so
+/// that a relink per solver step does not notify the curve that is relinking
+/// it.
+pub struct YearOnYearInflationSwapHelper {
+    base: YoYInflationHelperBase,
+    swap_obs_lag: Period,
+    maturity: Date,
+    calendar: Calendar,
+    payment_convention: BusinessDayConvention,
+    day_counter: DayCounter,
+    yii: Shared<YoYInflationIndex>,
+    interpolation: CpiInterpolationType,
+    nominal_term_structure: Handle<dyn YieldTermStructure>,
+    term_structure_handle: RelinkableHandle<dyn YoYInflationTermStructure>,
+    settings: Shared<Settings<Date>>,
+    swap: RefCell<QlResult<YearOnYearInflationSwap>>,
+}
+
+impl YearOnYearInflationSwapHelper {
+    /// A helper on a swap maturing at `maturity` (`cpp:209-224`, delegating to
+    /// `cpp:226-307`).
+    ///
+    /// The swap runs from the evaluation date, this being the constructor C++
+    /// marks relative by passing a null start date (`cpp:222`), so the contract
+    /// is rebuilt whenever the evaluation date moves.
+    ///
+    /// The helper observes its quote, the index copy it prices through and the
+    /// nominal curve (`cpp:304-305`); it does **not** observe the curve it is
+    /// bootstrapped against.
+    ///
+    /// `pillar` picks which of the two nodes the interpolated swap straddles the
+    /// helper fits (`cpp:257-270`); the flat swap reads one fixing, so its
+    /// single node is the pillar whatever the choice (`cpp:286-291`). C++
+    /// defaults the argument to [`Pillar::LastRelevantDate`] (`hpp:130`).
+    ///
+    /// On the interpolated path C++ weights that choice by the swap's *start*
+    /// date where it has one, falling back to the maturity (`cpp:263`), so that
+    /// helpers sharing a start date all pick the same side. This constructor is
+    /// the relative-date one, whose start date is the moving evaluation date and
+    /// not a schedule input, so it is always the maturity arm - the fixed-date
+    /// constructor that would supply the other is not ported (see the module
+    /// deferrals).
+    ///
+    /// # Errors
+    ///
+    /// The interpolated path needs a further whole index period of lag on top of
+    /// the index's availability lag (`cpp:296-302`), reading as it does the
+    /// fixing of the month *after* the one the lag lands in; a pair of lags
+    /// [`Period`]'s partial ordering cannot decide fails there too, where C++
+    /// throws out of the comparison itself. The swap the helper prices is also
+    /// built here, so a `swap_obs_lag` its legs cannot be built under fails at
+    /// construction, as the C++ `initializeDates` throws.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        quote: Handle<dyn Quote>,
+        swap_obs_lag: Period,
+        maturity: Date,
+        calendar: Calendar,
+        payment_convention: BusinessDayConvention,
+        day_counter: DayCounter,
+        yii: &Shared<YoYInflationIndex>,
+        interpolation: CpiInterpolationType,
+        nominal_term_structure: Handle<dyn YieldTermStructure>,
+        pillar: Pillar,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Shared<YearOnYearInflationSwapHelper>> {
+        let fixing_period = inflation_period(maturity - swap_obs_lag, yii.frequency())?;
+        let (earliest_date, latest_date, pillar_date) =
+            Self::dates(fixing_period, maturity, yii, interpolation, pillar)?;
+        if interpolation == CpiInterpolationType::Linear {
+            let period_shift = Period::try_from(yii.frequency())?;
+            let availability_lag = yii.availability_lag();
+            let excess = swap_obs_lag - period_shift;
+            require!(
+                excess
+                    .partial_cmp(&availability_lag)
+                    .is_some_and(std::cmp::Ordering::is_ge),
+                "inconsistency between swap observation lag {swap_obs_lag}, index period \
+                 {period_shift} and index availability {availability_lag}: need (obsLag-index \
+                 period) >= availLag"
+            );
+        }
+
+        let helper = Shared::new_cyclic(|weak: &Weak<YearOnYearInflationSwapHelper>| {
+            let weak = weak.clone();
+            let on_eval_change = Box::new(move || {
+                if let Some(helper) = weak.upgrade() {
+                    helper.initialize_dates();
+                }
+            });
+            let base = YoYInflationHelperBase::new_relative(
+                quote,
+                Shared::clone(&settings),
+                true,
+                on_eval_change,
+            );
+            let term_structure_handle = RelinkableHandle::empty();
+            let yii = shared(yii.clone_linked_to(term_structure_handle.handle()));
+            term_structure_handle
+                .handle()
+                .unregister_observer(&yii.inflation_base().observer());
+            yii.observable().register_observer(&base.observer());
+            nominal_term_structure.register_observer(&base.observer());
+
+            base.set_earliest_date(earliest_date);
+            base.set_latest_date(latest_date);
+            if let Some(pillar_date) = pillar_date {
+                base.set_pillar_date(pillar_date);
+            }
+
+            let helper = YearOnYearInflationSwapHelper {
+                base,
+                swap_obs_lag,
+                maturity,
+                calendar,
+                payment_convention,
+                day_counter,
+                yii,
+                interpolation,
+                nominal_term_structure,
+                term_structure_handle,
+                settings,
+                swap: RefCell::new(Err(crate::errors::QlError::new(
+                    "the helper's swap is built by initialize_dates",
+                    file!(),
+                    line!(),
+                ))),
+            };
+            helper.initialize_dates();
+            helper
+        });
+        if let Err(error) = helper.swap.borrow().as_ref() {
+            return Err(error.clone());
+        }
+        Ok(helper)
+    }
+
+    /// The helper's earliest and latest dates and its pillar, if it pins one
+    /// (`cpp:253-291`).
+    ///
+    /// The flat swap reads a single fixing, so all three collapse onto the first
+    /// day of the observed fixing period (`cpp:286-291`). The interpolated swap
+    /// reads the fixings bracketing its observation date, so its window opens on
+    /// that day and closes the day after the period ends (`cpp:254-255`), and
+    /// the pillar goes to whichever end carries the dominant interpolation
+    /// weight (`cpp:257-270`).
+    ///
+    /// `None` is the C++ `pillarDate_ == Date()` the `dt/dp > 0.5` arm leaves
+    /// behind (`cpp:267-268`): the pillar is not the fixing period's start
+    /// there, it is unset, and
+    /// [`BootstrapHelperBase::pillar_date`](crate::termstructures::bootstraphelper::BootstrapHelperBase::pillar_date)
+    /// answers with the latest date exactly as `bootstraphelper.hpp:193-197`
+    /// does.
+    fn dates(
+        fixing_period: (Date, Date),
+        maturity: Date,
+        yii: &Shared<YoYInflationIndex>,
+        interpolation: CpiInterpolationType,
+        pillar: Pillar,
+    ) -> QlResult<(Date, Date, Option<Date>)> {
+        match interpolation {
+            CpiInterpolationType::Flat => {
+                Ok((fixing_period.0, fixing_period.0, Some(fixing_period.0)))
+            }
+            CpiInterpolationType::Linear => {
+                let latest_date = fixing_period.1 + 1;
+                let pillar_date = match pillar {
+                    Pillar::MaturityDate => Some(latest_date),
+                    Pillar::LastRelevantDate => {
+                        let weight_period = inflation_period(maturity, yii.frequency())?;
+                        let dp = Real::from(weight_period.1 + 1 - weight_period.0);
+                        let dt = Real::from(maturity - weight_period.0);
+                        (dt / dp <= 0.5).then_some(fixing_period.0)
+                    }
+                };
+                Ok((fixing_period.0, latest_date, pillar_date))
+            }
+        }
+    }
+
+    /// The cached swap, or the error that stopped it being built (`swap()`,
+    /// `hpp:150`).
+    pub fn swap(&self) -> Ref<'_, QlResult<YearOnYearInflationSwap>> {
+        self.swap.borrow()
+    }
+
+    /// The cached swap, mutably, for its on-demand pricing accessors.
+    pub fn swap_mut(&self) -> RefMut<'_, QlResult<YearOnYearInflationSwap>> {
+        self.swap.borrow_mut()
+    }
+
+    /// The index copy the helper prices through, linked to its own handle.
+    pub fn yoy_inflation_index(&self) -> &Shared<YoYInflationIndex> {
+        &self.yii
+    }
+
+    /// The nominal curve the contract's engine discounts on, as handed in
+    /// (`hpp:165`).
+    pub fn nominal_term_structure(&self) -> &Handle<dyn YieldTermStructure> {
+        &self.nominal_term_structure
+    }
+
+    /// The unit-notional, zero-strike swap the helper quotes, under a
+    /// discounting engine over the nominal curve (`initializeDates`,
+    /// `cpp:311-335`).
+    ///
+    /// Both legs run over one annual, unadjusted, backward-generated schedule
+    /// from the evaluation date to the maturity; a one-year tenor never runs
+    /// into a days-in-month mismatch, which is why C++ can share the schedule
+    /// here while the contract itself takes two. An evaluation date that was
+    /// never set is an error rather than a panic (D10), surfaced when the
+    /// cached result is next read.
+    fn build_swap(&self) -> QlResult<YearOnYearInflationSwap> {
+        let start_date = match self.base.evaluation_date() {
+            Some(date) => date,
+            None => crate::fail!("no evaluation date set: the helper's swap starts at it"),
+        };
+        let schedule = MakeSchedule::new()
+            .from(start_date)
+            .to(self.maturity)
+            .with_tenor(Period::new(1, TimeUnit::Years))
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_calendar(self.calendar.clone())
+            .backwards()
+            .build();
+        let mut swap = YearOnYearInflationSwap::new(
+            SwapType::Payer,
+            1.0,
+            schedule.clone(),
+            0.0,
+            self.day_counter.clone(),
+            schedule,
+            Shared::clone(&self.yii),
+            self.swap_obs_lag,
+            self.interpolation,
+            0.0,
+            self.day_counter.clone(),
+            self.calendar.clone(),
+            self.payment_convention,
+            Shared::clone(&self.settings),
+        )?;
+        let engine = DiscountingSwapEngine::new(
+            self.nominal_term_structure.clone(),
+            None,
+            None,
+            None,
+            Shared::clone(&self.settings),
+        );
+        swap.base_mut()
+            .set_pricing_engine(shared_mut(engine) as SharedMut<dyn PricingEngine>);
+        Ok(swap)
+    }
+}
+
+impl AsObservable for YearOnYearInflationSwapHelper {
+    fn observable(&self) -> &crate::patterns::observable::Observable {
+        self.base.observable()
+    }
+}
+
+impl YoYInflationHelper for YearOnYearInflationSwapHelper {
+    fn base(&self) -> &YoYInflationHelperBase {
+        &self.base
+    }
+
+    /// The swap's fair rate (`impliedQuote`, `cpp:309-312`).
+    ///
+    /// The `deepUpdate` is load-bearing here, unlike in the zero twin: the fair
+    /// rate is a *priced* result, cached on the contract behind its lazy flag,
+    /// so a node the bootstrap has just moved would otherwise go unseen.
+    fn implied_quote(&self) -> QlResult<Real> {
+        let mut swap = self.swap.borrow_mut();
+        let swap = swap.as_mut().map_err(|error| error.clone())?;
+        swap.swap_mut().deep_update();
+        swap.fair_rate()
+    }
+
+    /// Points the index copy's handle at the curve, then records it
+    /// (`setTermStructure`, `cpp:337-346`).
+    ///
+    /// The link is weak and unobserved, the port of the C++ `null_deleter` plus
+    /// `observer = false`, and for the same reason as in the zero twin: the
+    /// curve owns this helper, which owns the swap, which owns the index copy.
+    fn set_term_structure(&self, term_structure: &Shared<dyn YoYInflationTermStructure>) {
+        self.term_structure_handle
+            .link_to_weak(Shared::downgrade(term_structure));
+        self.base.set_term_structure(term_structure);
+    }
+}
+
+impl RelativeDateYoYInflationHelper for YearOnYearInflationSwapHelper {
+    /// Rebuilds the swap off the current evaluation date (`initializeDates`,
+    /// `cpp:311-335`).
+    ///
+    /// The helper's own dates are not rebuilt: they come from the fixing period
+    /// of `maturity - swap_obs_lag`, which no evaluation date moves.
+    fn initialize_dates(&self) {
+        *self.swap.borrow_mut() = self.build_swap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+    use crate::patterns::observable::Observable;
+    use crate::quotes::SimpleQuote;
+    use crate::shared::shared;
+    use crate::termstructures::inflation::interpolatedzeroinflationcurve::ZeroInflationCurve;
+    use crate::time::date::Month;
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::frequency::Frequency;
+
+    /// A helper that overrides both hooks a concrete helper overrides, and
+    /// records that each ran. Its quote is 0.03 and its implied quote 0.01, so
+    /// the default `quote_error` would be 0.02 - a value the overridden one
+    /// deliberately does not return.
+    struct StubHelper {
+        base: ZeroInflationHelperBase,
+        curve_set: Cell<bool>,
+        error_called: Cell<bool>,
+    }
+
+    impl StubHelper {
+        fn new() -> Shared<StubHelper> {
+            let quote = shared(SimpleQuote::new(Some(0.03)));
+            let base = ZeroInflationHelperBase::new(Handle::new(quote));
+            base.set_pillar_date(Date::new(1, Month::June, 2030));
+            base.set_latest_relevant_date(Date::new(1, Month::July, 2030));
+            base.set_maturity_date(Date::new(1, Month::June, 2030));
+            shared(StubHelper {
+                base,
+                curve_set: Cell::new(false),
+                error_called: Cell::new(false),
+            })
+        }
+    }
+
+    impl AsObservable for StubHelper {
+        fn observable(&self) -> &Observable {
+            self.base.observable()
+        }
+    }
+
+    impl ZeroInflationHelper for StubHelper {
+        fn base(&self) -> &ZeroInflationHelperBase {
+            &self.base
+        }
+
+        fn implied_quote(&self) -> QlResult<Real> {
+            Ok(0.01)
+        }
+
+        fn quote_error(&self) -> QlResult<Real> {
+            self.error_called.set(true);
+            Ok(-1.0)
+        }
+
+        fn set_term_structure(&self, term_structure: &Shared<dyn ZeroInflationTermStructure>) {
+            self.curve_set.set(true);
+            self.base.set_term_structure(term_structure);
+        }
+    }
+
+    fn curve() -> Shared<dyn ZeroInflationTermStructure> {
+        let reference = Date::new(27, Month::January, 2026);
+        let dates = vec![
+            Date::new(1, Month::December, 2025),
+            Date::new(1, Month::December, 2030),
+        ];
+        let curve = ZeroInflationCurve::new(
+            reference,
+            dates,
+            vec![0.02, 0.02],
+            Frequency::Monthly,
+            Actual360::new(),
+            crate::math::interpolations::linear::Linear,
+            None,
+        )
+        .unwrap();
+        shared(curve) as Shared<dyn ZeroInflationTermStructure>
+    }
+
+    /// The inflation family satisfies the bound the bootstrap driver puts on
+    /// `PiecewiseCurve::Helper`, so a piecewise zero-inflation curve can name
+    /// `dyn ZeroInflationHelper` there against a
+    /// `dyn ZeroInflationTermStructure` curve. The two associated types must
+    /// agree, which is the whole point of the generalization, and only a paired
+    /// instantiation checks it.
+    #[test]
+    fn inflation_helpers_satisfy_the_driver_bound() {
+        fn accepts_driver_helper<H>()
+        where
+            H: BootstrapHelperShared<TS = dyn ZeroInflationTermStructure> + ?Sized,
+        {
+        }
+        accepts_driver_helper::<dyn ZeroInflationHelper>();
+    }
+
+    /// What a driver sees of a helper.
+    struct DriverView {
+        quote_value: Real,
+        quote_error: Real,
+        pillar_date: Date,
+        latest_relevant_date: Date,
+        maturity_date: Date,
+    }
+
+    /// Exercises the helper the way
+    /// [`IterativeBootstrap::calculate`](crate::termstructures::iterativebootstrap::IterativeBootstrap::calculate)
+    /// does: through a type parameter bounded by [`BootstrapHelperShared`], so
+    /// only that impl's methods are in scope.
+    ///
+    /// Reaching the bound through a type parameter is what makes the assertions
+    /// below bite. Calling the same method names straight on a
+    /// `Shared<dyn ZeroInflationHelper>` resolves to [`ZeroInflationHelper`]
+    /// instead and never enters the impl under test, which would leave the
+    /// routing claim untested.
+    fn drive<H>(helper: &Shared<H>, curve: &Shared<dyn ZeroInflationTermStructure>) -> DriverView
+    where
+        H: BootstrapHelperShared<TS = dyn ZeroInflationTermStructure> + ?Sized,
+    {
+        helper.set_term_structure(curve);
+        DriverView {
+            quote_value: helper.quote_value().unwrap(),
+            quote_error: helper.quote_error().unwrap(),
+            pillar_date: helper.pillar_date(),
+            latest_relevant_date: helper.latest_relevant_date(),
+            maturity_date: helper.maturity_date(),
+        }
+    }
+
+    /// Every driver-facing method routes through the [`ZeroInflationHelper`]
+    /// trait, so a concrete helper's overrides run. Short-circuiting the impl
+    /// to the base would leave a helper pricing off an unlinked handle and
+    /// would silently swap its quote error for the default one - here, the
+    /// stub's `-1.0` would become the default `0.03 - 0.01`. The curve is bound
+    /// to a local because the base holds it weakly and never owns it.
+    #[test]
+    fn the_driver_bound_routes_through_the_trait_so_overrides_run() {
+        let helper = StubHelper::new();
+        let driver: Shared<dyn ZeroInflationHelper> = Shared::clone(&helper) as _;
+        let curve = curve();
+
+        let view = drive(&driver, &curve);
+
+        assert!(
+            helper.curve_set.get(),
+            "set_term_structure override skipped"
+        );
+        assert!(helper.base.term_structure().is_ok());
+        assert!(helper.error_called.get(), "quote_error override skipped");
+        assert_eq!(view.quote_error, -1.0);
+        assert_eq!(view.quote_value, 0.03);
+    }
+
+    #[test]
+    fn the_driver_bound_reports_the_bases_dates() {
+        let helper = StubHelper::new();
+        let driver: Shared<dyn ZeroInflationHelper> = Shared::clone(&helper) as _;
+        let curve = curve();
+
+        let view = drive(&driver, &curve);
+
+        assert_eq!(view.pillar_date, Date::new(1, Month::June, 2030));
+        assert_eq!(view.latest_relevant_date, Date::new(1, Month::July, 2030));
+        assert_eq!(view.maturity_date, Date::new(1, Month::June, 2030));
+    }
+
+    mod zero_coupon_swap_helper {
+        //! The helper's place inside a bootstrap is exercised by the piecewise
+        //! zero-inflation curve; what is checkable here is everything the helper
+        //! decides on its own - its dates, the swap it caches, and the two
+        //! wirings a bootstrap depends on but no numeric assertion would catch:
+        //! that its index copy reads the curve handed to
+        //! [`set_term_structure`](ZeroInflationHelper::set_term_structure), and
+        //! that the relink does not travel back to the helper.
+
+        use super::*;
+        use crate::indexes::Index;
+        use crate::indexes::inflation::UkRpi;
+        use crate::instrument::Instrument;
+        use crate::math::interpolations::linear::Linear;
+        use crate::test_support::{Flag, as_observer};
+        use crate::time::businessdayconvention::BusinessDayConvention;
+        use crate::time::calendars::unitedkingdom::{Market, UnitedKingdom};
+        use crate::time::date::Month::{August, June, May, September};
+        use crate::time::daycounters::actual365fixed::Actual365Fixed;
+        use crate::time::period::Period;
+        use crate::time::timeunit::TimeUnit;
+        use crate::types::Rate;
+
+        /// The May 2007 figure, which the swap's base observation reads.
+        const BASE_FIXING: Real = 195.0;
+        /// The June 2007 figure, which is also the curve's base date.
+        const CURVE_BASE_FIXING: Real = 200.0;
+
+        fn today() -> Date {
+            Date::new(13, Month::August, 2007)
+        }
+
+        /// One year out, so the fixing period observed under a three-month lag is
+        /// May 2008 - a date the curve carries a node at.
+        fn maturity() -> Date {
+            Date::new(13, August, 2008)
+        }
+
+        fn curve_base_date() -> Date {
+            Date::new(1, June, 2007)
+        }
+
+        fn lag() -> Period {
+            Period::new(3, TimeUnit::Months)
+        }
+
+        fn settings_today() -> Shared<Settings<Date>> {
+            let settings = shared(Settings::<Date>::new());
+            settings.set_evaluation_date(today());
+            settings
+        }
+
+        fn a_curve(rates: Vec<Rate>) -> Shared<dyn ZeroInflationTermStructure> {
+            shared(
+                ZeroInflationCurve::new(
+                    today(),
+                    vec![
+                        curve_base_date(),
+                        Date::new(1, May, 2008),
+                        Date::new(1, June, 2012),
+                    ],
+                    rates,
+                    Frequency::Monthly,
+                    Actual360::new(),
+                    Linear,
+                    None,
+                )
+                .expect("a well-formed zero inflation curve"),
+            ) as Shared<dyn ZeroInflationTermStructure>
+        }
+
+        /// UK RPI with the two figures the swap needs on record: its base
+        /// observation and the curve's base date. The index is left on an empty
+        /// curve handle, so any forecast it produced itself would fail - only the
+        /// helper's own copy, relinked to the bootstrapped curve, can forecast.
+        fn an_index(settings: &Shared<Settings<Date>>) -> Shared<ZeroInflationIndex> {
+            let index = shared(UkRpi::new(Shared::clone(settings)));
+            index
+                .add_fixing(Date::new(1, May, 2007), BASE_FIXING)
+                .expect("a published figure");
+            index
+                .add_fixing(curve_base_date(), CURVE_BASE_FIXING)
+                .expect("a published figure");
+            index
+        }
+
+        fn a_helper(
+            settings: &Shared<Settings<Date>>,
+            interpolation: CpiInterpolationType,
+        ) -> QlResult<Shared<ZeroCouponInflationSwapHelper>> {
+            a_helper_with(
+                settings,
+                interpolation,
+                Pillar::LastRelevantDate,
+                maturity(),
+                lag(),
+            )
+        }
+
+        fn a_helper_with(
+            settings: &Shared<Settings<Date>>,
+            interpolation: CpiInterpolationType,
+            pillar: Pillar,
+            maturity: Date,
+            obs_lag: Period,
+        ) -> QlResult<Shared<ZeroCouponInflationSwapHelper>> {
+            ZeroCouponInflationSwapHelper::new(
+                Handle::new(shared(SimpleQuote::new(Some(0.03))) as Shared<dyn Quote>),
+                obs_lag,
+                maturity,
+                UnitedKingdom::new(Market::Settlement),
+                BusinessDayConvention::ModifiedFollowing,
+                Actual365Fixed::new(),
+                &an_index(settings),
+                interpolation,
+                pillar,
+                Shared::clone(settings),
+            )
+        }
+
+        /// All four dates collapse onto the first day of the observed fixing
+        /// period (`cpp:158-159`): 13 August 2008 less three months is 13 May
+        /// 2008, whose monthly period starts on 1 May 2008. C++ leaves the
+        /// relevant, maturity and pillar fields unset there and lets the base's
+        /// fallbacks answer; this port sets the pillar explicitly - the same value
+        /// - and leaves the other two to the fallbacks, as C++ does.
+        ///
+        /// The swap observes the *unrounded* 13 May 2008, the fixing period being
+        /// the helper's rounding and not the contract's.
+        #[test]
+        fn the_dates_collapse_onto_the_observed_fixing_period() {
+            let helper = a_helper(&settings_today(), CpiInterpolationType::Flat)
+                .expect("a three-month lag covers UK RPI's availability");
+            let period_start = Date::new(1, May, 2008);
+
+            assert_eq!(helper.earliest_date(), period_start);
+            assert_eq!(helper.latest_date(), period_start);
+            assert_eq!(helper.pillar_date(), period_start);
+            assert_eq!(helper.latest_relevant_date(), period_start);
+            assert_eq!(helper.maturity_date(), period_start);
+
+            let swap = helper.swap();
+            let swap = swap.as_ref().expect("the swap builds");
+            assert_eq!(swap.obs_date(), Date::new(13, May, 2008));
+            assert_eq!(swap.maturity_date(), maturity());
+            assert_eq!(swap.fixed_rate(), 0.0);
+            assert_eq!(swap.nominal(), 1.0);
+        }
+
+        /// The fixed-date helper's inversion of
+        /// `moving_the_evaluation_date_rebuilds_the_swap`: its swap starts at
+        /// the given start date, not the evaluation date, and stays there when
+        /// that date moves - `updateDates_` is false, so the helper never
+        /// registers with the evaluation date (`cpp:100`, `cpp:193`). The #806
+        /// bootstrap oracles only count no-throws and are blind to this arm: a
+        /// port that wrongly stayed eval-date-registered would rebuild off the
+        /// moving date, never collide, and still pass them.
+        #[test]
+        fn a_fixed_date_helper_ignores_a_moving_evaluation_date() {
+            let settings = settings_today();
+            let start = Date::new(15, August, 2007);
+            let helper = ZeroCouponInflationSwapHelper::with_start_date(
+                Handle::new(shared(SimpleQuote::new(Some(0.03))) as Shared<dyn Quote>),
+                lag(),
+                start,
+                maturity(),
+                UnitedKingdom::new(Market::Settlement),
+                BusinessDayConvention::ModifiedFollowing,
+                Actual365Fixed::new(),
+                &an_index(&settings),
+                CpiInterpolationType::Flat,
+                Pillar::LastRelevantDate,
+                Shared::clone(&settings),
+            )
+            .expect("a three-month lag covers the index's availability");
+            assert_eq!(
+                helper
+                    .swap()
+                    .as_ref()
+                    .expect("the swap builds")
+                    .start_date(),
+                start
+            );
+            let pillar = helper.pillar_date();
+
+            settings.set_evaluation_date(Date::new(14, September, 2007));
+
+            assert_eq!(
+                helper
+                    .swap()
+                    .as_ref()
+                    .expect("the swap was not rebuilt")
+                    .start_date(),
+                start
+            );
+            assert_eq!(helper.pillar_date(), pillar);
+        }
+
+        /// The fixed-date helper weighs the [`Pillar::LastRelevantDate`] choice
+        /// on its start date, not its maturity (`cpp:132`). The maturity is the
+        /// one `the_weighted_pillar_takes_the_windows_far_end_late_in_the_month`
+        /// pins to the far end on the relative path; with a start date early in
+        /// its month (13 August 2007, `dt/dp` = 12/31), the near end wins
+        /// instead.
+        #[test]
+        fn the_fixed_date_helper_weighs_the_pillar_on_its_start_date() {
+            let settings = settings_today();
+            let helper = ZeroCouponInflationSwapHelper::with_start_date(
+                Handle::new(shared(SimpleQuote::new(Some(0.03))) as Shared<dyn Quote>),
+                lag(),
+                today(),
+                Date::new(25, August, 2008),
+                UnitedKingdom::new(Market::Settlement),
+                BusinessDayConvention::ModifiedFollowing,
+                Actual365Fixed::new(),
+                &an_index(&settings),
+                CpiInterpolationType::Linear,
+                Pillar::LastRelevantDate,
+                Shared::clone(&settings),
+            )
+            .expect("a valid lag");
+
+            assert_eq!(helper.earliest_date(), Date::new(1, May, 2008));
+            assert_eq!(helper.pillar_date(), Date::new(1, May, 2008));
+        }
+
+        /// The contract starts at the evaluation date and follows it, which is
+        /// what makes this a relative-date helper (`cpp:100`, `cpp:188`). The
+        /// helper's own dates come from the maturity and so do not move.
+        #[test]
+        fn moving_the_evaluation_date_rebuilds_the_swap() {
+            let settings = settings_today();
+            let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a valid lag");
+            assert_eq!(
+                helper
+                    .swap()
+                    .as_ref()
+                    .expect("the swap builds")
+                    .start_date(),
+                today()
+            );
+
+            let moved = Date::new(14, August, 2007);
+            settings.set_evaluation_date(moved);
+
+            assert_eq!(
+                helper
+                    .swap()
+                    .as_ref()
+                    .expect("the swap rebuilds")
+                    .start_date(),
+                moved
+            );
+            assert_eq!(helper.pillar_date(), Date::new(1, May, 2008));
+        }
+
+        /// The oracle, without a bootstrap: the quote the helper implies off a
+        /// directly built curve is the fair rate of the same swap built by hand
+        /// on that curve.
+        ///
+        /// It pins the whole chain the bootstrap relies on. The helper's index is
+        /// a *copy* reading a handle that is empty until `set_term_structure`
+        /// relinks it, so a copy that kept the caller's curve, or a relink that
+        /// never reached the copy, would fail to forecast at all rather than
+        /// answer a different number.
+        #[test]
+        fn the_implied_quote_is_the_swaps_fair_rate_on_the_curve_it_is_given() {
+            let settings = settings_today();
+            let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a valid lag");
+            let curve = a_curve(vec![0.02, 0.03, 0.04]);
+
+            assert!(
+                helper.implied_quote().is_err(),
+                "no curve has been handed over yet"
+            );
+            ZeroInflationHelper::set_term_structure(helper.as_ref(), &curve);
+
+            let by_hand = ZeroCouponInflationSwap::new(
+                SwapType::Payer,
+                1.0,
+                today(),
+                maturity(),
+                UnitedKingdom::new(Market::Settlement),
+                BusinessDayConvention::ModifiedFollowing,
+                Actual365Fixed::new(),
+                0.0,
+                shared(an_index(&settings).clone_linked_to(Handle::new(Shared::clone(&curve)))),
+                lag(),
+                CpiInterpolationType::Flat,
+                None,
+                None,
+                Shared::clone(&settings),
+            )
+            .expect("a valid lag");
+
+            let implied = helper.implied_quote().expect("the curve forecasts");
+            assert!(implied > 0.0);
+            assert!(
+                (implied - by_hand.fair_rate().expect("the curve forecasts")).abs() < 1e-14,
+                "implied {implied}"
+            );
+        }
+
+        /// The H7 hazard, pinned: the helper's own swap is struck at zero on a
+        /// flat 0 % nominal curve, so its NPV is nowhere near zero at the same
+        /// point where the implied quote is a perfectly good rate. A bootstrap
+        /// written against `helper.swap().npv() == 0` would never converge.
+        ///
+        /// The curve is bound to a local: the helper links it weakly, so a
+        /// temporary would be dropped before the quote is read.
+        #[test]
+        fn the_cached_swap_does_not_price_to_zero_at_the_implied_quote() {
+            let settings = settings_today();
+            let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a valid lag");
+            let curve = a_curve(vec![0.02, 0.03, 0.04]);
+            ZeroInflationHelper::set_term_structure(helper.as_ref(), &curve);
+
+            let implied = helper.implied_quote().expect("the curve forecasts");
+            let mut swap = helper.swap_mut();
+            let npv = swap
+                .as_mut()
+                .expect("the swap builds")
+                .npv()
+                .expect("the flat nominal curve discounts");
+
+            assert!(implied.is_finite() && implied > 0.0);
+            assert!(npv.abs() > 0.01, "npv was {npv}");
+        }
+
+        /// `cpp:107-110` and `cpp:199`, asserted structurally: the helper must not
+        /// hear about the curve it is being bootstrapped against. Two paths could
+        /// carry the news back - the copy still observing the handle the helper
+        /// relinks, and the relink itself subscribing to the curve - and both are
+        /// closed here. Either one open turns a solver step into a notification
+        /// the helper rebroadcasts to the curve that is moving it.
+        #[test]
+        fn the_relink_reaches_neither_the_helper_nor_its_index_copy() {
+            let helper =
+                a_helper(&settings_today(), CpiInterpolationType::Flat).expect("a valid lag");
+            let curve = a_curve(vec![0.02, 0.03, 0.04]);
+
+            let on_helper = Flag::new();
+            helper
+                .observable()
+                .register_observer(&as_observer(&on_helper));
+            let on_index = Flag::new();
+            helper
+                .inflation_index()
+                .observable()
+                .register_observer(&as_observer(&on_index));
+
+            ZeroInflationHelper::set_term_structure(helper.as_ref(), &curve);
+            assert!(
+                !Flag::is_up(&on_index),
+                "the copy still observes the handle"
+            );
+            assert!(!Flag::is_up(&on_helper), "the relink reached the helper");
+
+            curve.observable().notify_observers();
+            assert!(
+                !Flag::is_up(&on_helper),
+                "the helper must not observe the curve it is bootstrapped against"
+            );
+        }
+
+        /// The interpolated window straddles the observed fixing period
+        /// (`cpp:115-116`). The swap observes 13 May 2008, whose monthly period is
+        /// 1 to 31 May, and it reads the fixings bracketing that day: the May
+        /// figure, dated 1 May 2008, and the June one, dated the day after May's
+        /// period ends - 1 June 2008. The flat helper collapses both onto 1 May.
+        ///
+        /// The relevant and maturity dates follow the far end rather than the
+        /// near one, both falling back to the latest date
+        /// (`bootstraphelper.hpp:190-197`), and it is the relevant date that sets
+        /// how far a bootstrapped curve reaches.
+        #[test]
+        fn the_interpolated_dates_straddle_the_observed_fixing_period() {
+            let helper = a_helper(&settings_today(), CpiInterpolationType::Linear)
+                .expect("a three-month lag leaves a month over UK RPI's availability");
+
+            assert_eq!(helper.earliest_date(), Date::new(1, May, 2008));
+            assert_eq!(helper.latest_date(), Date::new(1, June, 2008));
+            assert_eq!(helper.latest_relevant_date(), Date::new(1, June, 2008));
+            assert_eq!(helper.maturity_date(), Date::new(1, June, 2008));
+        }
+
+        /// [`Pillar::MaturityDate`] pins the node at the window's far end
+        /// (`cpp:119-121`), the June figure's date - not the near end the weighted
+        /// choice picks for this same maturity below.
+        #[test]
+        fn the_maturity_date_pillar_is_the_windows_far_end() {
+            let helper = a_helper_with(
+                &settings_today(),
+                CpiInterpolationType::Linear,
+                Pillar::MaturityDate,
+                maturity(),
+                lag(),
+            )
+            .expect("a valid lag");
+
+            assert_eq!(helper.pillar_date(), Date::new(1, June, 2008));
+        }
+
+        /// [`Pillar::LastRelevantDate`] pins the node at whichever end carries the
+        /// dominant interpolation weight (`cpp:122-138`), weighed on the maturity
+        /// because this relative-date helper has no schedule start date
+        /// (`cpp:132`). 13 August 2008 falls 12 days into a 31-day month, so
+        /// `dt/dp` is 12/31 = 0.387 and the near end wins: the pillar is the
+        /// window's start, a full month before its far end.
+        #[test]
+        fn the_weighted_pillar_takes_the_windows_start_early_in_the_month() {
+            let helper =
+                a_helper(&settings_today(), CpiInterpolationType::Linear).expect("a valid lag");
+
+            assert_eq!(helper.pillar_date(), Date::new(1, May, 2008));
+        }
+
+        /// The far side of the same threshold: 25 August 2008 falls 24 days into
+        /// that 31-day month, `dt/dp` is 24/31 = 0.774, and the far end wins. C++
+        /// leaves the pillar unset there rather than assigning one (`cpp:136-137`)
+        /// and the base answers with the latest date
+        /// (`bootstraphelper.hpp:193-197`); this port does the same. The window
+        /// itself does not move - 25 May 2008 sits in the same May period - so the
+        /// weight is the only thing the later maturity changes.
+        #[test]
+        fn the_weighted_pillar_takes_the_windows_far_end_late_in_the_month() {
+            let helper = a_helper_with(
+                &settings_today(),
+                CpiInterpolationType::Linear,
+                Pillar::LastRelevantDate,
+                Date::new(25, August, 2008),
+                lag(),
+            )
+            .expect("a valid lag");
+
+            assert_eq!(helper.earliest_date(), Date::new(1, May, 2008));
+            assert_eq!(helper.pillar_date(), Date::new(1, June, 2008));
+        }
+
+        /// The interpolated path needs a whole index period of observation lag on
+        /// top of the index's availability lag (`cpp:165-171`), since it reads the
+        /// month *after* the one the lag lands in. UK RPI publishes a month in
+        /// arrears, so a one-month lag leaves nothing for that second figure.
+        ///
+        /// The message names all three quantities, which is what tells this apart
+        /// from the swap's own availability failure - the flat path builds on the
+        /// same one-month lag.
+        #[test]
+        fn an_interpolated_lag_short_of_an_index_period_is_rejected() {
+            let settings = settings_today();
+            let short_lag = Period::new(1, TimeUnit::Months);
+            let error = a_helper_with(
+                &settings,
+                CpiInterpolationType::Linear,
+                Pillar::LastRelevantDate,
+                maturity(),
+                short_lag,
+            )
+            .err()
+            .expect("one month of lag cannot cover the interpolation");
+
+            assert!(
+                error
+                    .message()
+                    .contains("need (obsLag-index period) >= availLag"),
+                "err was: {error}"
+            );
+            assert!(
+                a_helper_with(
+                    &settings,
+                    CpiInterpolationType::Flat,
+                    Pillar::LastRelevantDate,
+                    maturity(),
+                    short_lag,
+                )
+                .is_ok(),
+                "the flat path has no such requirement"
+            );
+        }
+    }
+}
+#[cfg(test)]
+mod yoy_swap_helper_tests {
+    //! The year-on-year helper's own wiring, off a **flat, directly built**
+    //! curve linked onto its handle. `test-suite/inflation.cpp`'s oracle
+    //! (`testYYTermStructure`, `:1109`) exercises it against a bootstrapped
+    //! curve instead and lands with that curve's tests.
+    //!
+    //! A flat curve makes the implied quote the curve's own rate whatever the
+    //! nominal curve discounts at, so this pins the plumbing - the index copy
+    //! reaching the linked curve, the contract being built and priced - and
+    //! *not* which nominal curve the engine got.
+
+    use super::*;
+    use crate::currency::Currency;
+    use crate::indexes::Region;
+    use crate::math::interpolations::linear::Linear;
+    use crate::quotes::SimpleQuote;
+    use crate::termstructures::inflation::interpolatedyoyinflationcurve::YoYInflationCurve;
+    use crate::time::calendars::unitedkingdom::{self, UnitedKingdom};
+    use crate::time::date::Month::{August, July, June};
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
+
+    /// The flat year-on-year rate the curve publishes everywhere.
+    const CURVE_RATE: Real = 0.03;
+
+    fn today() -> Date {
+        Date::new(13, August, 2007)
+    }
+
+    fn maturity() -> Date {
+        Date::new(13, August, 2012)
+    }
+
+    fn lag() -> Period {
+        Period::new(2, TimeUnit::Months)
+    }
+
+    fn settings_today() -> Shared<Settings<Date>> {
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today());
+        settings
+    }
+
+    fn an_index(settings: &Shared<Settings<Date>>) -> Shared<YoYInflationIndex> {
+        shared(YoYInflationIndex::new(
+            "YY_RPI".into(),
+            Region::uk(),
+            false,
+            Frequency::Monthly,
+            Period::new(1, TimeUnit::Months),
+            Currency::gbp(),
+            Shared::clone(settings),
+        ))
+    }
+
+    /// Flat at [`CURVE_RATE`] over the whole span the coupons observe.
+    fn a_flat_curve() -> Shared<dyn YoYInflationTermStructure> {
+        shared(
+            YoYInflationCurve::new(
+                today(),
+                vec![Date::new(1, July, 2007), Date::new(1, July, 2015)],
+                vec![CURVE_RATE, CURVE_RATE],
+                Frequency::Monthly,
+                Actual360::new(),
+                Linear,
+                None,
+            )
+            .expect("a well-formed year-on-year curve"),
+        ) as Shared<dyn YoYInflationTermStructure>
+    }
+
+    fn a_nominal_curve() -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
+            today(),
+            0.05,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    }
+
+    fn a_helper(
+        settings: &Shared<Settings<Date>>,
+        interpolation: CpiInterpolationType,
+    ) -> QlResult<Shared<YearOnYearInflationSwapHelper>> {
+        a_helper_with(
+            settings,
+            interpolation,
+            Pillar::LastRelevantDate,
+            maturity(),
+            lag(),
+        )
+    }
+
+    fn a_helper_with(
+        settings: &Shared<Settings<Date>>,
+        interpolation: CpiInterpolationType,
+        pillar: Pillar,
+        maturity: Date,
+        obs_lag: Period,
+    ) -> QlResult<Shared<YearOnYearInflationSwapHelper>> {
+        YearOnYearInflationSwapHelper::new(
+            Handle::new(shared(SimpleQuote::new(Some(CURVE_RATE)))),
+            obs_lag,
+            maturity,
+            UnitedKingdom::new(unitedkingdom::Market::Settlement),
+            BusinessDayConvention::ModifiedFollowing,
+            Thirty360::with_convention(Convention::BondBasis),
+            &an_index(settings),
+            interpolation,
+            a_nominal_curve(),
+            pillar,
+            Shared::clone(settings),
+        )
+    }
+
+    /// On a curve flat at `r` every forward year-on-year rate is `r`, so the
+    /// swap that is fair against it is the one struck at `r`, and the helper's
+    /// implied quote is `r` however the legs are discounted.
+    #[test]
+    fn the_implied_quote_is_the_flat_curves_rate() {
+        let settings = settings_today();
+        let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a well-formed helper");
+        let curve = a_flat_curve();
+        helper.set_term_structure(&curve);
+
+        assert!((helper.implied_quote().unwrap() - CURVE_RATE).abs() < 1e-8);
+        assert!((helper.quote_error().unwrap()).abs() < 1e-8);
+    }
+
+    /// The flat path collapses the helper's window onto the first day of the
+    /// period the observation lands in: 13 August 2012 less two months is in
+    /// June 2012 (`cpp:289-291`).
+    #[test]
+    fn the_flat_helper_pins_one_date() {
+        let settings = settings_today();
+        let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a well-formed helper");
+        let period_start = Date::new(1, crate::time::date::Month::June, 2012);
+
+        assert_eq!(helper.earliest_date(), period_start);
+        assert_eq!(helper.latest_date(), period_start);
+        assert_eq!(helper.pillar_date(), period_start);
+    }
+
+    /// The helper's contract is a unit-notional, zero-strike payer swap from the
+    /// evaluation date to the maturity, both legs on one annual schedule
+    /// (`cpp:314-334`), priced by an engine over the nominal curve it was
+    /// handed rather than one it built.
+    #[test]
+    fn the_contract_is_a_unit_zero_strike_payer_swap() {
+        let settings = settings_today();
+        let helper = a_helper(&settings, CpiInterpolationType::Flat).expect("a well-formed helper");
+        let swap = helper.swap();
+        let swap = swap.as_ref().expect("the contract was built");
+
+        assert_eq!(swap.swap_type(), SwapType::Payer);
+        assert_eq!(swap.nominal(), 1.0);
+        assert_eq!(swap.fixed_rate(), 0.0);
+        assert_eq!(swap.spread(), 0.0);
+        assert_eq!(swap.fixed_schedule().dates(), swap.yoy_schedule().dates());
+        assert_eq!(swap.yoy_coupons().len(), 5);
+        assert_eq!(
+            helper
+                .nominal_term_structure()
+                .current_link()
+                .unwrap()
+                .reference_date()
+                .unwrap(),
+            today(),
+            "the helper kept the curve it was handed"
+        );
+    }
+
+    /// The interpolated window straddles the observed fixing period
+    /// (`cpp:254-255`). The observation falls in June 2012, whose monthly period
+    /// is 1 to 30 June, and the swap reads the fixings bracketing it: the June
+    /// figure, dated 1 June, and the July one, dated the day after June's period
+    /// ends - 1 July 2012. The flat helper collapses both onto 1 June.
+    #[test]
+    fn the_interpolated_window_reaches_a_month_past_the_flat_one() {
+        let settings = settings_today();
+        let interpolated = a_helper(&settings, CpiInterpolationType::Linear)
+            .expect("a two-month lag leaves a month over the index's availability");
+        let flat = a_helper(&settings, CpiInterpolationType::Flat).expect("a well-formed helper");
+
+        assert_eq!(interpolated.earliest_date(), Date::new(1, June, 2012));
+        assert_eq!(interpolated.latest_date(), Date::new(1, July, 2012));
+        assert!(interpolated.latest_date() > flat.latest_date());
+    }
+
+    /// [`Pillar::MaturityDate`] pins the node at the window's far end
+    /// (`cpp:258-260`), the July figure's date - not the near end the weighted
+    /// choice picks for this same maturity below.
+    #[test]
+    fn the_maturity_date_pillar_is_the_windows_far_end() {
+        let helper = a_helper_with(
+            &settings_today(),
+            CpiInterpolationType::Linear,
+            Pillar::MaturityDate,
+            maturity(),
+            lag(),
+        )
+        .expect("a well-formed helper");
+
+        assert_eq!(helper.pillar_date(), helper.latest_date());
+        assert_eq!(helper.pillar_date(), Date::new(1, July, 2012));
+    }
+
+    /// [`Pillar::LastRelevantDate`] pins the node at whichever end carries the
+    /// dominant interpolation weight (`cpp:261-278`), weighed on the maturity
+    /// because this relative-date helper has no schedule start date
+    /// (`cpp:263`). 13 August 2012 falls 12 days into a 31-day month, so `dt/dp`
+    /// is 12/31 = 0.387 and the near end wins: the pillar is the window's start,
+    /// a full month before its far end.
+    #[test]
+    fn the_weighted_pillar_takes_the_windows_start_early_in_the_month() {
+        let helper = a_helper(&settings_today(), CpiInterpolationType::Linear)
+            .expect("a well-formed helper");
+
+        assert_eq!(helper.pillar_date(), Date::new(1, June, 2012));
+    }
+
+    /// The far side of the same threshold: 25 August 2012 falls 24 days into
+    /// that 31-day month, `dt/dp` is 24/31 = 0.774, and the far end wins. C++
+    /// leaves the pillar unset there rather than assigning one (`cpp:267-268`)
+    /// and the base answers with the latest date
+    /// (`bootstraphelper.hpp:193-197`); this port does the same. The window
+    /// itself does not move - 25 June 2012 sits in the same June period - so the
+    /// weight is the only thing the later maturity changes.
+    #[test]
+    fn the_weighted_pillar_takes_the_windows_far_end_late_in_the_month() {
+        let helper = a_helper_with(
+            &settings_today(),
+            CpiInterpolationType::Linear,
+            Pillar::LastRelevantDate,
+            Date::new(25, August, 2012),
+            lag(),
+        )
+        .expect("a well-formed helper");
+
+        assert_eq!(helper.earliest_date(), Date::new(1, June, 2012));
+        assert_eq!(helper.pillar_date(), Date::new(1, July, 2012));
+    }
+
+    /// The interpolated path needs a whole index period of observation lag on
+    /// top of the index's availability lag (`cpp:296-302`), since it reads the
+    /// month *after* the one the lag lands in. The index publishes a month in
+    /// arrears, so a one-month lag leaves nothing for that second figure.
+    ///
+    /// The message names all three quantities, which is what tells this apart
+    /// from any failure the contract itself would raise - the flat path builds
+    /// on the same one-month lag.
+    #[test]
+    fn an_interpolated_lag_short_of_an_index_period_is_rejected() {
+        let settings = settings_today();
+        let short_lag = Period::new(1, TimeUnit::Months);
+        let error = a_helper_with(
+            &settings,
+            CpiInterpolationType::Linear,
+            Pillar::LastRelevantDate,
+            maturity(),
+            short_lag,
+        )
+        .err()
+        .expect("one month of lag cannot cover the interpolation");
+
+        assert!(
+            error
+                .message()
+                .contains("need (obsLag-index period) >= availLag"),
+            "err was: {error}"
+        );
+        assert!(
+            a_helper_with(
+                &settings,
+                CpiInterpolationType::Flat,
+                Pillar::LastRelevantDate,
+                maturity(),
+                short_lag,
+            )
+            .is_ok(),
+            "the flat path has no such requirement"
+        );
+    }
+}

@@ -1,6 +1,5 @@
-//! Facade for [`PySabrSmileSection`], a single option expiry's volatility smile
-//! at fixed Hagan SABR parameters
-//! (`termstructures::volatility::SabrSmileSection`).
+//! Facade for SabrSmileSection, a single option expiry's volatility smile at
+//! fixed Hagan SABR parameters.
 //!
 //! The core `SmileSection` trait is not exposed as a Python base class: the SABR
 //! section is the only implementor a caller of this crate has a constructor for,
@@ -21,27 +20,52 @@ use crate::PyQlError;
 use crate::swaptionvol::PyVolatilityType;
 use libitofin::termstructures::volatility::{SabrSmileSection, SmileSection};
 use pyo3::prelude::*;
+#[allow(unused_imports)]
+use pyo3_stub_gen::derive::{
+    gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction, gen_stub_pymethods,
+};
 
-/// Python `SabrSmileSection`: the volatility smile of one option expiry, read
-/// off the closed-form Hagan SABR formula at fixed parameters
-/// (`termstructures::volatility::SabrSmileSection`).
+/// One option expiry's volatility smile, read off the closed-form Hagan SABR
+/// formula at fixed parameters.
 ///
 /// There is no calibration here: the four parameters are inputs. A fitted smile
-/// is what the SABR swaption vol cube serves; this class is for querying a smile
+/// is what SabrSwaptionVolatilityCube serves; this class is for querying a smile
 /// whose parameters are already known.
-#[pyclass(name = "SabrSmileSection", unsendable)]
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "SabrSmileSection",
+    unsendable,
+    module = "itofin.termstructures"
+)]
 pub struct PySabrSmileSection {
     inner: SabrSmileSection,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PySabrSmileSection {
-    /// A smile at `exercise_time` years, centred on `forward`.
+    /// Build the smile at a given exercise time and forward.
     ///
-    /// Raises `ItofinError` on a non-zero `shift` or a `Normal`
-    /// `volatility_type` (both deferred to #586), on a non-positive shifted
-    /// forward, and on SABR parameters outside their admissible ranges
-    /// (`alpha > 0`, `beta` in `[0, 1]`, `nu >= 0`, `rho^2 < 1`).
+    /// Only the exercise-time form is wrapped; the date-anchored one differs
+    /// from it only in computing that time from a reference date and a day
+    /// counter, which a caller can do with DayCounter.year_fraction.
+    ///
+    /// Args:
+    ///     exercise_time (float): The option's exercise time, in years.
+    ///     forward (float): The forward the smile is centred on.
+    ///     alpha (float): The SABR alpha, which must be positive.
+    ///     beta (float): The SABR beta, which must lie in [0, 1].
+    ///     nu (float): The SABR nu, which must be non-negative.
+    ///     rho (float): The SABR rho, whose square must be below 1.
+    ///     shift (float): The lognormal shift; a non-zero shift is deferred
+    ///         and refused.
+    ///     volatility_type (VolatilityType): The quoting convention; Normal is
+    ///         deferred and refused.
+    ///
+    /// Raises:
+    ///     ItofinError: On a non-zero shift or a Normal volatility_type, both
+    ///         deferred to #586; on a non-positive shifted forward; and on
+    ///         SABR parameters outside their admissible ranges.
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (exercise_time, forward, alpha, beta, nu, rho, shift = 0.0, volatility_type = PyVolatilityType::ShiftedLognormal))]
@@ -70,24 +94,48 @@ impl PySabrSmileSection {
         })
     }
 
-    /// The volatility at `strike`. Strikes below the shifted domain floor are
-    /// clamped to it rather than rejected, as the core does.
+    /// Return the volatility at strike.
+    ///
+    /// Args:
+    ///     strike (float): The strike; strikes below the shifted domain floor
+    ///         are clamped to it rather than rejected, as the core does.
+    ///
+    /// Returns:
+    ///     float: The Hagan SABR volatility.
+    ///
+    /// Raises:
+    ///     ItofinError: On whatever the closed-form evaluation rejects.
     fn volatility(&self, strike: f64) -> PyResult<f64> {
         Ok(self.inner.volatility(strike).map_err(PyQlError::from)?)
     }
 
-    /// The Black variance at `strike`: `volatility(strike)^2 * exercise_time`.
+    /// Return the Black variance at strike.
+    ///
+    /// Args:
+    ///     strike (float): The strike the variance is read at.
+    ///
+    /// Returns:
+    ///     float: The squared volatility times the exercise time.
+    ///
+    /// Raises:
+    ///     ItofinError: On whatever the closed-form evaluation rejects.
     fn variance(&self, strike: f64) -> PyResult<f64> {
         Ok(self.inner.variance(strike).map_err(PyQlError::from)?)
     }
 
-    /// The exercise time the smile was built for, in years.
+    /// The exercise time the smile was built for.
+    ///
+    /// Returns:
+    ///     float: The exercise time, in years.
     #[getter]
     fn exercise_time(&self) -> f64 {
         self.inner.exercise_time()
     }
 
-    /// The at-the-money level: the forward the smile is centred on.
+    /// The at-the-money level.
+    ///
+    /// Returns:
+    ///     float: The forward the smile is centred on.
     #[getter]
     fn atm_level(&self) -> f64 {
         self.inner
@@ -95,25 +143,37 @@ impl PySabrSmileSection {
             .expect("a SABR smile section always carries its forward as the atm level")
     }
 
-    /// The SABR `alpha` parameter.
+    /// The SABR alpha parameter.
+    ///
+    /// Returns:
+    ///     float: The alpha the smile was built with.
     #[getter]
     fn alpha(&self) -> f64 {
         self.inner.alpha()
     }
 
-    /// The SABR `beta` parameter.
+    /// The SABR beta parameter.
+    ///
+    /// Returns:
+    ///     float: The beta the smile was built with.
     #[getter]
     fn beta(&self) -> f64 {
         self.inner.beta()
     }
 
-    /// The SABR `nu` parameter.
+    /// The SABR nu parameter.
+    ///
+    /// Returns:
+    ///     float: The nu the smile was built with.
     #[getter]
     fn nu(&self) -> f64 {
         self.inner.nu()
     }
 
-    /// The SABR `rho` parameter.
+    /// The SABR rho parameter.
+    ///
+    /// Returns:
+    ///     float: The rho the smile was built with.
     #[getter]
     fn rho(&self) -> f64 {
         self.inner.rho()

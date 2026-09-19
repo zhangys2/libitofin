@@ -6,8 +6,9 @@
 //! and (later) money rather than by any dedicated numeric test.
 //!
 //! Named constructors cover the currencies concrete indexes need today
-//! ([`eur`](Currency::eur), [`usd`](Currency::usd), [`aud`](Currency::aud)).
-//! The full `ql/currencies/*` catalogue is deferred to a later ticket.
+//! ([`eur`](Currency::eur), [`usd`](Currency::usd), [`aud`](Currency::aud),
+//! [`gbp`](Currency::gbp), [`jpy`](Currency::jpy)). The full `ql/currencies/*`
+//! catalogue is deferred to a later ticket.
 //!
 //! ## Divergences from QuantLib
 //!
@@ -92,6 +93,25 @@ impl Currency {
         Currency::new("Australian dollar", "AUD", 36, "A$", "", 100)
     }
 
+    /// The British pound sterling (ISO code `GBP`, numeric `826`, 100 pence
+    /// per unit).
+    ///
+    /// Values match `GBPCurrency` in QuantLib's `ql/currencies/europe.cpp`
+    /// (`:106-109`). Its default `Rounding()` convention is dropped along with
+    /// the `rounding` field (see the module divergences).
+    pub fn gbp() -> Self {
+        Currency::new("British pound sterling", "GBP", 826, "\u{a3}", "p", 100)
+    }
+
+    /// The Japanese yen (ISO code `JPY`, numeric `392`, 100 sen per unit).
+    ///
+    /// Values match `JPYCurrency` in QuantLib's `ql/currencies/asia.cpp`
+    /// (`:106-108`). Its default `Rounding()` convention is dropped along with
+    /// the `rounding` field (see the module divergences).
+    pub fn jpy() -> Self {
+        Currency::new("Japanese yen", "JPY", 392, "\u{a5}", "", 100)
+    }
+
     /// Currency name, e.g. `"European Euro"`.
     pub fn name(&self) -> &str {
         &self.name
@@ -172,6 +192,28 @@ mod tests {
         assert_eq!(aud.symbol(), "A$");
         assert_eq!(aud.fraction_symbol(), "");
         assert_eq!(aud.fractions_per_unit(), 100);
+    }
+
+    #[test]
+    fn gbp_fields_match_quantlib() {
+        let gbp = Currency::gbp();
+        assert_eq!(gbp.name(), "British pound sterling");
+        assert_eq!(gbp.code(), "GBP");
+        assert_eq!(gbp.numeric_code(), 826);
+        assert_eq!(gbp.symbol(), "\u{a3}");
+        assert_eq!(gbp.fraction_symbol(), "p");
+        assert_eq!(gbp.fractions_per_unit(), 100);
+    }
+
+    #[test]
+    fn jpy_fields_match_quantlib() {
+        let jpy = Currency::jpy();
+        assert_eq!(jpy.name(), "Japanese yen");
+        assert_eq!(jpy.code(), "JPY");
+        assert_eq!(jpy.numeric_code(), 392);
+        assert_eq!(jpy.symbol(), "\u{a5}");
+        assert_eq!(jpy.fraction_symbol(), "");
+        assert_eq!(jpy.fractions_per_unit(), 100);
     }
 
     #[test]

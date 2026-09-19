@@ -1,12 +1,12 @@
 //! Facade for the market cap/floor TERM-volatility surface
-//! [`PyCapFloorTermVolSurface`].
+//! CapFloorTermVolSurface.
 //!
 //! This is a `CapFloorTermVolatilityStructure`, not an
-//! [`OptionletVolatilityStructure`](crate::optionletvol::PyOptionletVolatilityStructure):
-//! it quotes the flat volatility of a WHOLE cap by cap length, which is how the
-//! market quotes caps, whereas an optionlet surface quotes the individual
-//! caplets a cap decomposes into. It is therefore the optionlet stripper's
-//! input, not its output, and it does not extend the optionlet base.
+//! OptionletVolatilityStructure: it quotes the flat volatility of a WHOLE cap
+//! by cap length, which is how the market quotes caps, whereas an optionlet
+//! surface quotes the individual caplets a cap decomposes into. It is therefore
+//! the optionlet stripper's input, not its output, and it does not extend the
+//! optionlet base.
 //!
 //! It is exposed standalone rather than under a shared base: it is the only
 //! implementor of its trait in the core, so a Python base class would have a
@@ -19,10 +19,9 @@
 //! volatilities or over the caller's quotes. The moving pair is not optional
 //! polish here - it is what the optionlet stripping pipeline runs on. The
 //! adapter that serves the stripped surface reads its settlement days from this
-//! surface (`strippedoptionletadapter.rs:87` through
-//! `optionletstripper.rs:241`), and a fixed-reference term structure has none,
-//! so a surface built by the fixed forms fails the adapter with `"settlement
-//! days not provided for this instance"`.
+//! surface, and a fixed-reference term structure has none, so a surface built
+//! by the fixed forms fails the adapter with `"settlement days not provided for
+//! this instance"`.
 
 use crate::PyQlError;
 use crate::market::PySimpleQuote;
@@ -37,26 +36,64 @@ use libitofin::termstructures::volatility::{
 };
 use libitofin::time::period::Period;
 use pyo3::prelude::*;
+#[allow(unused_imports)]
+use pyo3_stub_gen::derive::{
+    gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction, gen_stub_pymethods,
+};
 
-/// Python `CapFloorTermVolSurface`: the market cap/floor term-volatility
-/// surface, bicubic over an option-tenor x strike grid
-/// (`termstructures::volatility::CapFloorTermVolSurface`).
+/// The market cap/floor TERM-volatility surface, bicubic over an option-tenor
+/// x strike grid.
 ///
-/// The grid is a row per option tenor and a column per strike, both strictly
-/// increasing. The three query forms address the same surface by cap tenor, by
-/// cap end date and by cap end time; the tenor form resolves against the
-/// surface's own calendar and business-day convention, so it is the one to
-/// reach for unless a date is already in hand.
-#[pyclass(name = "CapFloorTermVolSurface", unsendable)]
+/// This is the flat volatility of a WHOLE cap by cap length, which is how the
+/// market quotes caps, not the volatility of the individual caplets it
+/// decomposes into: it is the optionlet stripper's input, and it is not an
+/// OptionletVolatilityStructure.
+///
+/// volatilities is a row per option tenor and a column per strike; both axes
+/// must be strictly increasing.
+///
+/// All four constructors are exposed. __init__ and with_quotes pin the
+/// reference date, so every query's option time runs from reference_date rather
+/// than the evaluation date. moving and moving_with_quotes float it
+/// settlement_days off the evaluation date, and are what the optionlet
+/// stripping pipeline runs on: StrippedOptionletAdapter reads its settlement
+/// days back off this surface, and a pinned-reference surface has none.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "CapFloorTermVolSurface",
+    unsendable,
+    module = "itofin.termstructures"
+)]
 pub struct PyCapFloorTermVolSurface {
     inner: Shared<CapFloorTermVolSurface>,
 }
 
+#[gen_stub_pymethods]
 #[pymethods]
 impl PyCapFloorTermVolSurface {
-    /// A surface on a pinned reference date over fixed volatilities: every
-    /// query's option time runs from `reference_date`, not from the evaluation
-    /// date, and no later mutation can reach the grid.
+    /// Build the surface on a pinned reference date over fixed volatilities.
+    ///
+    /// Every query's option time runs from reference_date, not from the
+    /// evaluation date, and no later mutation can reach the grid.
+    ///
+    /// Args:
+    ///     reference_date (Date): The date option times run from.
+    ///     calendar (Calendar): The calendar cap tenors resolve on.
+    ///     business_day_convention (BusinessDayConvention): The roll applied
+    ///         when resolving a tenor to a date.
+    ///     option_tenors (list[Period]): The cap-length axis, one per grid
+    ///         row; strictly increasing.
+    ///     strikes (list[float]): The strike axis, one per grid column;
+    ///         strictly increasing.
+    ///     volatilities (list[list[float]]): The flat cap volatilities, one
+    ///         row per option tenor.
+    ///     day_counter (DayCounter): The day count option times are measured
+    ///         in.
+    ///
+    /// Raises:
+    ///     ItofinError: On an empty or ragged grid, on a grid whose shape does
+    ///         not match the tenors and strikes, and on a non-increasing tenor
+    ///         or strike axis.
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (reference_date, calendar, business_day_convention, option_tenors, strikes, volatilities, day_counter))]
@@ -85,9 +122,27 @@ impl PyCapFloorTermVolSurface {
         Ok(PyCapFloorTermVolSurface { inner })
     }
 
-    /// The same pinned-reference surface reading each node from the caller's
-    /// quote: a later `set_value` on any of them rebuilds the interpolation and
-    /// notifies the surface's observers.
+    /// Build the pinned-reference surface over live quotes.
+    ///
+    /// Args:
+    ///     reference_date (Date): The date option times run from.
+    ///     calendar (Calendar): The calendar cap tenors resolve on.
+    ///     business_day_convention (BusinessDayConvention): The roll applied
+    ///         when resolving a tenor to a date.
+    ///     option_tenors (list[Period]): The cap-length axis, strictly
+    ///         increasing.
+    ///     strikes (list[float]): The strike axis, strictly increasing.
+    ///     volatilities (list[list[SimpleQuote]]): The volatility quotes, one
+    ///         row per option tenor; a later set_value rebuilds the
+    ///         interpolation and notifies the surface's observers.
+    ///     day_counter (DayCounter): The day count option times are measured
+    ///         in.
+    ///
+    /// Returns:
+    ///     CapFloorTermVolSurface: The surface over those quotes.
+    ///
+    /// Raises:
+    ///     ItofinError: On the same conditions __init__ reports.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (reference_date, calendar, business_day_convention, option_tenors, strikes, volatilities, day_counter))]
@@ -120,12 +175,33 @@ impl PyCapFloorTermVolSurface {
         Ok(PyCapFloorTermVolSurface { inner })
     }
 
-    /// A surface whose reference date floats `settlement_days` business days
-    /// off the evaluation date, over fixed volatilities.
+    /// Build a surface whose reference date floats off the evaluation date.
     ///
     /// This is the form the optionlet stripping pipeline needs: unlike the
     /// pinned-reference constructors, it carries the settlement days
-    /// `StrippedOptionletAdapter` reads back off the stripper.
+    /// StrippedOptionletAdapter reads back off the stripper.
+    ///
+    /// Args:
+    ///     settlement_days (int): The business days the reference date sits
+    ///         past the evaluation date.
+    ///     calendar (Calendar): The calendar cap tenors resolve on.
+    ///     business_day_convention (BusinessDayConvention): The roll applied
+    ///         when resolving a tenor to a date.
+    ///     option_tenors (list[Period]): The cap-length axis, strictly
+    ///         increasing.
+    ///     strikes (list[float]): The strike axis, strictly increasing.
+    ///     volatilities (list[list[float]]): The flat cap volatilities, one
+    ///         row per option tenor.
+    ///     day_counter (DayCounter): The day count option times are measured
+    ///         in.
+    ///     settings (Settings): The explicit settings supplying the evaluation
+    ///         date the reference date floats off.
+    ///
+    /// Returns:
+    ///     CapFloorTermVolSurface: The floating-reference surface.
+    ///
+    /// Raises:
+    ///     ItofinError: On the same conditions __init__ reports.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (settlement_days, calendar, business_day_convention, option_tenors, strikes, volatilities, day_counter, settings))]
@@ -156,8 +232,30 @@ impl PyCapFloorTermVolSurface {
         Ok(PyCapFloorTermVolSurface { inner })
     }
 
-    /// The same floating-reference surface reading each node from the caller's
-    /// quote.
+    /// Build the floating-reference surface over live quotes.
+    ///
+    /// Args:
+    ///     settlement_days (int): The business days the reference date sits
+    ///         past the evaluation date.
+    ///     calendar (Calendar): The calendar cap tenors resolve on.
+    ///     business_day_convention (BusinessDayConvention): The roll applied
+    ///         when resolving a tenor to a date.
+    ///     option_tenors (list[Period]): The cap-length axis, strictly
+    ///         increasing.
+    ///     strikes (list[float]): The strike axis, strictly increasing.
+    ///     volatilities (list[list[SimpleQuote]]): The volatility quotes, one
+    ///         row per option tenor.
+    ///     day_counter (DayCounter): The day count option times are measured
+    ///         in.
+    ///     settings (Settings): The explicit settings supplying the evaluation
+    ///         date the reference date floats off.
+    ///
+    /// Returns:
+    ///     CapFloorTermVolSurface: The floating-reference surface over those
+    ///         quotes.
+    ///
+    /// Raises:
+    ///     ItofinError: On the same conditions __init__ reports.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (settlement_days, calendar, business_day_convention, option_tenors, strikes, volatilities, day_counter, settings))]
@@ -192,7 +290,23 @@ impl PyCapFloorTermVolSurface {
         Ok(PyCapFloorTermVolSurface { inner })
     }
 
-    /// The cap volatility for a cap tenor and strike.
+    /// Return the flat cap volatility for a cap tenor and strike.
+    ///
+    /// The tenor form resolves against the surface's own calendar and
+    /// business-day convention, so it is the one to reach for unless a date is
+    /// already in hand.
+    ///
+    /// Args:
+    ///     option_tenor (Period): The cap's length.
+    ///     strike (float): The strike the volatility is read at.
+    ///     extrapolate (bool): Whether to answer outside the surface's grid.
+    ///
+    /// Returns:
+    ///     float: The flat cap volatility.
+    ///
+    /// Raises:
+    ///     ItofinError: If the query falls outside the grid and extrapolation
+    ///         is not allowed.
     #[pyo3(signature = (option_tenor, strike, extrapolate = false))]
     fn volatility(&self, option_tenor: &PyPeriod, strike: f64, extrapolate: bool) -> PyResult<f64> {
         Ok(self
@@ -201,7 +315,19 @@ impl PyCapFloorTermVolSurface {
             .map_err(PyQlError::from)?)
     }
 
-    /// The cap volatility for a cap end date and strike.
+    /// Return the flat cap volatility for a cap end date and strike.
+    ///
+    /// Args:
+    ///     end_date (Date): The cap's end date.
+    ///     strike (float): The strike the volatility is read at.
+    ///     extrapolate (bool): Whether to answer outside the surface's grid.
+    ///
+    /// Returns:
+    ///     float: The flat cap volatility.
+    ///
+    /// Raises:
+    ///     ItofinError: If the query falls outside the grid and extrapolation
+    ///         is not allowed.
     #[pyo3(signature = (end_date, strike, extrapolate = false))]
     fn volatility_date(&self, end_date: &PyDate, strike: f64, extrapolate: bool) -> PyResult<f64> {
         Ok(self
@@ -210,8 +336,20 @@ impl PyCapFloorTermVolSurface {
             .map_err(PyQlError::from)?)
     }
 
-    /// The cap volatility for a cap end time (a year fraction off the reference
-    /// date, in the surface's own day count) and strike.
+    /// Return the flat cap volatility for a cap end time and strike.
+    ///
+    /// Args:
+    ///     length (float): A year fraction off the reference date, in the
+    ///         surface's own day count.
+    ///     strike (float): The strike the volatility is read at.
+    ///     extrapolate (bool): Whether to answer outside the surface's grid.
+    ///
+    /// Returns:
+    ///     float: The flat cap volatility.
+    ///
+    /// Raises:
+    ///     ItofinError: If the query falls outside the grid and extrapolation
+    ///         is not allowed.
     #[pyo3(signature = (length, strike, extrapolate = false))]
     fn volatility_time(&self, length: f64, strike: f64, extrapolate: bool) -> PyResult<f64> {
         Ok(self
@@ -255,8 +393,8 @@ fn check_grid<T>(rows: &[Vec<T>]) -> PyResult<usize> {
     Ok(columns)
 }
 
-/// A `list[list[float]]` as a core [`Matrix`], one row per option tenor.
-fn matrix_from_rows(rows: &[Vec<f64>]) -> PyResult<Matrix> {
+/// A `list[list[float]]` as a core Matrix, one row per option tenor.
+pub(crate) fn matrix_from_rows(rows: &[Vec<f64>]) -> PyResult<Matrix> {
     let columns = check_grid(rows)?;
     let mut matrix = Matrix::with_size(rows.len(), columns);
     for (i, row) in rows.iter().enumerate() {

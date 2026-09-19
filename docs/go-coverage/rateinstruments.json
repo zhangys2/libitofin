@@ -1,0 +1,1458 @@
+{
+  "coverage_target": "committed Python stubs",
+  "domain": "rate-instruments-and-generic-cashflows",
+  "entries": [
+    {
+      "c": [
+        "itofin_vanilla_swap_new"
+      ],
+      "go": [
+        "Session.NewVanillaSwap"
+      ],
+      "python": "itofin.instruments.VanillaSwap",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.FairRate"
+      ],
+      "python": "itofin.instruments.VanillaSwap.fair_rate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.NPV"
+      ],
+      "python": "itofin.instruments.VanillaSwap.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.Nominal"
+      ],
+      "python": "itofin.instruments.VanillaSwap.nominal",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.FixedRate"
+      ],
+      "python": "itofin.instruments.VanillaSwap.fixed_rate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.Calculate"
+      ],
+      "python": "itofin.instruments.VanillaSwap.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.IsCalculated"
+      ],
+      "python": "itofin.instruments.VanillaSwap.is_calculated",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_results"
+      ],
+      "go": [
+        "VanillaSwap.Results"
+      ],
+      "python": "itofin.instruments.VanillaSwap.results",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_vanilla_swap_set_engine",
+        "itofin_swap_value"
+      ],
+      "go": [
+        "VanillaSwap.Price"
+      ],
+      "python": "itofin.instruments.VanillaSwap.price",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_ois"
+      ],
+      "go": [
+        "Session.MakeOis"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.FairRate"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.fair_rate",
+      "status": "implemented",
+      "tests": [
+        "unset_fixed_rate_fills_fair_rate_for_vanilla_and_ois"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.NPV"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.Nominal"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.nominal",
+      "status": "implemented",
+      "tests": [
+        "unset_fixed_rate_fills_fair_rate_for_vanilla_and_ois"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.FixedRate"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.fixed_rate",
+      "status": "implemented",
+      "tests": [
+        "unset_fixed_rate_fills_fair_rate_for_vanilla_and_ois"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.Calculate"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.calculate",
+      "status": "implemented",
+      "tests": [
+        "unset_fixed_rate_fills_fair_rate_for_vanilla_and_ois"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.IsCalculated"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.is_calculated",
+      "status": "implemented",
+      "tests": [
+        "unset_fixed_rate_fills_fair_rate_for_vanilla_and_ois"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_results"
+      ],
+      "go": [
+        "OvernightIndexedSwap.Results"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.results",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_value"
+      ],
+      "go": [
+        "OvernightIndexedSwap.Price"
+      ],
+      "python": "itofin.instruments.OvernightIndexedSwap.price",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_vanilla_swap_new"
+      ],
+      "go": [
+        "Session.NewVanillaSwap"
+      ],
+      "python": "itofin.instruments.VanillaSwap.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_vanilla_swap_set_engine"
+      ],
+      "go": [
+        "VanillaSwap.SetEngine"
+      ],
+      "python": "itofin.instruments.VanillaSwap.set_engine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_vanilla_swap"
+      ],
+      "go": [
+        "Session.MakeVanillaSwap"
+      ],
+      "python": "itofin.instruments.MakeVanillaSwap",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_vanilla_swap"
+      ],
+      "go": [
+        "Session.MakeVanillaSwap"
+      ],
+      "notes": "Go configuration struct and Session factory combine immutable configuration with native build.",
+      "python": "itofin.instruments.MakeVanillaSwap.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_vanilla_swap"
+      ],
+      "go": [
+        "Session.MakeVanillaSwap"
+      ],
+      "notes": "Go configuration struct and Session factory combine immutable configuration with native build.",
+      "python": "itofin.instruments.MakeVanillaSwap.build",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_ois"
+      ],
+      "go": [
+        "Session.MakeOis"
+      ],
+      "python": "itofin.instruments.MakeOis",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_ois"
+      ],
+      "go": [
+        "Session.MakeOis"
+      ],
+      "notes": "Go configuration struct and Session factory combine immutable configuration with native build.",
+      "python": "itofin.instruments.MakeOis.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_make_ois"
+      ],
+      "go": [
+        "Session.MakeOis"
+      ],
+      "notes": "Go configuration struct and Session factory combine immutable configuration with native build.",
+      "python": "itofin.instruments.MakeOis.build",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_new"
+      ],
+      "go": [
+        "Session.NewForwardRateAgreement"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_new"
+      ],
+      "go": [
+        "Session.NewForwardRateAgreement"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_new"
+      ],
+      "go": [
+        "FRAConfig.MaturityDate"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.with_maturity",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_value"
+      ],
+      "go": [
+        "ForwardRateAgreement.ForwardRate"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.forward_rate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_value"
+      ],
+      "go": [
+        "ForwardRateAgreement.Amount"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.amount",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_value"
+      ],
+      "go": [
+        "ForwardRateAgreement.NPV"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_date"
+      ],
+      "go": [
+        "ForwardRateAgreement.ValueDate"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.value_date",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_fra_date"
+      ],
+      "go": [
+        "ForwardRateAgreement.MaturityDate"
+      ],
+      "python": "itofin.instruments.ForwardRateAgreement.maturity_date",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [
+        "itofin_european_exercise_new"
+      ],
+      "go": [
+        "Session.NewEuropeanExercise"
+      ],
+      "python": "itofin.instruments.EuropeanExercise",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [
+        "itofin_european_exercise_new"
+      ],
+      "go": [
+        "Session.NewEuropeanExercise"
+      ],
+      "python": "itofin.instruments.EuropeanExercise.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swaption_new"
+      ],
+      "go": [
+        "Session.NewSwaption"
+      ],
+      "python": "itofin.instruments.Swaption",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swaption_new"
+      ],
+      "go": [
+        "Session.NewSwaption"
+      ],
+      "python": "itofin.instruments.Swaption.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "Swaption.NPV"
+      ],
+      "python": "itofin.instruments.Swaption.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "Swaption.Calculate"
+      ],
+      "python": "itofin.instruments.Swaption.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "Swaption.IsCalculated"
+      ],
+      "python": "itofin.instruments.Swaption.is_calculated",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_results"
+      ],
+      "go": [
+        "Swaption.Results"
+      ],
+      "python": "itofin.instruments.Swaption.results",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine",
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "Swaption.Price"
+      ],
+      "python": "itofin.instruments.Swaption.price",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine"
+      ],
+      "go": [
+        "Swaption.SetBlackEngine"
+      ],
+      "python": "itofin.instruments.Swaption.set_black_engine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_new"
+      ],
+      "go": [
+        "Session.NewCapFloor"
+      ],
+      "python": "itofin.instruments.CapFloor",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_new"
+      ],
+      "go": [
+        "Session.NewCapFloor"
+      ],
+      "python": "itofin.instruments.CapFloor.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "CapFloor.NPV"
+      ],
+      "python": "itofin.instruments.CapFloor.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "CapFloor.Calculate"
+      ],
+      "python": "itofin.instruments.CapFloor.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "CapFloor.IsCalculated"
+      ],
+      "python": "itofin.instruments.CapFloor.is_calculated",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_results"
+      ],
+      "go": [
+        "CapFloor.Results"
+      ],
+      "python": "itofin.instruments.CapFloor.results",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine",
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "CapFloor.Price"
+      ],
+      "python": "itofin.instruments.CapFloor.price",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine"
+      ],
+      "go": [
+        "CapFloor.SetBlackEngine"
+      ],
+      "python": "itofin.instruments.CapFloor.set_black_engine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine"
+      ],
+      "go": [
+        "Swaption.SetJamshidianEngine"
+      ],
+      "python": "itofin.instruments.Swaption.set_jamshidian_engine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_set_engine"
+      ],
+      "go": [
+        "Swaption.SetBachelierEngine"
+      ],
+      "python": "itofin.instruments.Swaption.set_bachelier_engine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_from_leg"
+      ],
+      "go": [
+        "Session.NewCap"
+      ],
+      "python": "itofin.instruments.CapFloor.cap",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_from_leg"
+      ],
+      "go": [
+        "Session.NewFloor"
+      ],
+      "python": "itofin.instruments.CapFloor.floor",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_from_leg"
+      ],
+      "go": [
+        "Session.NewCollar"
+      ],
+      "python": "itofin.instruments.CapFloor.collar",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_rates"
+      ],
+      "go": [
+        "CapFloor.CapRates"
+      ],
+      "python": "itofin.instruments.CapFloor.cap_rates",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_capfloor_rates"
+      ],
+      "go": [
+        "CapFloor.FloorRates"
+      ],
+      "python": "itofin.instruments.CapFloor.floor_rates",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_option_value"
+      ],
+      "go": [
+        "CapFloor.CouponCount"
+      ],
+      "python": "itofin.instruments.CapFloor.coupon_count",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackSwaptionEngine"
+      ],
+      "python": "itofin.pricingengines.BlackSwaptionEngine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackSwaptionEngine"
+      ],
+      "python": "itofin.pricingengines.BlackSwaptionEngine.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackSwaptionEngineFlat"
+      ],
+      "python": "itofin.pricingengines.BlackSwaptionEngine.with_flat_vol",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBachelierSwaptionEngine"
+      ],
+      "python": "itofin.pricingengines.BachelierSwaptionEngine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBachelierSwaptionEngine"
+      ],
+      "python": "itofin.pricingengines.BachelierSwaptionEngine.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBachelierSwaptionEngineFlat"
+      ],
+      "python": "itofin.pricingengines.BachelierSwaptionEngine.with_flat_vol",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackCapFloorEngine"
+      ],
+      "python": "itofin.pricingengines.BlackCapFloorEngine",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackCapFloorEngine"
+      ],
+      "python": "itofin.pricingengines.BlackCapFloorEngine.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_rate_engine_new"
+      ],
+      "go": [
+        "Session.NewBlackCapFloorEngineFlat"
+      ],
+      "python": "itofin.pricingengines.BlackCapFloorEngine.with_flat_vol",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [
+        "itofin_black_capfloor_displacement"
+      ],
+      "go": [
+        "BlackCapFloorEngine.Displacement"
+      ],
+      "python": "itofin.pricingengines.BlackCapFloorEngine.displacement",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_new"
+      ],
+      "go": [
+        "Session.NewSwapIndex"
+      ],
+      "python": "itofin.indexes.SwapIndex",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_new"
+      ],
+      "go": [
+        "Session.NewSwapIndex"
+      ],
+      "python": "itofin.indexes.SwapIndex.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_new"
+      ],
+      "go": [
+        "SwapIndexConfig.Discount"
+      ],
+      "python": "itofin.indexes.SwapIndex.with_exogenous_discount",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_fixing"
+      ],
+      "go": [
+        "SwapIndex.Fixing"
+      ],
+      "python": "itofin.indexes.SwapIndex.fixing",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_currency"
+      ],
+      "go": [
+        "SwapIndex.Currency"
+      ],
+      "python": "itofin.indexes.SwapIndex.currency",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_details"
+      ],
+      "go": [
+        "SwapIndex.FixedLegTenor"
+      ],
+      "python": "itofin.indexes.SwapIndex.fixed_leg_tenor",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_swap_index_details"
+      ],
+      "go": [
+        "SwapIndex.ExogenousDiscount"
+      ],
+      "python": "itofin.indexes.SwapIndex.exogenous_discount",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_new"
+      ],
+      "go": [
+        "Session.NewIborLeg"
+      ],
+      "python": "itofin.cashflows.IborLeg",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_new"
+      ],
+      "go": [
+        "Session.NewIborLeg"
+      ],
+      "python": "itofin.cashflows.IborLeg.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_with"
+      ],
+      "go": [
+        "IborLeg.WithNotional"
+      ],
+      "python": "itofin.cashflows.IborLeg.with_notional",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_with"
+      ],
+      "go": [
+        "IborLeg.WithPaymentDayCounter"
+      ],
+      "python": "itofin.cashflows.IborLeg.with_payment_day_counter",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_with"
+      ],
+      "go": [
+        "IborLeg.WithPaymentAdjustment"
+      ],
+      "python": "itofin.cashflows.IborLeg.with_payment_adjustment",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_with"
+      ],
+      "go": [
+        "IborLeg.WithFixingDays"
+      ],
+      "python": "itofin.cashflows.IborLeg.with_fixing_days",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_count"
+      ],
+      "go": [
+        "IborLeg.CouponCount"
+      ],
+      "python": "itofin.cashflows.IborLeg.coupon_count",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_ibor_leg_build"
+      ],
+      "go": [
+        "IborLeg.Build"
+      ],
+      "python": "itofin.cashflows.Leg",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_leg_count"
+      ],
+      "go": [
+        "Leg.Len"
+      ],
+      "python": "itofin.cashflows.Leg.__len__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_leg_item"
+      ],
+      "go": [
+        "Leg.At"
+      ],
+      "python": "itofin.cashflows.Leg.__getitem__",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_leg_item"
+      ],
+      "go": [
+        "Leg.At"
+      ],
+      "python": "itofin.cashflows.CashFlow",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_cashflow_amount"
+      ],
+      "go": [
+        "CashFlow.Amount"
+      ],
+      "python": "itofin.cashflows.CashFlow.amount",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_cashflow_date"
+      ],
+      "go": [
+        "CashFlow.Date"
+      ],
+      "python": "itofin.cashflows.CashFlow.date",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [
+        "itofin_leg_npv"
+      ],
+      "go": [
+        "Leg.NPV"
+      ],
+      "python": "itofin.cashflows.npv",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SwapPayer",
+        "SwapReceiver"
+      ],
+      "python": "itofin.instruments.SwapType",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PositionLong",
+        "PositionShort"
+      ],
+      "python": "itofin.instruments.Position",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SettlementPhysical",
+        "SettlementCash"
+      ],
+      "python": "itofin.instruments.SettlementType",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PhysicalOTC",
+        "PhysicalCleared",
+        "CollateralizedCashPrice",
+        "ParYieldCurve"
+      ],
+      "python": "itofin.instruments.SettlementMethod",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "CapType",
+        "FloorType",
+        "CollarType"
+      ],
+      "python": "itofin.instruments.CapFloorType",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "AnnuitySwapRate",
+        "AnnuityDiscountCurve"
+      ],
+      "python": "itofin.pricingengines.CashAnnuityModel",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "CapType"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.CapFloorType.Cap",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "CollarType"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.CapFloorType.Collar",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "FloorType"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.CapFloorType.Floor",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCapFloorLegsAndSwapIndex"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PositionLong"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.Position.Long",
+      "status": "implemented",
+      "tests": [
+        "TestRatesParSwapsAndFRA"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PositionShort"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.Position.Short",
+      "status": "implemented",
+      "tests": [
+        "par_forward_rate_amount_and_npv_match_the_closed_form"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PhysicalOTC"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementMethod.PhysicalOTC",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "PhysicalCleared"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementMethod.PhysicalCleared",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "CollateralizedCashPrice"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementMethod.CollateralizedCashPrice",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "ParYieldCurve"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementMethod.ParYieldCurve",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SettlementPhysical"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementType.Physical",
+      "status": "implemented",
+      "tests": [
+        "TestRatesSwaptionCachedValue"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SettlementCash"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SettlementType.Cash",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SwapPayer"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SwapType.Payer",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "SwapReceiver"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.instruments.SwapType.Receiver",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "AnnuitySwapRate"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.pricingengines.CashAnnuityModel.SwapRate",
+      "status": "implemented",
+      "tests": [
+        "TestRatesEngineFactoriesAndAtomicPrice"
+      ]
+    },
+    {
+      "c": [],
+      "go": [
+        "AnnuityDiscountCurve"
+      ],
+      "notes": "Typed Go enum value; C boundary validates the corresponding integer selector.",
+      "python": "itofin.pricingengines.CashAnnuityModel.DiscountCurve",
+      "status": "implemented",
+      "tests": [
+        "TestRatesCompletionSwaptionSettlementAndReceiver"
+      ]
+    }
+  ],
+  "notes": [
+    "Python fluent builder configuration is expressed as Go config structs and Session build methods.",
+    "Enums cross C as checked integer selectors; Go exposes typed constants.",
+    "No private consumer source or fixtures included.",
+    "Numerical gates include QuantLib cached swaption values at 1e-12, closed-form FRA, par swap/OIS, and cap-floor-collar identity.",
+    "Empty tests lists explicitly indicate a missing dedicated wrapper test."
+  ]
+}

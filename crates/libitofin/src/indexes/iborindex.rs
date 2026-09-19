@@ -31,8 +31,25 @@ use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::period::Period;
 use crate::time::timeunit::TimeUnit;
-use crate::types::{Natural, Rate, Time};
+use crate::types::{Integer, Natural, Rate, Time};
 use crate::{currency::Currency, require};
+
+/// Which calendar the fixing and value rolls advance on.
+///
+/// C++ splits the two shapes across subclasses: `Libor::valueDate` advances on
+/// the fixing calendar (`libor.cpp:98`), while `CustomIborIndex` advances on a
+/// separate value calendar and pulls the fixing date `Preceding` back onto the
+/// fixing calendar (`custom.cpp:23-36`). Carrying the choice as data keeps the
+/// roll dispatching through every site holding a concrete [`IborIndex`], where
+/// a newtype override would be bypassed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CalendarRollRule {
+    /// Advance on the fixing calendar: plain [`IborIndex`] and `Libor`.
+    SingleCalendar,
+    /// Advance on the value calendar, then adjust the fixing date `Preceding`
+    /// on the fixing calendar: `CustomIborIndex` and `EURLibor`.
+    SeparateCalendars,
+}
 
 /// A concrete Inter-Bank-Offered-Rate index (e.g. Libor, Euribor).
 ///
@@ -41,18 +58,29 @@ use crate::{currency::Currency, require};
 /// handle, exactly as the C++ default `Handle<YieldTermStructure> h = {}`
 /// allows; a fixing forecast on an empty handle is an error, not a panic (D4).
 ///
-/// Libor-family indexes additionally carry a financial-centre calendar and a
-/// joint (UK Exchange ∪ centre) calendar that override
-/// [`value_date`](InterestRateIndex::value_date) /
-/// [`maturity_date`](InterestRateIndex::maturity_date)
-/// (`ql/indexes/ibor/libor.cpp`).
+/// The value and maturity calendars carry the C++ `Libor` subclass's joint
+/// date roll (`libor.cpp:86-113`) as data rather than as a subtype: both
+/// default to the fixing calendar (making the rolls byte-identical to the
+/// single-calendar index), and the Libor constructor points the maturity
+/// calendar at the UK-plus-financial-center joint calendar. Folding the
+/// calendars in keeps the roll dispatching through every site holding a
+/// concrete `IborIndex` (`makevanillaswap.rs:440`), where a newtype override
+/// would be bypassed.
+///
+/// The internal `CalendarRollRule` extends that fold to the
+/// `CustomIborIndex` three-calendar roll (`custom.cpp:23-41`): it selects
+/// which of the two calendars the fixing and value advances run on, and
+/// [`with_separate_calendars`](Self::with_separate_calendars) is the only way
+/// to leave the single-calendar default, so a Libor-style calendar assignment
+/// cannot flip it by accident.
 pub struct IborIndex {
     base: InterestRateIndexBase,
     convention: BusinessDayConvention,
     end_of_month: bool,
     term_structure: Handle<dyn YieldTermStructure>,
-    financial_center_calendar: Option<Calendar>,
-    joint_calendar: Option<Calendar>,
+    value_calendar: Calendar,
+    maturity_calendar: Calendar,
+    roll_rule: CalendarRollRule,
 }
 
 impl IborIndex {
@@ -75,71 +103,8 @@ impl IborIndex {
         forwarding: Handle<dyn YieldTermStructure>,
         settings: Shared<Settings<Date>>,
     ) -> IborIndex {
-        Self::new_inner(
-            family_name,
-            tenor,
-            settlement_days,
-            currency,
-            fixing_calendar,
-            convention,
-            end_of_month,
-            day_counter,
-            forwarding,
-            settings,
-            None,
-            None,
-        )
-    }
-
-    /// Libor-family constructor: same as [`new`](Self::new) plus the financial-
-    /// centre and joint calendars that drive Libor's value/maturity dates
-    /// (`libor.cpp:59-79`).
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_joint_calendars(
-        family_name: String,
-        tenor: Period,
-        settlement_days: Natural,
-        currency: Currency,
-        fixing_calendar: Calendar,
-        financial_center_calendar: Calendar,
-        joint_calendar: Calendar,
-        convention: BusinessDayConvention,
-        end_of_month: bool,
-        day_counter: DayCounter,
-        forwarding: Handle<dyn YieldTermStructure>,
-        settings: Shared<Settings<Date>>,
-    ) -> IborIndex {
-        Self::new_inner(
-            family_name,
-            tenor,
-            settlement_days,
-            currency,
-            fixing_calendar,
-            convention,
-            end_of_month,
-            day_counter,
-            forwarding,
-            settings,
-            Some(financial_center_calendar),
-            Some(joint_calendar),
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn new_inner(
-        family_name: String,
-        tenor: Period,
-        settlement_days: Natural,
-        currency: Currency,
-        fixing_calendar: Calendar,
-        convention: BusinessDayConvention,
-        end_of_month: bool,
-        day_counter: DayCounter,
-        forwarding: Handle<dyn YieldTermStructure>,
-        settings: Shared<Settings<Date>>,
-        financial_center_calendar: Option<Calendar>,
-        joint_calendar: Option<Calendar>,
-    ) -> IborIndex {
+        let value_calendar = fixing_calendar.clone();
+        let maturity_calendar = fixing_calendar.clone();
         let base = InterestRateIndexBase::new(
             family_name,
             tenor,
@@ -155,20 +120,32 @@ impl IborIndex {
             convention,
             end_of_month,
             term_structure: forwarding,
-            financial_center_calendar,
-            joint_calendar,
+            value_calendar,
+            maturity_calendar,
+            roll_rule: CalendarRollRule::SingleCalendar,
         }
     }
 
-    /// The Libor financial-centre calendar, when this index was built as a
-    /// Libor-family joint-calendar index.
-    pub fn financial_center_calendar(&self) -> Option<&Calendar> {
-        self.financial_center_calendar.as_ref()
-    }
-
-    /// The Libor joint calendar (UK Exchange ∪ financial centre), when set.
-    pub fn joint_calendar(&self) -> Option<&Calendar> {
-        self.joint_calendar.as_ref()
+    /// Points the value and maturity rolls at their own calendars and switches
+    /// the index to the `CustomIborIndex` three-calendar roll
+    /// (`custom.cpp:23-41`).
+    ///
+    /// The fixing calendar stays the one the constructor took, so the result
+    /// carries the C++ subclass's whole configuration as data. The
+    /// `Libor` constructor deliberately does not use this: `Libor::valueDate`
+    /// advances on the fixing calendar (`libor.cpp:98`), so it points the two
+    /// calendars with the crate-internal `set_value_calendar` /
+    /// `set_maturity_calendar` and keeps the single-calendar rule.
+    #[must_use]
+    pub fn with_separate_calendars(
+        mut self,
+        value_calendar: Calendar,
+        maturity_calendar: Calendar,
+    ) -> IborIndex {
+        self.value_calendar = value_calendar;
+        self.maturity_calendar = maturity_calendar;
+        self.roll_rule = CalendarRollRule::SeparateCalendars;
+        self
     }
 
     /// The convention applied when rolling the value date to maturity.
@@ -186,6 +163,28 @@ impl IborIndex {
         &self.term_structure
     }
 
+    /// The calendar value dates are computed on (the fixing calendar unless a
+    /// Libor-style constructor pointed it elsewhere).
+    pub fn value_calendar(&self) -> Calendar {
+        self.value_calendar.clone()
+    }
+
+    /// The calendar maturity dates are advanced on (the fixing calendar unless
+    /// a Libor-style constructor pointed it at a joint calendar).
+    pub fn maturity_calendar(&self) -> Calendar {
+        self.maturity_calendar.clone()
+    }
+
+    /// Points the value roll at `calendar` (used by the Libor constructor).
+    pub(crate) fn set_value_calendar(&mut self, calendar: Calendar) {
+        self.value_calendar = calendar;
+    }
+
+    /// Points the maturity roll at `calendar` (used by the Libor constructor).
+    pub(crate) fn set_maturity_calendar(&mut self, calendar: Calendar) {
+        self.maturity_calendar = calendar;
+    }
+
     /// Rebuilds this index onto a different forwarding curve, copying every
     /// other configuration field verbatim (`clone`, `iborindex.cpp:85-93`).
     ///
@@ -196,37 +195,22 @@ impl IborIndex {
     /// [`Settings`], so it shares the original's fixing history (keyed on name)
     /// and evaluation date.
     pub fn clone_with(&self, forwarding: Handle<dyn YieldTermStructure>) -> IborIndex {
-        match (
-            self.financial_center_calendar.clone(),
-            self.joint_calendar.clone(),
-        ) {
-            (Some(financial), Some(joint)) => IborIndex::new_with_joint_calendars(
-                self.family_name().to_string(),
-                self.tenor(),
-                self.fixing_days(),
-                self.currency().clone(),
-                self.fixing_calendar(),
-                financial,
-                joint,
-                self.convention,
-                self.end_of_month,
-                self.day_counter().clone(),
-                forwarding,
-                self.base.settings().clone(),
-            ),
-            _ => IborIndex::new(
-                self.family_name().to_string(),
-                self.tenor(),
-                self.fixing_days(),
-                self.currency().clone(),
-                self.fixing_calendar(),
-                self.convention,
-                self.end_of_month,
-                self.day_counter().clone(),
-                forwarding,
-                self.base.settings().clone(),
-            ),
-        }
+        let mut clone = IborIndex::new(
+            self.family_name().to_string(),
+            self.tenor(),
+            self.fixing_days(),
+            self.currency().clone(),
+            self.fixing_calendar(),
+            self.convention,
+            self.end_of_month,
+            self.day_counter().clone(),
+            forwarding,
+            self.base.settings().clone(),
+        );
+        clone.value_calendar = self.value_calendar.clone();
+        clone.maturity_calendar = self.maturity_calendar.clone();
+        clone.roll_rule = self.roll_rule;
+        clone
     }
 
     /// The simple forward rate over `[d1, d2]` with year fraction `t`, read off
@@ -256,43 +240,72 @@ impl InterestRateIndex for IborIndex {
         &self.base
     }
 
-    /// Libor: joint-calendar advance (`libor.cpp:103-114`); otherwise the
-    /// fixing-calendar advance.
-    fn maturity_date(&self, value_date: Date) -> QlResult<Date> {
-        let calendar = self
-            .joint_calendar
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| self.fixing_calendar());
-        Ok(
-            calendar.advance_by_period(
+    /// The fixing date for `value_date`, rolled by the index's calendar rule.
+    ///
+    /// The single-calendar rule reproduces the trait default: back
+    /// `fixing_days` business days on the fixing calendar. The
+    /// separate-calendar rule is `CustomIborIndex::fixingDate`
+    /// (`custom.cpp:23-27`): back on the value calendar, then a `Preceding`
+    /// adjust onto the fixing calendar.
+    fn fixing_date(&self, value_date: Date) -> Date {
+        let days = -(self.fixing_days() as Integer);
+        match self.roll_rule {
+            CalendarRollRule::SingleCalendar => self.fixing_calendar().advance(
                 value_date,
-                self.tenor(),
-                self.convention,
-                self.end_of_month,
+                days,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false,
             ),
-        )
+            CalendarRollRule::SeparateCalendars => {
+                let d = self.value_calendar.advance(
+                    value_date,
+                    days,
+                    TimeUnit::Days,
+                    BusinessDayConvention::Following,
+                    false,
+                );
+                self.fixing_calendar()
+                    .adjust(d, BusinessDayConvention::Preceding)
+            }
+        }
     }
 
-    /// Libor: London advance then joint adjust (`libor.cpp:82-96`); otherwise
-    /// the default fixing-calendar advance.
+    /// The value date rolled as `Libor::valueDate` (`libor.cpp:86-100`) or, on
+    /// the separate-calendar rule, as `CustomIborIndex::valueDate`
+    /// (`custom.cpp:29-36`): the advance runs on
+    /// the fixing calendar under the single-calendar rule and on the value
+    /// calendar under the separate-calendar one, and both then adjust on the
+    /// maturity calendar. With the default calendars the adjust lands on the
+    /// business day the advance produced, reducing to the trait default.
     fn value_date(&self, fixing_date: Date) -> QlResult<Date> {
         require!(
             self.is_valid_fixing_date(fixing_date),
             "{fixing_date:?} is not a valid fixing date"
         );
-        let d = self.fixing_calendar().advance(
+        let advance_calendar = match self.roll_rule {
+            CalendarRollRule::SingleCalendar => self.fixing_calendar(),
+            CalendarRollRule::SeparateCalendars => self.value_calendar.clone(),
+        };
+        let d = advance_calendar.advance(
             fixing_date,
-            self.fixing_days() as crate::types::Integer,
+            self.fixing_days() as Integer,
             TimeUnit::Days,
             BusinessDayConvention::Following,
             false,
         );
-        if let Some(joint) = &self.joint_calendar {
-            Ok(joint.adjust(d, BusinessDayConvention::Following))
-        } else {
-            Ok(d)
-        }
+        Ok(self
+            .maturity_calendar
+            .adjust(d, BusinessDayConvention::Following))
+    }
+
+    fn maturity_date(&self, value_date: Date) -> QlResult<Date> {
+        Ok(self.maturity_calendar.advance_by_period(
+            value_date,
+            self.tenor(),
+            self.convention,
+            self.end_of_month,
+        ))
     }
 
     fn forecast_fixing(&self, fixing_date: Date) -> QlResult<Rate> {
@@ -417,12 +430,11 @@ impl InterestRateIndex for OvernightIndex {
 mod tests {
     //! Oracles for the plain single-calendar `IborIndex`.
     //!
-    //! `indexes.cpp testCustomIborIndex` (:152) exercises `CustomIborIndex`, a
-    //! three-calendar variant (separate fixing/value/maturity calendars) that is
-    //! not ported here; its hard-coded bespoke-holiday date assertions (e.g.
-    //! `valueDate(7 Jan 2025) == 9 Jan 2025`) apply when that subclass lands.
-    //! Plain `IborIndex` has one calendar, so these tests cover only the
-    //! single-calendar subset.
+    //! `indexes.cpp testCustomIborIndex` (:152) exercises `CustomIborIndex`, the
+    //! three-calendar variant ported in
+    //! [`ibor::custom`](crate::indexes::ibor::custom), whose tests carry that
+    //! oracle's date assertions. Plain `IborIndex` has one calendar, so these
+    //! tests cover only the single-calendar subset.
 
     use super::*;
     use crate::handle::RelinkableHandle;
@@ -430,6 +442,7 @@ mod tests {
     use crate::patterns::observable::Observer;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
+    use crate::time::calendars::bespokecalendar::BespokeCalendar;
     use crate::time::calendars::target::Target;
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
@@ -462,6 +475,67 @@ mod tests {
             forwarding,
             settings,
         )
+    }
+
+    /// A three-month index on `fixing_calendar`, the shape the roll-rule teeth
+    /// point at three bespoke calendars.
+    fn bespoke_ibor(fixing_calendar: Calendar) -> IborIndex {
+        IborIndex::new(
+            "bespoke".into(),
+            Period::new(3, TimeUnit::Months),
+            2,
+            Currency::new("", "", 0, "", "", 0),
+            fixing_calendar,
+            BusinessDayConvention::ModifiedFollowing,
+            true,
+            Actual360::new(),
+            Handle::empty(),
+            shared(Settings::<Date>::new()),
+        )
+    }
+
+    /// The roll-rule teeth: no single C++ test discriminates the two subclass
+    /// bodies against each other, so this pits them on one fixture. Two
+    /// [`BespokeCalendar`]s (no weekends, so the placed holiday is the only
+    /// variable) differ on Saturday 11 January 2025 alone, which sits inside
+    /// the two-day settlement window off the 10th and the 13th.
+    ///
+    /// The single-calendar index points its value calendar at that holiday
+    /// calendar too, so only the rule - not the stored calendars - can move
+    /// the dates: it must roll 10 -> 12 January and 13 -> 11 January, ignoring
+    /// the value calendar entirely, where the separate-calendar rule rolls
+    /// through the holiday to 13 and 10 January.
+    #[test]
+    fn the_roll_rule_selects_the_calendar_the_advances_run_on() {
+        let fix_cal = BespokeCalendar::new("Fixings").calendar();
+        let val_cal = BespokeCalendar::new("Value").calendar();
+        val_cal.add_holiday(Date::new(11, Month::January, 2025));
+        let mat_cal = BespokeCalendar::new("Maturity").calendar();
+
+        let mut single = bespoke_ibor(fix_cal.clone());
+        single.set_value_calendar(val_cal.clone());
+        single.set_maturity_calendar(mat_cal.clone());
+        let separate = bespoke_ibor(fix_cal).with_separate_calendars(val_cal, mat_cal);
+
+        let fixing = Date::new(10, Month::January, 2025);
+        assert_eq!(
+            single.value_date(fixing).unwrap(),
+            Date::new(12, Month::January, 2025)
+        );
+        assert_eq!(
+            separate.value_date(fixing).unwrap(),
+            Date::new(13, Month::January, 2025)
+        );
+
+        let value = Date::new(13, Month::January, 2025);
+        assert_eq!(
+            single.fixing_date(value),
+            Date::new(11, Month::January, 2025)
+        );
+        assert_eq!(
+            separate.fixing_date(value),
+            Date::new(10, Month::January, 2025)
+        );
     }
 
     fn flat_curve(reference: Date, rate: Rate) -> Handle<dyn YieldTermStructure> {

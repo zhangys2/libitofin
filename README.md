@@ -6,501 +6,59 @@
 [![Python](https://img.shields.io/pypi/pyversions/itofin)](https://pypi.org/project/itofin/)
 [![License: BSD-3-Clause](https://img.shields.io/crates/l/libitofin)](LICENSE)
 
-A ground-up port of [QuantLib](https://github.com/lballabio/QuantLib) — the
-quantitative-finance library — into idiomatic, memory-safe Rust. The deliverable
-is a core library, **`libitofin`**, with thin language bindings on top (Python
-first, then a C ABI for everything else).
+A Rust port of [QuantLib](https://github.com/lballabio/QuantLib) for pricing,
+risk, and numerical methods, with Python and Go bindings over the same core.
+Pre-1.0: APIs may change. See [status and scope](wiki/status.md) and the
+[release history](https://github.com/benbenbang/libitofin/releases).
 
-> The name nods to [Kiyosi Itô](https://en.wikipedia.org/wiki/Kiyosi_It%C5%8D),
-> whose stochastic calculus underpins modern derivatives pricing.
+## Install
 
-> ⚠️ **Pre-1.0, under active development.** The core already prices European
-> options, Hull-White swaptions (with model calibration), and Heston options
-> end-to-end, but the API will change until 1.0 and parts of the pricing surface
-> are still being filled in. The **Python bindings** (`itofin`) are published on
-> [PyPI](https://pypi.org/project/itofin/); a C ABI is planned. See
-> [Status](#status).
+### Rust
 
 ```sh
 cargo add libitofin
 ```
 
-```rust
-use libitofin::time::Date;
-// dates, calendars, day counters, curves, vol surfaces, quotes, indexes,
-// cashflows, swaps/swaptions, short-rate + Heston models with calibration,
-// and analytic option engines are available today - see docs.rs.
-```
+[Rust guide and examples](wiki/rust.md) · [API reference](https://docs.rs/libitofin)
 
 ### Python
 
-The same engine is reachable from Python via [`itofin`](https://pypi.org/project/itofin/)
-(Python 3.13+). The API mirrors QuantLib's `ql/` layout: types live in submodules
-(`itofin.time`, `itofin.instruments`, `itofin.processes`, ...), while `Settings`
-and `ItofinError` stay at the top level. Real market data is first-class - yield
-curves (bootstrapped from a deposit/swap strip via `PiecewiseYieldCurve`, or
-interpolated), Black-vol surfaces, swaption vol cubes (matrix, interpolated, or
-SABR-calibrated), and cap/floor optionlet-vol stripping - so you price against a
-market snapshot, not just flat inputs. Type stubs ship in the wheel, so editors
-and `mypy` see the full API.
+Requires Python 3.10 or newer.
 
 ```sh
 pip install itofin
 ```
 
-```python
-from itofin import Settings
-from itofin.instruments import OptionType, VanillaOption
-from itofin.processes import BlackScholesProcess
-from itofin.time import Date, DayCounter
+[Python guide and examples](wiki/python.md) · [API reference](https://benbenbang.github.io/libitofin/api/core/)
 
-s = Settings()
-s.set_evaluation_date(Date(15, 6, 2026))
-dc = DayCounter.actual360()
+### Go
 
-process = BlackScholesProcess(60.0, 0.08, 0.0, 0.30, Date(15, 6, 2026), dc)
-option = VanillaOption(OptionType.Call, 65.0, Date(15, 6, 2026) + 90, s)
-option.set_engine(process)
-
-print(f"NPV   {option.npv():.10f}")   # 2.1333684449
-print(f"delta {option.delta():.10f}")  # 0.3724827980
-```
-
-…or build a real vol surface (strike x expiry) and query it:
-
-```python
-from itofin.termstructures import BlackVarianceSurface
-from itofin.time import Date, DayCounter
-
-ref = Date(15, 6, 2026)
-vols = BlackVarianceSurface(
-    ref,
-    [ref + 365, ref + 730],   # expiries
-    [90.0, 100.0, 110.0],     # strikes
-    [[0.20, 0.25],            # one row per strike,
-     [0.18, 0.22],            # one column per expiry
-     [0.16, 0.20]],
-    DayCounter.actual365_fixed(),
-)
-print(f"{vols.black_vol(1.0, 100.0):.2f}")  # 0.18
-```
-
-…or query a swaption vol surface - here the ATM matrix; `InterpolatedSwaptionVolatilityCube`
-and the SABR-calibrated `SabrSwaptionVolatilityCube` add the strike dimension, and
-`pricingengines.BlackSwaptionEngine` (via `Swaption.set_black_engine`) prices a
-swaption straight off any of them:
-
-```python
-from itofin import Settings
-from itofin.termstructures import SwaptionVolatilityMatrix, VolatilityType
-from itofin.time import Date, Period, Calendar, DayCounter, BusinessDayConvention
-
-s = Settings()
-s.set_evaluation_date(Date(15, 6, 2026))
-opt = [Period(1, "Years"), Period(5, "Years")]   # option tenors (rows)
-swp = [Period(1, "Years"), Period(5, "Years")]   # swap tenors (columns)
-vols = [[0.20, 0.18],
-        [0.17, 0.16]]
-
-svol = SwaptionVolatilityMatrix(
-    Date(15, 6, 2026), Calendar.target(), BusinessDayConvention.Following,
-    opt, swp, vols, DayCounter.actual365_fixed(), VolatilityType.ShiftedLognormal,
-)
-print(f"{svol.volatility(Period(1, 'Years'), Period(5, 'Years'), 0.03):.4f}")  # 0.1800 (node)
-print(f"{svol.volatility(Period(3, 'Years'), Period(3, 'Years'), 0.03):.4f}")  # 0.1775 (bilinear)
-```
-
-## Why
-
-QuantLib is ~470k lines of mature, battle-tested C++ across 16 modules. This
-project re-expresses that core in safe, idiomatic Rust:
-
-- **Memory-safe by construction** — no manual `shared_ptr` cycles or
-  use-after-free. The core is single-threaded-mutable during setup, then frozen
-  into immutable snapshots; data-race-free parallel compute via `rayon` is the
-  planned snapshot-and-fan-out model (not yet wired into the core crate).
-- **A clean FFI story** — a single core crate with Python (PyO3) bindings
-  shipped today and a growing C-ABI (`cbindgen`) surface, so the same engine is
-  reachable from Python, C, C++, Julia, R, and more.
-- **Faithful numerics** — QuantLib's `test-suite/` (186 `.cpp` files) is the
-  porting oracle: a feature is "done" only when the matching tests are ported and
-  the Rust output matches the C++ numbers within tolerance.
-- **Usability at the edges** — where C++ leans on runtime casts, silent
-  fallbacks, or clock magic, the core prefers compile-time typing and explicit
-  errors; ergonomic conveniences live in the binding crates.
-
-## Status
-
-The port proceeds **bottom-up** through dependency layers L0→L11; each layer
-depends only on lower-numbered layers. The live backlog is the
-[GitHub Project board](https://github.com/users/benbenbang/projects/5) and the
-repository's issues (the board is the source of truth, not a checked-in file).
-
-| Layer | Epic | Scope | State |
-|------|------|-------|-------|
-| **L0** | core | types, errors, patterns, settings, handle, utilities | ✅ done |
-| **L1** | math | array/matrix, distributions, interpolation, integrals, solvers, optimization, statistics, RNG, ODE, copulas, decompositions | ✅ done |
-| **L2** | time | `Date`, `Period`, `Calendar`, `DayCounter`, `Schedule`, IMM/ASX/ECB | ✅ done |
-| **L3** | quotes | `Quote`, `SimpleQuote`, derived quotes, `InterestRate`, compounding | ✅ done |
-| **L4** | term structures | interpolated yield curves, Black-vol curves/surfaces, local vol, swaption vol surfaces (matrix / interpolated / SABR cube), cap-floor term-vol surfaces + optionlet stripping | ✅ done |
-| **L5** | processes | multi-factor `StochasticProcess` / `StochasticProcess1D`, Black-Scholes, Heston (analytic surface), Ornstein-Uhlenbeck, correlated process array | 🚧 in progress |
-| **L6** | indexes | `InterestRateIndex`, Ibor family (Euribor / Eonia / €STR / SOFR), `SwapIndex` | 🚧 in progress |
-| **L7** | cashflows | fixed / floating / Ibor / overnight coupons and legs, coupon pricers, duration, capped-floored coupons | 🚧 in progress |
-| **L8** | instruments | fixed-rate bonds, vanilla / OIS swaps, swaptions, caps & floors, vanilla options | 🚧 in progress |
-| **L9** | methods | lattices, trees (trinomial + Hull-White), Monte Carlo (path generators + antithetic), one-dimensional European vanilla finite differences | 🚧 in progress |
-| **L10** | models | `CalibratedModel` + `calibrate()`, short-rate (Vasicek, CIR, Hull-White), Heston, calibration helpers | ✅ core coverage |
-| **L11** | engines | analytic European & Heston (Fourier), swaption (Black / Bachelier / Jamshidian), discounting swap / bond, Black cap/floor | ✅ core coverage |
-
-**Milestone 1 (done):** a European option prices end-to-end — quote → flat
-yield/vol curves → generalized Black-Scholes process → analytic engine → lazy
-instrument greeks — matching QuantLib's `europeanoption.cpp` value and greeks to
-double-rounding precision, with the full observer/invalidation graph exercised.
-
-Verified end-to-end since then, each against the matching `test-suite/` oracle:
-
-- **Hull-White calibration** — a Hull-White model calibrates to a swaption strip
-  (Jamshidian decomposition + Levenberg-Marquardt), reproducing
-  `shortratemodels.cpp`'s cached mean-reversion and volatility.
-- **Heston analytic + calibration** — the Fourier `AnalyticHestonEngine` prices
-  European options to `hestonmodel.cpp`'s cached values, and a Heston model
-  calibrates to a DAX volatility surface (reproducing the reference SSE).
-
-### What's usable today
-
-- **`types` / `errors`** — QuantLib's numeric aliases and `QlError` / `QlResult`
-  with `fail!` / `require!` macros (the analogue of `QL_FAIL` / `QL_REQUIRE`).
-- **`patterns` / `handle` / `settings`** — the observer/observable graph,
-  `LazyObject`, `Handle` / `RelinkableHandle`, and the evaluation-date context.
-- **`math`** — arrays and matrices (with SVD/QR/Cholesky/…), the distribution
-  family, interpolation (linear → bicubic), integrals (incl. Gauss quadratures),
-  1-D solvers, optimizers, statistics, RNGs (MT/Sobol/…), ODEs, copulas.
-- **`time`** — dates, periods, 50+ calendars, day counters, schedules, IMM/ASX/ECB.
-- **`quotes` / `interestrate`** — simple and derived quotes, interest-rate and
-  compounding conversions.
-- **`termstructures`** — flat and interpolated yield curves (zero/discount/
-  forward), implied and spreaded curves, Black-variance curves/surfaces, local vol,
-  swaption vol surfaces (matrix / interpolated / SABR cube) and cap-floor term-vol
-  surfaces with optionlet stripping (SABR smile sections + calibrated interpolation).
-- **`indexes`** — `InterestRateIndex`, the Ibor family (Euribor / Eonia / €STR /
-  SOFR) and `SwapIndex`, with fixings threaded through `Settings` (D11).
-- **`cashflows`** — fixed, floating, Ibor and overnight coupons and legs, coupon
-  pricers, duration, and capped-floored coupons.
-- **`processes`** — the multi-factor `StochasticProcess` base, generalized
-  Black-Scholes, Heston (analytic surface), Ornstein-Uhlenbeck, and a correlated
-  process array.
-- **`models`** — `CalibratedModel` with `calibrate()`, the short-rate family
-  (Vasicek, CIR, Hull-White), the Heston model, and calibration helpers
-  (swaption, Heston).
-- **`instruments` / `pricingengines`** — vanilla payoffs and exercise,
-  `EuropeanOption`, fixed-rate bonds, vanilla / OIS swaps, swaptions, caps &
-  floors; the analytic European and Heston (Fourier) engines, the swaption
-  engines (Black / Bachelier / Jamshidian), and discounting swap / bond engines.
-
-## Getting started (development)
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for PR size, commit style, and oracle
-expectations. Requires the toolchain pinned in
-[`rust-toolchain.toml`](rust-toolchain.toml) (Rust 1.96.0, edition 2024); plain
-`cargo` picks it up automatically.
-
-### Rust
+Requires Go 1.27.1, cgo, a C compiler, and the matching native release package.
+Follow the [native installation guide](https://benbenbang.github.io/libitofin/go/#install-in-an-application)
+first, then add the matching module version:
 
 ```sh
-cargo build                          # whole workspace
-cargo build -p libitofin             # core crate only
-
-cargo test                           # the porting oracle
-cargo test -p libitofin patterns::   # one module
-
-cargo fmt
-cargo clippy --all-targets -- -D warnings
+go get github.com/benbenbang/libitofin/sdk/go@v0.23.0
 ```
 
-A [`pre-commit`](https://pre-commit.com/) config runs `fmt`, `check`, `clippy`,
-`test`, and conventional-commit linting on every commit:
+Use `-tags itofin_external` for builds, runs, tests, and vet outside this checkout.
+[Go guide and examples](wiki/go.md) · [API reference](https://pkg.go.dev/github.com/benbenbang/libitofin/sdk/go)
 
-```sh
-pre-commit install
-pre-commit run --all-files
-```
+## Documentation
 
-### Python bindings (`itofin`)
+| Topic | Start here |
+|-------|------------|
+| Language guides and examples | [Rust](wiki/rust.md) · [Python](wiki/python.md) · [Go](wiki/go.md) |
+| Worked pricing walkthrough | [Python, Rust, and Go](https://benbenbang.github.io/libitofin/getting-started/) |
+| Releases, coverage, and remaining work | [Status and scope](wiki/status.md) · [Issues](https://github.com/benbenbang/libitofin/issues) |
+| Build, test, and repository layout | [Development](wiki/development.md) |
+| Architecture and porting principles | [Design](wiki/design.md) |
+| Deliberate differences from QuantLib | [Compatibility notes](wiki/compatibility.md) |
 
-Requires **Python ≥ 3.13**, then a local editable install via maturin (same flow
-as CI):
-
-```sh
-python3.13 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt  # maturin + pytest (pinned)
-
-maturin develop -m crates/itofin-py/Cargo.toml
-pytest crates/itofin-py/tests -v
-```
-
-### QuantLib reference tree
-
-The `QuantLib/` entry is a **git-ignored local symlink**, not committed — point
-it at a QuantLib checkout to have the reference source and test-suite oracle
-available locally:
-
-```sh
-ln -s /path/to/QuantLib QuantLib
-```
-
-## Project layout
-
-```
-crates/libitofin/       the core library — FFI-agnostic, idiomatic Rust
-crates/libitofin-ffi/   minimal extern "C" stub (version + errors; full cbindgen API planned)
-crates/itofin-py/       PyO3 + maturin → the `itofin` package       (on PyPI)
-QuantLib/               reference C++ tree + test oracle           (git-ignored symlink)
-```
-
-## Design principles
-
-- **Bottom-up, layer by layer** — never port a module before its dependencies.
-- **The C++ test-suite is the oracle** — match the numbers, not just the shape.
-- **Small PRs** — ≤350 LOC target, 400 hard cap; large source files split across
-  tickets.
-- **Single-threaded-mutable core, snapshot-and-fan-out for parallelism** — the
-  observable graph is mutated single-threaded during setup, then frozen into
-  immutable snapshots. `rayon` parallel compute is the planned model (not yet
-  wired into the core). No `async` in the core (QuantLib does no I/O; market
-  data is user input).
-- **Fidelity in numerics, usability at API boundaries** — QuantLib is the oracle
-  for every number, but the core favours compile-time typing and explicit `Result`
-  errors over runtime casts and silent fallbacks; convenience lives in the bindings.
-
-## Divergences from QuantLib
-
-The port targets **semantic** faithfulness (matching QuantLib's results), not
-bit-for-bit reproduction of its implementation. A small, deliberate set of
-divergences is catalogued here. Each is an intentional, reviewed decision (not an
-oversight) and is documented at the point of divergence in the source.
-
-**Time / calendars (EPIC-2):**
-
-- **Calendar holiday overrides are per-value, not process-global.** QuantLib
-  shares one global `Impl` per market, so `addHoliday` on any `TARGET()` handle
-  is visible through every other. This port shares added/removed holidays only
-  among *clones* of a `Calendar` value, matching the "explicit state, no hidden
-  singletons" decision. The built-in holiday rules are identical; only the
-  reach of `add_holiday`/`remove_holiday` differs.
-- **`holiday_list` filters weekends by a date-aware rule.** QuantLib's
-  `holidayList` excludes weekends using the weekday-only `isWeekend`, which
-  misclassifies holidays for markets whose weekend changed over time (Saudi
-  Arabia's Thu/Fri→Fri/Sat in 2013, Israel/TASE's Fri/Sat→Sat/Sun in 2026). This
-  port filters with a date-aware `is_weekend_on`; fixed-weekend calendars are
-  unaffected (the default equals the weekday rule).
-- **Table-backed calendars fail loudly past their data horizon.** Where QuantLib
-  tabulates lunar / religious / observed holidays only up to a fixed year and
-  then silently returns "business day" for later dates, this port panics with a
-  clear message once a query passes the last fully-tabulated year. QuantLib's
-  tables are kept verbatim; we never fabricate future dates.
-- **`Period` comparison is a partial order, and fixes a negative-period bug.**
-  QuantLib's `operator<`/`operator==` throw when two periods have overlapping
-  day ranges (e.g. `1 Month` vs `30 Days`); this port returns `None` from
-  `partial_cmp` instead, so comparison never panics. It also orders the day
-  bounds `min <= max` before comparing, which QuantLib omits: for negative
-  lengths QuantLib's inverted bounds make overlapping periods (like `-1 Month`
-  vs `-30 Days`) look decidably ordered, whereas this port correctly reports
-  them as undecidable. Positive comparisons are unaffected.
-- **`DayCounter` is always valid; there is no empty placeholder.** QuantLib's
-  default-constructed `DayCounter` holds a null `impl_` and `QL_REQUIRE`s a
-  non-null one on every call. This port omits the empty state, so a
-  `DayCounter` always wraps a concrete convention and its accessors never trip
-  that null check. The "not yet set" placeholder used by higher layers is an
-  `Option<DayCounter>` at those call sites instead.
-- **`Business/252` counts directly instead of via a process-global cache.**
-  QuantLib memoizes per-month and per-year business-day totals in global
-  `std::map`s keyed by calendar name; this port counts with
-  `Calendar::business_days_between` directly. With a calendar's built-in
-  schedule the results are identical; once holidays are overridden they can
-  differ, since QuantLib's name-keyed cache goes stale while this port always
-  reflects the current holiday set.
-- **`Actual/Actual (ISMA)` uses the reference-date algorithm.** QuantLib picks a
-  schedule-driven implementation when a `Schedule` is supplied and a
-  reference-date one otherwise; the reference-date path is ported, with the
-  schedule-driven overload following as needed.
-
-**Core (EPIC-0):**
-
-- **An unset evaluation date is an explicit error, not a system-clock fallback.**
-  QuantLib's `Settings` singleton falls back to the machine clock; this core has
-  no clock (for determinism and FFI), so operations that need the evaluation date
-  return `Err` when it is unset rather than silently pricing a possibly-expired
-  instrument as live.
-- **Past index fixings live on `Settings`, not in a global `IndexManager`
-  singleton (D11).** QuantLib stores fixing history in `IndexManager::instance()`,
-  a global-singleton `map<string, TimeSeries<Real>>`; D5 forbids that singleton,
-  so the history moves onto `Settings` as a `fixing_store`, exactly like the
-  evaluation date. It stays shared across every handle to an index (a `Settings`
-  is shared, and the store is keyed by the case-insensitive index name), so two
-  handles to "the same" Euribor observe one history, as C++'s global map
-  guarantees. Each index name owns an `Observable`, so adding or clearing a
-  fixing notifies exactly that index's observers, and those notifiers outlive a
-  `clear_fixings`. A conflicting fixing on an existing date returns `Err` (D4)
-  where QuantLib notifies and then throws. The `enforces_todays_historic_fixings`
-  flag's today's-fixing rule is applied by the index layer that reads the store,
-  as `InterestRateIndex::fixing` does in C++, not by the store itself.
-
-**Cash flows (EPIC-7):**
-
-- **`Coupon` is not a subtrait of `CashFlow`; one blanket impl derives the
-  cash-flow face from the coupon.**
-  C++ derives `Coupon` from `CashFlow`, and its base class supplies
-  `hasOccurred`, `exCouponDate()` and `isCoupon()` so that no coupon can forget
-  them. Rust has no specialization, so under the subtrait shape a `Coupon`
-  cannot supply its supertrait's methods on its implementors' behalf. All three
-  wrong answers compile and are plausible numbers rather than diagnostics: the
-  plain-event `has_occurred` ignores `Settings::includeTodaysCashFlows` on the
-  evaluation date; a `None` `ex_coupon_date` accrues ex-coupon while reporting
-  `trading_ex_coupon` as `false`; a `None` `as_coupon` contributes nothing to
-  `bps`, has its amount subtracted from `atm_rate`'s target, and reports its
-  payment date to `maturity_date` in place of its accrual end.
-
-  So `Coupon` restates its own surface (`coupon_base`, `amount`, `rate`,
-  `day_counter`, `accrued_amount`, and `AsObservable`), and
-  `impl<T: Coupon> CashFlow for T` writes the three exactly once, reading
-  `CouponBase`. A coupon cannot get them wrong because it cannot supply them.
-  `amount` moves onto `Coupon` for the same reason it must: a blanket that
-  *provided* `amount` would give `FixedRateCoupon` a generic body in place of
-  its compounded one, and a competing `impl CashFlow for FixedRateCoupon`
-  restoring it is a conflicting implementation. The three methods stay required
-  on `CashFlow` and `Event` for the flows that are not coupons, which still
-  forward explicitly to `event_has_occurred` or `cash_flow_has_occurred`.
-
-  Two costs. `dyn Coupon` does not implement `CashFlow`: the `Some(self)` of
-  `as_coupon` is an unsizing coercion, so the blanket takes a `Sized` `T`, and
-  `+ ?Sized` would restore the impl and forbid the `Some(self)`. Nothing needs
-  it - the `CashFlows` analytics hold a `&dyn CashFlow` already and read only
-  `Coupon`'s own methods through the coupon view. And `amount` now sits on both
-  traits, so on a concrete coupon with both in scope an unqualified
-  `coupon.amount()` is ambiguous; name the trait.
-
-- **The `IborCoupon` par/indexed forecast switch is threaded on `Settings`, not
-  a global singleton.** QuantLib's `IborCoupon::indexFixing()` forecast branch
-  selects between a par-coupon approximation (rolls `fixingEndDate` off the
-  coupon's own accrual end) and an indexed coupon (the index's natural maturity)
-  through the `IborCoupon::Settings` singleton (`usingAtParCoupons`, default
-  `true`). That process-global switch is what D5 forbids, so the port drops the
-  singleton and threads the flag explicitly on `Settings`
-  (`using_at_par_coupons`, default `true`) beside the evaluation date and the
-  D11 fixing store. The behaviour it governs is fully reproduced: `index_fixing`
-  computes the cached `fixingValueDate`/`fixingEndDate`/`spanningTime`
-  (`couponpricer.cpp:56-88`) and reads the specialized 3-arg `forecastFixing`
-  off the curve; a *determined* fixing is mode-independent and returns the same
-  required past fixing as the C++ override. `BlackIborCouponPricer` ports
-  `swapletRate = gearing * indexFixing + spread`;
-  since a non-in-arrears `Black76` coupon needs no convexity adjustment it needs
-  no volatility, and since only `swapletPrice` (not `swapletRate`) reads the
-  forwarding-curve discount, the pricer captures no curve. The caplet/floorlet
-  optionlet path, the `*Price` methods, and the in-arrears convexity adjustment
-  belong to the cap/floor slice; an in-arrears coupon is refused with an `Err`
-  rather than priced with a missing convexity term.
-
-- **`IborLeg` builds the plain-vanilla coupons only; caps, floors and the
-  in-arrears feature are omitted, not silently dropped.** QuantLib's `IborLeg`
-  carries `withCaps`/`withFloors`/`inArrears` builder methods that route the leg
-  through `CappedFlooredIborCoupon` and the optionlet pricer. Those belong to the
-  cap/floor slice, so this port omits the methods entirely rather than accepting
-  the vectors and building plain coupons. The default `BlackIborCouponPricer` is
-  attached in `coupons()` (C++ attaches it in `operator Leg()` under the same
-  no-cap/no-floor/no-arrears condition, which here always holds); `build()` only
-  erases the concrete coupons into a `Leg`, and the free `set_coupon_pricer`
-  overrides the default on the concrete coupons, the erased `Leg` carrying no
-  downcast. The stub reference dates follow the `FloatingLeg` template
-  (`calendar.adjust(end - tenor, bdc)`, no end-of-month flag), which agrees with
-  the fixed leg on every multi-coupon schedule. A zero gearing, which the C++
-  template collapses to a `FixedRateCoupon`, is not special-cased: `IborCoupon`
-  rejects it, so `with_gearing(0.0)` surfaces that `Err` rather than a silent
-  fixed coupon.
-
-**Indexes (EPIC-6):**
-
-- **`Currency` is always valid; there is no empty placeholder.** QuantLib's
-  default-constructed `Currency` holds a null `data_` and `QL_REQUIRE`s a
-  non-null one on every inspector; its `operator==` treats two empty currencies
-  as equal and `operator<<` prints `"null currency"`. This port omits the empty
-  state, so a `Currency` always holds a concrete specification: accessors never
-  trip that null check, equality is purely by name (QuantLib's non-empty
-  branch), and `Display` always prints the ISO code. The "not yet set"
-  placeholder is an `Option<Currency>` at higher call sites, mirroring the
-  `DayCounter` decision above. The `rounding` convention, `triangulationCurrency`
-  and `minorUnitCodes` fields are dropped as unused by the index slice; rounding
-  returns with the money layer. Only EUR is provided; the `ql/currencies/*`
-  catalogue is deferred.
-
-**Pricing engines (Milestone 1):**
-
-- **Zero-volatility Black greeks dispatch on the stored option type, not on the
-  sign of `alpha_`.** This is a deliberate divergence where the oracle is
-  wrong, and the only place in the port where a *finite* priced number
-  intentionally disagrees with QuantLib. Upstream (tree `v1.42.1-266-g9863b578a`,
-  from commit `17f1a1bed` "Fixing zero vol for Black") detects the option type
-  in its zero-vol branches with `if (alpha_ >= 0) // Call`, at nine sites
-  (`blackcalculator.cpp:215,222,229,257,264,271,439,446,453`). For a
-  plain-vanilla put, `alpha_ = -1.0 + cum_d1_` (`blackcalculator.cpp:137`), and
-  at zero volatility an out-of-the-money put has `cum_d1_ == 1.0` exactly, so
-  `alpha_ == 0.0` exactly and `0.0 >= 0` takes the Call branch: the OTM put is
-  handed a delta of `+1.0` where the correct value is `0.0`. This port instead
-  dispatches on the option type stored in the calculator, implementing the
-  values the reference's own comments state, so the OTM-put delta is `0.0`. The
-  full zero-vol ladder is pinned by `zero_volatility_ladder_matches_stated_intent`
-  and `zero_volatility_otm_put_gets_put_greeks_not_call_greeks` in
-  `blackcalculator.rs`, which assert the corrected numbers (OTM `0.0`, ATM
-  `-0.5`, ITM `-1.0` for the put, and the call mirror), so a regression to the
-  `alpha_ >= 0` form is a test failure.
-
-**Processes (L5):**
-
-- **`HestonProcess::evolve` ports the ctor-default Andersen QE scheme; the
-  other seven schemes and `pdf` are deferred.** QuantLib's `HestonProcess`
-  overrides `evolve` (`hestonprocess.cpp:396`) with a nine-way `Discretization`
-  switch, defaulting to `QuadraticExponentialMartingale`
-  (`hestonprocess.hpp:65`). This port implements the shared
-  `QuadraticExponential`/`QuadraticExponentialMartingale` body
-  (`hestonprocess.cpp:461-516`) and exposes the full `Discretization` enum; the
-  remaining seven variants (PartialTruncation, FullTruncation, Reflection,
-  NonCentralChiSquareVariance, and the three BroadieKaya exact schemes) return
-  `Err` referencing the deferral (#410) rather than silently mispricing via a
-  wrong branch. The QE `evolve` drifts the spot by the INTERVAL forward
-  `forwardRate(t0, t0+dt, Continuous)`, not the instantaneous forward that
-  `drift` uses. The ctor still installs the base Euler
-  `expectation`/`std_deviation`/`covariance` (`hestonprocess.cpp:46`), which
-  match QuantLib. `pdf`, `varianceDistribution`, and the modified-Bessel /
-  complex machinery the BroadieKaya schemes need remain with #410.
-
-**Non-finite inputs (cross-cutting):**
-
-- **Non-finite arguments are rejected at the API boundary.** QuantLib validates
-  signs (`stdDev >= 0`, `forward > 0`, `t >= 0`) and relies on NaN failing every
-  such comparison, so a NaN is already an error wherever a sign is checked. An
-  infinity is not: it passes `>= 0.0` and propagates to a NaN result several
-  layers down, and where a curve extrapolates the range check is skipped
-  entirely. Following D10, this port widens each of those guards from "not NaN"
-  to "finite", and adds finiteness checks where C++ has none at all: solver
-  arguments and functor values (`solver1d.rs`), sampled quadrature abscissae
-  (`discrete.rs`), Black-Scholes process arguments (`blackscholesprocess.rs`),
-  and the volatility and variance an implementation returns
-  (`termstructures/volatility/`). Each site names the C++ guard it extends, or
-  states that none exists. The only behavioural change is for infinities; every
-  finite input QuantLib accepts is still accepted, so no priced number moves.
-- **Statistics accumulators reject a NaN sample value, and accept infinities.**
-  QuantLib's only sample guard is `QL_REQUIRE(weight >= 0.0)`
-  (`generalstatistics.hpp:233`, `incrementalstatistics.cpp:127`), which this
-  port keeps verbatim, written `!(weight >= 0.0)` so a NaN weight fails it as it
-  does in C++. A NaN *value* has no C++ guard: it is accumulated and poisons
-  every subsequent mean, variance and percentile with no diagnostic. Infinite
-  values remain accepted, as in C++, being meaningful to `min`, `max` and the
-  risk measures.
-- **Shape mismatches panic with a named cause.** `SVD::solveFor`
-  (`svd.cpp:528`) and the default `CostFunction::gradient` / `jacobian` have no
-  `QL_REQUIRE`; a wrongly-sized output leaves stale entries the optimiser reads
-  as real derivatives. These are caller errors, not market-data errors, so the
-  port asserts rather than returning `Err`.
+The tracked `wiki/` pages hold detailed guides; the
+[MkDocs site](https://benbenbang.github.io/libitofin/) provides language tabs and
+API navigation.
 
 ## License
 
-[BSD-3-Clause](LICENSE) — the same license as QuantLib, the ported source.
+[BSD-3-Clause](LICENSE), the same license as QuantLib.

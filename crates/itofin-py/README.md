@@ -10,7 +10,9 @@ The API mirrors QuantLib's `ql/` layout: types live in submodules (`itofin.time`
 pip install itofin
 ```
 
-Requires Python >= 3.13.
+## Python versions
+
+itofin ships a single abi3 wheel that runs on CPython 3.10, 3.11, 3.12, and 3.13+. Python 3.13 is the primary, tested target; 3.10 through 3.12 are supported through the stable ABI.
 
 ### Develop from this repository
 
@@ -241,6 +243,66 @@ print(f"payer swaption NPV {swaption.npv():.10f}")
 ```
 payer swaption NPV 1.5666103956
 ```
+
+## Draw random numbers as NumPy arrays
+
+The generators under `itofin.randomnumbers` carry QuantLib's Python names. Sequence
+generators return NumPy arrays, and `next_sequences(count)` draws a whole
+`(count, dimension)` matrix in one call, so a path loop never crosses the binding
+once per path.
+
+```python
+from itofin.randomnumbers import (
+    GaussianRandomSequenceGenerator,
+    UniformRandomGenerator,
+    UniformRandomSequenceGenerator,
+)
+
+rng = UniformRandomGenerator(42)                       # MT19937, seeded
+usg = UniformRandomSequenceGenerator(3, rng)           # 3 uniforms per sequence
+gsg = GaussianRandomSequenceGenerator(usg)             # inverse-cumulative normals
+print(usg.next_sequence())                             # ndarray, shape (3,)
+print(gsg.next_sequences(1000).shape)                  # (1000, 3) standard normals
+```
+
+`SobolRsg`, `HaltonRsg` and `GaussianLowDiscrepancySequenceGenerator` provide the
+low-discrepancy counterparts with the same `next_sequence` / `next_sequences` calls.
+
+## Global bootstrap callbacks
+
+`PiecewiseYieldCurve(..., bootstrap="global")` accepts keyword-only
+`additional_penalties(times, data)`, `additional_dates()`, and
+`additional_variables=SimpleQuoteVariables(quotes, guesses, lower_bounds)`.
+Penalties return finite residuals with a constant length during each calculation;
+times and data are copied lists including the reference node. Extra helpers can
+be repriced through `helper.quote_error()` inside a penalty. Additional dates and
+variables add unknowns and need corresponding residuals. Iterative bootstrap
+rejects these options.
+
+For a futures convexity quote being fitted, pass `register_conv_adj=False` to its
+`FuturesRateHelper` constructor. This prevents optimizer updates from recursively
+invalidating the curve. The default remains observable for ordinary market quotes.
+See the [joint futures-convexity example](tests/test_global_bootstrap.py), checked
+against an independently compiled [QuantLib oracle](tests/fixtures/global_bootstrap/README.md).
+
+Callbacks run synchronously on the owning thread. Python exceptions become
+`ItofinError` from fallible pricing/bootstrap queries, including the original
+exception type and message. Failed queries can be retried after fixing the callback.
+`max_date()` retains its existing fallback on bootstrap failure; it neither proves
+a successful solve nor hides the error from a subsequent pricing query. Do not mutate quotes inside callbacks;
+such mutations are rejected. Callback state changes alone do not invalidate a
+successfully cached curve; observed market-input changes do.
+
+Native consumers retain callbacks after the Python curve wrapper is dropped.
+Avoid callbacks that strongly capture the curve or an engine/model/index that
+retains it. Those mixed native/Python cycles need the user to break the capture;
+use `weakref.ref(curve)` for trial-curve queries. Capturing an additional helper
+is supported. Full mixed-graph garbage collection is tracked in
+[#1028](https://github.com/benbenbang/libitofin/issues/1028).
+
+## Typing checks
+
+See [typing acceptance](TYPING.md) for the pinned, bidirectional Pyright gate.
 
 ## License
 

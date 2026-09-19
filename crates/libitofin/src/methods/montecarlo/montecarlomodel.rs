@@ -38,6 +38,7 @@
 use crate::errors::QlResult;
 use crate::math::statistics::{GeneralStatistics, Statistics};
 use crate::methods::montecarlo::PathGen;
+use crate::shared::Shared;
 use crate::types::{Real, Size};
 
 /// Maps a realized path of type `P` to its payoff (the C++ `path_pricer_type`,
@@ -54,6 +55,14 @@ pub trait PathPricer<P> {
 impl<P, F: Fn(&P) -> Real> PathPricer<P> for F {
     fn price(&self, path: &P) -> Real {
         self(path)
+    }
+}
+
+/// A [`Shared`] pricer is itself a [`PathPricer`], so one calibrated pricer can
+/// drive several models (Longstaff–Schwartz calibration then pricing).
+impl<P, T: PathPricer<P>> PathPricer<P> for Shared<T> {
+    fn price(&self, path: &P) -> Real {
+        (**self).price(path)
     }
 }
 

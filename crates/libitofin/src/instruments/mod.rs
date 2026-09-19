@@ -12,10 +12,12 @@ mod bondforward;
 mod bonds;
 mod callablebond;
 mod capfloor;
+mod claim;
 mod cliquetoption;
 mod cmsswap;
 mod complexchooseroption;
 mod continuousaveragingasianoption;
+mod creditdefaultswap;
 mod discreteaveragingasianoption;
 mod doublebarrieroption;
 mod fixedvsfloatingswap;
@@ -23,21 +25,27 @@ mod floatfloatswap;
 mod forwardrateagreement;
 mod forwardvanillaoption;
 mod futures;
+mod inflationcapfloor;
 mod lookbackoption;
 mod makecapfloor;
+mod makecds;
 mod makeois;
 mod makeswaption;
 mod makevanillaswap;
+mod makeyoyinflationcapfloor;
 mod oneassetoption;
 mod overnightindexedswap;
 mod partialtimebarrieroption;
 mod payoffs;
+mod protection;
 mod simplechooseroption;
 mod softbarrieroption;
 mod swap;
 mod swaption;
 mod vanillaswap;
 mod xccybasisswap;
+mod yearonyearinflationswap;
+mod zerocouponinflationswap;
 
 pub use crate::pricingengines::{
     AnalyticDoubleBarrierEngine, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
@@ -66,6 +74,7 @@ pub use callablebond::{
     CallableFixedRateBond, CallableZeroCouponBond,
 };
 pub use capfloor::{CapFloor, CapFloorArguments, CapFloorType};
+pub use claim::{Claim, FaceValueAccrualClaim, FaceValueClaim};
 pub use cliquetoption::{CliquetArguments, CliquetOption, CliquetResults};
 pub use cmsswap::CmsSwap;
 pub use complexchooseroption::{
@@ -74,6 +83,9 @@ pub use complexchooseroption::{
 pub use continuousaveragingasianoption::{
     AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
     ContinuousAveragingAsianResults,
+};
+pub use creditdefaultswap::{
+    CdsArguments, CdsEngine, CdsResults, CdsTerms, CreditDefaultSwap, PricingModel, cds_maturity,
 };
 pub use discreteaveragingasianoption::{
     DiscreteAveragingAsianArguments, DiscreteAveragingAsianOption, DiscreteAveragingAsianResults,
@@ -86,9 +98,10 @@ pub use fixedvsfloatingswap::{
     FixedVsFloatingSwapResults, FloatingArgumentsFn,
 };
 pub use floatfloatswap::FloatFloatSwap;
-pub use forwardrateagreement::{ForwardRateAgreement, Position};
+pub use forwardrateagreement::ForwardRateAgreement;
 pub use forwardvanillaoption::{ForwardOptionArguments, ForwardVanillaOption};
 pub use futures::FuturesType;
+pub use inflationcapfloor::{YoYInflationCapFloor, YoYInflationCapFloorArguments};
 pub use lookbackoption::{
     ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption,
     ContinuousFixedLookbackResults, ContinuousFloatingLookbackArguments,
@@ -98,9 +111,11 @@ pub use lookbackoption::{
     ContinuousPartialFloatingLookbackOption, ContinuousPartialFloatingLookbackResults,
 };
 pub use makecapfloor::MakeCapFloor;
+pub use makecds::MakeCreditDefaultSwap;
 pub use makeois::MakeOis;
 pub use makeswaption::MakeSwaption;
 pub use makevanillaswap::MakeVanillaSwap;
+pub use makeyoyinflationcapfloor::MakeYoYInflationCapFloor;
 pub use oneassetoption::{
     EuropeanOption, Greeks, MoreGreeks, OneAssetOption, OneAssetOptionEngine,
     OneAssetOptionResults, OptionArguments, VanillaOption,
@@ -114,6 +129,7 @@ pub use payoffs::{
     CashOrNothingPayoff, FloatingTypePayoff, PercentageStrikePayoff, PlainVanillaPayoff,
     StrikedTypePayoff, TypePayoff,
 };
+pub use protection::ProtectionSide;
 pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};
 pub use softbarrieroption::{SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults};
 pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
@@ -123,3 +139,7 @@ pub use swaption::{
 };
 pub use vanillaswap::VanillaSwap;
 pub use xccybasisswap::XccyBasisSwap;
+pub use yearonyearinflationswap::YearOnYearInflationSwap;
+pub use zerocouponinflationswap::ZeroCouponInflationSwap;
+
+pub use crate::position::Position;

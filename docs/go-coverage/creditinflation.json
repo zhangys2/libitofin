@@ -1,0 +1,525 @@
+{
+  "notes": [
+    "Inflation is tracked separately by its implementation owner.",
+    "Implemented does not imply individually tested: empty tests lists identify remaining direct test gaps.",
+    "FlatHazardRate constructors select quote/rate and moving/fixed modes through FlatHazardConfig.",
+    "MakeCreditDefaultSwap constructor/build map to one stateless Go build call.",
+    "Credit class base operations apply to all derived curve aliases."
+  ],
+  "scope": [
+    "credit.rs",
+    "creditengine.rs",
+    "credithelpers.rs"
+  ],
+  "symbols": [
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.DefaultDensity",
+      "python": "DefaultProbabilityTermStructure.default_density",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.DefaultDensityDate",
+      "python": "DefaultProbabilityTermStructure.default_density_date",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.DefaultProbability",
+      "python": "DefaultProbabilityTermStructure.default_probability",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.DefaultProbabilityDate",
+      "python": "DefaultProbabilityTermStructure.default_probability_date",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.HazardRate",
+      "python": "DefaultProbabilityTermStructure.hazard_rate",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCurveNodesAndSessionIsolation"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.HazardRateDate",
+      "python": "DefaultProbabilityTermStructure.hazard_rate_date",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.SurvivalProbability",
+      "python": "DefaultProbabilityTermStructure.survival_probability",
+      "status": "implemented",
+      "tests": [
+        "TestFlatHazardAnalyticQueriesAndRetainedQuote"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_value",
+      "go": "DefaultProbabilityTermStructure.SurvivalProbabilityDate",
+      "python": "DefaultProbabilityTermStructure.survival_probability_date",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCurveNodesAndSessionIsolation"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.moving",
+      "status": "implemented",
+      "tests": [
+        "flat_hazard_live_quote_lifetime_and_foreign_handle",
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.moving_with_rate",
+      "status": "implemented",
+      "tests": [
+        "flat_hazard_live_quote_lifetime_and_foreign_handle",
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.__init__",
+      "status": "implemented",
+      "tests": [
+        "flat_hazard_live_quote_lifetime_and_foreign_handle",
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_flat_hazard_new",
+      "go": "Session.NewFlatHazardRate",
+      "python": "FlatHazardRate.with_rate",
+      "status": "implemented",
+      "tests": [
+        "flat_hazard_live_quote_lifetime_and_foreign_handle",
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedHazardRateCurve.Dates",
+      "python": "InterpolatedHazardRateCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedHazardRateCurve.HazardRates",
+      "python": "InterpolatedHazardRateCurve.hazard_rates",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "itofin_interpolated_hazard_new",
+      "go": "Session.NewInterpolatedHazardRateCurve",
+      "python": "InterpolatedHazardRateCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCurveNodesAndSessionIsolation"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "InterpolatedHazardRateCurve.Nodes",
+      "python": "InterpolatedHazardRateCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCurveNodesAndSessionIsolation"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_calculate",
+      "go": "PiecewiseDefaultCurve.Calculate",
+      "python": "PiecewiseDefaultCurve.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultCurve.Data",
+      "python": "PiecewiseDefaultCurve.data",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultCurve.Dates",
+      "python": "PiecewiseDefaultCurve.dates",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_piecewise_default_new",
+      "go": "Session.NewPiecewiseDefaultCurve",
+      "python": "PiecewiseDefaultCurve.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultCurve.Nodes",
+      "python": "PiecewiseDefaultCurve.nodes",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_default_curve_nodes",
+      "go": "PiecewiseDefaultCurve.Times",
+      "python": "PiecewiseDefaultCurve.times",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_cds_rebate",
+      "go": "CreditDefaultSwap.AccrualRebateAmount",
+      "python": "CreditDefaultSwap.accrual_rebate_amount",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_rebate",
+      "go": "CreditDefaultSwap.AccrualRebateDate",
+      "python": "CreditDefaultSwap.accrual_rebate_date",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionRebateSettlementBusinessDays"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.Calculate",
+      "python": "CreditDefaultSwap.calculate",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts",
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.CouponLegNPV",
+      "python": "CreditDefaultSwap.coupon_leg_npv",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.DefaultLegNPV",
+      "python": "CreditDefaultSwap.default_leg_npv",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.FairSpread",
+      "python": "CreditDefaultSwap.fair_spread",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.FairUpfront",
+      "python": "CreditDefaultSwap.fair_upfront",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_cds_implied_hazard",
+      "go": "CreditDefaultSwap.ImpliedHazardRate",
+      "python": "CreditDefaultSwap.implied_hazard_rate",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.IsCalculated",
+      "python": "CreditDefaultSwap.is_calculated",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_new",
+      "go": "Session.NewCreditDefaultSwap",
+      "python": "CreditDefaultSwap.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.Notional",
+      "python": "CreditDefaultSwap.notional",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts",
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_cds_value",
+      "go": "CreditDefaultSwap.NPV",
+      "python": "CreditDefaultSwap.npv",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle",
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_set_engine + itofin_cds_value",
+      "go": "CreditDefaultSwap.Price",
+      "python": "CreditDefaultSwap.price",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts",
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_cds_results",
+      "go": "CreditDefaultSwap.Results",
+      "python": "CreditDefaultSwap.results",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_set_engine",
+      "go": "CreditDefaultSwap.SetEngine",
+      "python": "CreditDefaultSwap.set_engine",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_set_engine",
+      "go": "CreditDefaultSwap.SetIsdaEngine",
+      "python": "CreditDefaultSwap.set_isda_engine",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_cds_new",
+      "go": "Session.NewCreditDefaultSwap",
+      "python": "CreditDefaultSwap.with_terms",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_make_cds",
+      "go": "Session.MakeCreditDefaultSwap",
+      "python": "MakeCreditDefaultSwap.build",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_make_cds",
+      "go": "Session.MakeCreditDefaultSwap",
+      "python": "MakeCreditDefaultSwap.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionBuilderCashflowsAndFairUpfront"
+      ]
+    },
+    {
+      "c": "itofin_cds_engine_new",
+      "go": "Session.NewMidPointCdsEngine",
+      "python": "MidPointCdsEngine.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCachedMidpointAndLifecycle"
+      ]
+    },
+    {
+      "c": "itofin_cds_engine_new",
+      "go": "Session.NewIsdaCdsEngine",
+      "python": "IsdaCdsEngine.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditISDAOracleDefaultsAndImpliedHazard"
+      ]
+    },
+    {
+      "c": "itofin_default_helper_dates",
+      "go": "DefaultProbabilityHelper.LatestDate",
+      "python": "DefaultProbabilityHelper.latest_date",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_default_helper_dates",
+      "go": "DefaultProbabilityHelper.PillarDate",
+      "python": "DefaultProbabilityHelper.pillar_date",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "itofin_spread_cds_helper_new",
+      "go": "Session.NewSpreadCdsHelper",
+      "python": "SpreadCdsHelper.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "ProtectionBuyer",
+      "python": "ProtectionSide.Buyer",
+      "status": "implemented",
+      "tests": [
+        "TestCreditBootstrapRepricesIndependentContracts",
+        "TestCreditCompletionMidpointHazardAndProtectionSigns"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "ProtectionSeller",
+      "python": "ProtectionSide.Seller",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionMidpointHazardAndProtectionSigns"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "Midpoint",
+      "python": "PricingModel.Midpoint",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionMidpointHazardAndProtectionSigns"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "Isda",
+      "python": "PricingModel.Isda",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionMidpointHazardAndProtectionSigns"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "NoFix",
+      "python": "NumericalFix.NoFix",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "Taylor",
+      "python": "NumericalFix.Taylor",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "HalfDayBias",
+      "python": "AccrualBias.HalfDayBias",
+      "status": "implemented",
+      "tests": []
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "NoBias",
+      "python": "AccrualBias.NoBias",
+      "status": "implemented",
+      "tests": []
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "FlatForwards",
+      "python": "ForwardsInCouponPeriod.Flat",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    },
+    {
+      "c": "validated int32 discriminant",
+      "go": "PiecewiseForwards",
+      "python": "ForwardsInCouponPeriod.Piecewise",
+      "status": "implemented",
+      "tests": [
+        "TestCreditCompletionHazardArraysAndNonflatISDA"
+      ]
+    }
+  ]
+}

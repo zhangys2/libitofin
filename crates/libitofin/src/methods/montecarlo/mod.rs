@@ -5,6 +5,9 @@
 //! stack on top in later tickets.
 
 mod brownianbridge;
+mod earlyexercisepathpricer;
+mod longstaffschwartzpathpricer;
+mod lsmbasissystem;
 mod mcsimulation;
 mod montecarlomodel;
 mod multipath;
@@ -15,6 +18,9 @@ mod pathgenerator;
 mod sample;
 
 pub use brownianbridge::BrownianBridge;
+pub use earlyexercisepathpricer::EarlyExercisePathPricer;
+pub use longstaffschwartzpathpricer::LongstaffSchwartzPathPricer;
+pub use lsmbasissystem::{LsmBasisSystem, PolynomialType};
 pub use mcsimulation::{DEFAULT_MIN_SAMPLES, McSimulation};
 pub use montecarlomodel::{MonteCarloModel, PathPricer};
 pub use multipath::MultiPath;
