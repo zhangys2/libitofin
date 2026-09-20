@@ -799,26 +799,42 @@ mod tests {
             .unwrap();
         let floor_dn_f = floor.result::<Vec<Real>>("optionletsAtmForward").unwrap();
 
-        // QL skips the first caplet (`n` from 1); floorlets run from 0.
+        // QL leaves capletFDDelta[0]=0 and still asserts analytic[0]==0
+        // (`capfloor.cpp:740-748`); FD for caps is only formed from n=1.
+        assert_eq!(
+            cap_analytic[0], 0.0,
+            "in-progress first caplet must keep analytic δ=0 (sqrtTime==0)"
+        );
+
+        let mut cap_n = 0usize;
         for n in 1..cap_up_p.len() {
             let accrual = leg[n].nominal() * leg[n].accrual_period() * leg[n].gearing();
             let df_fwd = cap_up_f[n] - cap_dn_f[n];
-            if df_fwd.abs() < 1e-14 || cap_up_d[n] == 0.0 || cap_dn_d[n] == 0.0 {
-                continue;
-            }
+            assert!(
+                cap_up_d[n] > 0.0 && cap_dn_d[n] > 0.0 && df_fwd.abs() > 1e-14,
+                "caplet {n}: spread bump did not move discount/forward (vacuous FD)"
+            );
             let fd = (cap_up_p[n] / cap_up_d[n] - cap_dn_p[n] / cap_dn_d[n]) / df_fwd / accrual;
             assert!(
                 (cap_analytic[n] - fd).abs() <= 1.0e-6,
                 "caplet {n}: analytic {} vs fd {fd}",
                 cap_analytic[n]
             );
+            cap_n += 1;
         }
+        let mut floor_n = 0usize;
         for n in 0..floor_up_p.len() {
             let accrual = leg[n].nominal() * leg[n].accrual_period() * leg[n].gearing();
             let df_fwd = floor_up_f[n] - floor_dn_f[n];
-            if df_fwd.abs() < 1e-14 || floor_up_d[n] == 0.0 || floor_dn_d[n] == 0.0 {
+            if floor_up_d[n] == 0.0 && floor_dn_d[n] == 0.0 {
+                // expired slot — analytic must also be zero
+                assert_eq!(floor_analytic[n], 0.0);
                 continue;
             }
+            assert!(
+                floor_up_d[n] > 0.0 && floor_dn_d[n] > 0.0 && df_fwd.abs() > 1e-14,
+                "floorlet {n}: spread bump did not move discount/forward (vacuous FD)"
+            );
             let fd =
                 (floor_up_p[n] / floor_up_d[n] - floor_dn_p[n] / floor_dn_d[n]) / df_fwd / accrual;
             assert!(
@@ -826,6 +842,11 @@ mod tests {
                 "floorlet {n}: analytic {} vs fd {fd}",
                 floor_analytic[n]
             );
+            floor_n += 1;
         }
+        assert!(
+            cap_n >= 39 && floor_n >= 40,
+            "too few live optionlets compared: cap {cap_n} floor {floor_n}"
+        );
     }
 }
