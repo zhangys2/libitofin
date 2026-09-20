@@ -3,11 +3,15 @@
 //! Port of `ql/pricingengines/exotic/`.
 
 mod analyticcomplexchooserengine;
+mod analyticcompoundoptionengine;
 mod analyticeuropeanmargrabeengine;
 mod analyticsimplechooserengine;
 
 pub use analyticcomplexchooserengine::{
     AnalyticComplexChooserEngine, set_analytic_complex_chooser_engine,
+};
+pub use analyticcompoundoptionengine::{
+    AnalyticCompoundOptionEngine, set_analytic_compound_option_engine,
 };
 pub use analyticeuropeanmargrabeengine::{
     AnalyticEuropeanMargrabeEngine, set_analytic_european_margrabe_engine,
