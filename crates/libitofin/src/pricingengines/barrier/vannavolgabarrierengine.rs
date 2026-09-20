@@ -5,6 +5,7 @@
 
 use crate::errors::QlResult;
 use crate::exercise::Exercise;
+use crate::fail;
 use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentResults};
 use crate::instruments::{
@@ -54,6 +55,18 @@ pub struct VannaVolgaBarrierEngine {
 }
 
 impl VannaVolgaBarrierEngine {
+    /// `VannaVolgaBarrierEngine(...)` with QuantLib defaults (`adaptVanDelta=false`).
+    #[allow(clippy::too_many_arguments)]
+    #[rustfmt::skip]
+    pub fn new(
+        atm_vol: Shared<DeltaVolQuote>, vol25_put: Shared<DeltaVolQuote>,
+        vol25_call: Shared<DeltaVolQuote>, spot_fx: Handle<dyn Quote>,
+        domestic_ts: Handle<dyn YieldTermStructure>, foreign_ts: Handle<dyn YieldTermStructure>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_options(atm_vol, vol25_put, vol25_call, spot_fx, domestic_ts, foreign_ts, false, 0.0, settings)
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[rustfmt::skip]
     pub fn with_options(
@@ -105,7 +118,7 @@ impl PricingEngine for VannaVolgaBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
         let rebate = args.rebate.expect("validated");
-        let payoff = args.payoff.expect("validated");
+        let Some(payoff) = args.payoff else { fail!("non-plain payoff given"); };
         let exercise = Shared::clone(args.exercise.as_ref().expect("validated"));
         require!(matches!(barrier_type, BarrierType::UpIn | BarrierType::UpOut | BarrierType::DownIn | BarrierType::DownOut), "Invalid barrier type");
         let spot0 = self.spot_fx.current_link()?.value()?;
@@ -138,7 +151,9 @@ impl PricingEngine for VannaVolgaBarrierEngine {
         let up = matches!(barrier_type, BarrierType::UpIn | BarrierType::UpOut);
         let knock_out = matches!(barrier_type, BarrierType::UpOut | BarrierType::DownOut);
         if if up { spot0 >= barrier } else { spot0 <= barrier } {
-            self.base.results_mut().value = Some(if knock_out { 0.0 } else { van });
+            let results = self.base.results_mut();
+            results.value = Some(if knock_out { 0.0 } else { van });
+            put_extra(results, forward, strike_vol, van, van, 0.0, None);
             return Ok(());
         }
         let mut bump = bump_out(process, if up { BarrierType::UpOut } else { BarrierType::DownOut }, barrier, rebate, payoff, exercise, Shared::clone(&self.settings))?;
@@ -189,9 +204,24 @@ impl PricingEngine for VannaVolgaBarrierEngine {
         } else {
             out_price = out_price.max(0.0).min(vanilla);
         }
-        self.base.results_mut().value = Some(if knock_out { out_price } else { van - out_price });
+        let in_price = van - out_price;
+        let results = self.base.results_mut();
+        results.value = Some(if knock_out { out_price } else { in_price });
+        put_extra(results, forward, strike_vol, van, in_price, out_price, Some(lambda));
         Ok(())
     }
+}
+
+#[rustfmt::skip]
+fn put_extra(r: &mut InstrumentResults, forward: Real, strike_vol: Real, vanilla: Real, in_price: Real, out_price: Real, lambda: Option<Real>) {
+    use std::any::Any;
+    let mut put = |k: &str, v: Real| { r.additional_results.insert(k.into(), shared(v) as Shared<dyn Any>); };
+    put("Forward", forward);
+    put("StrikeVol", strike_vol);
+    put("VanillaPrice", vanilla);
+    put("BarrierInPrice", in_price);
+    put("BarrierOutPrice", out_price);
+    if let Some(lambda) = lambda { put("lambda", lambda); }
 }
 
 #[rustfmt::skip]
@@ -275,5 +305,16 @@ mod tests {
             let c = npv(bty, h, oty, k, t, vp, va, vc, v, Shared::clone(&spot), Shared::clone(&q_rate), Shared::clone(&r_rate));
             assert!((c - expected).abs() <= 1e-4, "{bty:?} {oty:?} H={h}: {c} vs {expected}");
         }
+        q_rate.set_value(0.0003541); r_rate.set_value(0.0033871);
+        v25p.set_value(0.10087); vatm.set_value(0.08925); v25c.set_value(0.08463);
+        let mut raw = BarrierOption::with_rebate(BarrierType::UpOut, 1.5, 0.0, PlainVanillaPayoff::new(OptionType::Call, 1.13321), shared(EuropeanExercise::new(today() + 365)), Shared::clone(&settings)).unwrap();
+        set_vanna_volga_barrier_engine(&mut raw, shared_mut(VannaVolgaBarrierEngine::new(
+            shared(DeltaVolQuote::new_atm(qh(&vatm), DeltaType::Fwd, 1.0, AtmType::DeltaNeutral)),
+            shared(DeltaVolQuote::new(-0.25, qh(&v25p), 1.0, DeltaType::Fwd)),
+            shared(DeltaVolQuote::new(0.25, qh(&v25c), 1.0, DeltaType::Fwd)),
+            qh(&spot), r_ts, q_ts, Shared::clone(&settings),
+        ).unwrap()));
+        let raw_npv = raw.npv().unwrap();
+        assert!(raw_npv.is_finite() && raw_npv > 0.0 && (raw_npv - 0.148127).abs() > 1e-4, "adapt=false structural: {raw_npv}");
     }
 }
