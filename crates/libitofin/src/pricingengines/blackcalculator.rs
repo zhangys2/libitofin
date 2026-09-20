@@ -2,15 +2,17 @@
 //!
 //! Port of `ql/pricingengines/blackcalculator.{hpp,cpp}`: a
 //! [`BlackCalculator`] prices a European payoff on a forward and exposes the
-//! full greek set. The plain-vanilla and cash-or-nothing payoffs are
-//! supported; the C++ visitor's remaining arms (`AssetOrNothingPayoff`,
-//! `GapPayoff`) follow those payoffs as a follow-up, as do `strike_gamma`,
-//! `vanna` and `volga`.
+//! full greek set. The plain-vanilla, cash-or-nothing, asset-or-nothing, and
+//! gap payoffs are supported. `strike_gamma`, `vanna` and `volga` remain
+//! follow-up work.
 //!
 //! Known limitation carried over from the reference: the zero-volatility
-//! branches below return the plain-vanilla ladder, which is meaningless for a
-//! digital payoff. C++ has the same gap - its branches read the option type
-//! off `alpha_ >= 0`, and a digital's `alpha_` is always zero.
+//! branches below return the plain-vanilla ladder. C++ detects the option
+//! type with `alpha_ >= 0`, which is meaningless for cash-or-nothing and
+//! asset-or-nothing (`alpha_` is always zero). Gap keeps vanilla α/β and
+//! only rewrites `x` / `DxDstrike`, so the C++ type detection works, but
+//! the ATM zero-vol ladder is still the vanilla kink rather than the jump
+//! at `K1` when `K2 ≠ K1`.
 //!
 //! Divergence, throughout: every argument requirement here is QuantLib's own
 //! (`blackcalculator.cpp:66,68,72,74` for the constructor, `:204` and `:316`
@@ -35,7 +37,10 @@ use std::any::Any;
 
 use crate::errors::QlResult;
 use crate::fail;
-use crate::instruments::{CashOrNothingPayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff};
+use crate::instruments::{
+    AssetOrNothingPayoff, CashOrNothingPayoff, GapPayoff, PlainVanillaPayoff, StrikedTypePayoff,
+    TypePayoff,
+};
 use crate::math::comparison::close;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
 use crate::option::OptionType;
@@ -58,6 +63,7 @@ pub struct BlackCalculator {
     dbeta_dd2: Real,
     cum_d1: Real,
     cum_d2: Real,
+    n_d1: Real,
     n_d2: Real,
     x: Real,
     dx_ds: Real,
@@ -159,6 +165,7 @@ impl BlackCalculator {
             dbeta_dd2,
             cum_d1,
             cum_d2,
+            n_d1,
             n_d2,
             x: strike,
             dx_ds: 0.0,
@@ -184,11 +191,14 @@ impl BlackCalculator {
 
     /// Builds a calculator from any striked payoff the C++ visitor handles.
     ///
-    /// Ports `BlackCalculator::Calculator` (`blackcalculator.cpp:149-174`):
+    /// Ports `BlackCalculator::Calculator` (`blackcalculator.cpp:149-195`):
     /// the coefficients [`BlackCalculator::new`] lays down are the
     /// plain-vanilla ones and stand as they are, the cash-or-nothing payoff
-    /// replaces them with the digital ones (`:158-174`), and every other
-    /// payoff hits the `visit(Payoff&)` failure (`:152-154`).
+    /// replaces them with the digital ones (`:158-174`), the asset-or-nothing
+    /// payoff keeps the asset (`alpha`) leg and zeros the cash (`beta`) leg
+    /// (`:176-190`), the gap payoff keeps vanilla α/β and points `x` at the
+    /// second strike (`:192-195`), and every other payoff hits the
+    /// `visit(Payoff&)` failure (`:152-154`).
     ///
     /// # Errors
     ///
@@ -223,6 +233,22 @@ impl BlackCalculator {
             };
             black.beta = beta;
             black.dbeta_dd2 = dbeta_dd2;
+            return Ok(black);
+        }
+        if let Some(asset) = dynamic.downcast_ref::<AssetOrNothingPayoff>() {
+            black.beta = 0.0;
+            black.dbeta_dd2 = 0.0;
+            let (alpha, dalpha_dd1) = match asset.option_type() {
+                OptionType::Call => (black.cum_d1, black.n_d1),
+                OptionType::Put => (1.0 - black.cum_d1, -black.n_d1),
+            };
+            black.alpha = alpha;
+            black.dalpha_dd1 = dalpha_dd1;
+            return Ok(black);
+        }
+        if let Some(gap) = dynamic.downcast_ref::<GapPayoff>() {
+            black.x = gap.second_strike();
+            black.dx_dstrike = 0.0;
             return Ok(black);
         }
 
@@ -610,6 +636,24 @@ mod tests {
         }
     }
 
+    /// The asset-or-nothing value is `discount * forward * N(d1)` for a call
+    /// and `discount * forward * N(-d1)` for a put (`blackcalculator.cpp:176-190`).
+    #[test]
+    fn asset_or_nothing_coefficients_reproduce_the_closed_form() {
+        let d1 = (FORWARD / STRIKE).ln() / STD_DEV + 0.5 * STD_DEV;
+        let f = CumulativeNormalDistribution::standard();
+        for (option_type, expected) in [
+            (OptionType::Call, DISCOUNT * FORWARD * f.value(d1)),
+            (OptionType::Put, DISCOUNT * FORWARD * f.value(-d1)),
+        ] {
+            let payoff = AssetOrNothingPayoff::new(option_type, STRIKE);
+            let black = BlackCalculator::with_striked_payoff(&payoff, FORWARD, STD_DEV, DISCOUNT)
+                .expect("valid inputs");
+            assert_close(black.value(), expected, 1e-14);
+            assert_close(black.beta(), 0.0, 0.0);
+        }
+    }
+
     /// `x_` becomes the cash amount and no longer tracks the strike, so
     /// `DxDstrike_` is reset to zero (`blackcalculator.cpp:161`). The strike
     /// derivative of `discount * cash * N(-d2)` is
@@ -621,6 +665,49 @@ mod tests {
         let f = CumulativeNormalDistribution::standard();
         let expected = DISCOUNT * cash * f.derivative(d2) / (STD_DEV * STRIKE);
         let payoff = CashOrNothingPayoff::new(OptionType::Put, STRIKE, cash);
+        let black = BlackCalculator::with_striked_payoff(&payoff, FORWARD, STD_DEV, DISCOUNT)
+            .expect("valid inputs");
+        assert_close(black.strike_sensitivity(), expected, 1e-14);
+    }
+
+    /// Gap keeps vanilla α/β and replaces `x` with the second strike
+    /// (`blackcalculator.cpp:192-195`). Value is
+    /// `discount * (F N(±d1) ∓ K2 N(±d2))`.
+    #[test]
+    fn gap_coefficients_reproduce_the_closed_form() {
+        let second = 45.0;
+        let d1 = (FORWARD / STRIKE).ln() / STD_DEV + 0.5 * STD_DEV;
+        let d2 = d1 - STD_DEV;
+        let f = CumulativeNormalDistribution::standard();
+        for (option_type, expected) in [
+            (
+                OptionType::Call,
+                DISCOUNT * (FORWARD * f.value(d1) - second * f.value(d2)),
+            ),
+            (
+                OptionType::Put,
+                DISCOUNT * (-FORWARD * f.value(-d1) + second * f.value(-d2)),
+            ),
+        ] {
+            let payoff = GapPayoff::new(option_type, STRIKE, second);
+            let black = BlackCalculator::with_striked_payoff(&payoff, FORWARD, STD_DEV, DISCOUNT)
+                .expect("valid inputs");
+            assert_close(black.value(), expected, 1e-14);
+        }
+    }
+
+    /// `DxDstrike_` is zero (`blackcalculator.cpp:194`), so strike
+    /// sensitivity of a gap call is
+    /// `discount * (-F n(d1) + K2 n(d2)) / (stdDev * strike)`.
+    #[test]
+    fn gap_strike_sensitivity_drops_the_strike_carrying_term() {
+        let second = 45.0;
+        let d1 = (FORWARD / STRIKE).ln() / STD_DEV + 0.5 * STD_DEV;
+        let d2 = d1 - STD_DEV;
+        let f = CumulativeNormalDistribution::standard();
+        let expected = DISCOUNT * (-FORWARD * f.derivative(d1) + second * f.derivative(d2))
+            / (STD_DEV * STRIKE);
+        let payoff = GapPayoff::new(OptionType::Call, STRIKE, second);
         let black = BlackCalculator::with_striked_payoff(&payoff, FORWARD, STD_DEV, DISCOUNT)
             .expect("valid inputs");
         assert_close(black.strike_sensitivity(), expected, 1e-14);

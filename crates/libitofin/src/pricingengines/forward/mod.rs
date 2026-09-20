@@ -5,6 +5,7 @@
 
 mod analyticforwardperformancevanillaengine;
 mod analyticforwardvanillaengine;
+mod analytichestonforwardeuropeanengine;
 mod mcforwardeuropeanbsengine;
 mod mcforwardeuropeanhestonengine;
 mod quantoforwardengine;
@@ -16,6 +17,7 @@ pub use analyticforwardperformancevanillaengine::{
 pub use analyticforwardvanillaengine::{
     AnalyticForwardVanillaEngine, BinomialForwardVanillaEngine, set_analytic_forward_vanilla_engine,
 };
+pub use analytichestonforwardeuropeanengine::AnalyticHestonForwardEuropeanEngine;
 pub use mcforwardeuropeanbsengine::{
     ForwardEuropeanBsPathPricer, MakeMcForwardEuropeanBsEngine, McForwardEuropeanBsEngine,
     set_mc_forward_european_bs_engine,

@@ -47,7 +47,7 @@ pub struct BarrierOption {
     barrier_type: BarrierType,
     barrier: Real,
     rebate: Real,
-    payoff: PlainVanillaPayoff,
+    payoff: Shared<dyn StrikedTypePayoff>,
     exercise: Shared<dyn Exercise>,
 }
 
@@ -71,6 +71,25 @@ impl BarrierOption {
         barrier: Real,
         rebate: Real,
         payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_striked_payoff(
+            barrier_type,
+            barrier,
+            rebate,
+            shared(payoff) as Shared<dyn StrikedTypePayoff>,
+            exercise,
+            settings,
+        )
+    }
+
+    #[allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments)]
+    pub fn with_striked_payoff(
+        barrier_type: BarrierType,
+        barrier: Real,
+        rebate: Real,
+        payoff: Shared<dyn StrikedTypePayoff>,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
@@ -256,7 +275,10 @@ impl Instrument for BarrierOption {
         args.barrier_type = Some(self.barrier_type);
         args.barrier = Some(self.barrier);
         args.rebate = Some(self.rebate);
-        args.payoff = Some(self.payoff);
+        args.payoff = (&*self.payoff as &dyn std::any::Any)
+            .downcast_ref::<PlainVanillaPayoff>()
+            .copied();
+        args.binary_payoff = Some(Shared::clone(&self.payoff));
         args.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
     }
@@ -269,6 +291,7 @@ pub struct BarrierArguments {
     pub barrier: Option<Real>,
     pub rebate: Option<Real>,
     pub payoff: Option<PlainVanillaPayoff>,
+    pub binary_payoff: Option<Shared<dyn StrikedTypePayoff>>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
 
@@ -277,7 +300,10 @@ impl Arguments for BarrierArguments {
         require!(self.barrier_type.is_some(), "no barrier type");
         require!(self.barrier.is_some(), "no barrier");
         require!(self.rebate.is_some(), "no rebate");
-        require!(self.payoff.is_some(), "no payoff");
+        require!(
+            self.payoff.is_some() || self.binary_payoff.is_some(),
+            "no payoff"
+        );
         require!(self.exercise.is_some(), "no exercise");
         Ok(())
     }
@@ -311,6 +337,7 @@ impl AnalyticBarrierEngine {
             args.barrier = arguments.barrier;
             args.rebate = arguments.rebate;
             args.payoff = arguments.payoff;
+            args.binary_payoff = arguments.binary_payoff.as_ref().map(Shared::clone);
             args.exercise = arguments.exercise.as_ref().map(Shared::clone);
         }
         PricingEngine::calculate(self)?;
@@ -340,6 +367,7 @@ impl PricingEngine for AnalyticBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
         let rebate = args.rebate.expect("validated");
+        require!(args.payoff.is_some(), "non-plain payoff given");
         let payoff = args.payoff.expect("validated");
         let exercise = args.exercise.as_ref().expect("validated");
         if exercise.exercise_type() != ExerciseType::European {

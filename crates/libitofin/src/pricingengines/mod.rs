@@ -49,15 +49,17 @@ pub use asian::{
     set_mc_discrete_geometric_average_price_asian_heston_engine, set_turnbull_wakeman_asian_engine,
 };
 pub use barrier::{
-    AnalyticDoubleBarrierEngine, AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine,
-    BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
+    AnalyticBinaryBarrierEngine, AnalyticDoubleBarrierEngine,
+    AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine, BarrierPathPricer,
+    BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
     FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCBarrierEngine,
     MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
-    QuantoDoubleBarrierEngine, VannaVolgaDoubleBarrierEngine, set_analytic_double_barrier_engine,
-    set_analytic_partial_time_barrier_engine, set_analytic_soft_barrier_engine,
-    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
-    set_mc_barrier_engine, set_mc_double_barrier_engine, set_quanto_barrier_engine,
-    set_quanto_double_barrier_engine, set_vanna_volga_double_barrier_engine,
+    QuantoDoubleBarrierEngine, VannaVolgaDoubleBarrierEngine, set_analytic_binary_barrier_engine,
+    set_analytic_double_barrier_engine, set_analytic_partial_time_barrier_engine,
+    set_analytic_soft_barrier_engine, set_binomial_barrier_engine,
+    set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine, set_mc_barrier_engine,
+    set_mc_double_barrier_engine, set_quanto_barrier_engine, set_quanto_double_barrier_engine,
+    set_vanna_volga_double_barrier_engine,
 };
 pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use blackcalculator::BlackCalculator;
@@ -66,7 +68,10 @@ pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, 
 pub use capfloor::{
     AnalyticCapFloorEngine, BachelierCapFloorEngine, BlackCapFloorEngine, TreeCapFloorEngine,
 };
-pub use cliquet::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
+pub use cliquet::{
+    AnalyticCliquetEngine, AnalyticPerformanceEngine, set_analytic_cliquet_engine,
+    set_analytic_performance_engine,
+};
 pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{
     AnalyticComplexChooserEngine, AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,
@@ -74,12 +79,13 @@ pub use exotic::{
 };
 pub use forward::{
     AnalyticForwardPerformanceVanillaEngine, AnalyticForwardVanillaEngine,
-    BinomialForwardVanillaEngine, ForwardEuropeanBsPathPricer, ForwardEuropeanHestonPathPricer,
-    MakeMcForwardEuropeanBsEngine, MakeMcForwardEuropeanHestonEngine, McForwardEuropeanBsEngine,
-    McForwardEuropeanHestonEngine, QuantoForwardEuropeanEngine,
-    QuantoForwardPerformanceEuropeanEngine, set_analytic_forward_performance_vanilla_engine,
-    set_analytic_forward_vanilla_engine, set_mc_forward_european_bs_engine,
-    set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
+    AnalyticHestonForwardEuropeanEngine, BinomialForwardVanillaEngine, ForwardEuropeanBsPathPricer,
+    ForwardEuropeanHestonPathPricer, MakeMcForwardEuropeanBsEngine,
+    MakeMcForwardEuropeanHestonEngine, McForwardEuropeanBsEngine, McForwardEuropeanHestonEngine,
+    QuantoForwardEuropeanEngine, QuantoForwardPerformanceEuropeanEngine,
+    set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
+    set_mc_forward_european_bs_engine, set_quanto_forward_european_engine,
+    set_quanto_forward_performance_european_engine,
 };
 pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use inflation::{YoYInflationCapFloorEngine, yoy_optionlet_price};
@@ -104,8 +110,8 @@ pub use swaption::{
     FdHullWhiteSwaptionEngine, G2SwaptionEngine, JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
 pub use vanilla::{
-    AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
-    QuantoEuropeanEngine,
+    AnalyticDigitalAmericanEngine, AnalyticEuropeanEngine, BaroneAdesiWhaleyApproximationEngine,
+    CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine, QuantoEuropeanEngine,
 };
 
 pub use blackformula::{

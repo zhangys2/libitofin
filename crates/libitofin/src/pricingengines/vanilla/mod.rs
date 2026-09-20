@@ -17,7 +17,9 @@
 //!   does not handle is an explicit error from there rather than a silently
 //!   wrong price.
 
+pub mod analyticdigitalamericanengine;
 pub mod analytichestonengine;
+pub mod baroneadesiwhaleyengine;
 pub mod batesengine;
 pub mod binomialvanillaengine;
 pub mod fdblackscholesvanillaengine;
@@ -31,7 +33,9 @@ pub mod mceuropeanhestonengine;
 pub mod mcvanillaengine;
 pub mod quantoengine;
 
+pub use analyticdigitalamericanengine::AnalyticDigitalAmericanEngine;
 pub use analytichestonengine::HestonChf;
+pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
 pub use binomialvanillaengine::BinomialVanillaEngine;
 pub use fdblackscholesvanillaengine::{CashDividendModel, FdBlackScholesVanillaEngine};
@@ -1093,13 +1097,279 @@ mod test_cash_or_nothing {
 }
 
 #[cfg(test)]
+mod test_asset_or_nothing {
+    //! The `testAssetOrNothingEuropeanValues` oracle of
+    //! `test-suite/digitaloption.cpp:131-183`.
+
+    use super::test_market::{market, time_to_days, today};
+    use crate::instrument::Instrument;
+    use crate::instruments::{AssetOrNothingPayoff, EuropeanOption};
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::shared::shared;
+    use crate::types::{Rate, Real, Time, Volatility};
+
+    fn asset_or_nothing(
+        option_type: OptionType,
+        strike: Real,
+        expiry_time: Time,
+        market: &super::test_market::Market,
+    ) -> EuropeanOption {
+        let expiry = today() + time_to_days(expiry_time);
+        market.option_with_payoff(
+            shared(AssetOrNothingPayoff::new(option_type, strike)),
+            expiry,
+        )
+    }
+
+    /// The single row of the C++ fixture (`digitaloption.cpp:136-139`): a Haug
+    /// p.90 put, asserted at the C++ tolerance of 1e-4. The published figure
+    /// is paired with a full-precision reference at 1e-12:
+    /// `discount * F * N(-d1)` on Actual360.
+    #[test]
+    fn value_matches_the_haug_asset_or_nothing_row() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (65.0, 70.0, 0.05, 0.07, 0.50, 0.27);
+        let haug: Real = 20.2069;
+        let precise: Real = 20.206947298368533;
+
+        let market = market();
+        market.set(spot, q, r, vol);
+        let mut option = asset_or_nothing(Put, strike, t, &market);
+
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - haug).abs() <= 1.0e-4,
+            "asset-or-nothing put K={strike} S={spot}: {calculated} vs Haug {haug} \
+             (error {})",
+            (calculated - haug).abs()
+        );
+        assert!(
+            (calculated - precise).abs() <= 1.0e-12,
+            "asset-or-nothing put K={strike} S={spot}: {calculated} vs reference {precise} \
+             (error {})",
+            (calculated - precise).abs()
+        );
+    }
+
+    /// Call and put asset-or-nothings together pay the asset almost surely,
+    /// so their NPVs sum to `S e^{-q t}`.
+    #[test]
+    fn call_and_put_asset_or_nothings_sum_to_the_prepaid_spot() {
+        let q: Rate = 0.04;
+        let t: Time = 0.5;
+        let market = market();
+        market.set(100.0, q, 0.06, 0.30);
+        for strike in [80.0, 100.0, 120.0] {
+            let mut call = asset_or_nothing(Call, strike, t, &market);
+            let mut put = asset_or_nothing(Put, strike, t, &market);
+            let prepaid = 100.0 * (-q * t).exp();
+            let total = call.npv().unwrap() + put.npv().unwrap();
+            assert!(
+                (total - prepaid).abs() <= 1.0e-12,
+                "asset-or-nothing call+put K={strike}: {total} vs prepaid spot {prepaid}"
+            );
+        }
+    }
+
+    /// Pins put/call `DalphaDd1` (`blackcalculator.cpp:181,185`): value()
+    /// reads only α/β, so a vanilla-put `+n(d1)` on the asset-or-nothing put
+    /// would still match Haug NPV. Delta/gamma vs central differences of NPV
+    /// on a `q != r` fixture, both types, same bump as the cash-or-nothing
+    /// sibling.
+    #[test]
+    fn asset_or_nothing_greeks_match_central_differences() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let tolerance: Real = 1.0e-7;
+        let market = market();
+        market.set(spot, q, r, vol);
+        for option_type in [Call, Put] {
+            let mut option = asset_or_nothing(option_type, strike, t, &market);
+            let delta = option.delta().unwrap();
+            let gamma = option.gamma().unwrap();
+            assert!(
+                gamma.abs() > 1.0e-4,
+                "the fixture must have a gamma worth pinning, got {gamma}"
+            );
+            let h = spot * 1.0e-4;
+            market.spot.set_value(spot + h);
+            let value_up = option.npv().unwrap();
+            market.spot.set_value(spot - h);
+            let value_down = option.npv().unwrap();
+            market.spot.set_value(spot);
+            let value = option.npv().unwrap();
+            let fd_delta = (value_up - value_down) / (2.0 * h);
+            let fd_gamma = (value_up - 2.0 * value + value_down) / (h * h);
+            for (name, analytic, finite_difference) in
+                [("delta", delta, fd_delta), ("gamma", gamma, fd_gamma)]
+            {
+                assert!(
+                    (analytic - finite_difference).abs() <= tolerance,
+                    "{name} of the {option_type:?} asset-or-nothing: analytic {analytic} vs \
+                     finite difference {finite_difference} (error {})",
+                    (analytic - finite_difference).abs()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_gap {
+    //! The `testGapEuropeanValues` oracle of
+    //! `test-suite/digitaloption.cpp:184-235`.
+
+    use super::test_market::{market, time_to_days, today};
+    use crate::instrument::Instrument;
+    use crate::instruments::{CashOrNothingPayoff, EuropeanOption, GapPayoff, PlainVanillaPayoff};
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::shared::shared;
+    use crate::types::{Rate, Real, Time, Volatility};
+
+    const SECOND_STRIKE: Real = 57.0;
+
+    fn gap(
+        option_type: OptionType,
+        strike: Real,
+        second_strike: Real,
+        expiry_time: Time,
+        market: &super::test_market::Market,
+    ) -> EuropeanOption {
+        let expiry = today() + time_to_days(expiry_time);
+        market.option_with_payoff(
+            shared(GapPayoff::new(option_type, strike, second_strike)),
+            expiry,
+        )
+    }
+
+    /// The single row of the C++ fixture (`digitaloption.cpp:189-191`): a Haug
+    /// p.88 call with payoff strike 57, asserted at the C++ tolerance of 1e-4.
+    /// The published figure is paired with a full-precision reference at
+    /// 1e-12: `discount * (F N(d1) - 57 N(d2))` on Actual360.
+    #[test]
+    fn value_matches_the_haug_gap_row() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (50.0, 50.0, 0.00, 0.09, 0.50, 0.20);
+        let haug: Real = -0.0053;
+        let precise: Real = -0.0052524892587822595;
+
+        let market = market();
+        market.set(spot, q, r, vol);
+        let mut option = gap(Call, strike, SECOND_STRIKE, t, &market);
+
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - haug).abs() <= 1.0e-4,
+            "gap call K={strike} K2={SECOND_STRIKE} S={spot}: {calculated} vs Haug {haug} \
+             (error {})",
+            (calculated - haug).abs()
+        );
+        assert!(
+            (calculated - precise).abs() <= 1.0e-12,
+            "gap call K={strike} K2={SECOND_STRIKE} S={spot}: {calculated} vs reference {precise} \
+             (error {})",
+            (calculated - precise).abs()
+        );
+    }
+
+    /// A gap is a vanilla struck at K1 plus or minus a cash-or-nothing of
+    /// size `K2 - K1` (`payoffs.hpp:170-176`): short the cash for a call,
+    /// long it for a put. Pins both types of the visitor, which only rewrites
+    /// `x` and `DxDstrike`.
+    #[test]
+    fn gap_matches_vanilla_plus_or_minus_the_cash_leg() {
+        let (strike, second, spot, q, r, t, vol): (Real, Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 110.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let cash = second - strike;
+        let market = market();
+        market.set(spot, q, r, vol);
+        let expiry = today() + time_to_days(t);
+        for option_type in [Call, Put] {
+            let mut gap_opt = gap(option_type, strike, second, t, &market);
+            let mut vanilla = market
+                .option_with_payoff(shared(PlainVanillaPayoff::new(option_type, strike)), expiry);
+            let mut digital = market.option_with_payoff(
+                shared(CashOrNothingPayoff::new(option_type, strike, cash)),
+                expiry,
+            );
+            let expected = match option_type {
+                Call => vanilla.npv().unwrap() - digital.npv().unwrap(),
+                Put => vanilla.npv().unwrap() + digital.npv().unwrap(),
+            };
+            let calculated = gap_opt.npv().unwrap();
+            assert!(
+                (calculated - expected).abs() <= 1.0e-12,
+                "{option_type:?} gap {calculated} vs vanilla±cash {expected}"
+            );
+        }
+    }
+
+    /// Pins `DxDstrike_ = 0` (`blackcalculator.cpp:194`): value() does not
+    /// see it, so a leftover vanilla `dx_dstrike = 1` still matches Haug NPV.
+    /// Delta/gamma vs spot bumps and strikeSensitivity vs K1 bumps (K2
+    /// fixed), both types, same relative bump as the cash-or-nothing sibling.
+    #[test]
+    fn gap_greeks_match_central_differences() {
+        let (strike, second, spot, q, r, t, vol): (Real, Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 90.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let tolerance: Real = 1.0e-7;
+        let market = market();
+        market.set(spot, q, r, vol);
+        for option_type in [Call, Put] {
+            let mut option = gap(option_type, strike, second, t, &market);
+            let delta = option.delta().unwrap();
+            let gamma = option.gamma().unwrap();
+            let strike_sensitivity = option.strike_sensitivity().unwrap();
+            assert!(
+                gamma.abs() > 1.0e-4,
+                "the fixture must have a gamma worth pinning, got {gamma}"
+            );
+            let h = spot * 1.0e-4;
+            market.spot.set_value(spot + h);
+            let value_up = option.npv().unwrap();
+            market.spot.set_value(spot - h);
+            let value_down = option.npv().unwrap();
+            market.spot.set_value(spot);
+            let value = option.npv().unwrap();
+            let fd_delta = (value_up - value_down) / (2.0 * h);
+            let fd_gamma = (value_up - 2.0 * value + value_down) / (h * h);
+            let hk = strike * 1.0e-4;
+            let fd_strike_sensitivity = (gap(option_type, strike + hk, second, t, &market)
+                .npv()
+                .unwrap()
+                - gap(option_type, strike - hk, second, t, &market)
+                    .npv()
+                    .unwrap())
+                / (2.0 * hk);
+            for (name, analytic, finite_difference) in [
+                ("delta", delta, fd_delta),
+                ("gamma", gamma, fd_gamma),
+                (
+                    "strikeSensitivity",
+                    strike_sensitivity,
+                    fd_strike_sensitivity,
+                ),
+            ] {
+                assert!(
+                    (analytic - finite_difference).abs() <= tolerance,
+                    "{name} of the {option_type:?} gap: analytic {analytic} vs finite \
+                     difference {finite_difference} (error {})",
+                    (analytic - finite_difference).abs()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod test_greeks {
     //! The `testGreeks` oracle of `test-suite/europeanoption.cpp`: analytic
     //! greeks against central finite differences over the full plain-vanilla
     //! grid, on curves moving off the evaluation date. The C++ test also
-    //! sweeps asset-or-nothing and gap payoffs; those payoffs are follow-up
-    //! work and their sweeps come with them. The cash-or-nothing sweep is
-    //! covered by `test_cash_or_nothing` above.
+    //! sweeps cash-or-nothing, asset-or-nothing and gap payoffs; those NPV +
+    //! δ/γ pins live in `test_cash_or_nothing`, `test_asset_or_nothing` and
+    //! `test_gap`. The full `europeanoption.cpp` kk==1..3 moving-curve grids
+    //! remain deferred.
 
     use super::AnalyticEuropeanEngine;
     use super::test_market::{quote_handle, time_to_days, today};

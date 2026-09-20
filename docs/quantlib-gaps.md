@@ -58,10 +58,10 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Hull–White / affine short-rate suite | `HullWhite`, trees, helpers | `shortratemodels.cpp` | true | partial | Coverage “Core done”; full `testSwaps` breadth not mapped |
 | Equity | Heston analytic/FD/MC full suite | `HestonModel`, engines | `hestonmodel.cpp` | true | partial | FD-cached ambition closed (`testFdBarrierVsCached` / `testFdVanillaVsCached` / dividends / `testFdAmerican`). Remaining: Lewis/Kahl–Jaeckel, COS/AP/integrals, piecewise TD, etc. |
 | Equity | Heston FD scheme grid | `FdHeston*` | `fdheston.cpp` | true | partial | Variance mesher + Black limit + American/Ikonen/div/barrier NPV + ADI convergence (HS/MCS/mod-HS/CS) + Haug barrier-vs-BS table + MethodOfLines vs Hundsdorfer + American call–put parity + spurious oscillations (CS/HS/mod-HS/Douglas) closed. Still open: ExplicitEuler arm, 2-D CN/TrBDF2/ImplicitEuler (#636), intraday (`QL_HIGH_RESOLUTION_DATE`) |
-| Equity | Forward-start vanilla (non-quanto) | `ForwardVanillaOption`, forward engines | `forwardoption.cpp` | true | partial | Haug NPV + analytic greeks + greeks-init + BS MC + flat-Heston MC vs BS (`testHestonMCPrices` Test 1) + smile/t=0 Heston MC vs vanilla AnalyticHeston (`testHestonMCPrices` Test 2 MC arm) closed. Still open: `AnalyticHestonForwardEuropeanEngine` T=0 analytic, analytic-vs-MC / control variate |
-| Equity | Digitals beyond cash-or-nothing | Digital payoffs + American/MC engines | `digitaloption.cpp`, `binaryoption.cpp` | true | partial | One Haug cash-or-nothing; asset/gap/American/MC open |
-| Equity | Asset-or-nothing / gap / super payoffs | `AssetOrNothing`, `Gap`, `Super*` | `binaryoption.cpp` | false | none | Documented follow-up in `payoffs.rs` |
-| Equity | Binary / double-binary barrier | `AnalyticBinaryBarrierEngine`, `AnalyticDoubleBarrierBinaryEngine` | `binaryoption.cpp`, `doublebarrieroption.cpp` | false | none | |
+| Equity | Forward-start vanilla (non-quanto) | `ForwardVanillaOption`, forward engines | `forwardoption.cpp` | true | partial | Haug NPV + analytic greeks + greeks-init + BS MC + flat-Heston MC vs BS (`testHestonMCPrices` Test 1) + smile/t=0 Heston MC vs vanilla AnalyticHeston (`testHestonMCPrices` Test 2 MC arm) + T=0 `AnalyticHestonForwardEuropeanEngine` vs vanilla AnalyticHeston closed. Still open: `tReset>0` 2-D propagator / Bessel, analytic-vs-MC / control variate |
+| Equity | Digitals beyond cash-or-nothing | Digital payoffs + American/MC engines | `digitaloption.cpp`, `binaryoption.cpp` | true | partial | Haug cash-or-nothing + asset-or-nothing + gap; `AnalyticDigitalAmericanEngine` at-hit cash/asset @ 1e-4; at-expiry / KO / MC deferred |
+| Equity | Asset-or-nothing / gap / super payoffs | `AssetOrNothing`, `Gap`, `Super*` | `digitaloption.cpp` | true | partial | Asset-or-nothing European Haug p.90 + FD δ/γ and gap European Haug p.88 + FD δ/γ/strikeSensitivity closed; super and `europeanoption.cpp` kk==1..3 moving-curve grids open |
+| Equity | Binary / double-binary barrier | `AnalyticBinaryBarrierEngine`, `AnalyticDoubleBarrierBinaryEngine` | `binaryoption.cpp`, `doublebarrieroption.cpp` | true | partial | `AnalyticBinaryBarrierEngine` Haug p.180 cash/asset book rows (q=0) closed; book-vba q≠0 / remaining cash degenerates / double-binary deferred |
 | Equity | Compound option | `CompoundOption`, analytic engine | `compoundoption.cpp` | false | none | |
 | Equity | Margrabe / exchange | `MargrabeOption` | `margrabeoption.cpp` | false | none | |
 | Equity | Two-asset barrier | `TwoAssetBarrierOption` | `twoassetbarrieroption.cpp` / barrier suite | false | none | |
@@ -71,7 +71,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Basket beyond Choi / single-factor | Kirk/Stulz/Pearson/MC/FD-nD basket | `basketoption.cpp`, `spreadoption.cpp` | true | partial | Choi golden example pinned |
 | Equity | FD Heston double-barrier | `FdHestonDoubleBarrierEngine` | `doublebarrieroption.cpp` | false | none | |
 | Equity | Vanna–Volga single barrier | VV barrier (non-double) | `barrieroption.cpp` | false | none | Double-barrier VV only |
-| Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | false | none | Analytic cliquet Haug done |
+| Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | true | partial | `AnalyticPerformanceEngine` FD ρ/divρ/ν/θ + δ=γ=0 closed; `MCPerformanceEngine` / full `testPerformanceGreeks` grid deferred |
 | Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | false | none | |
 | Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | false | none | |
 | Equity | Sticky ratchet | `StickyRatchet` | `stickyratchet.cpp` | false | none | |
@@ -79,7 +79,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Variance gamma | `VarianceGamma*` | `variancegamma.cpp` | false | none | |
 | Equity | GJR-GARCH | `GJRGARCHModel` + engines | `gjrgarch.cpp` | false | none | |
 | Equity | Piecewise time-dependent Heston | `PiecewiseTimeDependentHestonModel` | `hestonmodel.cpp` | false | none | |
-| Equity | Analytic American approximations | Barone-Adesi–Whaley, Bjerksund–Stensland, Ju, QD+ | `americanoption.cpp` | false | none | FD/binomial American present |
+| Equity | Analytic American approximations | Barone-Adesi–Whaley, Bjerksund–Stensland, Ju, QD+ | `americanoption.cpp` | true | partial | `BaroneAdesiWhaleyApproximationEngine` Haug p.24 NPV @ 3e-3; Bjerksund–Stensland / Ju / QD+ deferred |
 | Equity | FD CEV / CIR / SABR / Bates vanilla | `FdCev*`, `FdCir*`, `FdSabr*`, `FdBates*` | matching suites | false | none | |
 | Equity | FD Black–Scholes Asian | `FdBlackScholesAsianEngine` | `asianoptions.cpp` | false | none | Analytic/MC Asian set present |
 | Equity | LSMC American max option | `McLongstaffSchwartz` max | `mclongstaffschwartzengine.cpp` | true | partial | Vanilla LSMC pinned; max-option case not |
