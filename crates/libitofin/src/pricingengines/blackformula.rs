@@ -8,13 +8,16 @@
 //! not the volatility itself, and an optional lognormal `displacement`
 //! shifting both forward and strike.
 //!
-//! The Bachelier (normal-model) pricing pair, [`bachelier_black_formula`] and
-//! its forward derivative [`bachelier_black_formula_forward_derivative`], sit
-//! beside the Black family; the optionlet volatility surface selects between
-//! the two through its volatility type. Unlike the lognormal family the normal
-//! model admits negative forwards and strikes and applies no displacement, so
-//! these two functions deliberately skip [`check_parameters`]: they validate
-//! only the standard deviation and discount, exactly as the C++ reference does.
+//! The Bachelier (normal-model) pricing family —
+//! [`bachelier_black_formula`], [`bachelier_black_formula_forward_derivative`],
+//! [`bachelier_black_formula_std_dev_derivative`], and
+//! [`bachelier_black_formula_asset_itm_probability`] — sits beside the Black
+//! family; the optionlet volatility surface selects between the two through its
+//! volatility type. Unlike the lognormal family the normal model admits
+//! negative forwards and strikes and applies no displacement, so these
+//! functions deliberately skip [`check_parameters`]: they validate only the
+//! standard deviation (and discount where required), exactly as the C++
+//! reference does.
 //!
 //! Out of scope, left as follow-ups with the quotes that need them: the
 //! implied-standard-deviation family (approximations and solvers), including
@@ -511,6 +514,30 @@ pub fn bachelier_black_formula_std_dev_derivative(
     let d1 = (forward - strike) / std_dev;
     let phi = CumulativeNormalDistribution::standard();
     Ok(discount * phi.derivative(d1))
+}
+
+/// Risk-neutral probability of exercise in the asset martingale measure under
+/// the normal model, `N(h)` with `h = (forward - strike) * sign / std_dev`
+/// (`bachelierBlackFormulaAssetItmProbability`, `blackformula.cpp:950-963`).
+///
+/// At `std_dev == 0` the C++ reference returns `max((forward - strike) * sign,
+/// 0)` (a moneyness, not a probability); the port matches that quirk. Cap/floor
+/// engines leave δ=0 when `sqrtTime == 0`, so the live FD oracles never hit it.
+pub fn bachelier_black_formula_asset_itm_probability(
+    option_type: OptionType,
+    strike: Real,
+    forward: Real,
+    std_dev: Real,
+) -> QlResult<Real> {
+    check_std_dev(std_dev)?;
+
+    let d = (forward - strike) * sign_of(option_type);
+    if std_dev == 0.0 {
+        return Ok(d.max(0.0));
+    }
+    let h = d / std_dev;
+    let phi = CumulativeNormalDistribution::standard();
+    Ok(phi.value(h))
 }
 
 #[cfg(test)]
