@@ -195,6 +195,12 @@ impl MakeOis {
         self
     }
 
+    /// Sets payer/receiver (`makeois.hpp` `withType`).
+    pub fn with_type(mut self, swap_type: SwapType) -> MakeOis {
+        self.swap_type = swap_type;
+        self
+    }
+
     /// Sets the swap's start date explicitly, bypassing the settlement-days
     /// dispatch (`makeois.cpp:205`).
     pub fn with_effective_date(mut self, effective_date: Date) -> MakeOis {
