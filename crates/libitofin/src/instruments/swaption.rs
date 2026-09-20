@@ -24,8 +24,10 @@
 //!   [`check_type_and_method_consistency`]; the consistency check returns a
 //!   [`QlResult`] rather than throwing.
 //! - [`Swaption::implied_volatility`] pins `testImpliedVolatility` (Spot Black
-//!   arm); OIS implied-vol and Bachelier round-trips remain deferred. The
-//!   `deepUpdate` observer optimisation is also deferred.
+//!   Physical arm); Cash / Forward / OIS / Bachelier round-trips remain deferred.
+//!   The helper uses `CashAnnuityModel::DiscountCurve` to match QuantLib's
+//!   `ImpliedSwaptionVolHelper` ctor default. The `deepUpdate` observer
+//!   optimisation is also deferred.
 //!   [`MakeSwaption`](crate::instruments::MakeSwaption) builds vanilla
 //!   swaptions from a [`SwapIndex`](crate::indexes::SwapIndex).
 
@@ -265,9 +267,10 @@ impl Swaption {
 
         let vol = shared(SimpleQuote::new(-1.0));
         let vol_handle = Handle::new(Shared::clone(&vol) as Shared<dyn Quote>);
-        // Match the fixture's `make_swaption` annuity model so round-trips pin
-        // against the same engine surface the suite prices with.
-        let model = CashAnnuityModel::SwapRate;
+        // Match QuantLib `ImpliedSwaptionVolHelper`: Black/Bachelier ctors that
+        // omit `model` default to `DiscountCurve` (`blackswaptionengine.hpp:143`).
+        // Only Cash+ParYieldCurve reads this; Physical ignores it.
+        let model = CashAnnuityModel::DiscountCurve;
         let mut engine: Box<dyn PricingEngine> = match vol_type {
             VolatilityType::ShiftedLognormal => Box::new(BlackSwaptionEngine::with_flat_vol(
                 discount_curve,
