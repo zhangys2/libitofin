@@ -735,6 +735,35 @@ mod tests {
             swaption
         }
 
+        /// Flat Normal (Bachelier) engine attach for the Normal implied-vol arm.
+        fn make_bachelier_swaption(
+            &self,
+            swap: FixedVsFloatingSwap,
+            exercise_date: Date,
+            volatility: Volatility,
+            settlement_type: SettlementType,
+            settlement_method: SettlementMethod,
+        ) -> Swaption {
+            let engine = shared_mut(BachelierSwaptionEngine::with_flat_vol(
+                self.curve.clone(),
+                make_quote_handle(volatility).handle(),
+                Actual365Fixed::new(),
+                0.0,
+                CashAnnuityModel::SwapRate,
+                Shared::clone(&self.settings),
+            )) as SharedMut<dyn PricingEngine>;
+            let mut swaption = Swaption::new(
+                shared_mut(swap),
+                shared(EuropeanExercise::new(exercise_date))
+                    as Shared<dyn crate::exercise::Exercise>,
+                settlement_type,
+                settlement_method,
+                Shared::clone(&self.settings),
+            );
+            swaption.base_mut().set_pricing_engine(engine);
+            swaption
+        }
+
         /// A vanilla swap with an explicit type and floating-leg spread, the
         /// shape the monotonicity tests need (`MakeVanillaSwap` cannot yet set
         /// either). The fixed leg is annual Thirty360 BondBasis, the floating
@@ -1126,7 +1155,8 @@ mod tests {
     /// `testImpliedVolatility` (`swaption.cpp:825`): recover the input Black
     /// flat vol from Spot NPV via [`Swaption::implied_volatility`] @ 1e-8,
     /// Physical settlement, skipping zero-price bracket cases QL also skips.
-    /// Cash/Forward/OIS/Bachelier arms deferred.
+    /// Cash / Forward / OIS arms deferred; Normal arm in
+    /// [`implied_volatility_recovers_the_input_normal_vol`].
     #[test]
     fn implied_volatility_recovers_the_input_black_vol() {
         let vars = Vars::new(Date::new(13, Month::March, 2002), true);
@@ -1206,6 +1236,71 @@ mod tests {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Reduced Normal-arm pin for [`Swaption::implied_volatility`] with
+    /// `VolatilityType::Normal` (QL `testImpliedVolatility` is Black-only;
+    /// mirrors CapFloor's reduced Normal IV pin). Spot Physical @ 1e-8.
+    #[test]
+    fn implied_volatility_recovers_the_input_normal_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let exercise_date = vars.years(vars.today, 5);
+        let start_date = vars.spot(exercise_date);
+        let length = 10;
+        let strike = 0.05;
+        let vols = [0.005, 0.01, 0.02];
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            for vol in vols {
+                let make_swap = || {
+                    vars.make_vanilla(start_date, length, strike, 0.0, swap_type)
+                        .into_fixed_vs_floating()
+                };
+                let mut swaption = vars.make_bachelier_swaption(
+                    make_swap(),
+                    exercise_date,
+                    vol,
+                    SettlementType::Physical,
+                    SettlementMethod::PhysicalOTC,
+                );
+                let value = swaption.npv().unwrap();
+                let implied = swaption
+                    .implied_volatility(
+                        value,
+                        vars.curve.clone(),
+                        0.01,
+                        tolerance,
+                        100,
+                        1.0e-7,
+                        4.0,
+                        VolatilityType::Normal,
+                        0.0,
+                        crate::instruments::SwaptionPriceType::Spot,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Normal implied vol failed ({swap_type:?} vol={vol} \
+                             price={value}): {e}"
+                        )
+                    });
+                if (implied - vol).abs() > tolerance {
+                    let mut check = vars.make_bachelier_swaption(
+                        make_swap(),
+                        exercise_date,
+                        implied,
+                        SettlementType::Physical,
+                        SettlementMethod::PhysicalOTC,
+                    );
+                    let value2 = check.npv().unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "Normal implied {implied} vs input {vol}: price {value} \
+                         vs reprice {value2} ({swap_type:?})"
+                    );
                 }
             }
         }
