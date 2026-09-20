@@ -7,6 +7,7 @@ mod analyticcompoundoptionengine;
 mod analyticeuropeanmargrabeengine;
 mod analyticsimplechooserengine;
 mod analytictwoassetcorrelationengine;
+mod analyticwriterextensibleoptionengine;
 
 pub use analyticcomplexchooserengine::{
     AnalyticComplexChooserEngine, set_analytic_complex_chooser_engine,
@@ -22,4 +23,7 @@ pub use analyticsimplechooserengine::{
 };
 pub use analytictwoassetcorrelationengine::{
     AnalyticTwoAssetCorrelationEngine, set_analytic_two_asset_correlation_engine,
+};
+pub use analyticwriterextensibleoptionengine::{
+    AnalyticWriterExtensibleOptionEngine, set_analytic_writer_extensible_option_engine,
 };
