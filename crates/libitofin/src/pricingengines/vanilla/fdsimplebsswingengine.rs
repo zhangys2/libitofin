@@ -159,5 +159,15 @@ mod tests {
             }
             assert!(lower - price <= 4e-2, "rights={rights} lower {lower} > price {price}");
         }
+        let n = dates.len();
+        let mut forced = VanillaSwingOption::new(Shared::clone(&forward), Shared::clone(&swing), n, n, Shared::clone(&settings));
+        set_fd_simple_bs_swing_engine(&mut forced, Shared::clone(&process), 50, 200);
+        let mut analytic = 0.0;
+        for d in &dates {
+            let t = process.time(d).unwrap();
+            analytic += 30.0 * process.risk_free_rate().current_link().unwrap().discount(t, false).unwrap() - 30.0 * process.dividend_yield().current_link().unwrap().discount(t, false).unwrap();
+        }
+        assert!((forced.npv().unwrap() - analytic).abs() < 2e-3);
+        assert_eq!(VanillaForwardPayoff::new(OptionType::Put, 30.0).value(40.0), -10.0);
     }
 }
