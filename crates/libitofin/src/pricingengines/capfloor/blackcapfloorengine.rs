@@ -10,19 +10,18 @@
 //! (`blackcapfloorengine.cpp:77-166`).
 //!
 //! The engine reports `value`, the additional result `"vega"` (the sum of the
-//! optionlet vegas, required by the instrument, `capfloor.cpp:104`) and
-//! `"optionletsPrice"` (one price per coupon, including the zeros of coupons that
-//! have already paid, so its length always equals the coupon count).
+//! optionlet vegas, required by the instrument, `capfloor.cpp:104`),
+//! `"optionletsPrice"`, `"optionletsDelta"`, `"optionletsDiscountFactor"`, and
+//! `"optionletsAtmForward"` (`blackcapfloorengine.cpp:160-168`).
 //!
 //! ## Divergences from QuantLib
 //!
 //! - The C++ `Settings::instance()` singleton has no counterpart; the flat-vol
 //!   convenience constructor threads an explicit [`Settings`] into the moving
 //!   [`ConstantOptionletVolatility`] it builds (D5).
-//! - Only the [`ShiftedLognormal`](VolatilityType::ShiftedLognormal) path is
-//!   priced. The C++ `optionletsDelta`/`optionletsStdDev`/`optionletsAtmForward`
-//!   additional results feed only the deferred delta and implied-vol tests and
-//!   are not produced.
+//! - `"optionletsVega"` / `"optionletsStdDev"` per-optionlet vectors are not
+//!   emitted (the suite only consumes the aggregate `"vega"` and the delta FD
+//!   fixture).
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
@@ -31,7 +30,9 @@ use crate::instruments::{CapFloorArguments, CapFloorType};
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
-use crate::pricingengines::blackformula::{black_formula, black_formula_std_dev_derivative};
+use crate::pricingengines::blackformula::{
+    black_formula, black_formula_asset_itm_probability, black_formula_std_dev_derivative,
+};
 use crate::quotes::Quote;
 use crate::settings::Settings;
 use crate::shared::{Shared, shared};
@@ -162,9 +163,17 @@ impl PricingEngine for BlackCapFloorEngine {
 
         let n = arguments.end_dates.len();
         let mut values = Vec::with_capacity(n);
+        let mut deltas = Vec::with_capacity(n);
+        let mut discount_factors = Vec::with_capacity(n);
+        let mut atm_forwards: Vec<Real> = arguments
+            .forwards
+            .iter()
+            .map(|f| f.unwrap_or(0.0))
+            .collect();
         let mut value = 0.0;
         let mut vega = 0.0;
 
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             let payment_date = arguments.end_dates[i];
             // Settlement/npv-date handling is not modelled; expired caplets are
@@ -172,16 +181,21 @@ impl PricingEngine for BlackCapFloorEngine {
             // zero entry so `optionletsPrice` spans every coupon.
             if payment_date <= settlement {
                 values.push(0.0);
+                deltas.push(0.0);
+                discount_factors.push(0.0);
                 continue;
             }
             let d = discount.discount_date(payment_date, false)?;
+            discount_factors.push(d);
             let accrual_factor =
                 arguments.nominals[i] * arguments.gearings[i] * arguments.accrual_times[i];
             let discounted_accrual = d * accrual_factor;
             let Some(forward) = arguments.forwards[i] else {
                 values.push(0.0);
+                deltas.push(0.0);
                 continue;
             };
+            atm_forwards[i] = forward;
 
             let fixing_date = arguments.fixing_dates[i];
             let sqrt_time = if fixing_date > today {
@@ -192,6 +206,7 @@ impl PricingEngine for BlackCapFloorEngine {
 
             let mut optionlet_value = 0.0;
             let mut optionlet_vega = 0.0;
+            let mut optionlet_delta = 0.0;
 
             if has_cap {
                 let strike = arguments.cap_rates[i].expect("cap rate set for cap/collar");
@@ -207,6 +222,13 @@ impl PricingEngine for BlackCapFloorEngine {
                         discounted_accrual,
                         displacement,
                     )? * sqrt_time;
+                    optionlet_delta = black_formula_asset_itm_probability(
+                        OptionType::Call,
+                        strike,
+                        forward,
+                        std_dev,
+                        displacement,
+                    )?;
                 }
                 optionlet_value += black_formula(
                     OptionType::Call,
@@ -222,6 +244,7 @@ impl PricingEngine for BlackCapFloorEngine {
                 let strike = arguments.floor_rates[i].expect("floor rate set for floor/collar");
                 let mut std_dev = 0.0;
                 let mut floorlet_vega = 0.0;
+                let mut floorlet_delta = 0.0;
                 if sqrt_time > 0.0 {
                     std_dev = surface
                         .black_variance_date(fixing_date, strike, false)?
@@ -233,6 +256,14 @@ impl PricingEngine for BlackCapFloorEngine {
                         discounted_accrual,
                         displacement,
                     )? * sqrt_time;
+                    floorlet_delta = (OptionType::Put as i32 as Real)
+                        * black_formula_asset_itm_probability(
+                            OptionType::Put,
+                            strike,
+                            forward,
+                            std_dev,
+                            displacement,
+                        )?;
                 }
                 let floorlet = black_formula(
                     OptionType::Put,
@@ -245,14 +276,17 @@ impl PricingEngine for BlackCapFloorEngine {
                 if cap_floor_type == CapFloorType::Floor {
                     optionlet_value = floorlet;
                     optionlet_vega = floorlet_vega;
+                    optionlet_delta = floorlet_delta;
                 } else {
                     // A collar is long the cap and short the floor.
                     optionlet_value -= floorlet;
                     optionlet_vega -= floorlet_vega;
+                    optionlet_delta -= floorlet_delta;
                 }
             }
 
             values.push(optionlet_value);
+            deltas.push(optionlet_delta);
             value += optionlet_value;
             vega += optionlet_vega;
         }
@@ -271,6 +305,18 @@ impl PricingEngine for BlackCapFloorEngine {
             "optionletsPrice".to_string(),
             shared(values) as Shared<dyn Any>,
         );
+        results.additional_results.insert(
+            "optionletsDelta".to_string(),
+            shared(deltas) as Shared<dyn Any>,
+        );
+        results.additional_results.insert(
+            "optionletsDiscountFactor".to_string(),
+            shared(discount_factors) as Shared<dyn Any>,
+        );
+        results.additional_results.insert(
+            "optionletsAtmForward".to_string(),
+            shared(atm_forwards) as Shared<dyn Any>,
+        );
         Ok(())
     }
 }
@@ -278,7 +324,7 @@ impl PricingEngine for BlackCapFloorEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cashflows::{IborCoupon, IborLeg};
+    use crate::cashflows::{Coupon, IborCoupon, IborLeg};
     use crate::indexes::IborIndex;
     use crate::indexes::ibor::Euribor;
     use crate::indexes::interestrateindex::InterestRateIndex;
@@ -287,9 +333,9 @@ mod tests {
     use crate::instruments::{SwapType, VanillaSwap};
     use crate::interestrate::Compounding;
     use crate::pricingengines::DiscountingSwapEngine;
-    use crate::quotes::make_quote_handle;
+    use crate::quotes::{Quote, SimpleQuote, make_quote_handle};
     use crate::shared::{SharedMut, shared, shared_mut};
-    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yields::{FlatForward, ZeroSpreadedTermStructure};
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendar::Calendar;
     use crate::time::calendars::target::Target;
@@ -299,7 +345,7 @@ mod tests {
     use crate::time::frequency::Frequency;
     use crate::time::schedule::{MakeSchedule, Schedule};
     use crate::time::timeunit::TimeUnit;
-    use crate::types::{Integer, Rate, Volatility};
+    use crate::types::{Integer, Rate, Real, Volatility};
 
     /// The `capfloor.cpp` `CommonVars` fixture, retargeted to the cached test's
     /// dates (`testCachedValue:542`): today 14-Mar-2002, settlement 18-Mar-2002,
@@ -660,6 +706,126 @@ mod tests {
                     "collar {length}y cap {cap_rate} floor {floor_rate}"
                 );
             }
+        }
+    }
+
+    /// `testOptionLetsDelta` (`capfloor.cpp`): analytical `optionletsDelta`
+    /// matches a forward-rate FD that strips out discounting effects, to 1e-6.
+    #[test]
+    fn optionlets_delta_matches_forward_fd() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(Date::new(14, Month::March, 2002));
+        let settlement = Date::new(18, Month::March, 2002);
+        let base: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.05,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let spread = shared(SimpleQuote::new(0.0));
+        let spread_h: Handle<dyn Quote> = Handle::new(Shared::clone(&spread) as Shared<dyn Quote>);
+        let curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(ZeroSpreadedTermStructure::new(base, spread_h))
+                as Shared<dyn YieldTermStructure>);
+
+        let index = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+        let calendar = Target::new();
+        let start = curve.current_link().unwrap().reference_date().unwrap();
+        let end = calendar.advance(
+            start,
+            20,
+            TimeUnit::Years,
+            BusinessDayConvention::ModifiedFollowing,
+            false,
+        );
+        let schedule = MakeSchedule::new()
+            .from(start)
+            .to(end)
+            .with_frequency(Frequency::Semiannual)
+            .with_calendar(calendar)
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
+            .forwards()
+            .end_of_month(false)
+            .build();
+        let leg = IborLeg::new(schedule, Shared::clone(&index))
+            .with_notional(100.0)
+            .with_payment_day_counter(index.day_counter().clone())
+            .with_payment_adjustment(BusinessDayConvention::ModifiedFollowing)
+            .with_fixing_days(2)
+            .coupons()
+            .unwrap();
+
+        let engine = || {
+            shared_mut(
+                BlackCapFloorEngine::with_flat_vol(
+                    curve.clone(),
+                    make_quote_handle(0.20).handle(),
+                    Actual365Fixed::new(),
+                    0.0,
+                    Shared::clone(&settings),
+                )
+                .unwrap(),
+            ) as SharedMut<dyn PricingEngine>
+        };
+        let mut cap = CapFloor::cap(leg.clone(), vec![0.05], Shared::clone(&settings)).unwrap();
+        cap.base_mut().set_pricing_engine(engine());
+        let mut floor = CapFloor::floor(leg.clone(), vec![0.05], Shared::clone(&settings)).unwrap();
+        floor.base_mut().set_pricing_engine(engine());
+
+        let cap_analytic = cap.result::<Vec<Real>>("optionletsDelta").unwrap();
+        let floor_analytic = floor.result::<Vec<Real>>("optionletsDelta").unwrap();
+
+        let eps = 1.0e-6;
+        spread.set_value(Some(eps));
+        let cap_up_p = cap.result::<Vec<Real>>("optionletsPrice").unwrap();
+        let cap_up_d = cap.result::<Vec<Real>>("optionletsDiscountFactor").unwrap();
+        let cap_up_f = cap.result::<Vec<Real>>("optionletsAtmForward").unwrap();
+        let floor_up_p = floor.result::<Vec<Real>>("optionletsPrice").unwrap();
+        let floor_up_d = floor
+            .result::<Vec<Real>>("optionletsDiscountFactor")
+            .unwrap();
+        let floor_up_f = floor.result::<Vec<Real>>("optionletsAtmForward").unwrap();
+
+        spread.set_value(Some(-eps));
+        let cap_dn_p = cap.result::<Vec<Real>>("optionletsPrice").unwrap();
+        let cap_dn_d = cap.result::<Vec<Real>>("optionletsDiscountFactor").unwrap();
+        let cap_dn_f = cap.result::<Vec<Real>>("optionletsAtmForward").unwrap();
+        let floor_dn_p = floor.result::<Vec<Real>>("optionletsPrice").unwrap();
+        let floor_dn_d = floor
+            .result::<Vec<Real>>("optionletsDiscountFactor")
+            .unwrap();
+        let floor_dn_f = floor.result::<Vec<Real>>("optionletsAtmForward").unwrap();
+
+        // QL skips the first caplet (`n` from 1); floorlets run from 0.
+        for n in 1..cap_up_p.len() {
+            let accrual = leg[n].nominal() * leg[n].accrual_period() * leg[n].gearing();
+            let df_fwd = cap_up_f[n] - cap_dn_f[n];
+            if df_fwd.abs() < 1e-14 || cap_up_d[n] == 0.0 || cap_dn_d[n] == 0.0 {
+                continue;
+            }
+            let fd = (cap_up_p[n] / cap_up_d[n] - cap_dn_p[n] / cap_dn_d[n]) / df_fwd / accrual;
+            assert!(
+                (cap_analytic[n] - fd).abs() <= 1.0e-6,
+                "caplet {n}: analytic {} vs fd {fd}",
+                cap_analytic[n]
+            );
+        }
+        for n in 0..floor_up_p.len() {
+            let accrual = leg[n].nominal() * leg[n].accrual_period() * leg[n].gearing();
+            let df_fwd = floor_up_f[n] - floor_dn_f[n];
+            if df_fwd.abs() < 1e-14 || floor_up_d[n] == 0.0 || floor_dn_d[n] == 0.0 {
+                continue;
+            }
+            let fd =
+                (floor_up_p[n] / floor_up_d[n] - floor_dn_p[n] / floor_dn_d[n]) / df_fwd / accrual;
+            assert!(
+                (floor_analytic[n] - fd).abs() <= 1.0e-6,
+                "floorlet {n}: analytic {} vs fd {fd}",
+                floor_analytic[n]
+            );
         }
     }
 }
