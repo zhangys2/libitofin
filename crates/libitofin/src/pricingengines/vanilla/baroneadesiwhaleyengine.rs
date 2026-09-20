@@ -237,8 +237,9 @@ mod tests {
     }
 
     /// Haug p.24 as in `americanoption.cpp` `testBaroneAdesiWhaleyValues`.
+    type Row = (OptionType, Real, Real, Real, Real, Real, Real, Real);
     #[rustfmt::skip]
-    const ROWS: &[(OptionType, Real, Real, Real, Real, Real, Real, Real)] = &[
+    const ROWS: &[Row] = &[
         (Call, 100.00,  90.00, 0.10, 0.10, 0.10, 0.15,  0.0206),
         (Call, 100.00, 100.00, 0.10, 0.10, 0.10, 0.15,  1.8771),
         (Call, 100.00, 110.00, 0.10, 0.10, 0.10, 0.15, 10.0089),
