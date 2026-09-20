@@ -750,11 +750,20 @@ mod tests {
                 );
 
                 for instrument in [&mut cap, &mut floor, &mut collar] {
+                    let prices = instrument
+                        .result::<Vec<Real>>("optionletsPrice")
+                        .expect("Black engine emits optionletsPrice");
                     let mut sum = 0.0;
                     for m in 0..leg.len() {
                         let mut optionlet = instrument.optionlet(m).expect("m within the leg");
                         optionlet.base_mut().set_pricing_engine(vars.engine(vol));
-                        sum += optionlet.npv().expect("the curve prices it");
+                        let npv = optionlet.npv().expect("the curve prices it");
+                        assert!(
+                            (npv - prices[m]).abs() <= 1.0e-10,
+                            "optionlet({m}) NPV {npv} vs optionletsPrice[{m}] {} at {context}",
+                            prices[m]
+                        );
+                        sum += npv;
                     }
                     let whole = instrument.npv().expect("the curve prices it");
                     assert!(

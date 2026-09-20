@@ -581,19 +581,29 @@ mod tests {
         assert_eq!(collar.floor_rates(), vec![0.02; n].as_slice());
     }
 
-    /// `optionlet(i)` keeps the parent's type and carries that coupon's strike
-    /// (`capfloor.cpp:195-208`).
+    /// `optionlet(i)` keeps the parent's type and carries coupon `i` / strike `i`
+    /// (`capfloor.cpp:195-208`). Distinct per-coupon strikes + `Shared::ptr_eq`
+    /// pin the index map (a constant-strike / coupons[0] bug would still pass
+    /// a padded-strike / len-only check).
     #[test]
     fn an_optionlet_carries_one_coupon_and_its_own_strike() {
         let settings = settings_on(Date::new(2, Month::January, 2026));
         let coupons = leg(settings.clone());
         let n = coupons.len();
-        let collar = CapFloor::collar(coupons, vec![0.06], vec![0.02], settings).unwrap();
+        assert_eq!(n, 3, "fixture is the documented 3-coupon leg");
+        let collar = CapFloor::collar(
+            coupons.clone(),
+            vec![0.04, 0.05, 0.06],
+            vec![0.01, 0.02, 0.03],
+            settings,
+        )
+        .unwrap();
 
         let optionlet = collar.optionlet(1).unwrap();
         assert_eq!(optionlet.cap_floor_type(), CapFloorType::Collar);
         assert_eq!(optionlet.coupons().len(), 1);
-        assert_eq!(optionlet.cap_rates(), [0.06].as_slice());
+        assert!(Shared::ptr_eq(&optionlet.coupons()[0], &coupons[1]));
+        assert_eq!(optionlet.cap_rates(), [0.05].as_slice());
         assert_eq!(optionlet.floor_rates(), [0.02].as_slice());
 
         let err = collar.optionlet(n).err().expect("past the leg");
