@@ -24,14 +24,15 @@
 //!   [`check_type_and_method_consistency`]; the consistency check returns a
 //!   [`QlResult`] rather than throwing.
 //! - [`Swaption::implied_volatility`] pins `testImpliedVolatility` (Spot Black
-//!   Physical + reduced Spot Cash/`ParYieldCurve` + reduced Forward Physical
-//!   + reduced Spot Physical Normal) and reduced Spot Physical OIS
+//!   Physical, reduced Spot Cash/`ParYieldCurve`, reduced Forward Physical,
+//!   reduced Spot Physical Normal) and reduced Spot Physical OIS
 //!   (`testImpliedVolatilityOis`). The helper uses
 //!   `CashAnnuityModel::DiscountCurve` to match QuantLib's
 //!   `ImpliedSwaptionVolHelper` ctor default. The `deepUpdate` observer
 //!   optimisation is also deferred.
-//!   [`MakeSwaption`](crate::instruments::MakeSwaption) builds vanilla
-//!   swaptions from a [`SwapIndex`](crate::indexes::SwapIndex).
+//!
+//! [`MakeSwaption`](crate::instruments::MakeSwaption) builds vanilla swaptions
+//! from a [`SwapIndex`](crate::indexes::SwapIndex).
 
 use std::any::Any;
 use std::cell::RefCell;
