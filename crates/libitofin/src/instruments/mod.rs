@@ -33,6 +33,7 @@ mod makeois;
 mod makeswaption;
 mod makevanillaswap;
 mod makeyoyinflationcapfloor;
+mod margrabeoption;
 mod oneassetoption;
 mod overnightindexedswap;
 mod partialtimebarrieroption;
@@ -117,6 +118,7 @@ pub use makeois::MakeOis;
 pub use makeswaption::MakeSwaption;
 pub use makevanillaswap::MakeVanillaSwap;
 pub use makeyoyinflationcapfloor::MakeYoYInflationCapFloor;
+pub use margrabeoption::{MargrabeArguments, MargrabeOption, MargrabeResults};
 pub use oneassetoption::{
     EuropeanOption, Greeks, MoreGreeks, OneAssetOption, OneAssetOptionEngine,
     OneAssetOptionResults, OptionArguments, VanillaOption,
@@ -127,7 +129,7 @@ pub use partialtimebarrieroption::{
     PartialTimeBarrierResults,
 };
 pub use payoffs::{
-    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, GapPayoff,
+    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, GapPayoff, NullPayoff,
     PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
 pub use protection::ProtectionSide;
