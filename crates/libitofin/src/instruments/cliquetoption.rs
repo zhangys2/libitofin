@@ -81,6 +81,15 @@ impl Results for CliquetResults {
     }
 }
 
+macro_rules! greek_fn {
+    ($name:ident, $label:expr) => {
+        pub fn $name(&mut self) -> QlResult<Real> {
+            self.calculate()?;
+            Self::greek(self.greeks.$name, $label)
+        }
+    };
+}
+
 /// Cliquet (ratchet) option with percentage strikes at reset dates.
 pub struct CliquetOption {
     base: InstrumentBase,
@@ -118,41 +127,12 @@ impl CliquetOption {
         Ok(value)
     }
 
-    /// The option delta.
-    pub fn delta(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.delta, "delta")
-    }
-
-    /// The option gamma.
-    pub fn gamma(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.gamma, "gamma")
-    }
-
-    /// The option theta.
-    pub fn theta(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.theta, "theta")
-    }
-
-    /// The option vega.
-    pub fn vega(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.vega, "vega")
-    }
-
-    /// The option rho.
-    pub fn rho(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.rho, "rho")
-    }
-
-    /// The option dividend rho.
-    pub fn dividend_rho(&mut self) -> QlResult<Real> {
-        self.calculate()?;
-        Self::greek(self.greeks.dividend_rho, "dividend rho")
-    }
+    greek_fn!(delta, "delta");
+    greek_fn!(gamma, "gamma");
+    greek_fn!(theta, "theta");
+    greek_fn!(vega, "vega");
+    greek_fn!(rho, "rho");
+    greek_fn!(dividend_rho, "dividend rho");
 }
 
 impl Instrument for CliquetOption {
@@ -176,6 +156,22 @@ impl Instrument for CliquetOption {
         arguments.exercise = Some(Shared::clone(&self.exercise));
         arguments.reset_dates = self.reset_dates.clone();
         Ok(())
+    }
+
+    fn setup_expired(&mut self) {
+        self.base_mut().store_results(&InstrumentResults {
+            value: Some(0.0),
+            error_estimate: Some(0.0),
+            ..InstrumentResults::default()
+        });
+        self.greeks = Greeks {
+            delta: Some(0.0),
+            gamma: Some(0.0),
+            theta: Some(0.0),
+            vega: Some(0.0),
+            rho: Some(0.0),
+            dividend_rho: Some(0.0),
+        };
     }
 
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {

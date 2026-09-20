@@ -1,6 +1,4 @@
-//! Analytic performance-option engine.
-//!
-//! Port of `ql/pricingengines/cliquet/analyticperformanceengine.{hpp,cpp}`.
+//! Analytic performance-option engine (`ql/pricingengines/cliquet/analyticperformanceengine`).
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
@@ -20,14 +18,12 @@ use crate::time::frequency::Frequency;
 
 type EngineBase = GenericEngine<CliquetArguments, CliquetResults>;
 
-/// Pricing engine for uncapped European performance options.
 pub struct AnalyticPerformanceEngine {
     base: EngineBase,
     process: Shared<GeneralizedBlackScholesProcess>,
 }
 
 impl AnalyticPerformanceEngine {
-    /// `AnalyticPerformanceEngine(process)`.
     pub fn new(process: Shared<GeneralizedBlackScholesProcess>) -> Self {
         let base = EngineBase::new(CliquetArguments::default(), CliquetResults::default());
         base.register_with(process.observable());
@@ -111,7 +107,8 @@ impl PricingEngine for AnalyticPerformanceEngine {
             let black =
                 BlackCalculator::with_payoff(&payoff, forward, variance.sqrt(), r_discount)?;
 
-            value += discount * moneyness.strike() * black.value();
+            let w = discount * moneyness.strike();
+            value += w * black.value();
             theta += r_ts
                 .forward_rate_between(
                     reset_dates[i - 1],
@@ -122,19 +119,15 @@ impl PricingEngine for AnalyticPerformanceEngine {
                     false,
                 )?
                 .rate()
-                * discount
-                * moneyness.strike()
+                * w
                 * black.value();
-
-            let dt = rfdc.year_fraction(reset_dates[i - 1], reset_dates[i]);
-            let t = rfdc.year_fraction(r_ts.reference_date()?, reset_dates[i - 1]);
-            rho += discount * moneyness.strike() * (black.rho(dt)? - t * black.value());
-
-            let dt_q = divdc.year_fraction(reset_dates[i - 1], reset_dates[i]);
-            dividend_rho += discount * moneyness.strike() * black.dividend_rho(dt_q)?;
-
-            let dt_v = voldc.year_fraction(reset_dates[i - 1], reset_dates[i]);
-            vega += discount * moneyness.strike() * black.vega(dt_v)?;
+            rho += w
+                * (black.rho(rfdc.year_fraction(reset_dates[i - 1], reset_dates[i]))?
+                    - rfdc.year_fraction(r_ts.reference_date()?, reset_dates[i - 1])
+                        * black.value());
+            dividend_rho +=
+                w * black.dividend_rho(divdc.year_fraction(reset_dates[i - 1], reset_dates[i]))?;
+            vega += w * black.vega(voldc.year_fraction(reset_dates[i - 1], reset_dates[i]))?;
         }
 
         let results = self.base.results_mut();
@@ -151,7 +144,6 @@ impl PricingEngine for AnalyticPerformanceEngine {
     }
 }
 
-/// Attaches [`AnalyticPerformanceEngine`] to `option`.
 pub fn set_analytic_performance_engine(
     option: &mut crate::instruments::CliquetOption,
     process: Shared<GeneralizedBlackScholesProcess>,
@@ -175,6 +167,7 @@ mod tests {
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::calendars::NullCalendar;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::types::{Rate, Real, Volatility};
@@ -183,22 +176,31 @@ mod tests {
         Handle::new(Shared::clone(q) as Shared<dyn Quote>)
     }
 
-    fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::new(
-            reference,
+    fn flat_rate(
+        quote: &Shared<SimpleQuote>,
+        settings: &Shared<Settings<Date>>,
+    ) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::moving(
+            0,
+            NullCalendar::new(),
             quote_handle(quote),
             Actual360::new(),
             Compounding::Continuous,
             Frequency::Annual,
+            Shared::clone(settings),
         )) as Shared<dyn YieldTermStructure>)
     }
 
-    fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(shared(BlackConstantVol::with_quote(
-            reference,
-            None,
+    fn flat_vol(
+        quote: &Shared<SimpleQuote>,
+        settings: &Shared<Settings<Date>>,
+    ) -> Handle<dyn BlackVolTermStructure> {
+        Handle::new(shared(BlackConstantVol::moving_with_quote(
+            0,
+            NullCalendar::new(),
             quote_handle(quote),
             Actual360::new(),
+            Shared::clone(settings),
         )) as Shared<dyn BlackVolTermStructure>)
     }
 
@@ -222,9 +224,9 @@ mod tests {
         let vol = shared(SimpleQuote::new(0.0));
         let process = shared(BlackScholesMertonProcess::new(
             quote_handle(&spot),
-            flat_rate(today, &q_rate),
-            flat_rate(today, &r_rate),
-            flat_vol(today, &vol),
+            flat_rate(&q_rate, &settings),
+            flat_rate(&r_rate, &settings),
+            flat_vol(&vol, &settings),
         ));
         Market {
             spot,
@@ -254,9 +256,23 @@ mod tests {
         option
     }
 
-    /// `cliquetoption.cpp` `testPerformanceGreeks`: performance NPV is
-    /// homogeneous of degree 0 in the spot, so δ and γ are identically zero
-    /// (`analyticperformanceengine.cpp:75-76`).
+    fn fd(
+        market: &Market,
+        option_type: OptionType,
+        moneyness: Real,
+        quote: &Shared<SimpleQuote>,
+        mid: Real,
+    ) -> Real {
+        let d = mid * 1.0e-4;
+        quote.set_value(mid + d);
+        let up = option(market, option_type, moneyness).npv().unwrap();
+        quote.set_value(mid - d);
+        let down = option(market, option_type, moneyness).npv().unwrap();
+        quote.set_value(mid);
+        (up - down) / (2.0 * d)
+    }
+
+    /// Spot-homogeneous NPV so δ=γ=0; expired NPV and greeks are 0.
     #[test]
     fn performance_delta_and_gamma_are_zero_and_npv_is_spot_homogeneous() {
         let market = market();
@@ -278,11 +294,17 @@ mod tests {
             (at_120.npv().unwrap() - value).abs() <= 1.0e-12,
             "performance NPV must be independent of spot"
         );
+        market.settings.set_evaluation_date(market.today + 400);
+        assert_eq!(at_100.npv().unwrap(), 0.0);
+        assert_eq!(at_100.delta().unwrap(), 0.0);
+        assert_eq!(at_100.gamma().unwrap(), 0.0);
+        assert_eq!(at_100.theta().unwrap(), 0.0);
+        assert_eq!(at_100.vega().unwrap(), 0.0);
+        assert_eq!(at_100.rho().unwrap(), 0.0);
+        assert_eq!(at_100.dividend_rho().unwrap(), 0.0);
     }
 
-    /// Compact arm of `testPerformanceGreeks`: ρ / divρ / ν vs central
-    /// differences on a `q != r` fixture, both types. Skips the full
-    /// moneyness × length × frequency grid.
+    /// ρ/divρ/ν/θ vs FD (`testPerformanceGreeks`), both types.
     #[test]
     fn performance_greeks_match_central_differences() {
         let (moneyness, spot, q, r, vol): (Real, Real, Rate, Rate, Volatility) =
@@ -298,36 +320,25 @@ mod tests {
             let rho = opt.rho().unwrap();
             let dividend_rho = opt.dividend_rho().unwrap();
             let vega = opt.vega().unwrap();
+            let theta = opt.theta().unwrap();
             assert!(vega.abs() > 1.0e-4, "fixture must have a vega, got {vega}");
+            let fd_rho = fd(&market, option_type, moneyness, &market.r_rate, r);
+            let fd_div_rho = fd(&market, option_type, moneyness, &market.q_rate, q);
+            let fd_vega = fd(&market, option_type, moneyness, &market.vol, vol);
 
-            let dr = r * 1.0e-4;
-            market.r_rate.set_value(r + dr);
-            let value_up = option(&market, option_type, moneyness).npv().unwrap();
-            market.r_rate.set_value(r - dr);
-            let value_down = option(&market, option_type, moneyness).npv().unwrap();
-            market.r_rate.set_value(r);
-            let fd_rho = (value_up - value_down) / (2.0 * dr);
-
-            let dq = q * 1.0e-4;
-            market.q_rate.set_value(q + dq);
-            let value_up = option(&market, option_type, moneyness).npv().unwrap();
-            market.q_rate.set_value(q - dq);
-            let value_down = option(&market, option_type, moneyness).npv().unwrap();
-            market.q_rate.set_value(q);
-            let fd_div_rho = (value_up - value_down) / (2.0 * dq);
-
-            let dv = vol * 1.0e-4;
-            market.vol.set_value(vol + dv);
-            let value_up = option(&market, option_type, moneyness).npv().unwrap();
-            market.vol.set_value(vol - dv);
-            let value_down = option(&market, option_type, moneyness).npv().unwrap();
-            market.vol.set_value(vol);
-            let fd_vega = (value_up - value_down) / (2.0 * dv);
+            let dt = Actual360::new().year_fraction(market.today - 1, market.today + 1);
+            market.settings.set_evaluation_date(market.today - 1);
+            let value_m = opt.npv().unwrap();
+            market.settings.set_evaluation_date(market.today + 1);
+            let value_p = opt.npv().unwrap();
+            market.settings.set_evaluation_date(market.today);
+            let fd_theta = (value_p - value_m) / dt;
 
             for (name, analytic, finite_difference) in [
                 ("rho", rho, fd_rho),
                 ("dividendRho", dividend_rho, fd_div_rho),
                 ("vega", vega, fd_vega),
+                ("theta", theta, fd_theta),
             ] {
                 let error = (analytic - finite_difference).abs() / spot;
                 assert!(
