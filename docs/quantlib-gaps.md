@@ -62,8 +62,8 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Digitals beyond cash-or-nothing | Digital payoffs + American/MC engines | `digitaloption.cpp`, `binaryoption.cpp` | true | partial | Haug cash-or-nothing + asset-or-nothing + gap; `AnalyticDigitalAmericanEngine` at-hit and at-expiry KI/KO cash/asset @ 1e-4; MC deferred |
 | Equity | Asset-or-nothing / gap / super payoffs | `AssetOrNothing`, `Gap`, `Super*` | `digitaloption.cpp` | true | partial | Asset-or-nothing European Haug p.90 + FD δ/γ and gap European Haug p.88 + FD δ/γ/strikeSensitivity closed; super and `europeanoption.cpp` kk==1..3 moving-curve grids open |
 | Equity | Binary / double-binary barrier | `AnalyticBinaryBarrierEngine`, `AnalyticDoubleBarrierBinaryEngine` | `binaryoption.cpp`, `doublebarrieroption.cpp` | true | partial | `AnalyticBinaryBarrierEngine` Haug p.180 cash/asset book + cash book-vba q≠0 + touched-barrier extras closed; double-binary deferred |
-| Equity | Compound option | `CompoundOption`, analytic engine | `compoundoption.cpp` | false | none | |
-| Equity | Margrabe / exchange | `MargrabeOption` | `margrabeoption.cpp` | false | none | |
+| Equity | Compound option | `CompoundOption`, analytic engine | `compoundoption.cpp` | true | partial | European NPV vs `testValues` Haug/sitmo subset @ 1e-3 closed. Still open: greeks, put-call parity table |
+| Equity | Margrabe / exchange | `MargrabeOption` | `margrabeoption.cpp` | true | partial | European NPV vs Haug `testEuroExchangeTwoAssets` subset @ 1e-3 closed. Still open: extra greeks, American engine, `testGreeks` |
 | Equity | Two-asset barrier | `TwoAssetBarrierOption` | `twoassetbarrieroption.cpp` / barrier suite | false | none | |
 | Equity | Two-asset correlation | `TwoAssetCorrelationOption` | `twoassetcorrelationoption.cpp` | false | none | |
 | Equity | Extensible options | Holder/writer extensible | `extensibleoptions.cpp` | false | none | |

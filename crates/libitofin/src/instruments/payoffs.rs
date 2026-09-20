@@ -3,8 +3,8 @@
 //! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
 //! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], [`PercentageStrikePayoff`],
-//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], and [`GapPayoff`]. The
-//! remaining payoffs (`NullPayoff`, `SuperFundPayoff`, `SuperSharePayoff`) are
+//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], [`GapPayoff`], and
+//! [`NullPayoff`]. [`SuperFundPayoff`] and [`SuperSharePayoff`] remain
 //! follow-up work.
 
 use std::any::Any;
@@ -387,6 +387,26 @@ impl TypePayoff for GapPayoff {
 impl StrikedTypePayoff for GapPayoff {
     fn strike(&self) -> Real {
         self.strike
+    }
+}
+
+/// Dummy payoff (`ql/instruments/payoffs.hpp:56`). Margrabe constructs this
+/// internally. [`Payoff::value`] panics like [`FloatingTypePayoff::value`]
+/// (QuantLib `operator()` raises `QL_FAIL("dummy payoff given")`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NullPayoff;
+
+impl Payoff for NullPayoff {
+    fn name(&self) -> String {
+        "Null".to_string()
+    }
+
+    fn description(&self) -> String {
+        self.name()
+    }
+
+    fn value(&self, _price: Real) -> Real {
+        unimplemented!("dummy payoff given")
     }
 }
 

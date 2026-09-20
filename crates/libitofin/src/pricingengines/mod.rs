@@ -74,7 +74,9 @@ pub use cliquet::{
 };
 pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{
-    AnalyticComplexChooserEngine, AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,
+    AnalyticComplexChooserEngine, AnalyticCompoundOptionEngine, AnalyticEuropeanMargrabeEngine,
+    AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,
+    set_analytic_compound_option_engine, set_analytic_european_margrabe_engine,
     set_analytic_simple_chooser_engine,
 };
 pub use forward::{
