@@ -23,6 +23,7 @@ use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::date::Date;
 use crate::time::frequency::Frequency;
 use crate::types::Real;
+use std::any::Any;
 
 type EngineBase = GenericEngine<VarianceSwapArguments, VarianceSwapResults>;
 type Weight = (Shared<dyn StrikedTypePayoff>, Real);
@@ -58,22 +59,16 @@ impl ReplicatingVarianceSwapEngine {
     }
 }
 
+#[rustfmt::skip]
 impl AsObservable for ReplicatingVarianceSwapEngine {
-    fn observable(&self) -> &Observable {
-        self.base.observable()
-    }
+    fn observable(&self) -> &Observable { self.base.observable() }
 }
 
+#[rustfmt::skip]
 impl PricingEngine for ReplicatingVarianceSwapEngine {
-    fn arguments_mut(&mut self) -> &mut dyn Arguments {
-        self.base.arguments_mut()
-    }
-    fn results(&self) -> &dyn Results {
-        self.base.results()
-    }
-    fn reset(&mut self) {
-        self.base.reset();
-    }
+    fn arguments_mut(&mut self) -> &mut dyn Arguments { self.base.arguments_mut() }
+    fn results(&self) -> &dyn Results { self.base.results() }
+    fn reset(&mut self) { self.base.reset(); }
 
     #[rustfmt::skip]
     fn calculate(&mut self) -> QlResult<()> {
@@ -92,6 +87,7 @@ impl PricingEngine for ReplicatingVarianceSwapEngine {
         let results = self.base.results_mut();
         results.variance = Some(variance);
         results.instrument.value = Some(sign * disc * notional * (variance - strike));
+        results.instrument.additional_results.insert("optionWeights".into(), shared(weights) as Shared<dyn Any>);
         Ok(())
     }
 }
@@ -201,8 +197,19 @@ mod tests {
         let vol_ts = shared(BlackVarianceSurface::new(today, Some(NullCalendar::new()), &[ex], strikes, &vols, Actual365Fixed::new()).unwrap()) as Shared<dyn BlackVolTermStructure>;
         let process = shared(GeneralizedBlackScholesProcess::new(qh(&spot), flat(&q_rate), flat(&r_rate), Handle::new(vol_ts)));
         let mut swap = VarianceSwap::new(Position::Long, 0.04, 50000.0, today, ex, Shared::clone(&settings));
-        set_replicating_variance_swap_engine(&mut swap, process, calls, puts).unwrap();
-        let calculated = swap.variance().unwrap();
-        assert!((calculated - 0.04189).abs() <= 1e-4, "variance {calculated} vs 0.04189");
+        set_replicating_variance_swap_engine(&mut swap, Shared::clone(&process), calls.clone(), puts.clone()).unwrap();
+        let v = swap.variance().unwrap();
+        let long = swap.npv().unwrap();
+        assert!((v - 0.04189).abs() <= 1e-4, "variance {v} vs 0.04189");
+        assert!((long - 93.271669134338).abs() <= 1e-4, "long npv {long}");
+        assert!(swap.additional_results().unwrap().contains_key("optionWeights"));
+        let mut short = VarianceSwap::new(Position::Short, 0.04, 50000.0, today, ex, Shared::clone(&settings));
+        set_replicating_variance_swap_engine(&mut short, Shared::clone(&process), calls.clone(), puts.clone()).unwrap();
+        assert!((short.npv().unwrap() + long).abs() <= 1e-8, "short != -long");
+        q_rate.set_value(0.05);
+        let mut qswap = VarianceSwap::new(Position::Long, 0.04, 50000.0, today, ex, Shared::clone(&settings));
+        set_replicating_variance_swap_engine(&mut qswap, process, calls, puts).unwrap();
+        let qv = qswap.variance().unwrap();
+        assert!((qv - 0.042298936629).abs() <= 1e-4, "q=0.05 QL-hybrid variance {qv}");
     }
 }
