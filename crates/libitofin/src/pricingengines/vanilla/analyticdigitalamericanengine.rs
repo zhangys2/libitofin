@@ -484,35 +484,78 @@ mod tests {
     }
 
     /// `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` knock-in (cash=15).
-    #[rustfmt::skip]
-    const CASH_EXPIRY: &[(Row, Real)] = &[
-        ((Put,  100.0, 105.0, 0.00, 0.10, 0.5, 0.20,  9.3604), 1e-4),
-        ((Call, 100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 11.2223), 1e-4),
-        ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20,  0.0),    1e-12),
-        ((Put,  100.0,  95.0, 0.00, 0.10, 0.5, 0.20,  0.0),    1e-12),
-    ];
+    fn cash_expiry() -> Vec<(Row, Real)> {
+        vec![
+            ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 9.3604), 1e-4),
+            ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 11.2223), 1e-4),
+            (
+                (
+                    Call,
+                    100.0,
+                    105.0,
+                    0.00,
+                    0.10,
+                    0.5,
+                    0.20,
+                    15.0 * (-0.05_f64).exp(),
+                ),
+                1e-12,
+            ),
+            (
+                (
+                    Put,
+                    100.0,
+                    95.0,
+                    0.00,
+                    0.10,
+                    0.5,
+                    0.20,
+                    15.0 * (-0.05_f64).exp(),
+                ),
+                1e-12,
+            ),
+        ]
+    }
     /// `digitaloption.cpp` `testAssetAtExpiryOrNothingAmericanValues` knock-in.
-    #[rustfmt::skip]
-    const ASSET_EXPIRY: &[(Row, Real)] = &[
-        ((Put,  100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 64.8426), 1e-4),
-        ((Call, 100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 77.7017), 1e-4),
-        ((Put,  100.0, 105.0, 0.01, 0.10, 0.5, 0.20, 65.5291), 1e-4),
-        ((Call, 100.0,  95.0, 0.01, 0.10, 0.5, 0.20, 76.5951), 1e-4),
-        ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20,105.0000), 1e-12),
-        ((Put,  100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 95.0000), 1e-12),
-        ((Call, 100.0, 105.0, 0.01, 0.10, 0.5, 0.20,  0.0),    1e-12),
-        ((Put,  100.0,  95.0, 0.01, 0.10, 0.5, 0.20,  0.0),    1e-12),
-    ];
+    fn asset_expiry() -> Vec<(Row, Real)> {
+        vec![
+            ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 64.8426), 1e-4),
+            ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 77.7017), 1e-4),
+            ((Put, 100.0, 105.0, 0.01, 0.10, 0.5, 0.20, 65.5291), 1e-4),
+            ((Call, 100.0, 95.0, 0.01, 0.10, 0.5, 0.20, 76.5951), 1e-4),
+            ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 105.0000), 1e-12),
+            ((Put, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 95.0000), 1e-12),
+            (
+                (
+                    Call,
+                    100.0,
+                    105.0,
+                    0.01,
+                    0.10,
+                    0.5,
+                    0.20,
+                    105.0 * (-0.005_f64).exp(),
+                ),
+                1e-12,
+            ),
+            (
+                (
+                    Put,
+                    100.0,
+                    95.0,
+                    0.01,
+                    0.10,
+                    0.5,
+                    0.20,
+                    95.0 * (-0.005_f64).exp(),
+                ),
+                1e-12,
+            ),
+        ]
+    }
 
     fn check_expiry(rows: &[(Row, Real)], cash: Real) {
         for &((ty, k, s, q, r, t, v, expected), tol) in rows {
-            let expected = if expected == 0.0 && cash > 0.0 {
-                cash * (-r * t).exp()
-            } else if expected == 0.0 {
-                s * (-q * t).exp()
-            } else {
-                expected
-            };
             let got = price((ty, k, s, q, r, t, v, expected), cash, true);
             assert!(
                 (got - expected).abs() <= tol,
@@ -521,12 +564,61 @@ mod tests {
         }
     }
 
+    fn expiry_pricer(row: Row, cash: Real, knock_in: bool) -> Real {
+        let (ty, k, s, q, r, t, v, _) = row;
+        let payoff: Shared<dyn StrikedTypePayoff> = if cash > 0.0 {
+            shared(CashOrNothingPayoff::new(ty, k, cash))
+        } else {
+            shared(AssetOrNothingPayoff::new(ty, k))
+        };
+        AmericanPayoffAtExpiry::new(
+            s,
+            (-r * t).exp(),
+            (-q * t).exp(),
+            v * v * t,
+            &*payoff,
+            knock_in,
+        )
+        .unwrap()
+        .value()
+    }
+
     #[test]
     fn cash_at_expiry_or_nothing_american_values() {
-        check_expiry(CASH_EXPIRY, 15.0);
+        check_expiry(&cash_expiry(), 15.0);
     }
     #[test]
     fn asset_at_expiry_or_nothing_american_values() {
-        check_expiry(ASSET_EXPIRY, 0.0);
+        check_expiry(&asset_expiry(), 0.0);
+    }
+
+    #[test]
+    fn cash_at_expiry_knock_out_haug() {
+        for &row in &[
+            (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 4.9081),
+            (Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 3.0461),
+        ] {
+            let got = expiry_pricer(row, 15.0, false);
+            let expected = row.7;
+            assert!(
+                (got - expected).abs() <= 1e-4,
+                "{row:?}: {got} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn asset_at_expiry_knock_out_haug() {
+        for &row in &[
+            (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 40.1574),
+            (Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 17.2983),
+        ] {
+            let got = expiry_pricer(row, 0.0, false);
+            let expected = row.7;
+            assert!(
+                (got - expected).abs() <= 1e-4,
+                "{row:?}: {got} vs {expected}"
+            );
+        }
     }
 }
