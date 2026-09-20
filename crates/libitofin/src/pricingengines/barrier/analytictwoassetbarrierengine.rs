@@ -117,6 +117,7 @@ impl PricingEngine for AnalyticTwoAssetBarrierEngine {
         let log_hs = (h / s2).ln();
         let d1 = ((s1 / x).ln() + (mu1 + sigma1 * sigma1) * t) / (sigma1 * sqrt_t);
         let d2 = d1 - sigma1 * sqrt_t;
+        // QL `call()`/`put()`: spot weight is 1, not e^{(b1-r)T} (parity with C++).
         let vanilla = match payoff.option_type() {
             OptionType::Call => s1 * self.n.value(d1) - x * (-r * t).exp() * self.n.value(d2),
             OptionType::Put => x * (-r * t).exp() * self.n.value(-d2) - s1 * self.n.value(-d1),
@@ -190,61 +191,61 @@ mod tests {
         Handle::new(shared(SimpleQuote::new(v)) as Shared<dyn Quote>)
     }
 
+    #[rustfmt::skip]
     fn flat_rate(today: Date, r: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::new(
-            today,
-            quote_h(r),
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
+        Handle::new(shared(FlatForward::new(today, quote_h(r), Actual360::new(), Compounding::Continuous, Frequency::Annual)) as Shared<dyn YieldTermStructure>)
     }
 
+    #[rustfmt::skip]
     fn flat_vol(today: Date, v: Real) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(shared(BlackConstantVol::with_quote(
-            today,
-            None,
-            quote_h(v),
-            Actual360::new(),
-        )) as Shared<dyn BlackVolTermStructure>)
+        Handle::new(shared(BlackConstantVol::with_quote(today, None, quote_h(v), Actual360::new())) as Shared<dyn BlackVolTermStructure>)
     }
 
-    /// `twoassetbarrieroption.cpp` `testHaugValues` @ 4e-3.
+    #[allow(clippy::too_many_arguments)]
+    #[rustfmt::skip]
+    fn price(
+        bt: BarrierType, ty: OptionType, h: Real, k: Real, rho: Real, s1: Real, s2: Real,
+        q1: Real, q2: Real, v1: Real, v2: Real,
+    ) -> Real {
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::May, 1998);
+        settings.set_evaluation_date(today);
+        let r = flat_rate(today, 0.08);
+        let p1 = shared(BlackScholesMertonProcess::new(
+            quote_h(s1), flat_rate(today, q1), Handle::clone(&r), flat_vol(today, v1),
+        ));
+        let p2 = shared(BlackScholesMertonProcess::new(
+            quote_h(s2), flat_rate(today, q2), r, flat_vol(today, v2),
+        ));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 180));
+        let mut option = TwoAssetBarrierOption::new(
+            bt, h, PlainVanillaPayoff::new(ty, k), exercise, settings,
+        );
+        set_analytic_two_asset_barrier_engine(&mut option, p1, p2, quote_h(rho));
+        option.npv().unwrap()
+    }
+
+    /// `twoassetbarrieroption.cpp` `testHaugValues` @ 4e-3 plus independent pins.
     #[test]
+    #[rustfmt::skip]
     fn two_asset_barrier_haug_npv() {
-        use BarrierType::{DownOut, UpOut};
+        use BarrierType::{DownIn, DownOut, UpOut};
         use OptionType::{Call, Put};
-        type Row = (BarrierType, OptionType, Real, Real, Real, Real);
-        #[rustfmt::skip]
-        let rows: [Row; 4] = [
+        let haug = [
             (DownOut, Call, 95.0, 90.0, 0.5, 6.6592),
             (UpOut, Call, 105.0, 90.0, -0.5, 4.6670),
             (DownOut, Put, 95.0, 90.0, -0.5, 0.6184),
             (UpOut, Put, 105.0, 100.0, 0.0, 0.8246),
         ];
-        let settings = shared(Settings::new());
-        let today = Date::new(15, Month::May, 1998);
-        settings.set_evaluation_date(today);
-        let r = flat_rate(today, 0.08);
-        for (bt, ty, h, k, rho, expected) in rows {
-            #[rustfmt::skip]
-            let mk = || shared(BlackScholesMertonProcess::new(
-                quote_h(100.0), flat_rate(today, 0.0), Handle::clone(&r), flat_vol(today, 0.2),
-            ));
-            let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 180));
-            let mut option = TwoAssetBarrierOption::new(
-                bt,
-                h,
-                PlainVanillaPayoff::new(ty, k),
-                exercise,
-                Shared::clone(&settings),
-            );
-            set_analytic_two_asset_barrier_engine(&mut option, mk(), mk(), quote_h(rho));
-            let got = option.npv().unwrap();
-            assert!(
-                (got - expected).abs() <= 4e-3,
-                "{bt:?} {ty:?}: {expected} vs {got}"
-            );
+        for (bt, ty, h, k, rho, expected) in haug {
+            let got = price(bt, ty, h, k, rho, 100.0, 100.0, 0.0, 0.0, 0.2, 0.2);
+            assert!((got - expected).abs() <= 4e-3, "{bt:?} {ty:?}: {expected} vs {got}");
         }
+        let q_ko = price(DownOut, Call, 95.0, 90.0, 0.5, 100.0, 100.0, 0.0, 0.05, 0.2, 0.2);
+        assert!((q_ko - 5.920).abs() <= 4e-3, "q2≠0 KO {q_ko}");
+        let dist = price(DownOut, Call, 95.0, 90.0, 0.5, 120.0, 100.0, 0.0, 0.0, 0.15, 0.25);
+        assert!((dist - 10.228).abs() <= 4e-3, "distinct-asset KO {dist}");
+        let ki = price(DownIn, Call, 95.0, 90.0, 0.5, 100.0, 100.0, 0.05, 0.0, 0.2, 0.2);
+        assert!((ki - 8.679).abs() <= 4e-3, "q1≠0 KI {ki}");
     }
 }
