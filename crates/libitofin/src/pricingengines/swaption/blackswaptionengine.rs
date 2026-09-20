@@ -36,11 +36,13 @@
 //!   both `Coupon`-level, so the port reads them through
 //!   [`CashFlow::as_coupon`](crate::cashflow::CashFlow::as_coupon).
 //! - **`CashAnnuityModel` has no default.** The C++ header defaults to
-//!   [`DiscountCurve`](CashAnnuityModel::DiscountCurve) (`:143`) but every
-//!   ported test passes [`SwapRate`](CashAnnuityModel::SwapRate)
-//!   (`swaption.cpp:85`), so every test takes the `valuation_date` branch and
-//!   the `DiscountCurve` branch (first coupon accrual start) is UNPINNED by the
-//!   oracle. It is ported but untested.
+//!   [`DiscountCurve`](CashAnnuityModel::DiscountCurve) (`:143`); the fixture
+//!   `makeSwaption` / local `make_swaption` still defaults to
+//!   [`SwapRate`](CashAnnuityModel::SwapRate) (`swaption.cpp:85`).
+//!   `DiscountCurve` (first coupon accrual start) is exercised by Cash /
+//!   `ParYieldCurve` implied-vol and by the delta suite; `SwapRate`
+//!   (`valuation_date`) remains the hand-summed branch of
+//!   `testCashSettledSwaptions`.
 //! - **The `Cash && CollateralizedCashPrice` annuity arm** takes the same
 //!   `|fixedLegBPS| / basisPoint` path as `Physical` (`:270-274`), so the code
 //!   path is exercised by every physical test. The specific `(Cash,
@@ -100,7 +102,7 @@ pub enum CashAnnuityModel {
     /// `swaption.cpp:85`).
     SwapRate,
     /// Discount at the first fixed coupon's accrual start date (the C++ header
-    /// default; unpinned by the ported oracle).
+    /// default; exercised by Cash/`ParYieldCurve` implied-vol and delta).
     DiscountCurve,
 }
 

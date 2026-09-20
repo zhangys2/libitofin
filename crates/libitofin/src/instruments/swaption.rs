@@ -24,8 +24,8 @@
 //!   [`check_type_and_method_consistency`]; the consistency check returns a
 //!   [`QlResult`] rather than throwing.
 //! - [`Swaption::implied_volatility`] pins `testImpliedVolatility` (Spot Black
-//!   Physical + Cash/`ParYieldCurve` + reduced Spot Physical Normal); Forward /
-//!   OIS round-trips remain deferred. The helper uses
+//!   Physical + reduced Spot Cash/`ParYieldCurve` + reduced Spot Physical
+//!   Normal); Forward / OIS round-trips remain deferred. The helper uses
 //!   `CashAnnuityModel::DiscountCurve` to match QuantLib's
 //!   `ImpliedSwaptionVolHelper` ctor default. The `deepUpdate` observer
 //!   optimisation is also deferred.
