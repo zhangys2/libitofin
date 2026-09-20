@@ -13,12 +13,12 @@ use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::{GeneralizedBlackScholesProcess, StochasticProcessArray};
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared_mut};
-use crate::stochasticprocess::StochasticProcess;
+use crate::stochasticprocess::{StochasticProcess, StochasticProcess1D};
 use crate::types::{DiscountFactor, Rate, Real, Size};
 
 type EngineBase = GenericEngine<EverestArguments, EverestResults>;
 
-/// Path pricer: `(1 + min_j(S_j(T)/S_j(0) - 1) + guarantee) * notional * discount`.
+/// `(1 + min_j(S_j(T)/S_j(0) - 1) + guarantee) * notional * discount`.
 pub struct EverestMultiPathPricer {
     notional: Real,
     guarantee: Rate,
@@ -43,6 +43,9 @@ pub struct MCEverestEngine {
     time_steps: Option<Size>,
     time_steps_per_year: Option<Size>,
     samples: Option<Size>,
+    tolerance: Option<Real>,
+    max_samples: Option<Size>,
+    antithetic: bool,
     seed: u32,
 }
 
@@ -55,15 +58,21 @@ impl MCEverestEngine {
         time_steps: Option<Size>,
         time_steps_per_year: Option<Size>,
         samples: Option<Size>,
+        tolerance: Option<Real>,
+        max_samples: Option<Size>,
+        antithetic: bool,
         seed: u32,
     ) -> QlResult<Self> {
         require!(time_steps.is_some() || time_steps_per_year.is_some(), "no time steps provided");
         require!(time_steps.is_none() || time_steps_per_year.is_none(), "both time steps and time steps per year were provided");
         require!(time_steps != Some(0), "timeSteps must be positive, 0 not allowed");
         require!(time_steps_per_year != Some(0), "timeStepsPerYear must be positive, 0 not allowed");
+        let p0 = process.process(0);
+        let first_1d: Shared<dyn StochasticProcess1D> = Shared::clone(&first) as _;
+        require!(Shared::ptr_eq(&first_1d, &p0), "Black-Scholes process required");
         let base = EngineBase::new(EverestArguments::default(), EverestResults::default());
         base.register_with(process.observable());
-        Ok(Self { base, process, first, time_steps, time_steps_per_year, samples, seed })
+        Ok(Self { base, process, first, time_steps, time_steps_per_year, samples, tolerance, max_samples, antithetic, seed })
     }
 }
 
@@ -100,8 +109,8 @@ impl PricingEngine for MCEverestEngine {
         let path_gen = MultiPathGenerator::new(Shared::clone(&self.process) as Shared<dyn StochasticProcess>, grid, rsg, false)?;
         let disc = self.first.risk_free_rate().current_link()?.discount_date(last, false)?;
         let pricer = EverestMultiPathPricer { notional, guarantee, discount: disc };
-        let mut sim: McSimulation<_, EverestMultiPathPricer> = McSimulation::new(false, false);
-        sim.calculate(path_gen, pricer, None, self.samples, None)?;
+        let mut sim: McSimulation<_, EverestMultiPathPricer> = McSimulation::new(self.antithetic, false);
+        sim.calculate(path_gen, pricer, self.tolerance, self.samples, self.max_samples)?;
         let value = sim.sample_accumulator()?.mean()?;
         let r = self.base.results_mut();
         r.instrument.value = Some(value);
@@ -111,21 +120,23 @@ impl PricingEngine for MCEverestEngine {
     }
 }
 
-/// Factory for [`MCEverestEngine`] (`MakeMCEverestEngine<PseudoRandom>`).
-/// `first` is `process(0)` as a BS process (QL `dynamic_pointer_cast`).
+/// Factory (`MakeMCEverestEngine<PseudoRandom>`). `first` must be `process(0)`.
 pub struct MakeMcEverestEngine {
     process: Shared<StochasticProcessArray>,
     first: Shared<GeneralizedBlackScholesProcess>,
     steps: Option<Size>,
     steps_per_year: Option<Size>,
     samples: Option<Size>,
+    tolerance: Option<Real>,
+    max_samples: Option<Size>,
+    antithetic: bool,
     seed: u32,
 }
 
 impl MakeMcEverestEngine {
     #[rustfmt::skip]
     pub fn new(process: Shared<StochasticProcessArray>, first: Shared<GeneralizedBlackScholesProcess>) -> Self {
-        Self { process, first, steps: None, steps_per_year: None, samples: None, seed: 0 }
+        Self { process, first, steps: None, steps_per_year: None, samples: None, tolerance: None, max_samples: None, antithetic: false, seed: 0 }
     }
 
     #[must_use]
@@ -142,18 +153,32 @@ impl MakeMcEverestEngine {
 
     #[must_use]
     #[rustfmt::skip]
+    pub fn with_absolute_tolerance(mut self, tolerance: Real) -> Self { self.tolerance = Some(tolerance); self }
+
+    #[must_use]
+    #[rustfmt::skip]
+    pub fn with_max_samples(mut self, samples: Size) -> Self { self.max_samples = Some(samples); self }
+
+    #[must_use]
+    #[rustfmt::skip]
+    pub fn with_antithetic_variate(mut self, antithetic: bool) -> Self { self.antithetic = antithetic; self }
+
+    #[must_use]
+    #[rustfmt::skip]
     pub fn with_seed(mut self, seed: u32) -> Self { self.seed = seed; self }
 
     #[rustfmt::skip]
     pub fn build(self) -> QlResult<MCEverestEngine> {
         require!(self.steps.is_some() || self.steps_per_year.is_some(), "number of steps not given");
         require!(self.steps.is_none() || self.steps_per_year.is_none(), "number of steps overspecified");
-        require!(self.samples.is_some(), "neither tolerance nor number of samples set");
-        MCEverestEngine::new(self.process, self.first, self.steps, self.steps_per_year, self.samples, self.seed)
+        require!(!(self.samples.is_some() && self.tolerance.is_some()), "number of samples already set");
+        if self.tolerance.is_some() {
+            require!(PseudoRandom::ALLOWS_ERROR_ESTIMATE, "chosen random generator policy does not allow an error estimate");
+        }
+        MCEverestEngine::new(self.process, self.first, self.steps, self.steps_per_year, self.samples, self.tolerance, self.max_samples, self.antithetic, self.seed)
     }
 }
 
-/// Attaches [`MCEverestEngine`] to `option`.
 #[rustfmt::skip]
 pub fn set_mc_everest_engine(
     option: &mut crate::instruments::EverestOption,
@@ -180,7 +205,6 @@ mod tests {
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
     use crate::shared::shared;
-    use crate::stochasticprocess::StochasticProcess1D;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -225,8 +249,14 @@ mod tests {
         let array = shared(StochasticProcessArray::new(processes, &corr).unwrap());
         let ex: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 360));
         let mut option = EverestOption::new(1.0, 0.0, ex, settings);
-        set_mc_everest_engine(&mut option, array, first, 1, 1023, 86421).unwrap();
+        set_mc_everest_engine(&mut option, Shared::clone(&array), Shared::clone(&first), 1, 1023, 86421).unwrap();
         let value = option.npv().unwrap();
         assert!((value - 0.75784944).abs() <= 1e-8, "cached 0.75784944 vs {value}");
+        let tol = (option.error_estimate().unwrap() / 2.0).min(1e-2 * value);
+        let engine = shared_mut(MakeMcEverestEngine::new(array, first).with_steps_per_year(1).with_absolute_tolerance(tol).with_seed(86421).build().unwrap()) as SharedMut<dyn PricingEngine>;
+        option.base_mut().set_pricing_engine(engine);
+        option.npv().unwrap();
+        let acc = option.error_estimate().unwrap();
+        assert!(acc <= tol, "errorEstimate {acc} vs {tol}");
     }
 }

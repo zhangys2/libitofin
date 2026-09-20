@@ -1,5 +1,4 @@
-//! Everest option on a basket of assets.
-//! Port of `ql/experimental/exoticoptions/everestoption.{hpp,cpp}`.
+//! Everest option. Port of `ql/experimental/exoticoptions/everestoption.{hpp,cpp}`.
 
 use std::any::Any;
 
@@ -15,7 +14,6 @@ use crate::shared::Shared;
 use crate::time::date::Date;
 use crate::types::{Rate, Real};
 
-/// Arguments (`EverestOption::arguments`).
 #[derive(Default)]
 pub struct EverestArguments {
     pub payoff: Option<NullPayoff>,
@@ -35,7 +33,6 @@ impl Arguments for EverestArguments {
     }
 }
 
-/// NPV + Everest yield (`EverestOption::results`).
 #[derive(Default)]
 pub struct EverestResults {
     pub instrument: InstrumentResults,
@@ -53,7 +50,6 @@ impl Results for EverestResults {
     }
 }
 
-/// Everest option (`ql/experimental/exoticoptions/everestoption.hpp`).
 pub struct EverestOption {
     base: InstrumentBase,
     settings: Shared<Settings<Date>>,
@@ -65,7 +61,6 @@ pub struct EverestOption {
 }
 
 impl EverestOption {
-    /// `EverestOption(notional, guarantee, exercise)`.
     pub fn new(
         notional: Real,
         guarantee: Rate,
@@ -85,7 +80,7 @@ impl EverestOption {
         }
     }
 
-    /// C++ `EverestOption::yield()`.
+    /// `EverestOption::yield()`.
     pub fn yield_rate(&mut self) -> QlResult<Rate> {
         self.calculate()?;
         let Some(y) = self.yield_rate else {
