@@ -4,7 +4,8 @@ use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::fail;
 use crate::instruments::{
-    OneAssetOptionEngine, OneAssetOptionResults, OptionArguments, StrikedTypePayoff,
+    Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
+    StrikedTypePayoff,
 };
 use crate::math::comparison::close_n;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
@@ -163,7 +164,33 @@ impl PricingEngine for BaroneAdesiWhaleyApproximationEngine {
         let std_dev = variance.sqrt();
         let black = BlackCalculator::with_striked_payoff(&**payoff, forward, std_dev, rf_disc)?;
         if q_disc >= 1.0 && payoff.option_type() == OptionType::Call {
-            self.base.results_mut().instrument.value = Some(black.value());
+            let rf = self.process.risk_free_rate().current_link()?;
+            let qts = self.process.dividend_yield().current_link()?;
+            let t_rf = rf
+                .require_day_counter()?
+                .year_fraction(rf.reference_date()?, last);
+            let t_q = qts
+                .require_day_counter()?
+                .year_fraction(qts.reference_date()?, last);
+            let t_vol = vol.time_from_reference(last)?;
+            let theta = black.theta(spot, t_vol).ok();
+            let results = self.base.results_mut();
+            results.instrument.value = Some(black.value());
+            results.greeks = Greeks {
+                delta: Some(black.delta(spot)?),
+                gamma: Some(black.gamma(spot)?),
+                theta,
+                vega: Some(black.vega(t_vol)?),
+                rho: Some(black.rho(t_rf)?),
+                dividend_rho: Some(black.dividend_rho(t_q)?),
+            };
+            results.more_greeks = MoreGreeks {
+                itm_cash_probability: Some(black.itm_cash_probability()),
+                delta_forward: Some(black.delta_forward()),
+                elasticity: Some(black.elasticity(spot)?),
+                theta_per_day: theta.map(|th| th / 365.0),
+                strike_sensitivity: Some(black.strike_sensitivity()),
+            };
             return Ok(());
         }
         let sk = Self::critical_price(&**payoff, rf_disc, q_disc, variance, 1e-6)?;
@@ -226,14 +253,25 @@ mod tests {
     fn today() -> Date {
         Date::new(15, Month::June, 2026)
     }
-    fn yts(rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            today(),
-            rate,
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
+    fn process(s: Real, q: Real, r: Real, v: Real) -> Shared<BlackScholesMertonProcess> {
+        let yts = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                today(),
+                rate,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        shared(BlackScholesMertonProcess::new(
+            Handle::new(shared(SimpleQuote::new(s)) as Shared<dyn Quote>),
+            yts(q),
+            yts(r),
+            Handle::new(
+                shared(BlackConstantVol::new(today(), None, v, Actual360::new()))
+                    as Shared<dyn BlackVolTermStructure>,
+            ),
+        ))
     }
 
     /// Haug p.24 as in `americanoption.cpp` `testBaroneAdesiWhaleyValues`.
@@ -284,15 +322,7 @@ mod tests {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
         for &(ty, k, s, q, r, t, v, expected) in ROWS {
-            let process = shared(BlackScholesMertonProcess::new(
-                Handle::new(shared(SimpleQuote::new(s)) as Shared<dyn Quote>),
-                yts(q),
-                yts(r),
-                Handle::new(
-                    shared(BlackConstantVol::new(today(), None, v, Actual360::new()))
-                        as Shared<dyn BlackVolTermStructure>,
-                ),
-            ));
+            let process = process(s, q, r, v);
             let expiry = today() + (t * 360.0).round() as i32;
             let mut option = VanillaOption::new(
                 shared(PlainVanillaPayoff::new(ty, k)),
@@ -314,15 +344,7 @@ mod tests {
     fn negative_rates_are_rejected() {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
-        let process = shared(BlackScholesMertonProcess::new(
-            Handle::new(shared(SimpleQuote::new(36.0)) as Shared<dyn Quote>),
-            yts(0.0),
-            yts(-0.012),
-            Handle::new(
-                shared(BlackConstantVol::new(today(), None, 0.20, Actual360::new()))
-                    as Shared<dyn BlackVolTermStructure>,
-            ),
-        ));
+        let process = process(36.0, 0.0, -0.012, 0.20);
         let mut put = VanillaOption::new(
             shared(PlainVanillaPayoff::new(Put, 40.0)),
             shared(AmericanExercise::over(today(), today() + 360).unwrap()),
@@ -338,5 +360,32 @@ mod tests {
                 .message()
                 .contains("negative interest rates")
         );
+    }
+
+    #[test]
+    fn zero_dividend_call_matches_european() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let process = process(100.0, 0.0, 0.10, 0.15);
+        let mut am = VanillaOption::new(
+            shared(PlainVanillaPayoff::new(Call, 100.0)),
+            shared(AmericanExercise::over(today(), today() + 180).unwrap()),
+            settings,
+        );
+        am.base_mut()
+            .set_pricing_engine(
+                shared_mut(BaroneAdesiWhaleyApproximationEngine::new(process))
+                    as SharedMut<dyn PricingEngine>,
+            );
+        let df = (-0.05_f64).exp();
+        let black = BlackCalculator::with_payoff(
+            &PlainVanillaPayoff::new(Call, 100.0),
+            100.0 / df,
+            0.15 * 0.5_f64.sqrt(),
+            df,
+        )
+        .unwrap();
+        assert!((am.npv().unwrap() - black.value()).abs() <= 1.0e-12);
+        assert!((am.delta().unwrap() - black.delta(100.0).unwrap()).abs() <= 1.0e-12);
     }
 }
