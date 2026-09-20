@@ -25,8 +25,8 @@
 //!   `IborCoupon`, as above; the fixture only ever builds ibor legs.
 //! - [`MakeCapFloor`](super::MakeCapFloor) builds the market cap/floor and
 //!   [`CapFloor::last_floating_rate_coupon`] exposes the trailing coupon the
-//!   optionlet stripper reads; `optionlet`, `impliedVolatility` and `deepUpdate`
-//!   remain unported, as no ported test reaches them.
+//!   optionlet stripper reads; [`CapFloor::implied_volatility`] pins
+//!   `testImpliedVolatility`. `optionlet` and `deepUpdate` remain unported.
 //! - The `CapFloor::arguments` bundle carries `start_dates` (read by the analytic
 //!   Hull-White engine to form each optionlet's exercise maturity, #438); the C++
 //!   `spreads` and `indexes` are filled but unread by any ported engine, so they
@@ -35,19 +35,27 @@
 //!   date the expiry check and the forward guard read.
 
 use std::any::Any;
+use std::cell::RefCell;
 
 use crate::cashflow::{CashFlow, Leg};
 use crate::cashflows::{CashFlows, Coupon, IborCoupon};
 use crate::errors::QlResult;
 use crate::event::Event;
+use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase};
+use crate::math::solver1d::{DerivativeSolver, Function1D};
+use crate::math::solvers1d::newtonsafe::NewtonSafe;
 use crate::patterns::observable::AsObservable;
-use crate::pricingengine::Arguments;
+use crate::pricingengine::{Arguments, PricingEngine};
+use crate::pricingengines::capfloor::{BachelierCapFloorEngine, BlackCapFloorEngine};
+use crate::quotes::{Quote, SimpleQuote};
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, shared};
+use crate::termstructures::volatility::VolatilityType;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
-use crate::types::{Rate, Real, Time};
+use crate::time::daycounters::actual365fixed::Actual365Fixed;
+use crate::types::{Rate, Real, Size, Time, Volatility};
 use crate::{fail, require};
 
 /// Whether the instrument caps, floors or collars its floating leg
@@ -250,12 +258,139 @@ impl CapFloor {
         )
     }
 
+    /// Implied term volatility that reprices this instrument to `target_value`
+    /// (`CapFloor::impliedVolatility`).
+    ///
+    /// Uses [`NewtonSafe`] on a temporary Black or Bachelier engine whose flat
+    /// vol is a [`SimpleQuote`], matching `ImpliedCapVolHelper` /
+    /// `capfloor.cpp:39-109`. Defaults in C++: `accuracy = 1e-4`,
+    /// `max_evaluations = 100`, `min_vol = 1e-7`, `max_vol = 4.0`,
+    /// `ShiftedLognormal`, `displacement = 0.0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        target_value: Real,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        guess: Volatility,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+        vol_type: VolatilityType,
+        displacement: Real,
+    ) -> QlResult<Volatility> {
+        require!(!self.is_expired()?, "instrument expired");
+
+        // Implausible seed so the first evaluation always recalculates
+        // (`ImpliedCapVolHelper` ctor, `capfloor.cpp:63-66`).
+        let vol = shared(SimpleQuote::new(-1.0));
+        let vol_handle = Handle::new(Shared::clone(&vol) as Shared<dyn Quote>);
+        let mut engine: Box<dyn PricingEngine> = match vol_type {
+            VolatilityType::ShiftedLognormal => Box::new(BlackCapFloorEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                displacement,
+                Shared::clone(&self.settings),
+            )?),
+            VolatilityType::Normal => Box::new(BachelierCapFloorEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                Shared::clone(&self.settings),
+            )?),
+        };
+        self.setup_arguments(engine.arguments_mut())?;
+        engine.arguments_mut().validate()?;
+
+        let failure = RefCell::new(None);
+        let helper = ImpliedCapVolHelper {
+            engine,
+            vol,
+            target_value,
+            failure: &failure,
+        };
+        let solver = NewtonSafe::new().with_max_evaluations(max_evaluations);
+        let root = solver.solve_bracketed(helper, accuracy, guess, min_vol, max_vol);
+        match failure.into_inner() {
+            Some(error) => Err(error),
+            None => root,
+        }
+    }
+
     /// The concrete coupons erased to a [`Leg`] for the [`CashFlows`] analytics.
     fn cash_flows(&self) -> Leg {
         self.coupons
             .iter()
             .map(|coupon| Shared::clone(coupon) as Shared<dyn CashFlow>)
             .collect()
+    }
+}
+
+/// Newton objective for [`CapFloor::implied_volatility`] (`ImpliedCapVolHelper`).
+struct ImpliedCapVolHelper<'a> {
+    engine: Box<dyn PricingEngine>,
+    vol: Shared<SimpleQuote>,
+    target_value: Real,
+    failure: &'a RefCell<Option<crate::errors::QlError>>,
+}
+
+impl ImpliedCapVolHelper<'_> {
+    fn ensure_priced(&mut self, x: Volatility) {
+        let current = self.vol.value().ok();
+        if current != Some(x) {
+            self.vol.set_value(x);
+            if let Err(error) = self.engine.calculate() {
+                self.failure.borrow_mut().get_or_insert(error);
+            }
+        }
+    }
+
+    fn npv(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.value)
+    }
+
+    fn vega(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.additional_results.get("vega"))
+            .and_then(|v| v.as_ref().downcast_ref::<Real>().copied())
+    }
+}
+
+impl Function1D for ImpliedCapVolHelper<'_> {
+    fn value(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.npv() {
+            Some(value) => value - self.target_value,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new(
+                        "no results returned from pricing engine",
+                        file!(),
+                        line!(),
+                    )
+                });
+                Real::NAN
+            }
+        }
+    }
+
+    fn derivative(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.vega() {
+            Some(vega) => vega,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new("vega not provided", file!(), line!())
+                });
+                Real::NAN
+            }
+        }
     }
 }
 
