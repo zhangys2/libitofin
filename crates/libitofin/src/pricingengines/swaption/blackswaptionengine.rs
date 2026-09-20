@@ -715,12 +715,34 @@ mod tests {
             settlement_type: SettlementType,
             settlement_method: SettlementMethod,
         ) -> Swaption {
+            self.make_black_swaption(
+                swap,
+                exercise_date,
+                volatility,
+                settlement_type,
+                settlement_method,
+                CashAnnuityModel::SwapRate,
+            )
+        }
+
+        /// Black flat-vol attach with an explicit cash-annuity model. Cash +
+        /// `ParYieldCurve` IV round-trips must price with `DiscountCurve` to
+        /// match [`Swaption::implied_volatility`] / QL `ImpliedSwaptionVolHelper`.
+        fn make_black_swaption(
+            &self,
+            swap: FixedVsFloatingSwap,
+            exercise_date: Date,
+            volatility: Volatility,
+            settlement_type: SettlementType,
+            settlement_method: SettlementMethod,
+            model: CashAnnuityModel,
+        ) -> Swaption {
             let engine = shared_mut(BlackSwaptionEngine::with_flat_vol(
                 self.curve.clone(),
                 make_quote_handle(volatility).handle(),
                 Actual365Fixed::new(),
                 0.0,
-                CashAnnuityModel::SwapRate,
+                model,
                 Shared::clone(&self.settings),
             )) as SharedMut<dyn PricingEngine>;
             let mut swaption = Swaption::new(
@@ -1155,7 +1177,9 @@ mod tests {
     /// `testImpliedVolatility` (`swaption.cpp:825`): recover the input Black
     /// flat vol from Spot NPV via [`Swaption::implied_volatility`] @ 1e-8,
     /// Physical settlement, skipping zero-price bracket cases QL also skips.
-    /// Cash / Forward / OIS arms deferred; Normal arm in
+    /// Cash/`ParYieldCurve` arm in
+    /// [`implied_volatility_recovers_cash_par_yield_black_vol`]; Forward / OIS
+    /// deferred; Normal arm in
     /// [`implied_volatility_recovers_the_input_normal_vol`].
     #[test]
     fn implied_volatility_recovers_the_input_black_vol() {
@@ -1300,6 +1324,76 @@ mod tests {
                         (value - value2).abs() <= tolerance,
                         "Normal implied {implied} vs input {vol}: price {value} \
                          vs reprice {value2} ({swap_type:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reduced Cash + `ParYieldCurve` Spot Black pin for
+    /// [`Swaption::implied_volatility`] (`testImpliedVolatility` Cash arm).
+    /// Prices and inverts with `CashAnnuityModel::DiscountCurve` so the annuity
+    /// matches QL's `ImpliedSwaptionVolHelper` ctor default.
+    #[test]
+    fn implied_volatility_recovers_cash_par_yield_black_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let exercise_date = vars.years(vars.today, 5);
+        let start_date = vars.spot(exercise_date);
+        let length = 10;
+        let strike = 0.05;
+        let vols = [0.05, 0.10, 0.20];
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            for vol in vols {
+                let make_swap = || {
+                    vars.make_vanilla(start_date, length, strike, 0.0, swap_type)
+                        .into_fixed_vs_floating()
+                };
+                let make = |v| {
+                    vars.make_black_swaption(
+                        make_swap(),
+                        exercise_date,
+                        v,
+                        SettlementType::Cash,
+                        SettlementMethod::ParYieldCurve,
+                        CashAnnuityModel::DiscountCurve,
+                    )
+                };
+                let mut swaption = make(vol);
+                let value = swaption.npv().unwrap();
+                let implied = match swaption.implied_volatility(
+                    value,
+                    vars.curve.clone(),
+                    0.10,
+                    tolerance,
+                    100,
+                    1.0e-7,
+                    4.0,
+                    VolatilityType::ShiftedLognormal,
+                    0.0,
+                    crate::instruments::SwaptionPriceType::Spot,
+                ) {
+                    Ok(implied) => implied,
+                    Err(_) => {
+                        let mut zero = make(0.0);
+                        let value2 = zero.npv().unwrap();
+                        if (value - value2).abs() < tolerance {
+                            continue;
+                        }
+                        panic!(
+                            "Cash ParYield implied vol failed to bracket: \
+                             {swap_type:?} vol={vol} price={value}"
+                        );
+                    }
+                };
+                if (implied - vol).abs() > tolerance {
+                    let mut check = make(implied);
+                    let value2 = check.npv().unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "Cash ParYield implied {implied} vs input {vol}: \
+                         price {value} vs reprice {value2} ({swap_type:?})"
                     );
                 }
             }
