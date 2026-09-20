@@ -48,7 +48,7 @@
 use std::any::Any;
 
 use crate::cashflow::Leg;
-use crate::cashflows::FixedRateLeg;
+use crate::cashflows::{FixedRateLeg, RateAveraging};
 use crate::errors::QlResult;
 use crate::indexes::{IborIndex, InterestRateIndex};
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
@@ -77,6 +77,23 @@ const BASIS_POINT: Real = 1.0e-4;
 /// floating leg's `IborCoupon`s.
 pub type FloatingArgumentsFn =
     Box<dyn Fn(&FixedVsFloatingSwap, &mut FixedVsFloatingSwapArguments) -> QlResult<()>>;
+
+/// Overnight-leg fields retained when an [`OvernightIndexedSwap`] is erased to
+/// [`FixedVsFloatingSwap`] (`into_fixed_vs_floating`), so FDM rebuild can
+/// recover lag / calendar / averaging instead of guessing from tenor.
+///
+/// [`OvernightIndexedSwap`]: crate::instruments::OvernightIndexedSwap
+#[derive(Clone, Debug)]
+pub struct OvernightIndexedExtras {
+    /// Overnight payment lag in business days (`paymentLag()`).
+    pub payment_lag: Integer,
+    /// Overnight payment calendar (`paymentCalendar()`).
+    pub payment_calendar: Calendar,
+    /// Overnight payment adjustment (`paymentConvention()` on the OIS).
+    pub payment_adjustment: BusinessDayConvention,
+    /// Overnight averaging method (`averagingMethod()`).
+    pub averaging_method: RateAveraging,
+}
 
 /// Arguments passed to a fixed-vs-floating swap engine (the C++
 /// `FixedVsFloatingSwap::arguments`, which derives from `Swap::arguments`).
@@ -208,6 +225,8 @@ pub struct FixedVsFloatingSwap {
     fair_spread: Option<Spread>,
     constant_nominals: bool,
     same_nominals: bool,
+    /// Present when this base was built by [`OvernightIndexedSwap`].
+    overnight: Option<OvernightIndexedExtras>,
 }
 
 impl FixedVsFloatingSwap {
@@ -293,7 +312,27 @@ impl FixedVsFloatingSwap {
             fair_spread: None,
             constant_nominals,
             same_nominals,
+            overnight: None,
         })
+    }
+
+    /// Attaches overnight-leg metadata after an [`OvernightIndexedSwap`] builds
+    /// this base, so `into_fixed_vs_floating` keeps lag / calendar / averaging
+    /// for FDM rebuild (`FdmAffineModelSwapInnerValue`).
+    ///
+    /// [`OvernightIndexedSwap`]: crate::instruments::OvernightIndexedSwap
+    pub(crate) fn attach_overnight_extras(&mut self, extras: OvernightIndexedExtras) {
+        self.overnight = Some(extras);
+    }
+
+    /// Overnight extras when this base came from an OIS; `None` for vanilla.
+    pub fn overnight_extras(&self) -> Option<&OvernightIndexedExtras> {
+        self.overnight.as_ref()
+    }
+
+    /// Whether the underlying was an overnight-indexed swap.
+    pub fn is_overnight_indexed(&self) -> bool {
+        self.overnight.is_some()
     }
 
     /// Whether the swap pays or receives the fixed leg (`type()`).
