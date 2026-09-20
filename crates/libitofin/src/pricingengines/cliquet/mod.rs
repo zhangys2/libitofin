@@ -6,6 +6,4 @@ mod analyticcliquetengine;
 mod analyticperformanceengine;
 
 pub use analyticcliquetengine::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
-pub use analyticperformanceengine::{
-    AnalyticPerformanceEngine, set_analytic_performance_engine,
-};
+pub use analyticperformanceengine::{AnalyticPerformanceEngine, set_analytic_performance_engine};

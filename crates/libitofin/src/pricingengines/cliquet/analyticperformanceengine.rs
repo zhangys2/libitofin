@@ -14,7 +14,7 @@ use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::pricingengines::BlackCalculator;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
-use crate::shared::{shared_mut, Shared, SharedMut};
+use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::frequency::Frequency;
 
