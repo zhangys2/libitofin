@@ -556,10 +556,13 @@ mod tests {
     }
 
     /// `CapFloor::deepUpdate` (`capfloor.cpp:271`): after a successful NPV the
-    /// instrument is calculated; `deep_update` clears that cache so the next
-    /// NPV recalculates (and recovers the same value).
+    /// instrument is calculated; `deep_update` clears that cache and notifies
+    /// observers (not a silent invalidate), so the next NPV recalculates and
+    /// recovers the same value when markets are unchanged.
     #[test]
     fn deep_update_invalidates_the_cached_npv() {
+        use crate::test_support::{Flag, as_observer};
+
         let vars = Vars::new(true);
         let start = vars.start_date();
         let leg = vars.make_leg(start, 20);
@@ -573,7 +576,14 @@ mod tests {
             "NPV must leave the cap calculated"
         );
 
+        let flag = Flag::new();
+        cap.base().register_observer(&as_observer(&flag));
+        Flag::lower(&flag);
         cap.deep_update();
+        assert!(
+            Flag::is_up(&flag),
+            "deep_update must notify observers (not invalidate_silently)"
+        );
         assert!(
             !cap.base().is_calculated(),
             "deep_update must clear the calculated flag"
