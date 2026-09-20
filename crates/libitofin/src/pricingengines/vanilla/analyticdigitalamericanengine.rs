@@ -1,8 +1,9 @@
 //! Analytic American digital engine (`analyticdigitalamericanengine`).
 //!
-//! At-hit via `AmericanPayoffAtHit` (fills δ). At-expiry knock-in via
+//! At-hit via `AmericanPayoffAtHit` (fills δ). At-expiry via
 //! `AmericanPayoffAtExpiry` (NPV only; QL has no at-expiry greeks). Knock-out
-//! and γ/ρ stay deferred (D10: `.gamma()` / `.rho()` remain `"not provided"`).
+//! is [`AnalyticDigitalAmericanKOEngine`] (`knock_in = false`). γ/ρ stay
+//! deferred (D10: `.gamma()` / `.rho()` remain `"not provided"`).
 
 use std::any::Any;
 
@@ -241,14 +242,57 @@ impl AmericanPayoffAtExpiry {
 pub struct AnalyticDigitalAmericanEngine {
     base: OneAssetOptionEngine,
     process: Shared<GeneralizedBlackScholesProcess>,
+    knock_in: bool,
 }
 
 impl AnalyticDigitalAmericanEngine {
     pub fn new(process: Shared<GeneralizedBlackScholesProcess>) -> Self {
+        Self::with_knock_in(process, true)
+    }
+
+    fn with_knock_in(process: Shared<GeneralizedBlackScholesProcess>, knock_in: bool) -> Self {
         let base =
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
         base.register_with(process.observable());
-        Self { base, process }
+        Self {
+            base,
+            process,
+            knock_in,
+        }
+    }
+}
+
+/// Analytic American digital knock-out engine (`AnalyticDigitalAmericanKOEngine`).
+pub struct AnalyticDigitalAmericanKOEngine {
+    inner: AnalyticDigitalAmericanEngine,
+}
+
+impl AnalyticDigitalAmericanKOEngine {
+    pub fn new(process: Shared<GeneralizedBlackScholesProcess>) -> Self {
+        Self {
+            inner: AnalyticDigitalAmericanEngine::with_knock_in(process, false),
+        }
+    }
+}
+
+impl AsObservable for AnalyticDigitalAmericanKOEngine {
+    fn observable(&self) -> &Observable {
+        self.inner.observable()
+    }
+}
+
+impl PricingEngine for AnalyticDigitalAmericanKOEngine {
+    fn arguments_mut(&mut self) -> &mut dyn Arguments {
+        self.inner.arguments_mut()
+    }
+    fn results(&self) -> &dyn Results {
+        self.inner.results()
+    }
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
+    fn calculate(&mut self) -> QlResult<()> {
+        self.inner.calculate()
     }
 }
 
@@ -301,9 +345,10 @@ impl PricingEngine for AnalyticDigitalAmericanEngine {
             .current_link()?
             .discount_date(last, false)?;
         let at_expiry = exercise.payoff_at_expiry();
+        let knock_in = self.knock_in;
         if at_expiry {
             let value =
-                AmericanPayoffAtExpiry::new(spot, rf_disc, q_disc, variance, &**payoff, true)?
+                AmericanPayoffAtExpiry::new(spot, rf_disc, q_disc, variance, &**payoff, knock_in)?
                     .value();
             self.base.results_mut().instrument.value = Some(value);
         } else {
@@ -367,7 +412,7 @@ mod tests {
     }
 
     type Row = (OptionType, Real, Real, Real, Real, Real, Real, Real);
-    fn price(row: Row, cash: Real, at_expiry: bool) -> Real {
+    fn price(row: Row, cash: Real, at_expiry: bool, knock_in: bool) -> Real {
         let (ty, k, s, q, r, t, v, _) = row;
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
@@ -384,13 +429,13 @@ mod tests {
             ),
             settings,
         );
-        opt.base_mut()
-            .set_pricing_engine(shared_mut(AnalyticDigitalAmericanEngine::new(process(
-                &shared(SimpleQuote::new(s)),
-                q,
-                r,
-                v,
-            ))) as SharedMut<dyn PricingEngine>);
+        let proc = process(&shared(SimpleQuote::new(s)), q, r, v);
+        let engine: SharedMut<dyn PricingEngine> = if knock_in {
+            shared_mut(AnalyticDigitalAmericanEngine::new(proc)) as SharedMut<dyn PricingEngine>
+        } else {
+            shared_mut(AnalyticDigitalAmericanKOEngine::new(proc)) as SharedMut<dyn PricingEngine>
+        };
+        opt.base_mut().set_pricing_engine(engine);
         opt.npv().unwrap()
     }
 
@@ -422,7 +467,7 @@ mod tests {
     fn check(rows: &[Row], cash: Real) {
         for &(ty, k, s, q, r, t, v, expected) in rows {
             let tol = if expected.fract() == 0.0 { 1e-16 } else { 1e-4 };
-            let got = price((ty, k, s, q, r, t, v, expected), cash, false);
+            let got = price((ty, k, s, q, r, t, v, expected), cash, false, true);
             assert!(
                 (got - expected).abs() <= tol,
                 "{ty:?} K={k} S={s} q={q} cash={cash}: {got} vs {expected}"
@@ -554,71 +599,59 @@ mod tests {
         ]
     }
 
-    fn check_expiry(rows: &[(Row, Real)], cash: Real) {
+    fn check_expiry(rows: &[(Row, Real)], cash: Real, knock_in: bool) {
         for &((ty, k, s, q, r, t, v, expected), tol) in rows {
-            let got = price((ty, k, s, q, r, t, v, expected), cash, true);
+            let got = price((ty, k, s, q, r, t, v, expected), cash, true, knock_in);
             assert!(
                 (got - expected).abs() <= tol,
-                "{ty:?} K={k} S={s} q={q} cash={cash}: {got} vs {expected}"
+                "{ty:?} K={k} S={s} q={q} cash={cash} knock_in={knock_in}: {got} vs {expected}"
             );
         }
-    }
-
-    fn expiry_pricer(row: Row, cash: Real, knock_in: bool) -> Real {
-        let (ty, k, s, q, r, t, v, _) = row;
-        let payoff: Shared<dyn StrikedTypePayoff> = if cash > 0.0 {
-            shared(CashOrNothingPayoff::new(ty, k, cash))
-        } else {
-            shared(AssetOrNothingPayoff::new(ty, k))
-        };
-        AmericanPayoffAtExpiry::new(
-            s,
-            (-r * t).exp(),
-            (-q * t).exp(),
-            v * v * t,
-            &*payoff,
-            knock_in,
-        )
-        .unwrap()
-        .value()
     }
 
     #[test]
     fn cash_at_expiry_or_nothing_american_values() {
-        check_expiry(&cash_expiry(), 15.0);
+        check_expiry(&cash_expiry(), 15.0, true);
     }
     #[test]
     fn asset_at_expiry_or_nothing_american_values() {
-        check_expiry(&asset_expiry(), 0.0);
+        check_expiry(&asset_expiry(), 0.0, true);
     }
 
     #[test]
     fn cash_at_expiry_knock_out_haug() {
-        for &row in &[
-            (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 4.9081),
-            (Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 3.0461),
-        ] {
-            let got = expiry_pricer(row, 15.0, false);
-            let expected = row.7;
-            assert!(
-                (got - expected).abs() <= 1e-4,
-                "{row:?}: {got} vs {expected}"
-            );
-        }
+        check_expiry(
+            &[
+                ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 4.9081), 1e-4),
+                ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 3.0461), 1e-4),
+                ((Call, 2.37, 2.33, 0.07, 0.43, 0.19, 0.005, 0.0), 1e-4),
+            ],
+            15.0,
+            false,
+        );
     }
 
     #[test]
     fn asset_at_expiry_knock_out_haug() {
-        for &row in &[
-            (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 40.1574),
-            (Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 17.2983),
-        ] {
-            let got = expiry_pricer(row, 0.0, false);
-            let expected = row.7;
-            assert!(
-                (got - expected).abs() <= 1e-4,
-                "{row:?}: {got} vs {expected}"
-            );
-        }
+        check_expiry(
+            &[
+                ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 40.1574), 1e-4),
+                ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 17.2983), 1e-4),
+            ],
+            0.0,
+            false,
+        );
+    }
+
+    #[test]
+    fn at_expiry_knock_in_plus_out_is_prepaid() {
+        let cash_put = (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0);
+        let ki = price(cash_put, 15.0, true, true);
+        let ko = price(cash_put, 15.0, true, false);
+        assert!((ki + ko - 15.0 * (-0.05_f64).exp()).abs() <= 1e-4);
+        let asset_put = (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0);
+        let ki = price(asset_put, 0.0, true, true);
+        let ko = price(asset_put, 0.0, true, false);
+        assert!((ki + ko - 105.0).abs() <= 1e-4);
     }
 }
