@@ -141,7 +141,7 @@ pub use softbarrieroption::{SoftBarrierArguments, SoftBarrierOption, SoftBarrier
 pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
 pub use swaption::{
     SettlementMethod, SettlementType, Swaption, SwaptionArguments, SwaptionEngine,
-    check_type_and_method_consistency,
+    SwaptionPriceType, check_type_and_method_consistency,
 };
 pub use twoassetcorrelationoption::{
     TwoAssetCorrelationArguments, TwoAssetCorrelationOption, TwoAssetCorrelationResults,

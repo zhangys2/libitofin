@@ -1123,6 +1123,94 @@ mod tests {
         }
     }
 
+    /// `testImpliedVolatility` (`swaption.cpp:825`): recover the input Black
+    /// flat vol from Spot NPV via [`Swaption::implied_volatility`] @ 1e-8,
+    /// Physical settlement, skipping zero-price bracket cases QL also skips.
+    /// Cash/Forward/OIS/Bachelier arms deferred.
+    #[test]
+    fn implied_volatility_recovers_the_input_black_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let strikes = [0.03, 0.05, 0.07];
+        let vols = [0.05, 0.10, 0.20, 0.30];
+        let exercises = [1, 5];
+        let lengths = [5, 10];
+
+        for exercise in exercises {
+            let exercise_date = vars.years(vars.today, exercise);
+            let start_date = vars.spot(exercise_date);
+            for length in lengths {
+                for strike in strikes {
+                    for swap_type in [SwapType::Payer, SwapType::Receiver] {
+                        for vol in vols {
+                            // `FixedVsFloatingSwap` is not `Clone`; rebuild per
+                            // engine attach the way CapFloor IV rebuilds legs.
+                            let make_swap = || {
+                                vars.make_vanilla(start_date, length, strike, 0.0, swap_type)
+                                    .into_fixed_vs_floating()
+                            };
+                            let mut swaption = vars.make_swaption(
+                                make_swap(),
+                                exercise_date,
+                                vol,
+                                SettlementType::Physical,
+                                SettlementMethod::PhysicalOTC,
+                            );
+                            let value = swaption.npv().unwrap();
+                            let implied = match swaption.implied_volatility(
+                                value,
+                                vars.curve.clone(),
+                                0.10,
+                                tolerance,
+                                100,
+                                1.0e-7,
+                                4.0,
+                                VolatilityType::ShiftedLognormal,
+                                0.0,
+                                crate::instruments::SwaptionPriceType::Spot,
+                            ) {
+                                Ok(implied) => implied,
+                                Err(_) => {
+                                    let mut zero = vars.make_swaption(
+                                        make_swap(),
+                                        exercise_date,
+                                        0.0,
+                                        SettlementType::Physical,
+                                        SettlementMethod::PhysicalOTC,
+                                    );
+                                    let value2 = zero.npv().unwrap();
+                                    if (value - value2).abs() < tolerance {
+                                        continue;
+                                    }
+                                    panic!(
+                                        "implied vol failed to bracket: {exercise}x{length} \
+                                         {swap_type:?} strike {strike} vol {vol} price {value}"
+                                    );
+                                }
+                            };
+                            if (implied - vol).abs() > tolerance {
+                                let mut check = vars.make_swaption(
+                                    make_swap(),
+                                    exercise_date,
+                                    implied,
+                                    SettlementType::Physical,
+                                    SettlementMethod::PhysicalOTC,
+                                );
+                                let value2 = check.npv().unwrap();
+                                assert!(
+                                    (value - value2).abs() <= tolerance,
+                                    "implied vol {implied} vs input {vol}: \
+                                     price {value} vs reprice {value2} \
+                                     ({exercise}x{length} {swap_type:?} strike {strike})"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// `testBlackEngineCaching` (`swaption.cpp:147-169`): the swaption is not
     /// calculated before `NPV()` and is calculated after. This pins the D5
     /// re-entrancy fix: the engine installs a discounting engine on the swap the
