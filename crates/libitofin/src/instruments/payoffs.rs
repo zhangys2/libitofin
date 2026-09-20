@@ -3,8 +3,8 @@
 //! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
 //! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], [`PercentageStrikePayoff`],
-//! [`CashOrNothingPayoff`], and [`AssetOrNothingPayoff`]. The remaining payoffs
-//! (`NullPayoff`, `GapPayoff`, `SuperFundPayoff`, `SuperSharePayoff`) are
+//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], and [`GapPayoff`]. The
+//! remaining payoffs (`NullPayoff`, `SuperFundPayoff`, `SuperSharePayoff`) are
 //! follow-up work.
 
 use std::any::Any;
@@ -67,7 +67,11 @@ impl Payoff for PlainVanillaPayoff {
             OptionType::Call => price - self.strike,
             OptionType::Put => self.strike - price,
         };
-        if intrinsic < 0.0 { 0.0 } else { intrinsic }
+        if intrinsic < 0.0 {
+            0.0
+        } else {
+            intrinsic
+        }
     }
 }
 
@@ -159,7 +163,11 @@ impl FloatingTypePayoff {
             OptionType::Call => price - strike,
             OptionType::Put => strike - price,
         };
-        if intrinsic < 0.0 { 0.0 } else { intrinsic }
+        if intrinsic < 0.0 {
+            0.0
+        } else {
+            intrinsic
+        }
     }
 }
 
@@ -296,7 +304,11 @@ impl Payoff for AssetOrNothingPayoff {
             OptionType::Call => price - self.strike,
             OptionType::Put => self.strike - price,
         };
-        if moneyness > 0.0 { price } else { 0.0 }
+        if moneyness > 0.0 {
+            price
+        } else {
+            0.0
+        }
     }
 }
 
@@ -307,6 +319,84 @@ impl TypePayoff for AssetOrNothingPayoff {
 }
 
 impl StrikedTypePayoff for AssetOrNothingPayoff {
+    fn strike(&self) -> Real {
+        self.strike
+    }
+}
+
+/// Binary gap payoff: pays `price - secondStrike` (call) or
+/// `secondStrike - price` (put) when the option finishes in the money versus
+/// the first strike, otherwise zero.
+///
+/// Ports `GapPayoff` (`ql/instruments/payoffs.hpp:170`, `payoffs.cpp:177-196`).
+/// The comparison is non-strict (`>= 0.0`), unlike the cash-or-nothing and
+/// asset-or-nothing siblings, so a price exactly at the strike is in the money
+/// and can pay a negative amount when the two strikes differ.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GapPayoff {
+    option_type: OptionType,
+    strike: Real,
+    second_strike: Real,
+}
+
+impl GapPayoff {
+    /// Builds a gap payoff of the given type, exercise strike and payoff strike.
+    pub fn new(option_type: OptionType, strike: Real, second_strike: Real) -> GapPayoff {
+        GapPayoff {
+            option_type,
+            strike,
+            second_strike,
+        }
+    }
+
+    /// The strike that sizes the cash amount of the payoff (`payoffs.hpp:182`).
+    pub fn second_strike(&self) -> Real {
+        self.second_strike
+    }
+}
+
+impl Payoff for GapPayoff {
+    fn name(&self) -> String {
+        "Gap".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!(
+            "{} {}, {} strike, {} strike payoff",
+            self.name(),
+            self.option_type,
+            self.strike,
+            self.second_strike
+        )
+    }
+
+    fn value(&self, price: Real) -> Real {
+        match self.option_type {
+            OptionType::Call => {
+                if price - self.strike >= 0.0 {
+                    price - self.second_strike
+                } else {
+                    0.0
+                }
+            }
+            OptionType::Put => {
+                if self.strike - price >= 0.0 {
+                    self.second_strike - price
+                } else {
+                    0.0
+                }
+            }
+        }
+    }
+}
+
+impl TypePayoff for GapPayoff {
+    fn option_type(&self) -> OptionType {
+        self.option_type
+    }
+}
+
+impl StrikedTypePayoff for GapPayoff {
     fn strike(&self) -> Real {
         self.strike
     }
@@ -421,5 +511,23 @@ mod tests {
         assert_eq!(put.value(110.0), 0.0);
         assert_eq!(put.name(), "AssetOrNothing");
         assert_eq!(put.description(), "AssetOrNothing Put, 100 strike");
+    }
+
+    /// `payoffs.cpp:185,187` uses `>= 0.0`, so the strike itself is in the
+    /// money and a call with a higher payoff strike can pay a negative amount.
+    #[test]
+    fn gap_pays_against_the_second_strike_when_in_the_money() {
+        let call = GapPayoff::new(OptionType::Call, 100.0, 110.0);
+        assert_eq!(call.value(120.0), 10.0);
+        assert_eq!(call.value(100.0), -10.0);
+        assert_eq!(call.value(90.0), 0.0);
+
+        let put = GapPayoff::new(OptionType::Put, 100.0, 90.0);
+        assert_eq!(put.value(80.0), 10.0);
+        assert_eq!(put.value(100.0), -10.0);
+        assert_eq!(put.value(110.0), 0.0);
+        assert_eq!(put.name(), "Gap");
+        assert_eq!(put.description(), "Gap Put, 100 strike, 90 strike payoff");
+        assert_eq!(put.second_strike(), 90.0);
     }
 }

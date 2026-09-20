@@ -126,8 +126,8 @@ pub use partialtimebarrieroption::{
     PartialTimeBarrierResults,
 };
 pub use payoffs::{
-    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, PercentageStrikePayoff,
-    PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
+    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, GapPayoff,
+    PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
 pub use protection::ProtectionSide;
 pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};
