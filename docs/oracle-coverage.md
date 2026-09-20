@@ -77,6 +77,7 @@ credit.
 | Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip |
 | Cap/floor optionlet | `CapFloor::optionlet` | `capfloor.cpp` `testConsistency` recomposition | collar ≡ cap−floor @ 1e-10; Σ optionlet NPV ≡ parent @ 1e-10 (un-nested) |
 | Cap/floor optionlets vega | Black/`BachelierCapFloorEngine` `optionletsVega`/`StdDev` | `blackcapfloorengine.cpp:160-166` | Σ optionletsVega ≡ vega; StdDev for cap/floor only |
+| Cap/floor deepUpdate | `CapFloor::deep_update` | `capfloor.cpp:271-276` | clears calculated after NPV; reprice recovers prior NPV @ 1e-12 (coupon deepUpdate deferred) |
 | Swaption Black implied vol | `Swaption::implied_volatility` | `swaption.cpp` `testImpliedVolatility` / `testImpliedVolatilityOis` | Spot Physical Black + reduced IBOR/OIS Spot/Cash/Forward cartesian cells @ 1e-8 (incl. Cash×Forward); reduced Spot Physical Normal |
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |

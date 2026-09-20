@@ -27,7 +27,10 @@
 //!   [`CapFloor::last_floating_rate_coupon`] exposes the trailing coupon the
 //!   optionlet stripper reads; [`CapFloor::implied_volatility`] pins
 //!   `testImpliedVolatility`; [`CapFloor::optionlet`] pins the
-//!   `testConsistency` recomposition. `deepUpdate` remains unported.
+//!   `testConsistency` recomposition. [`CapFloor::deep_update`] pins the
+//!   LazyObject invalidation half of C++ `CapFloor::deepUpdate` (coupon-level
+//!   deepUpdate remains deferred with the cash-flow surface, as on
+//!   [`Swap::deep_update`](crate::instruments::Swap::deep_update)).
 //! - The `CapFloor::arguments` bundle carries `start_dates` (read by the analytic
 //!   Hull-White engine to form each optionlet's exercise maturity, #438); the C++
 //!   `spreads` and `indexes` are filled but unread by any ported engine, so they
@@ -356,6 +359,17 @@ impl CapFloor {
             Some(error) => Err(error),
             None => root,
         }
+    }
+
+    /// Invalidates the cached results and notifies observers (the C++
+    /// `CapFloor::deepUpdate`, `capfloor.cpp:271-276`).
+    ///
+    /// C++ additionally walks `floatingLeg_` calling `deepUpdate` on each flow
+    /// to refresh coupon pricer caches; the crate's cash-flow surface exposes no
+    /// such hook yet, so the walk reduces to the instrument `update` step until
+    /// one lands — the same reduction as [`Swap::deep_update`].
+    pub fn deep_update(&mut self) {
+        self.base().observer().borrow_mut().update();
     }
 
     /// The concrete coupons erased to a [`Leg`] for the [`CashFlows`] analytics.
