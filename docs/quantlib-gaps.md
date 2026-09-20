@@ -75,7 +75,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | false | none | |
 | Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | false | none | |
 | Equity | Sticky ratchet | `StickyRatchet` | `stickyratchet.cpp` | false | none | |
-| Equity | Merton jump-diffusion engine | jump engines | `jumpdiffusion.cpp` | false | none | Bates separate |
+| Equity | Merton jump-diffusion engine | jump engines | `jumpdiffusion.cpp` | true | partial | `Merton76Process` + `JumpDiffusionEngine` Haug p.9 NPV subset @ 1e-2; greeks / full 135-row table deferred. Bates separate |
 | Equity | Variance gamma | `VarianceGamma*` | `variancegamma.cpp` | false | none | |
 | Equity | GJR-GARCH | `GJRGARCHModel` + engines | `gjrgarch.cpp` | false | none | |
 | Equity | Piecewise time-dependent Heston | `PiecewiseTimeDependentHestonModel` | `hestonmodel.cpp` | false | none | |
