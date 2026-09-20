@@ -48,8 +48,9 @@ mod yearonyearinflationswap;
 mod zerocouponinflationswap;
 
 pub use crate::pricingengines::{
-    AnalyticDoubleBarrierEngine, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
-    MCBarrierEngine, MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine,
+    AnalyticBinaryBarrierEngine, AnalyticDoubleBarrierEngine, BinomialBarrierEngine,
+    FdBlackScholesBarrierEngine, MCBarrierEngine, MCDoubleBarrierEngine, MakeMcBarrierEngine,
+    MakeMcDoubleBarrierEngine, set_analytic_binary_barrier_engine,
     set_analytic_double_barrier_engine, set_binomial_barrier_engine,
     set_fd_black_scholes_barrier_engine, set_mc_barrier_engine, set_mc_double_barrier_engine,
 };
@@ -126,8 +127,8 @@ pub use partialtimebarrieroption::{
     PartialTimeBarrierResults,
 };
 pub use payoffs::{
-    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, PercentageStrikePayoff,
-    PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
+    AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, GapPayoff,
+    PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
 pub use protection::ProtectionSide;
 pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};

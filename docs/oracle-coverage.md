@@ -17,6 +17,8 @@ credit.
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
+| European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
+| American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16); at-expiry/KO deferred |
 | Analytic quanto vanilla | `QuantoEuropeanEngine` (`QuantoEngine<VanillaOption, AnalyticEuropeanEngine>`) | `quantooption.cpp` `testValues` | Haug call 5.3280/1.5, put 8.1636 @ 1e-4; NPV/greeks ≡ quanto-q Black |
 | Analytic quanto greeks | `QuantoEuropeanEngine` | `quantooption.cpp` `testGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega/qρ/qvega/qλ) @ 1e-5 relative to spot |
 | Analytic quanto barrier | `QuantoBarrierEngine` (`QuantoEngine<BarrierOption, AnalyticBarrierEngine>`) | `quantooption.cpp` `testBarrierValues` | Haug DownOut call 8.247 / put 2.274, DownIn put 2.85 @ tol 0.5; NPV ≡ quanto-q barrier |
@@ -43,6 +45,7 @@ credit.
 | Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
+| Barone-Adesi–Whaley American | `BaroneAdesiWhaleyApproximationEngine` | `americanoption.cpp` `testBaroneAdesiWhaleyValues` | Haug p.24 NPV @ 3e-3 (QL table tolerance); negative-rate reject |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |
 | Heston | analytic + calibration | `hestonmodel.cpp` | Core done |
 | Heston FD barrier cached | `FdHestonBarrierEngine` 200×400×100 | `hestonmodel.cpp` `testFdBarrierVsCached` | DownOut 9.0246 / DownIn 7.7627 @ 1e-3 |
@@ -146,6 +149,8 @@ credit.
 | Simple chooser Haug value | `AnalyticSimpleChooserEngine` | `chooseroption.cpp` `testAnalyticSimpleChooserEngine` | Haug 2nd ed. pp.39–40 @ 3e-5 |
 | Complex chooser Haug value | `AnalyticComplexChooserEngine` | `chooseroption.cpp` `testAnalyticComplexChooserEngine` | Haug example @ 1e-4 |
 | Cliquet Haug value | `AnalyticCliquetEngine` | `cliquetoption.cpp` `testValues` | Haug p.37 call @ 1e-4 |
+| Analytic performance cliquet | `AnalyticPerformanceEngine` | `cliquetoption.cpp` `testPerformanceGreeks` | δ=γ=0; NPV independent of spot; expired greeks 0; ρ/divρ/ν/θ vs FD @ 1e-5 relative to spot |
+| Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4 (q=0); book-vba q≠0 and remaining touched-barrier cash extras deferred |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |

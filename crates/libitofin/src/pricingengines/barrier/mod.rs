@@ -4,6 +4,7 @@
 //! the instrument; the finite-difference, binomial, Monte Carlo, and analytic
 //! quanto barrier engines are here.
 
+mod analyticbinarybarrierengine;
 mod analyticdoublebarrierengine;
 mod analyticpartialtimebarrieroptionengine;
 mod analyticsoftbarrierengine;
@@ -19,6 +20,9 @@ mod quantodoublebarrierengine;
 mod vannavolgadoublebarrierengine;
 mod vannavolgainterpolation;
 
+pub use analyticbinarybarrierengine::{
+    AnalyticBinaryBarrierEngine, set_analytic_binary_barrier_engine,
+};
 pub use analyticdoublebarrierengine::{
     AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
 };
