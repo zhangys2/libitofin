@@ -625,6 +625,9 @@ mod tests {
                 ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 4.9081), 1e-4),
                 ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 3.0461), 1e-4),
                 ((Call, 2.37, 2.33, 0.07, 0.43, 0.19, 0.005, 0.0), 1e-4),
+                // already knocked out (QL `cum_d = 0` when KO is ITM)
+                ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0), 1e-12),
+                ((Put, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 0.0), 1e-12),
             ],
             15.0,
             false,
@@ -637,6 +640,8 @@ mod tests {
             &[
                 ((Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 40.1574), 1e-4),
                 ((Call, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 17.2983), 1e-4),
+                ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0), 1e-12),
+                ((Put, 100.0, 95.0, 0.00, 0.10, 0.5, 0.20, 0.0), 1e-12),
             ],
             0.0,
             false,
@@ -649,6 +654,11 @@ mod tests {
         let ki = price(cash_put, 15.0, true, true);
         let ko = price(cash_put, 15.0, true, false);
         assert!((ki + ko - 15.0 * (-0.05_f64).exp()).abs() <= 1e-4);
+        let cash_call_itm = (Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0);
+        let ki = price(cash_call_itm, 15.0, true, true);
+        let ko = price(cash_call_itm, 15.0, true, false);
+        assert_eq!(ko, 0.0);
+        assert!((ki + ko - 15.0 * (-0.05_f64).exp()).abs() <= 1e-12);
         let asset_put = (Put, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 0.0);
         let ki = price(asset_put, 0.0, true, true);
         let ko = price(asset_put, 0.0, true, false);
