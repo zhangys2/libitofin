@@ -25,6 +25,7 @@
 //! [`with_discounting_term_structure`](MakeOis::with_discounting_term_structure),
 //! [`with_averaging_method`](MakeOis::with_averaging_method),
 //! [`with_fixed_leg_day_count`](MakeOis::with_fixed_leg_day_count),
+//! [`with_type`](MakeOis::with_type),
 //! [`with_settlement_days`](MakeOis::with_settlement_days),
 //! [`with_termination_date`](MakeOis::with_termination_date),
 //! [`with_payment_frequency`](MakeOis::with_payment_frequency),
@@ -54,7 +55,6 @@
 //!
 //! Still deferred, defaulting to the C++ default (`makeois.hpp:96-137`):
 //!
-//! - swap type (`receiveFixed` / `withType`): defaults to `Payer`;
 //! - the per-leg schedule variants (`withFixedLegCalendar` /
 //!   `withOvernightLegCalendar`, `withFixedLegPaymentFrequency`, the `*LegRule` /
 //!   `*LegConvention` / `*LegEndOfMonth` splits, `withMaturityEndOfMonth`): the
@@ -192,6 +192,12 @@ impl MakeOis {
     /// index's own day count) (`makeois.hpp` `withFixedLegDayCount`).
     pub fn with_fixed_leg_day_count(mut self, day_count: DayCounter) -> MakeOis {
         self.fixed_day_count = Some(day_count);
+        self
+    }
+
+    /// Sets payer/receiver (`makeois.hpp` `withType`).
+    pub fn with_type(mut self, swap_type: SwapType) -> MakeOis {
+        self.swap_type = swap_type;
         self
     }
 
@@ -798,6 +804,47 @@ mod tests {
         assert!(
             (default_day_count - thirty360).abs() > 1.0e-6,
             "fixed-leg day count must change the fair rate: {default_day_count} vs {thirty360}"
+        );
+    }
+
+    /// `withType` selects payer/receiver on the built OIS (`makeois.hpp`).
+    #[test]
+    fn with_type_sets_payer_or_receiver() {
+        let settings = settings_at(today());
+        let settlement = settlement(&settings);
+        let length = Period::new(5, TimeUnit::Years);
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            let swap = MakeOis::new(
+                length,
+                estr_on(common_curve(), &settings),
+                Some(0.05),
+                Period::new(0, TimeUnit::Days),
+                Shared::clone(&settings),
+            )
+            .with_effective_date(settlement)
+            .with_nominal(NOMINAL)
+            .with_type(swap_type)
+            .build()
+            .unwrap();
+            assert_eq!(swap.fixed_vs_floating().swap_type(), swap_type);
+        }
+
+        let defaulted = MakeOis::new(
+            length,
+            estr_on(common_curve(), &settings),
+            Some(0.05),
+            Period::new(0, TimeUnit::Days),
+            Shared::clone(&settings),
+        )
+        .with_effective_date(settlement)
+        .with_nominal(NOMINAL)
+        .build()
+        .unwrap();
+        assert_eq!(
+            defaulted.fixed_vs_floating().swap_type(),
+            SwapType::Payer,
+            "MakeOis defaults to Payer"
         );
     }
 
