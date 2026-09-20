@@ -33,7 +33,9 @@ pub mod mceuropeanhestonengine;
 pub mod mcvanillaengine;
 pub mod quantoengine;
 
-pub use analyticdigitalamericanengine::AnalyticDigitalAmericanEngine;
+pub use analyticdigitalamericanengine::{
+    AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine,
+};
 pub use analytichestonengine::HestonChf;
 pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
