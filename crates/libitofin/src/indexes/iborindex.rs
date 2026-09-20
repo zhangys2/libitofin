@@ -386,11 +386,28 @@ impl OvernightIndex {
 
     /// Re-wraps an overnight-configured [`IborIndex`] as [`OvernightIndex`].
     ///
-    /// Used when an OIS has been erased to [`FixedVsFloatingSwap`] (which stores
-    /// only the ibor face) and an FDM inner-value rebuild needs the overnight
-    /// clone branch of QuantLib's `FdmAffineModelSwapInnerValue`.
-    pub fn from_ibor(index: Shared<IborIndex>) -> OvernightIndex {
-        OvernightIndex(index)
+    /// Used when an OIS has been erased to [`FixedVsFloatingSwap`] and an FDM
+    /// inner-value rebuild needs the overnight clone branch of QuantLib's
+    /// `FdmAffineModelSwapInnerValue`. Requires the overnight configuration
+    /// (1*Days, Following, not end-of-month).
+    ///
+    /// # Errors
+    ///
+    /// The index is not overnight-configured.
+    pub(crate) fn from_ibor(index: Shared<IborIndex>) -> QlResult<OvernightIndex> {
+        require!(
+            index.tenor() == Period::new(1, TimeUnit::Days),
+            "OvernightIndex::from_ibor: tenor must be 1*Days"
+        );
+        require!(
+            index.business_day_convention() == BusinessDayConvention::Following,
+            "OvernightIndex::from_ibor: convention must be Following"
+        );
+        require!(
+            !index.end_of_month(),
+            "OvernightIndex::from_ibor: end-of-month must be false"
+        );
+        Ok(OvernightIndex(index))
     }
 
     /// Re-curves the overnight index onto a different forwarding handle,

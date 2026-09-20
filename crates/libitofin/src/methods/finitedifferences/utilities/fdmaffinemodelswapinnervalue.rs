@@ -11,10 +11,11 @@
 //! Vanilla Ibor and overnight-indexed swaps. G2 `getState` returns the two
 //! factor coordinates; Hull–White `getState` returns the short rate
 //! `x + φ(t)` (C++ specializations in `fdmaffinemodelswapinnervalue.cpp`).
-//! An overnight underlying (1*Days ibor tenor, the erased OIS face) rebuilds
-//! as [`OvernightIndexedSwap`] with compound averaging and zero payment lag —
-//! the HW Bermudan OIS oracle defaults; telescopic / lookback / lockout stay
-//! deferred with the overnight leg.
+//! An overnight underlying (`FixedVsFloatingSwap::is_overnight_indexed`, set
+//! when [`OvernightIndexedSwap`] builds the base) rebuilds as
+//! [`OvernightIndexedSwap`] copying lag / calendar / payment adjustment /
+//! averaging from [`OvernightIndexedExtras`]. Telescopic / lookback / lockout
+//! stay deferred with the overnight leg.
 //!
 //! ## Divergences from QuantLib
 //!
@@ -22,13 +23,11 @@
 //! - Exercise times are a `Vec<(Time, Date)>` with exact `Time` match (C++
 //!   `std::map<Time, Date>`).
 //! - Coupon `amount()` / discount failures panic with a message (C++ throws).
-//! - OIS identity uses the 1*Days tenor heuristic (C++
-//!   `dynamic_pointer_cast<OvernightIndexedSwap>`); averaging / lag /
-//!   lockout metadata erased by `into_fixed_vs_floating` are defaulted.
+//! - OIS identity uses [`OvernightIndexedExtras`] on the erased base (C++
+//!   `dynamic_pointer_cast<OvernightIndexedSwap>`).
 
 use std::cell::RefCell;
 
-use crate::cashflows::RateAveraging;
 use crate::errors::QlResult;
 use crate::handle::RelinkableHandle;
 use crate::indexes::{InterestRateIndex, OvernightIndex};
@@ -41,8 +40,6 @@ use crate::shared::{Shared, SharedMut, shared};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::calendars::nullcalendar::NullCalendar;
 use crate::time::date::Date;
-use crate::time::period::Period;
-use crate::time::timeunit::TimeUnit;
 use crate::types::{Real, Size, Time};
 
 use super::fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
@@ -51,18 +48,17 @@ use super::fdminnervaluecalculator::FdmInnerValueCalculator;
 /// Rebuilds `swap` onto `fwd_ts` for FDM exercise NPV
 /// (`FdmAffineModelSwapInnerValue` ctor lambda, `fdmaffinemodelswapinnervalue.hpp`).
 ///
-/// Overnight underlyings (1*Days tenor) become [`OvernightIndexedSwap`];
-/// everything else becomes [`VanillaSwap`].
+/// Overnight underlyings (tagged via [`FixedVsFloatingSwap::overnight_extras`])
+/// become [`OvernightIndexedSwap`]; everything else becomes [`VanillaSwap`].
 fn rebuild_swap_on_forecast(
     swap: &FixedVsFloatingSwap,
     fwd_ts: &RelinkableHandle<dyn YieldTermStructure>,
 ) -> QlResult<FixedVsFloatingSwap> {
     let settings = Shared::clone(swap.ibor_index().base().settings());
-    let overnight = swap.ibor_index().tenor() == Period::new(1, TimeUnit::Days);
-    if overnight {
+    if let Some(extras) = swap.overnight_extras() {
         let overnight_index = shared(OvernightIndex::from_ibor(shared(
             swap.ibor_index().clone_with(fwd_ts.handle()),
-        )));
+        ))?);
         return Ok(OvernightIndexedSwap::with_nominal(
             swap.swap_type(),
             swap.nominal()?,
@@ -72,10 +68,10 @@ fn rebuild_swap_on_forecast(
             swap.floating_schedule().clone(),
             overnight_index,
             swap.spread(),
-            0,
-            swap.payment_convention(),
-            Some(swap.floating_schedule().calendar().clone()),
-            RateAveraging::Compound,
+            extras.payment_lag,
+            extras.payment_adjustment,
+            Some(extras.payment_calendar.clone()),
+            extras.averaging_method,
             settings,
         )?
         .into_fixed_vs_floating());

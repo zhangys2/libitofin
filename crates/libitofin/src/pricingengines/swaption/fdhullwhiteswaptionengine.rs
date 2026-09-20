@@ -675,9 +675,9 @@ mod tests {
                 .into_fixed_vs_floating(),
             )
         };
-        let make_ois = |fixed_rate: Real| -> SharedMut<FixedVsFloatingSwap> {
-            shared_mut(
-                OvernightIndexedSwap::with_nominal(
+        let make_ois =
+            |fixed_rate: Real, averaging: RateAveraging| -> SharedMut<FixedVsFloatingSwap> {
+                let swap = OvernightIndexedSwap::with_nominal(
                     SwapType::Payer,
                     1000.0,
                     fixed_schedule.clone(),
@@ -687,15 +687,20 @@ mod tests {
                     Shared::clone(&eonia),
                     0.0,
                     0,
-                    BusinessDayConvention::ModifiedFollowing,
+                    BusinessDayConvention::Following,
                     None,
-                    RateAveraging::Compound,
+                    averaging,
                     Shared::clone(&settings),
                 )
                 .unwrap()
-                .into_fixed_vs_floating(),
-            )
-        };
+                .into_fixed_vs_floating();
+                assert!(
+                    swap.is_overnight_indexed(),
+                    "OIS into_fixed_vs_floating must retain overnight extras"
+                );
+                assert_eq!(swap.overnight_extras().unwrap().averaging_method, averaging);
+                shared_mut(swap)
+            };
 
         let discounting = shared_mut(DiscountingSwapEngine::new(
             curve.clone(),
@@ -711,7 +716,7 @@ mod tests {
             .set_pricing_engine(SharedMut::clone(&discounting));
         let atm_rate = atm_swap.borrow_mut().fair_rate().unwrap();
 
-        let exercise_dates: Vec<Date> = make_ois(atm_rate)
+        let exercise_dates: Vec<Date> = make_ois(atm_rate, RateAveraging::Compound)
             .borrow()
             .fixed_leg()
             .iter()
@@ -741,9 +746,9 @@ mod tests {
             swaption.npv().unwrap()
         };
 
-        let itm_ois = price(make_ois(0.8 * atm_rate));
-        let atm_ois = price(make_ois(atm_rate));
-        let otm_ois = price(make_ois(1.2 * atm_rate));
+        let itm_ois = price(make_ois(0.8 * atm_rate, RateAveraging::Compound));
+        let atm_ois = price(make_ois(atm_rate, RateAveraging::Compound));
+        let otm_ois = price(make_ois(1.2 * atm_rate, RateAveraging::Compound));
         assert!(itm_ois > 0.0, "ITM OIS Bermudan non-positive: {itm_ois}");
         assert!(atm_ois > 0.0, "ATM OIS Bermudan non-positive: {atm_ois}");
         assert!(otm_ois > 0.0, "OTM OIS Bermudan non-positive: {otm_ois}");
@@ -775,6 +780,17 @@ mod tests {
             rel_diff(otm_ois, otm_vs) <= rel_tol,
             "OTM OIS {otm_ois} vs Vanilla {otm_vs}, rel {}",
             rel_diff(otm_ois, otm_vs)
+        );
+
+        // Reduced feature pin from testBermudanOISSwaptionPreservesFeatures:
+        // Simple vs Compound must move the ATM Bermudan (QL floor 0.1%).
+        // Proves the overnight rebuild copies averaging_method.
+        let atm_simple = price(make_ois(atm_rate, RateAveraging::Simple));
+        let avg_gap = rel_diff(atm_simple, atm_ois);
+        assert!(
+            avg_gap >= 0.001,
+            "Simple vs Compound OIS Bermudan should differ by ≥0.1%, got {avg_gap} \
+             (simple={atm_simple}, compound={atm_ois})"
         );
     }
 }
