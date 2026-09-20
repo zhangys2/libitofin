@@ -44,6 +44,7 @@ mod simplechooseroption;
 mod softbarrieroption;
 mod swap;
 mod swaption;
+mod twoassetcorrelationoption;
 mod vanillaswap;
 mod xccybasisswap;
 mod yearonyearinflationswap;
@@ -141,6 +142,9 @@ pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
 pub use swaption::{
     SettlementMethod, SettlementType, Swaption, SwaptionArguments, SwaptionEngine,
     check_type_and_method_consistency,
+};
+pub use twoassetcorrelationoption::{
+    TwoAssetCorrelationArguments, TwoAssetCorrelationOption, TwoAssetCorrelationResults,
 };
 pub use vanillaswap::VanillaSwap;
 pub use xccybasisswap::XccyBasisSwap;
