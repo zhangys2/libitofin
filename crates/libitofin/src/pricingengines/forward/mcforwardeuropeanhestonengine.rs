@@ -312,9 +312,11 @@ mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
     use crate::instrument::Instrument;
-    use crate::instruments::ForwardVanillaOption;
+    use crate::instruments::{ForwardVanillaOption, VanillaOption};
     use crate::math::randomnumbers::rngtraits::{LowDiscrepancy, PseudoRandom};
+    use crate::models::HestonModel;
     use crate::pricingengines::forward::set_analytic_forward_vanilla_engine;
+    use crate::pricingengines::vanilla::analytichestonengine::AnalyticHestonEngine;
     use crate::pricingengines::vanilla::test_market::{market, today};
     use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::time::period::Period;
@@ -387,6 +389,78 @@ mod tests {
                 option
                     .base_mut()
                     .set_pricing_engine(shared_mut(engine) as SharedMut<dyn PricingEngine>);
+                let mc = option.npv().unwrap();
+                let error = (analytic - mc).abs() / 100.0;
+                assert!(
+                    error <= tol,
+                    "{option_type:?} moneyness={m}: analytic={analytic} mc={mc} rel={error} tol={tol}"
+                );
+            }
+        }
+    }
+
+    /// `forwardoption.cpp` `testHestonMCPrices` Test 2 MC arm: smile Heston
+    /// at `reset = today` vs vanilla `AnalyticHestonEngine(model, 96)`.
+    /// `AnalyticHestonForwardEuropeanEngine` T=0 analytic is deferred.
+    #[test]
+    fn forward_heston_mc_t0_vs_analytic_heston() {
+        let mkt = market();
+        let sigma_bs = 0.245;
+        mkt.set(100.0, 0.04, 0.01, sigma_bs);
+        let heston = shared(HestonProcess::new(
+            mkt.process.risk_free_rate(),
+            mkt.process.dividend_yield(),
+            mkt.process.state_variable(),
+            sigma_bs * sigma_bs,
+            1.0,
+            0.08,
+            0.39,
+            -0.93,
+        ));
+        let model = HestonModel::new(Shared::clone(&heston)).unwrap();
+        let exercise = shared(EuropeanExercise::new(
+            today() + Period::new(1, TimeUnit::Years),
+        ));
+        let reset = today();
+        let moneyness = [0.8, 0.9, 1.0, 1.1, 1.2];
+        let call_tols = [9e-4, 9e-4, 6e-4, 5e-4, 5e-4];
+        let put_tols = [6e-4, 5e-4, 8e-4, 2e-3, 2e-3];
+        for (option_type, tols) in [(OptionType::Call, call_tols), (OptionType::Put, put_tols)] {
+            let payoff =
+                shared(PlainVanillaPayoff::new(option_type, 0.0)) as Shared<dyn StrikedTypePayoff>;
+            let analytic_engine =
+                shared_mut(AnalyticHestonEngine::new(SharedMut::clone(&model), 96).unwrap())
+                    as SharedMut<dyn PricingEngine>;
+            let mc_engine = shared_mut(
+                MakeMcForwardEuropeanHestonEngine::<LowDiscrepancy>::new(Shared::clone(&heston))
+                    .with_steps(50)
+                    .with_samples(4095)
+                    .with_seed(42)
+                    .build()
+                    .unwrap(),
+            ) as SharedMut<dyn PricingEngine>;
+            for (m, tol) in moneyness.into_iter().zip(tols) {
+                let vanilla_payoff = shared(PlainVanillaPayoff::new(option_type, 100.0 * m))
+                    as Shared<dyn StrikedTypePayoff>;
+                let mut vanilla = VanillaOption::new(
+                    vanilla_payoff,
+                    Shared::clone(&exercise) as _,
+                    Shared::clone(&mkt.settings),
+                );
+                vanilla
+                    .base_mut()
+                    .set_pricing_engine(SharedMut::clone(&analytic_engine));
+                let analytic = vanilla.npv().unwrap();
+                let mut option = ForwardVanillaOption::new(
+                    m,
+                    reset,
+                    Shared::clone(&payoff),
+                    Shared::clone(&exercise) as _,
+                    Shared::clone(&mkt.settings),
+                );
+                option
+                    .base_mut()
+                    .set_pricing_engine(SharedMut::clone(&mc_engine));
                 let mc = option.npv().unwrap();
                 let error = (analytic - mc).abs() / 100.0;
                 assert!(
