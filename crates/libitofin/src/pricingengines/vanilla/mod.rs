@@ -18,6 +18,7 @@
 //!   wrong price.
 
 pub mod analytichestonengine;
+pub mod baroneadesiwhaleyengine;
 pub mod batesengine;
 pub mod binomialvanillaengine;
 pub mod fdblackscholesvanillaengine;
@@ -32,6 +33,7 @@ pub mod mcvanillaengine;
 pub mod quantoengine;
 
 pub use analytichestonengine::HestonChf;
+pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
 pub use binomialvanillaengine::BinomialVanillaEngine;
 pub use fdblackscholesvanillaengine::{CashDividendModel, FdBlackScholesVanillaEngine};

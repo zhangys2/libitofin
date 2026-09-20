@@ -110,8 +110,8 @@ pub use swaption::{
     FdHullWhiteSwaptionEngine, G2SwaptionEngine, JamshidianSwaptionEngine, TreeG2SwaptionEngine,
 };
 pub use vanilla::{
-    AnalyticEuropeanEngine, CashDividendModel, FdBlackScholesVanillaEngine, FdHestonVanillaEngine,
-    QuantoEuropeanEngine,
+    AnalyticEuropeanEngine, BaroneAdesiWhaleyApproximationEngine, CashDividendModel,
+    FdBlackScholesVanillaEngine, FdHestonVanillaEngine, QuantoEuropeanEngine,
 };
 
 pub use blackformula::{
