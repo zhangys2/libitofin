@@ -262,13 +262,13 @@ mod tests {
         settings: Shared<Settings<Date>>,
     }
 
-    fn market() -> Market {
+    fn market(q: Real) -> Market {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
         let spot = shared(SimpleQuote::new(100.0));
         let process = shared(BlackScholesMertonProcess::new(
             Handle::new(Shared::clone(&spot) as Shared<dyn Quote>),
-            yts(0.0),
+            yts(q),
             yts(0.10),
             Handle::new(
                 shared(BlackConstantVol::new(today(), None, 0.20, Actual360::new()))
@@ -319,12 +319,21 @@ mod tests {
         (UpOut, 0.0, Put, 102.0, 95.0, 17.2983),
         (UpOut, 0.0, Put, 98.0, 95.0, 17.0306),
     ];
+    /// Remaining `testCashOrNothingHaugValues` q=0 touched-barrier extras.
+    #[rustfmt::skip]
+    const CASH_DEGEN: &[(BarrierType, Real, OptionType, Real, Real, Real)] = &[
+        (UpIn, 15.0, Call, 98.0, 105.0, 11.1231),
+        (DownIn, 15.0, Put, 102.0, 98.0, 7.1344),
+        (UpIn, 15.0, Put, 102.0, 101.0, 5.9299),
+        (UpOut, 15.0, Call, 98.0, 101.0, 0.0000),
+        (DownOut, 15.0, Put, 98.0, 99.0, 0.0000),
+        (UpOut, 15.0, Put, 98.0, 101.0, 0.0000),
+    ];
 
-    #[test]
-    fn haug_cash_and_asset_or_nothing_barrier_values() {
-        let m = market();
+    fn check(q: Real, rows: &[(BarrierType, Real, OptionType, Real, Real, Real)]) {
+        let m = market(q);
         let expiry = today() + 180;
-        for &(bt, cash, ty, k, s, expected) in ROWS {
+        for &(bt, cash, ty, k, s, expected) in rows {
             m.spot.set_value(s);
             let payoff: Shared<dyn StrikedTypePayoff> = if cash > 0.0 {
                 shared(CashOrNothingPayoff::new(ty, k, cash))
@@ -344,8 +353,20 @@ mod tests {
             let calculated = option.npv().unwrap();
             assert!(
                 (calculated - expected).abs() <= 1.0e-4,
-                "{bt:?} {ty:?} cash={cash} K={k} S={s}: {calculated} vs Haug {expected}"
+                "{bt:?} {ty:?} cash={cash} K={k} S={s} q={q}: {calculated} vs Haug {expected}"
             );
         }
+    }
+
+    #[test]
+    fn haug_cash_and_asset_or_nothing_barrier_values() {
+        check(0.0, ROWS);
+    }
+
+    #[test]
+    fn haug_cash_book_vba_and_touched_barrier() {
+        check(0.0, CASH_DEGEN);
+        check(-0.14, &[(UpIn, 15.0, Call, 102.0, 95.0, 8.6806)]);
+        check(0.03, &[(UpIn, 15.0, Call, 102.0, 95.0, 5.3112)]);
     }
 }
