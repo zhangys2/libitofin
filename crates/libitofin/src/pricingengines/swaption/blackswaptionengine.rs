@@ -1395,7 +1395,7 @@ mod tests {
         for swap_type in [SwapType::Payer, SwapType::Receiver] {
             for vol in vols {
                 let make_swap = || {
-                    MakeOis::new(
+                    let ois = MakeOis::new(
                         Period::new(length, TimeUnit::Years),
                         Shared::clone(&ois_index),
                         Some(strike),
@@ -1407,8 +1407,13 @@ mod tests {
                     .with_fixed_leg_day_count(Vars::fixed_day_count())
                     .with_type(swap_type)
                     .build()
-                    .unwrap()
-                    .into_fixed_vs_floating()
+                    .unwrap();
+                    assert_eq!(
+                        ois.fixed_vs_floating().swap_type(),
+                        swap_type,
+                        "MakeOis::with_type must stick on the built OIS"
+                    );
+                    ois.into_fixed_vs_floating()
                 };
                 let make = |v| {
                     vars.make_swaption(
