@@ -151,6 +151,7 @@ credit.
 | Partial-time barrier EndB1 | `AnalyticPartialTimeBarrierOptionEngine` | `partialtimebarrieroption.cpp` `testAnalyticEngine` / `testAnalyticEnginePutOption` / `testPutCallSymmetry` | DownOut call + UpOut put 20-row tables @ 1e-4; 10 put-call symmetry pairs @ 1e-4 |
 | Simple chooser Haug value | `AnalyticSimpleChooserEngine` | `chooseroption.cpp` `testAnalyticSimpleChooserEngine` | Haug 2nd ed. pp.39–40 @ 3e-5 |
 | Complex chooser Haug value | `AnalyticComplexChooserEngine` | `chooseroption.cpp` `testAnalyticComplexChooserEngine` | Haug example @ 1e-4 |
+| European Margrabe exchange NPV | `AnalyticEuropeanMargrabeEngine` | `margrabeoption.cpp` `testEuroExchangeTwoAssets` | Haug two-asset NPV subset @ 1e-3; extra greeks / American deferred |
 | Cliquet Haug value | `AnalyticCliquetEngine` | `cliquetoption.cpp` `testValues` | Haug p.37 call @ 1e-4 |
 | Analytic performance cliquet | `AnalyticPerformanceEngine` | `cliquetoption.cpp` `testPerformanceGreeks` | δ=γ=0; NPV independent of spot; expired greeks 0; ρ/divρ/ν/θ vs FD @ 1e-5 relative to spot |
 | Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4; cash book-vba q≠0 and touched-barrier extras closed; double-binary deferred |
