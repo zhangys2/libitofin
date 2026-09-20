@@ -2,6 +2,7 @@
 //! Port of `ql/pricingengines/exotic/analyticholderextensibleoptionengine.{hpp,cpp}`.
 
 use crate::errors::QlResult;
+use crate::fail;
 use crate::handle::Handle;
 use crate::instrument::Instrument;
 use crate::instruments::{
@@ -61,6 +62,7 @@ impl PricingEngine for AnalyticHolderExtensibleOptionEngine {
         self.base.reset();
     }
 
+    #[rustfmt::skip]
     fn calculate(&mut self) -> QlResult<()> {
         let a = self.base.arguments();
         let payoff = a.payoff.expect("validated");
@@ -81,11 +83,7 @@ impl PricingEngine for AnalyticHolderExtensibleOptionEngine {
         let r = zr(&self.process.risk_free_rate())?;
         let q = zr(&self.process.dividend_yield())?;
         let b = r - q;
-        let vol = self
-            .process
-            .black_volatility()
-            .current_link()?
-            .black_vol(t1, x1, true)?;
+        let vol = self.process.black_volatility().current_link()?.black_vol(t1, x1, true)?;
         let qy = self.process.dividend_yield().current_link()?;
         let rf = self.process.risk_free_rate().current_link()?;
         let df_q = |t: Real| qy.discount(t, false);
@@ -107,34 +105,19 @@ impl PricingEngine for AnalyticHolderExtensibleOptionEngine {
                         return Ok(sv);
                     }
                     sv -= yi / di;
-                    if !sv.is_finite() || sv <= 0.0 {
-                        return Ok(Real::INFINITY);
-                    }
+                    require!(sv.is_finite() && sv > 0.0, "holder Newton left the domain");
                 }
-                Ok(Real::INFINITY)
+                fail!("holder-extensible Newton did not converge");
             };
         let (i1, i2) = match payoff.option_type() {
             OptionType::Call => {
-                let i1 = if prem == 0.0 {
-                    0.0
-                } else {
-                    newton(s, OptionType::Call, 0.0, 0.0, 0.0)?
-                };
-                let floor = x1 - x2 * (-r * (t2 - t1)).exp();
-                let i2 = if prem < floor {
-                    Real::INFINITY
-                } else {
-                    newton(s, OptionType::Call, -1.0, x1, -1.0)?
-                };
+                let i1 = if prem == 0.0 { 0.0 } else { newton(s, OptionType::Call, 0.0, 0.0, 0.0)? };
+                let i2 = if prem < x1 - x2 * (-r * (t2 - t1)).exp() { Real::INFINITY } else { newton(s, OptionType::Call, -1.0, x1, -1.0)? };
                 (i1, i2)
             }
             OptionType::Put => {
-                let i1 = newton(s, OptionType::Put, 1.0, -x1, -1.0)?;
-                let i2 = if prem == 0.0 {
-                    Real::INFINITY
-                } else {
-                    newton(s, OptionType::Put, 0.0, 0.0, 0.0)?
-                };
+                let i1 = if x2 * (-r * (t2 - t1)).exp() - x1 - prem > 0.0 { 0.0 } else { newton(s, OptionType::Put, 1.0, -x1, 1.0)? };
+                let i2 = if prem == 0.0 { Real::INFINITY } else { newton(s, OptionType::Put, 0.0, 0.0, 0.0)? };
                 (i1, i2)
             }
         };
@@ -152,30 +135,23 @@ impl PricingEngine for AnalyticHolderExtensibleOptionEngine {
         };
         let growth1 = df_q(t1)?;
         let disc1 = df_r(t1)?;
-        let bsm = BlackCalculator::new(
-            payoff.option_type(),
-            x1,
-            s * growth1 / disc1,
-            vol * t1.sqrt(),
-            disc1,
-        )?
-        .value();
-        let inf = Real::NEG_INFINITY;
+        let bsm = BlackCalculator::new(payoff.option_type(), x1, s * growth1 / disc1, vol * t1.sqrt(), disc1)?.value();
+        let ninf = Real::NEG_INFINITY;
         let vs = vol * t1.sqrt();
         let vt = vol * t2.sqrt();
         let value = match payoff.option_type() {
             OptionType::Call => {
-                bsm + s * ((b - r) * t2).exp() * m2(y1, y2, inf, z1)?
-                    - x2 * (-r * t2).exp() * m2(y1 - vs, y2 - vs, inf, z1 - vt)?
+                bsm + s * ((b - r) * t2).exp() * m2(y1, y2, ninf, z1)?
+                    - x2 * (-r * t2).exp() * m2(y1 - vs, y2 - vs, ninf, z1 - vt)?
                     - s * ((b - r) * t1).exp() * n2(y1, z2)
                     + x1 * (-r * t1).exp() * n2(y1 - vs, z2 - vs)
                     - prem * (-r * t1).exp() * n2(y1 - vs, y2 - vs)
             }
             OptionType::Put => {
-                bsm - s * ((b - r) * t2).exp() * m2(y1, y2, inf, -z1)?
-                    + x2 * (-r * t2).exp() * m2(y1 - vs, y2 - vs, inf, -z1 + vt)?
-                    + s * ((b - r) * t1).exp() * n2(z2, y2)
-                    - x1 * (-r * t1).exp() * n2(z2 - vs, y2 - vs)
+                -s * ((b - r) * t1).exp() * n2(y2, Real::INFINITY)
+                    + x1 * (-r * t1).exp() * n2(y2 - vs, Real::INFINITY)
+                    - s * ((b - r) * t2).exp() * m2(-y2, -y1, ninf, -z1)?
+                    + x2 * (-r * t2).exp() * m2(vs - y2, vs - y1, ninf, vt - z1)?
                     - prem * (-r * t1).exp() * n2(y1 - vs, y2 - vs)
             }
         };
@@ -247,6 +223,8 @@ mod tests {
     fn holder_extensible_haug_npv() {
         let call = price(OptionType::Call, 0.0);
         assert!((call - 9.4233).abs() <= 1e-4, "Haug call 9.4233 vs {call}");
+        let put = price(OptionType::Put, 0.0);
+        assert!((put - 7.2042).abs() <= 1e-4, "put 7.2042 vs {put}");
         let q_call = price(OptionType::Call, 0.05);
         assert!((q_call - 7.8299).abs() <= 1e-4, "q≠0 call 7.8299 vs {q_call}");
     }
