@@ -155,7 +155,7 @@ credit.
 | Complex chooser Haug value | `AnalyticComplexChooserEngine` | `chooseroption.cpp` `testAnalyticComplexChooserEngine` | Haug example @ 1e-4 |
 | European Margrabe exchange NPV | `AnalyticEuropeanMargrabeEngine` | `margrabeoption.cpp` `testEuroExchangeTwoAssets` | Haug two-asset NPV subset @ 1e-3; extra greeks / American deferred |
 | Compound option Haug/sitmo NPV | `AnalyticCompoundOptionEngine` | `compoundoption.cpp` `testValues` | Wystup/Haug put/call-on-put/call NPV subset @ 1e-3; greeks deferred |
-| Two-asset correlation Haug NPV | `AnalyticTwoAssetCorrelationEngine` | `twoassetcorrelationoption.cpp` `testAnalyticEngine` | Haug European call @ 1e-4 |
+| Two-asset correlation Haug NPV | `AnalyticTwoAssetCorrelationEngine` | `twoassetcorrelationoption.cpp` `testAnalyticEngine` | Haug European call @ 1e-4; independent put and q≠0 call pins (QL has no further suite cases) |
 | Cliquet Haug value | `AnalyticCliquetEngine` | `cliquetoption.cpp` `testValues` | Haug p.37 call @ 1e-4 |
 | Analytic performance cliquet | `AnalyticPerformanceEngine` | `cliquetoption.cpp` `testPerformanceGreeks` | δ=γ=0; NPV independent of spot; expired greeks 0; ρ/divρ/ν/θ vs FD @ 1e-5 relative to spot |
 | Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4; cash book-vba q≠0 and touched-barrier extras closed; double-binary deferred |

@@ -181,30 +181,42 @@ mod tests {
         )) as Shared<dyn BlackVolTermStructure>)
     }
 
-    /// `twoassetcorrelationoption.cpp` `testAnalyticEngine` (Haug @ 1e-4).
-    #[test]
-    fn two_asset_correlation_haug_npv() {
+    #[allow(clippy::too_many_arguments)]
+    #[rustfmt::skip]
+    fn price(ty: OptionType, q1: Real, q2: Real) -> Real {
         let settings = shared(Settings::new());
         let today = Date::new(15, Month::May, 1998);
         settings.set_evaluation_date(today);
         let r = flat_rate(today, 0.1);
         let p1 = shared(BlackScholesMertonProcess::new(
-            quote_h(52.0),
-            flat_rate(today, 0.0),
-            Handle::clone(&r),
-            flat_vol(today, 0.2),
+            quote_h(52.0), flat_rate(today, q1), Handle::clone(&r), flat_vol(today, 0.2),
         ));
         let p2 = shared(BlackScholesMertonProcess::new(
-            quote_h(65.0),
-            flat_rate(today, 0.0),
-            r,
-            flat_vol(today, 0.3),
+            quote_h(65.0), flat_rate(today, q2), r, flat_vol(today, 0.3),
         ));
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 180));
-        let mut option =
-            TwoAssetCorrelationOption::new(OptionType::Call, 50.0, 70.0, exercise, settings);
+        let mut option = TwoAssetCorrelationOption::new(ty, 50.0, 70.0, exercise, settings);
         set_analytic_two_asset_correlation_engine(&mut option, p1, p2, quote_h(0.75));
-        let got = option.npv().unwrap();
-        assert!((got - 4.7073).abs() <= 1e-4, "expected 4.7073, got {got}");
+        option.npv().unwrap()
+    }
+
+    /// `twoassetcorrelationoption.cpp` `testAnalyticEngine` plus put / q≠0 pins.
+    #[test]
+    fn two_asset_correlation_haug_npv() {
+        let call = price(OptionType::Call, 0.0, 0.0);
+        assert!(
+            (call - 4.7073).abs() <= 1e-4,
+            "Haug call expected 4.7073, got {call}"
+        );
+        let put = price(OptionType::Put, 0.0, 0.0);
+        assert!(
+            (put - 3.9093).abs() <= 1e-4,
+            "put expected 3.9093, got {put}"
+        );
+        let q_call = price(OptionType::Call, 0.03, 0.05);
+        assert!(
+            (q_call - 3.9510).abs() <= 1e-4,
+            "q≠0 call expected 3.9510, got {q_call}"
+        );
     }
 }
