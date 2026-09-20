@@ -65,7 +65,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Compound option | `CompoundOption`, analytic engine | `compoundoption.cpp` | true | partial | European NPV vs `testValues` Haug/sitmo subset @ 1e-3 closed. Still open: greeks, put-call parity table |
 | Equity | Margrabe / exchange | `MargrabeOption` | `margrabeoption.cpp` | true | partial | European NPV vs Haug `testEuroExchangeTwoAssets` subset @ 1e-3 closed. Still open: extra greeks, American engine, `testGreeks` |
 | Equity | Two-asset barrier | `TwoAssetBarrierOption` | `twoassetbarrieroption.cpp` / barrier suite | false | none | |
-| Equity | Two-asset correlation | `TwoAssetCorrelationOption` | `twoassetcorrelationoption.cpp` | false | none | |
+| Equity | Two-asset correlation | `TwoAssetCorrelationOption` | `twoassetcorrelationoption.cpp` | true | partial | Analytic Haug European call @ 1e-4 (`testAnalyticEngine`) closed, plus independent put and q≠0 call pins. QL has no further suite cases. Engine still applies the European formula to any `Exercise` (QL-parity) |
 | Equity | Extensible options | Holder/writer extensible | `extensibleoptions.cpp` | false | none | |
 | Equity | Alphabet baskets (Everest/Himalaya/Pagoda) | experimental exotic options + MC | `everestoption.cpp` (+ Himalaya/Pagoda often experimental-only) | false | none | QL v1.43: Everest has suite; Himalaya/Pagoda experimental |
 | Equity | Basket beyond Choi / single-factor | Kirk/Stulz/Pearson/MC/FD-nD basket | `basketoption.cpp`, `spreadoption.cpp` | true | partial | Choi golden example pinned |
