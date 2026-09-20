@@ -95,11 +95,7 @@ impl AmericanPayoffAtHit {
         let k = if let Some(coo) = any.downcast_ref::<CashOrNothingPayoff>() {
             coo.cash_payoff()
         } else if any.downcast_ref::<AssetOrNothingPayoff>().is_some() {
-            if in_the_money {
-                spot
-            } else {
-                strike
-            }
+            if in_the_money { spot } else { strike }
         } else {
             fail!("unsupported payoff type");
         };
@@ -227,7 +223,7 @@ mod tests {
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
-    use crate::shared::{shared, shared_mut, SharedMut};
+    use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
