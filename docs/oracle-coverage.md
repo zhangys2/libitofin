@@ -44,6 +44,7 @@ credit.
 | Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
+| Barone-Adesi–Whaley American | `BaroneAdesiWhaleyApproximationEngine` | `americanoption.cpp` `testBaroneAdesiWhaleyValues` | Haug p.24 NPV @ 3e-3 (QL table tolerance); negative-rate reject |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |
 | Heston | analytic + calibration | `hestonmodel.cpp` | Core done |
 | Heston FD barrier cached | `FdHestonBarrierEngine` 200×400×100 | `hestonmodel.cpp` `testFdBarrierVsCached` | DownOut 9.0246 / DownIn 7.7627 @ 1e-3 |
