@@ -1,10 +1,9 @@
 //! Merton-76 jump-diffusion process.
 //!
-//! Port of `ql/processes/merton76process.{hpp,cpp}`: a wrapper around
-//! [`BlackScholesMertonProcess`] plus jump-intensity / log-mean-jump /
-//! log-jump-volatility quote handles. Drift, diffusion, and apply fail as in
-//! C++ (`QL_FAIL`); the analytic [`JumpDiffusionEngine`] never evolves the
-//! process.
+//! Port of `ql/processes/merton76process.{hpp,cpp}`: GBS plus jump quotes.
+//! Drift/diffusion fail as in C++. `apply` stays additive `x0 + dx` (`Real`
+//! cannot `fail!`); `evolve`/`expectation` error through `drift`. The analytic
+//! [`crate::pricingengines::JumpDiffusionEngine`] never evolves the process.
 
 use crate::errors::QlResult;
 use crate::fail;

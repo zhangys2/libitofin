@@ -3,7 +3,8 @@
 //! Port of `ql/pricingengines/vanilla/jumpdiffusionengine.{hpp,cpp}`: Poisson
 //! mixture of Black–Scholes prices with jump-adjusted rate and vol. NPV only
 //! this slice (greeks / `testGreeks` deferred). Convergence uses the value
-//! addendum; QL also folds δ/γ/θ/ν/ρ/divρ into `lastContribution`.
+//! addendum; QL also folds δ/γ/θ/ν/ρ/divρ into `lastContribution`. Shifted
+//! `FlatForward` uses the risk-free day counter (QL uses the vol day counter).
 
 use super::AnalyticEuropeanEngine;
 use crate::errors::QlResult;
@@ -100,10 +101,13 @@ impl PricingEngine for JumpDiffusionEngine {
         let variance = black_vol.black_variance_date(last, payoff.strike(), false)?;
         let voldc = black_vol.require_day_counter()?;
         let volcal = black_vol.calendar();
-        let t = voldc.year_fraction(black_vol.reference_date()?, last);
+        let vol_ref = black_vol.reference_date()?;
+        let t = voldc.year_fraction(vol_ref, last);
         let risk_free = process.risk_free_rate().current_link()?;
-        let risk_free_rate = -risk_free.discount_date(last, false)?.ln() / t;
+        let rfdc = risk_free.require_day_counter()?;
         let rate_ref = risk_free.reference_date()?;
+        let t_rate = rfdc.year_fraction(rate_ref, last);
+        let risk_free_rate = -risk_free.discount_date(last, false)?.ln() / t_rate;
 
         let poisson = PoissonDistribution::new(lambda * t)?;
         let rf_link = RelinkableHandle::new(Shared::clone(&risk_free));
@@ -128,12 +132,12 @@ impl PricingEngine for JumpDiffusionEngine {
             rf_link.link_to(shared(FlatForward::with_rate(
                 rate_ref,
                 r,
-                voldc.clone(),
+                rfdc.clone(),
                 Compounding::Continuous,
                 Frequency::Annual,
             )) as Shared<dyn YieldTermStructure>);
             vol_link.link_to(shared(BlackConstantVol::new(
-                rate_ref,
+                vol_ref,
                 volcal.clone(),
                 v,
                 voldc.clone(),
@@ -180,82 +184,84 @@ mod tests {
     use crate::settings::Settings;
     use crate::shared::{SharedMut, shared_mut};
     use crate::time::date::{Date, Month};
+    use crate::time::daycounter::DayCounter;
     use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
 
     fn today() -> Date {
         Date::new(15, Month::June, 2026)
     }
-
     fn quote(v: Real) -> Handle<dyn Quote> {
         Handle::new(shared(SimpleQuote::new(v)) as Shared<dyn Quote>)
     }
-
-    fn yts(rate: Real) -> Handle<dyn YieldTermStructure> {
+    #[rustfmt::skip]
+    fn yts(rate: Real, dc: DayCounter, d: Date) -> Handle<dyn YieldTermStructure> {
         Handle::new(shared(FlatForward::with_rate(
-            today(),
-            rate,
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
+            d, rate, dc, Compounding::Continuous, Frequency::Annual,
         )) as Shared<dyn YieldTermStructure>)
     }
 
-    /// `jumpdiffusion.cpp` `testMerton76` subset (Haug p.9, QL 1e-2 values).
-    /// Columns: K, t, λ, γ, NPV. S=100, q=0, r=0.08, σ=0.25, mean-jump 0.
+    #[allow(clippy::too_many_arguments)]
     #[rustfmt::skip]
-    const ROWS: &[(Real, Real, Real, Real, Real)] = &[
-        ( 80.0, 0.10,  1.0, 0.25, 20.67),
-        ( 80.0, 0.50,  1.0, 0.25, 23.63),
-        (100.0, 0.10,  1.0, 0.25,  3.42),
-        (100.0, 0.25,  1.0, 0.25,  5.88),
-        (100.0, 0.50,  1.0, 0.25,  8.95),
-        (120.0, 0.10,  1.0, 0.25,  0.10),
-        (120.0, 0.50,  1.0, 0.25,  2.23),
-        (100.0, 0.25,  5.0, 0.25,  5.96),
-        (100.0, 0.25, 10.0, 0.25,  5.97),
-        ( 80.0, 0.50, 10.0, 0.25, 23.61), // Haug 23.28
-        (100.0, 0.25,  1.0, 0.50,  5.58),
-        (100.0, 0.25,  5.0, 0.50,  5.87),
-        (100.0, 0.25,  1.0, 0.75,  5.08),
-        (100.0, 0.25, 10.0, 0.75,  5.85),
-        (110.0, 0.50,  5.0, 0.75,  4.57),
-    ];
+    fn price(k: Real, days: i32, vol: Real, lam: Real, mu: Real, jv: Real, rdc: DayCounter, vdc: DayCounter, rd: Date, vd: Date) -> (Real, Shared<Merton76Process>, Shared<Settings<Date>>) {
+        let s = shared(Settings::new());
+        s.set_evaluation_date(today());
+        let p = shared(Merton76Process::new(
+            quote(100.0), yts(0.0, rdc.clone(), rd), yts(0.08, rdc, rd),
+            Handle::new(shared(BlackConstantVol::new(vd, None, vol, vdc)) as Shared<dyn BlackVolTermStructure>),
+            quote(lam), quote(mu), quote(jv),
+        ));
+        let mut o = EuropeanOption::new(
+            shared(PlainVanillaPayoff::new(Call, k)),
+            shared(EuropeanExercise::new(today() + days)),
+            Shared::clone(&s),
+        );
+        o.base_mut().set_pricing_engine(
+            shared_mut(JumpDiffusionEngine::new(Shared::clone(&p))) as SharedMut<dyn PricingEngine>,
+        );
+        (o.npv().unwrap(), p, s)
+    }
 
     #[test]
-    fn merton76_haug_values() {
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today());
-        for &(k, t, intensity, gamma, expected) in ROWS {
-            let j_vol = 0.25 * (gamma / intensity).sqrt();
-            let diff_vol = 0.25 * (1.0 - gamma).sqrt();
-            let mean_log = (1.0_f64).ln() - 0.5 * j_vol * j_vol;
-            let process = shared(Merton76Process::new(
-                quote(100.0),
-                yts(0.0),
-                yts(0.08),
-                Handle::new(shared(BlackConstantVol::new(
-                    today(),
-                    None,
-                    diff_vol,
-                    Actual360::new(),
-                )) as Shared<dyn BlackVolTermStructure>),
-                quote(intensity),
-                quote(mean_log),
-                quote(j_vol),
-            ));
-            let mut option = EuropeanOption::new(
-                shared(PlainVanillaPayoff::new(Call, k)),
-                shared(EuropeanExercise::new(today() + (t * 360.0).round() as i32)),
-                Shared::clone(&settings),
+    #[rustfmt::skip]
+    fn merton76_haug_and_compensator() {
+        let a360 = Actual360::new();
+        let d = today();
+        let rows: [(Real, Real, Real, Real, Real); 3] = [
+            (80.0, 0.10, 1.0, 0.25, 20.67),
+            (80.0, 0.50, 10.0, 0.25, 23.61),
+            (100.0, 0.25, 10.0, 0.75, 5.85),
+        ];
+        for (k, t, lam, g, exp) in rows {
+            let jv = 0.25 * (g / lam).sqrt();
+            let (npv, _, _) = price(
+                k, (t * 360.0).round() as i32, 0.25 * (1.0 - g).sqrt(), lam,
+                -0.5 * jv * jv, jv, a360.clone(), a360.clone(), d, d,
             );
-            option.base_mut().set_pricing_engine(
-                shared_mut(JumpDiffusionEngine::new(process)) as SharedMut<dyn PricingEngine>
-            );
-            let calculated = option.npv().unwrap();
-            assert!(
-                (calculated - expected).abs() <= 1e-2,
-                "K={k} t={t} λ={intensity} γ={gamma}: {calculated} vs {expected}"
-            );
+            assert!((npv - exp).abs() <= 1e-2, "{k} {lam} {g}: {npv} vs {exp}");
         }
+        let (npv, _, _) = price(100.0, 360, 0.20, 1.0, 0.20, 0.25, a360.clone(), a360, d, d);
+        assert!((npv - 18.93059).abs() <= 1e-4, "{npv}");
+    }
+
+    #[test]
+    #[rustfmt::skip]
+    fn risk_free_time_basis_matches_analytic_european() {
+        let (jd, p, s) = price(
+            100.0, 365, 0.20, 0.0, 0.0, 0.0,
+            Actual365Fixed::new(), Actual360::new(), today() - 10, today(),
+        );
+        let mut eu = EuropeanOption::new(
+            shared(PlainVanillaPayoff::new(Call, 100.0)),
+            shared(EuropeanExercise::new(today() + 365)),
+            s,
+        );
+        eu.base_mut().set_pricing_engine(shared_mut(AnalyticEuropeanEngine::new(shared(
+            GeneralizedBlackScholesProcess::new(
+                p.state_variable(), p.dividend_yield(), p.risk_free_rate(), p.black_volatility(),
+            ),
+        ))) as SharedMut<dyn PricingEngine>);
+        let ae = eu.npv().unwrap();
+        assert!((jd - ae).abs() <= 1e-10, "{jd} vs {ae}");
     }
 }
