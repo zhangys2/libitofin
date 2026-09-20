@@ -10,6 +10,7 @@ mod mcforwardeuropeanbsengine;
 mod mcforwardeuropeanhestonengine;
 mod quantoforwardengine;
 mod quantoforwardperformanceengine;
+mod replicatingvarianceswapengine;
 
 pub use analyticforwardperformancevanillaengine::{
     AnalyticForwardPerformanceVanillaEngine, set_analytic_forward_performance_vanilla_engine,
@@ -29,6 +30,9 @@ pub use mcforwardeuropeanhestonengine::{
 pub use quantoforwardengine::{QuantoForwardEuropeanEngine, set_quanto_forward_european_engine};
 pub use quantoforwardperformanceengine::{
     QuantoForwardPerformanceEuropeanEngine, set_quanto_forward_performance_european_engine,
+};
+pub use replicatingvarianceswapengine::{
+    ReplicatingVarianceSwapEngine, set_replicating_variance_swap_engine,
 };
 
 #[cfg(test)]

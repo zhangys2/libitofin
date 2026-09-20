@@ -72,8 +72,8 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | FD Heston double-barrier | `FdHestonDoubleBarrierEngine` | `doublebarrieroption.cpp` | true | partial | KnockOut FD vs Haug `testEuropeanHaugValues` subset @ 0.025 (251×76×3 near-Black). KnockIn / leverage / mixing / greeks deferred |
 | Equity | Vanna–Volga single barrier | VV barrier (non-double) | `barrieroption.cpp` | true | partial | `VannaVolgaBarrierEngine` FX subset of `testVannaVolgaSimpleBarrierValues` @ 1e-4 (`adaptVanDelta`). Rest of table deferred |
 | Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | true | partial | `AnalyticPerformanceEngine` FD ρ/divρ/ν/θ + δ=γ=0 closed; `MCPerformanceEngine` / full `testPerformanceGreeks` grid deferred |
-| Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | false | none | |
-| Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | false | none | |
+| Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | true | partial | Replicating engine vs Derman 1999 fair variance 0.04189 @ 1e-4. MC variance swap / `VarianceOption` deferred |
+| Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | true | partial | `FdSimpleBSSwingEngine` vs Bermudan upper / European-sum lower (`testFdBSSwingOption`). ExtOU-jump / Kluge deferred |
 | Equity | Sticky ratchet | `StickyRatchet` | `stickyratchet.cpp` | false | none | |
 | Equity | Merton jump-diffusion engine | jump engines | `jumpdiffusion.cpp` | true | partial | `Merton76Process` + `JumpDiffusionEngine` Haug p.9 NPV subset @ 1e-2; greeks / full 135-row table deferred. Bates separate |
 | Equity | Variance gamma | `VarianceGamma*` | `variancegamma.cpp` | false | none | |

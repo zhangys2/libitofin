@@ -91,9 +91,10 @@ pub use forward::{
     ForwardEuropeanHestonPathPricer, MakeMcForwardEuropeanBsEngine,
     MakeMcForwardEuropeanHestonEngine, McForwardEuropeanBsEngine, McForwardEuropeanHestonEngine,
     QuantoForwardEuropeanEngine, QuantoForwardPerformanceEuropeanEngine,
-    set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
-    set_mc_forward_european_bs_engine, set_quanto_forward_european_engine,
-    set_quanto_forward_performance_european_engine,
+    ReplicatingVarianceSwapEngine, set_analytic_forward_performance_vanilla_engine,
+    set_analytic_forward_vanilla_engine, set_mc_forward_european_bs_engine,
+    set_quanto_forward_european_engine, set_quanto_forward_performance_european_engine,
+    set_replicating_variance_swap_engine,
 };
 pub use greeks::{black_scholes_theta, default_theta_per_day};
 pub use inflation::{YoYInflationCapFloorEngine, yoy_optionlet_price};
@@ -120,7 +121,8 @@ pub use swaption::{
 pub use vanilla::{
     AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine, AnalyticEuropeanEngine,
     BaroneAdesiWhaleyApproximationEngine, CashDividendModel, FdBlackScholesVanillaEngine,
-    FdHestonVanillaEngine, JumpDiffusionEngine, QuantoEuropeanEngine,
+    FdHestonVanillaEngine, FdSimpleBSSwingEngine, JumpDiffusionEngine, QuantoEuropeanEngine,
+    set_fd_simple_bs_swing_engine,
 };
 
 pub use blackformula::{
