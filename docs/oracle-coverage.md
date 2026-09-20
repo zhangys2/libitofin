@@ -16,6 +16,7 @@ credit.
 | Domain | libitofin surface | QuantLib oracle(s) | Status |
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
+| European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | Analytic quanto vanilla | `QuantoEuropeanEngine` (`QuantoEngine<VanillaOption, AnalyticEuropeanEngine>`) | `quantooption.cpp` `testValues` | Haug call 5.3280/1.5, put 8.1636 @ 1e-4; NPV/greeks ≡ quanto-q Black |
 | Analytic quanto greeks | `QuantoEuropeanEngine` | `quantooption.cpp` `testGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega/qρ/qvega/qλ) @ 1e-5 relative to spot |
 | Analytic quanto barrier | `QuantoBarrierEngine` (`QuantoEngine<BarrierOption, AnalyticBarrierEngine>`) | `quantooption.cpp` `testBarrierValues` | Haug DownOut call 8.247 / put 2.274, DownIn put 2.85 @ tol 0.5; NPV ≡ quanto-q barrier |
