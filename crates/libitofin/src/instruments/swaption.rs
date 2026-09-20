@@ -26,8 +26,9 @@
 //! - [`Swaption::implied_volatility`] pins `testImpliedVolatility` (Spot Black
 //!   Physical, reduced Spot Cash/`ParYieldCurve`, reduced Forward Physical,
 //!   reduced Spot Physical Normal) and `testImpliedVolatilityOis` (reduced Spot
-//!   Physical, reduced Spot Cash/`ParYieldCurve`, and reduced Forward Physical
-//!   OIS). The helper uses `CashAnnuityModel::DiscountCurve` to match QuantLib's
+//!   Physical, reduced Spot Cash/`ParYieldCurve`, reduced Forward Physical, and
+//!   reduced Cash/`ParYieldCurve` Forward OIS). The helper uses
+//!   `CashAnnuityModel::DiscountCurve` to match QuantLib's
 //!   `ImpliedSwaptionVolHelper` ctor default. The `deepUpdate` observer
 //!   optimisation is also deferred.
 //!
