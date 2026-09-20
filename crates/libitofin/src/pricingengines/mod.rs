@@ -66,7 +66,10 @@ pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, 
 pub use capfloor::{
     AnalyticCapFloorEngine, BachelierCapFloorEngine, BlackCapFloorEngine, TreeCapFloorEngine,
 };
-pub use cliquet::{AnalyticCliquetEngine, set_analytic_cliquet_engine};
+pub use cliquet::{
+    AnalyticCliquetEngine, AnalyticPerformanceEngine, set_analytic_cliquet_engine,
+    set_analytic_performance_engine,
+};
 pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{
     AnalyticComplexChooserEngine, AnalyticSimpleChooserEngine, set_analytic_complex_chooser_engine,

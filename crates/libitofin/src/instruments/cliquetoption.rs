@@ -110,6 +110,49 @@ impl CliquetOption {
             greeks: Greeks::default(),
         })
     }
+
+    fn greek(value: Option<Real>, description: &str) -> QlResult<Real> {
+        let Some(value) = value else {
+            fail!("{description} not provided");
+        };
+        Ok(value)
+    }
+
+    /// The option delta.
+    pub fn delta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.delta, "delta")
+    }
+
+    /// The option gamma.
+    pub fn gamma(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.gamma, "gamma")
+    }
+
+    /// The option theta.
+    pub fn theta(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.theta, "theta")
+    }
+
+    /// The option vega.
+    pub fn vega(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.vega, "vega")
+    }
+
+    /// The option rho.
+    pub fn rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.rho, "rho")
+    }
+
+    /// The option dividend rho.
+    pub fn dividend_rho(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        Self::greek(self.greeks.dividend_rho, "dividend rho")
+    }
 }
 
 impl Instrument for CliquetOption {

@@ -71,7 +71,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Basket beyond Choi / single-factor | Kirk/Stulz/Pearson/MC/FD-nD basket | `basketoption.cpp`, `spreadoption.cpp` | true | partial | Choi golden example pinned |
 | Equity | FD Heston double-barrier | `FdHestonDoubleBarrierEngine` | `doublebarrieroption.cpp` | false | none | |
 | Equity | Vanna–Volga single barrier | VV barrier (non-double) | `barrieroption.cpp` | false | none | Double-barrier VV only |
-| Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | false | none | Analytic cliquet Haug done |
+| Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | true | partial | `AnalyticPerformanceEngine` FD ρ/divρ/ν + δ=γ=0 closed; `MCPerformanceEngine` / full `testPerformanceGreeks` grid deferred |
 | Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | false | none | |
 | Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | false | none | |
 | Equity | Sticky ratchet | `StickyRatchet` | `stickyratchet.cpp` | false | none | |
