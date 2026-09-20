@@ -168,6 +168,7 @@ credit.
 | Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4; cash book-vba q≠0 and touched-barrier extras closed; double-binary deferred |
 | Merton-76 jump diffusion | `Merton76Process` + `JumpDiffusionEngine` | `jumpdiffusion.cpp` `testMerton76` | Haug p.9 European call NPV subset @ 1e-2 (QL-corrected vs book); greeks deferred |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
+| Double-barrier Heston FD | `FdHestonDoubleBarrierEngine` 251×76×3 | `doublebarrieroption.cpp` `testEuropeanHaugValues` | KnockOut subset @ 0.025 (near-Black σ=0.001); KnockIn / leverage deferred |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |
 | Barrier knock-in/out parity | `AnalyticBarrierEngine` + `AnalyticEuropeanEngine` | `barrieroption.cpp` `testParity` | DownIn + DownOut ≡ European call @ 1e-7 (Actual360 and Business252 vol) |

@@ -13,6 +13,7 @@ mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
 mod fdblackscholesrebateengine;
 mod fdhestonbarrierengine;
+mod fdhestondoublebarrierengine;
 mod fdhestonrebateengine;
 mod mcbarrierengine;
 mod mcdoublebarrierengine;
@@ -40,6 +41,9 @@ pub use fdblackscholesbarrierengine::{
 };
 pub use fdblackscholesrebateengine::FdBlackScholesRebateEngine;
 pub use fdhestonbarrierengine::{FdHestonBarrierEngine, set_fd_heston_barrier_engine};
+pub use fdhestondoublebarrierengine::{
+    FdHestonDoubleBarrierEngine, set_fd_heston_double_barrier_engine,
+};
 pub use fdhestonrebateengine::FdHestonRebateEngine;
 pub use mcbarrierengine::{
     BarrierPathPricer, BiasedBarrierPathPricer, MCBarrierEngine, MakeMcBarrierEngine,
