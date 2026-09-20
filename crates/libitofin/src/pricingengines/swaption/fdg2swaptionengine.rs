@@ -622,13 +622,18 @@ mod tests {
     /// Port of `bermudanswaption.cpp` `testBermudanOISSwaptionWithG2`.
     ///
     /// ATM OIS Bermudan under default G2 + `FdG2SwaptionEngine` is positive and
-    /// within 5% relative of the VanillaSwap Bermudan on the same fixed leg.
+    /// within 5% relative of the VanillaSwap Bermudan on the same fixed leg
+    /// (at-par coupons, matching QL). A reduced Simple-vs-Compound pin
+    /// (≥0.1%) proves the overnight rebuild copies averaging.
     #[test]
     fn bermudan_ois_swaption_with_g2() {
         let today = Date::new(15, Month::February, 2002);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
-        settings.set_using_at_par_coupons(false);
+        assert!(
+            settings.using_at_par_coupons(),
+            "QL G2 OIS case leaves at-par coupons at the default true"
+        );
 
         let calendar = Target::new();
         let settlement = Date::new(19, Month::February, 2002);
@@ -696,27 +701,29 @@ mod tests {
                 .into_fixed_vs_floating(),
             )
         };
-        let make_ois = |fixed_rate: Real| -> SharedMut<FixedVsFloatingSwap> {
-            let swap = OvernightIndexedSwap::with_nominal(
-                SwapType::Payer,
-                1000.0,
-                fixed_schedule.clone(),
-                fixed_rate,
-                Thirty360::with_convention(Convention::BondBasis),
-                floating_schedule.clone(),
-                Shared::clone(&eonia),
-                0.0,
-                0,
-                BusinessDayConvention::Following,
-                None,
-                RateAveraging::Compound,
-                Shared::clone(&settings),
-            )
-            .unwrap()
-            .into_fixed_vs_floating();
-            assert!(swap.is_overnight_indexed());
-            shared_mut(swap)
-        };
+        let make_ois =
+            |fixed_rate: Real, averaging: RateAveraging| -> SharedMut<FixedVsFloatingSwap> {
+                let swap = OvernightIndexedSwap::with_nominal(
+                    SwapType::Payer,
+                    1000.0,
+                    fixed_schedule.clone(),
+                    fixed_rate,
+                    Thirty360::with_convention(Convention::BondBasis),
+                    floating_schedule.clone(),
+                    Shared::clone(&eonia),
+                    0.0,
+                    0,
+                    BusinessDayConvention::Following,
+                    None,
+                    averaging,
+                    Shared::clone(&settings),
+                )
+                .unwrap()
+                .into_fixed_vs_floating();
+                assert!(swap.is_overnight_indexed());
+                assert_eq!(swap.overnight_extras().unwrap().averaging_method, averaging);
+                shared_mut(swap)
+            };
 
         let discounting = shared_mut(DiscountingSwapEngine::new(
             curve.clone(),
@@ -732,7 +739,7 @@ mod tests {
             .set_pricing_engine(SharedMut::clone(&discounting));
         let atm_rate = atm_swap.borrow_mut().fair_rate().unwrap();
 
-        let exercise_dates: Vec<Date> = make_ois(atm_rate)
+        let exercise_dates: Vec<Date> = make_ois(atm_rate, RateAveraging::Compound)
             .borrow()
             .fixed_leg()
             .iter()
@@ -763,16 +770,28 @@ mod tests {
             swaption.npv().unwrap()
         };
 
-        let ois_value = price(make_ois(atm_rate));
+        let ois_value = price(make_ois(atm_rate, RateAveraging::Compound));
         assert!(
             ois_value > 0.0,
             "ATM OIS Bermudan (G2) non-positive: {ois_value}"
         );
         let vs_value = price(make_vanilla(atm_rate));
-        let rel_diff = (ois_value - vs_value).abs() / vs_value.abs().max(1.0e-10);
+        let rel_diff = |a: Real, b: Real| (a - b).abs() / b.abs().max(1.0e-10);
         assert!(
-            rel_diff <= 0.05,
-            "ATM OIS {ois_value} vs Vanilla {vs_value}, rel {rel_diff}"
+            rel_diff(ois_value, vs_value) <= 0.05,
+            "ATM OIS {ois_value} vs Vanilla {vs_value}, rel {}",
+            rel_diff(ois_value, vs_value)
+        );
+
+        // Reduced feature pin (HW sibling / QL PreservesFeatures): Simple vs
+        // Compound must move the ATM Bermudan (≥0.1%), proving averaging is
+        // copied through the overnight FDM rebuild.
+        let ois_simple = price(make_ois(atm_rate, RateAveraging::Simple));
+        let avg_gap = rel_diff(ois_simple, ois_value);
+        assert!(
+            avg_gap >= 0.001,
+            "Simple vs Compound OIS Bermudan (G2) should differ by ≥0.1%, got {avg_gap} \
+             (simple={ois_simple}, compound={ois_value})"
         );
     }
 }
