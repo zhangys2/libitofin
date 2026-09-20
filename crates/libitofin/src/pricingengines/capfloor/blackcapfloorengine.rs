@@ -11,17 +11,17 @@
 //!
 //! The engine reports `value`, the additional result `"vega"` (the sum of the
 //! optionlet vegas, required by the instrument, `capfloor.cpp:104`),
-//! `"optionletsPrice"`, `"optionletsDelta"`, `"optionletsDiscountFactor"`, and
-//! `"optionletsAtmForward"` (`blackcapfloorengine.cpp:160-168`).
+//! `"optionletsPrice"`, `"optionletsDelta"`, `"optionletsVega"`,
+//! `"optionletsDiscountFactor"`, and `"optionletsAtmForward"`
+//! (`blackcapfloorengine.cpp:160-168`). `"optionletsStdDev"` is emitted for
+//! caps and floors only (not collars), matching C++.
 //!
 //! ## Divergences from QuantLib
 //!
 //! - The C++ `Settings::instance()` singleton has no counterpart; the flat-vol
 //!   convenience constructor threads an explicit [`Settings`] into the moving
 //!   [`ConstantOptionletVolatility`] it builds (D5).
-//! - `"optionletsVega"` / `"optionletsStdDev"` per-optionlet vectors are not
-//!   emitted (the suite only consumes the aggregate `"vega"` and the delta FD
-//!   fixture). Term implied vol lives on
+//! - Term implied vol lives on
 //!   [`CapFloor::implied_volatility`](crate::instruments::CapFloor::implied_volatility).
 
 use crate::errors::QlResult;
@@ -165,6 +165,8 @@ impl PricingEngine for BlackCapFloorEngine {
         let n = arguments.end_dates.len();
         let mut values = Vec::with_capacity(n);
         let mut deltas = Vec::with_capacity(n);
+        let mut vegas = Vec::with_capacity(n);
+        let mut std_devs = Vec::with_capacity(n);
         let mut discount_factors = Vec::with_capacity(n);
         let mut atm_forwards: Vec<Real> = arguments
             .forwards
@@ -183,6 +185,8 @@ impl PricingEngine for BlackCapFloorEngine {
             if payment_date <= settlement {
                 values.push(0.0);
                 deltas.push(0.0);
+                vegas.push(0.0);
+                std_devs.push(0.0);
                 discount_factors.push(0.0);
                 continue;
             }
@@ -194,6 +198,8 @@ impl PricingEngine for BlackCapFloorEngine {
             let Some(forward) = arguments.forwards[i] else {
                 values.push(0.0);
                 deltas.push(0.0);
+                vegas.push(0.0);
+                std_devs.push(0.0);
                 continue;
             };
             atm_forwards[i] = forward;
@@ -208,6 +214,7 @@ impl PricingEngine for BlackCapFloorEngine {
             let mut optionlet_value = 0.0;
             let mut optionlet_vega = 0.0;
             let mut optionlet_delta = 0.0;
+            let mut optionlet_std_dev = 0.0;
 
             if has_cap {
                 let strike = arguments.cap_rates[i].expect("cap rate set for cap/collar");
@@ -216,6 +223,7 @@ impl PricingEngine for BlackCapFloorEngine {
                     std_dev = surface
                         .black_variance_date(fixing_date, strike, false)?
                         .sqrt();
+                    optionlet_std_dev = std_dev;
                     optionlet_vega += black_formula_std_dev_derivative(
                         strike,
                         forward,
@@ -250,6 +258,7 @@ impl PricingEngine for BlackCapFloorEngine {
                     std_dev = surface
                         .black_variance_date(fixing_date, strike, false)?
                         .sqrt();
+                    optionlet_std_dev = std_dev;
                     floorlet_vega = black_formula_std_dev_derivative(
                         strike,
                         forward,
@@ -288,6 +297,8 @@ impl PricingEngine for BlackCapFloorEngine {
 
             values.push(optionlet_value);
             deltas.push(optionlet_delta);
+            vegas.push(optionlet_vega);
+            std_devs.push(optionlet_std_dev);
             value += optionlet_value;
             vega += optionlet_vega;
         }
@@ -311,6 +322,10 @@ impl PricingEngine for BlackCapFloorEngine {
             shared(deltas) as Shared<dyn Any>,
         );
         results.additional_results.insert(
+            "optionletsVega".to_string(),
+            shared(vegas) as Shared<dyn Any>,
+        );
+        results.additional_results.insert(
             "optionletsDiscountFactor".to_string(),
             shared(discount_factors) as Shared<dyn Any>,
         );
@@ -318,6 +333,12 @@ impl PricingEngine for BlackCapFloorEngine {
             "optionletsAtmForward".to_string(),
             shared(atm_forwards) as Shared<dyn Any>,
         );
+        if cap_floor_type != CapFloorType::Collar {
+            results.additional_results.insert(
+                "optionletsStdDev".to_string(),
+                shared(std_devs) as Shared<dyn Any>,
+            );
+        }
         Ok(())
     }
 }
@@ -672,6 +693,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `optionletsVega` sums to aggregate `"vega"`; `optionletsStdDev` is present
+    /// for caps/floors and omitted for collars (`blackcapfloorengine.cpp:165-166`).
+    #[test]
+    fn optionlets_vega_sums_to_vega_and_stddev_skips_collars() {
+        let vars = Vars::new(true);
+        let start = vars.start_date();
+        let vol = 0.20;
+        let leg = vars.make_leg(start, 5);
+
+        for is_cap in [true, false] {
+            let mut cf = priced(&vars, &leg, is_cap, 0.05, vol);
+            let vega = cf.result::<Real>("vega").unwrap();
+            let vegas = cf.result::<Vec<Real>>("optionletsVega").unwrap();
+            let std_devs = cf.result::<Vec<Real>>("optionletsStdDev").unwrap();
+            let prices = cf.result::<Vec<Real>>("optionletsPrice").unwrap();
+            assert_eq!(vegas.len(), prices.len());
+            assert_eq!(std_devs.len(), prices.len());
+            let sum: Real = vegas.iter().sum();
+            assert!(
+                (sum - vega).abs() <= 1.0e-12,
+                "optionletsVega sum {sum} vs vega {vega}"
+            );
+            assert!(std_devs.iter().any(|&s| s > 0.0));
+        }
+
+        let mut collar =
+            CapFloor::collar(leg, vec![0.06], vec![0.03], Shared::clone(&vars.settings)).unwrap();
+        collar.base_mut().set_pricing_engine(vars.engine(vol));
+        let vega = collar.result::<Real>("vega").unwrap();
+        let vegas = collar.result::<Vec<Real>>("optionletsVega").unwrap();
+        let sum: Real = vegas.iter().sum();
+        assert!((sum - vega).abs() <= 1.0e-12);
+        assert!(
+            collar.result::<Vec<Real>>("optionletsStdDev").is_err(),
+            "collar must omit optionletsStdDev"
+        );
     }
 
     /// `testParity` (`:354`): a cap minus a floor at the same strike equals a
