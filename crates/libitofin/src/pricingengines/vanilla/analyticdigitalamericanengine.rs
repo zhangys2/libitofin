@@ -1,7 +1,8 @@
 //! Analytic American digital engine (`analyticdigitalamericanengine`).
 //!
-//! At-hit cash/asset-or-nothing via `AmericanPayoffAtHit`. At-expiry and
-//! knock-out (`AnalyticDigitalAmericanKOEngine`) are deferred.
+//! At-hit cash/asset-or-nothing via `AmericanPayoffAtHit`. At-expiry,
+//! knock-out, and γ/ρ are deferred (D10: `.gamma()` / `.rho()` stay
+//! `"not provided"`). The engine does fill δ.
 
 use std::any::Any;
 
@@ -94,7 +95,11 @@ impl AmericanPayoffAtHit {
         let k = if let Some(coo) = any.downcast_ref::<CashOrNothingPayoff>() {
             coo.cash_payoff()
         } else if any.downcast_ref::<AssetOrNothingPayoff>().is_some() {
-            if in_the_money { spot } else { strike }
+            if in_the_money {
+                spot
+            } else {
+                strike
+            }
         } else {
             fail!("unsupported payoff type");
         };
@@ -118,6 +123,9 @@ impl AmericanPayoffAtHit {
         self.k * (self.forward * self.alpha + self.x * self.beta)
     }
 
+    /// QL `americanpayoffathit.cpp`: ITM asset-or-nothing uses `K = spot` so
+    /// NPV = S, but δ does not take `dK/dS` (result 0; a spot FD is 1).
+    /// Cash ITM δ = 0 is the constant cash payoff.
     pub fn delta(&self) -> Real {
         let temp = -self.spot * self.std_dev;
         let da_ds = self.dalpha_dd1 / temp;
@@ -219,7 +227,7 @@ mod tests {
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
-    use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::shared::{shared, shared_mut, SharedMut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -230,7 +238,12 @@ mod tests {
     fn today() -> Date {
         Date::new(15, Month::June, 2026)
     }
-    fn process(s: Real, q: Real, r: Real, v: Real) -> Shared<BlackScholesMertonProcess> {
+    fn process(
+        spot: &Shared<SimpleQuote>,
+        q: Real,
+        r: Real,
+        v: Real,
+    ) -> Shared<BlackScholesMertonProcess> {
         let yts = |rate: Real| {
             Handle::new(shared(FlatForward::with_rate(
                 today(),
@@ -241,7 +254,7 @@ mod tests {
             )) as Shared<dyn YieldTermStructure>)
         };
         shared(BlackScholesMertonProcess::new(
-            Handle::new(shared(SimpleQuote::new(s)) as Shared<dyn Quote>),
+            Handle::new(Shared::clone(spot) as Shared<dyn Quote>),
             yts(q),
             yts(r),
             Handle::new(
@@ -267,10 +280,12 @@ mod tests {
             settings,
         );
         opt.base_mut()
-            .set_pricing_engine(
-                shared_mut(AnalyticDigitalAmericanEngine::new(process(s, q, r, v)))
-                    as SharedMut<dyn PricingEngine>,
-            );
+            .set_pricing_engine(shared_mut(AnalyticDigitalAmericanEngine::new(process(
+                &shared(SimpleQuote::new(s)),
+                q,
+                r,
+                v,
+            ))) as SharedMut<dyn PricingEngine>);
         opt.npv().unwrap()
     }
 
@@ -317,5 +332,49 @@ mod tests {
     #[test]
     fn asset_at_hit_or_nothing_american_values() {
         check(ASSET, 0.0);
+    }
+
+    #[test]
+    fn cash_put_delta_matches_spot_fd() {
+        let spot = shared(SimpleQuote::new(105.0));
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let mut opt = VanillaOption::new(
+            shared(CashOrNothingPayoff::new(Put, 100.0, 15.0)),
+            shared(AmericanExercise::over(today(), today() + 180).unwrap()),
+            settings,
+        );
+        opt.base_mut()
+            .set_pricing_engine(shared_mut(AnalyticDigitalAmericanEngine::new(process(
+                &spot, 0.0, 0.10, 0.20,
+            ))) as SharedMut<dyn PricingEngine>);
+        let delta = opt.delta().unwrap();
+        let h = 105.0 * 1.0e-4;
+        spot.set_value(105.0 + h);
+        let up = opt.npv().unwrap();
+        spot.set_value(105.0 - h);
+        let fd = (up - opt.npv().unwrap()) / (2.0 * h);
+        assert!((delta - fd).abs() <= 1.0e-4, "δ {delta} vs FD {fd}");
+    }
+
+    #[test]
+    fn itm_asset_call_delta_is_ql_zero() {
+        // QL `K_=spot_` so δ=0; a relative-spot FD of this NPV is 1.
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let mut opt = VanillaOption::new(
+            shared(AssetOrNothingPayoff::new(Call, 100.0)),
+            shared(AmericanExercise::over(today(), today() + 180).unwrap()),
+            settings,
+        );
+        opt.base_mut()
+            .set_pricing_engine(shared_mut(AnalyticDigitalAmericanEngine::new(process(
+                &shared(SimpleQuote::new(105.0)),
+                0.0,
+                0.10,
+                0.20,
+            ))) as SharedMut<dyn PricingEngine>);
+        assert_eq!(opt.npv().unwrap(), 105.0);
+        assert_eq!(opt.delta().unwrap(), 0.0);
     }
 }
