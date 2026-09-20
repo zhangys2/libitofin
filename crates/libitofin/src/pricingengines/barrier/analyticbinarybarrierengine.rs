@@ -55,6 +55,7 @@ impl PricingEngine for AnalyticBinaryBarrierEngine {
     fn calculate(&mut self) -> QlResult<()> {
         let (exercise, payoff, barrier, barrier_type) = {
             let args = self.base.arguments();
+            require!(args.binary_payoff.is_some(), "non-striked payoff given");
             (
                 Shared::clone(args.exercise.as_ref().expect("validated")),
                 Shared::clone(args.binary_payoff.as_ref().expect("validated")),
@@ -245,9 +246,6 @@ mod tests {
     fn today() -> Date {
         Date::new(15, Month::June, 2026)
     }
-    fn qh(q: &Shared<SimpleQuote>) -> Handle<dyn Quote> {
-        Handle::new(Shared::clone(q) as Shared<dyn Quote>)
-    }
     fn yts(rate: Real) -> Handle<dyn YieldTermStructure> {
         Handle::new(shared(FlatForward::with_rate(
             today(),
@@ -269,7 +267,7 @@ mod tests {
         settings.set_evaluation_date(today());
         let spot = shared(SimpleQuote::new(100.0));
         let process = shared(BlackScholesMertonProcess::new(
-            qh(&spot),
+            Handle::new(Shared::clone(&spot) as Shared<dyn Quote>),
             yts(0.0),
             yts(0.10),
             Handle::new(
@@ -284,7 +282,6 @@ mod tests {
         }
     }
 
-    /// Haug p.180: `(barrier, cash, type, K, S, npv)`; cash=0 is asset-or-nothing.
     #[rustfmt::skip]
     const ROWS: &[(BarrierType, Real, OptionType, Real, Real, Real)] = &[
         (DownIn, 15.0, Call, 102.0, 105.0, 4.9289),

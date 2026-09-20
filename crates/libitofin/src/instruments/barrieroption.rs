@@ -275,10 +275,9 @@ impl Instrument for BarrierOption {
         args.barrier_type = Some(self.barrier_type);
         args.barrier = Some(self.barrier);
         args.rebate = Some(self.rebate);
-        args.payoff = Some(PlainVanillaPayoff::new(
-            self.payoff.option_type(),
-            self.payoff.strike(),
-        ));
+        args.payoff = (&*self.payoff as &dyn std::any::Any)
+            .downcast_ref::<PlainVanillaPayoff>()
+            .copied();
         args.binary_payoff = Some(Shared::clone(&self.payoff));
         args.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
@@ -301,7 +300,10 @@ impl Arguments for BarrierArguments {
         require!(self.barrier_type.is_some(), "no barrier type");
         require!(self.barrier.is_some(), "no barrier");
         require!(self.rebate.is_some(), "no rebate");
-        require!(self.payoff.is_some(), "no payoff");
+        require!(
+            self.payoff.is_some() || self.binary_payoff.is_some(),
+            "no payoff"
+        );
         require!(self.exercise.is_some(), "no exercise");
         Ok(())
     }
@@ -365,6 +367,7 @@ impl PricingEngine for AnalyticBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier = args.barrier.expect("validated");
         let rebate = args.rebate.expect("validated");
+        require!(args.payoff.is_some(), "non-plain payoff given");
         let payoff = args.payoff.expect("validated");
         let exercise = args.exercise.as_ref().expect("validated");
         if exercise.exercise_type() != ExerciseType::European {
