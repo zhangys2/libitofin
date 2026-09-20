@@ -47,7 +47,7 @@ pub struct BarrierOption {
     barrier_type: BarrierType,
     barrier: Real,
     rebate: Real,
-    payoff: PlainVanillaPayoff,
+    payoff: Shared<dyn StrikedTypePayoff>,
     exercise: Shared<dyn Exercise>,
 }
 
@@ -71,6 +71,25 @@ impl BarrierOption {
         barrier: Real,
         rebate: Real,
         payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_striked_payoff(
+            barrier_type,
+            barrier,
+            rebate,
+            shared(payoff) as Shared<dyn StrikedTypePayoff>,
+            exercise,
+            settings,
+        )
+    }
+
+    #[allow(clippy::neg_cmp_op_on_partial_ord, clippy::too_many_arguments)]
+    pub fn with_striked_payoff(
+        barrier_type: BarrierType,
+        barrier: Real,
+        rebate: Real,
+        payoff: Shared<dyn StrikedTypePayoff>,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
@@ -256,7 +275,11 @@ impl Instrument for BarrierOption {
         args.barrier_type = Some(self.barrier_type);
         args.barrier = Some(self.barrier);
         args.rebate = Some(self.rebate);
-        args.payoff = Some(self.payoff);
+        args.payoff = Some(PlainVanillaPayoff::new(
+            self.payoff.option_type(),
+            self.payoff.strike(),
+        ));
+        args.binary_payoff = Some(Shared::clone(&self.payoff));
         args.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
     }
@@ -269,6 +292,7 @@ pub struct BarrierArguments {
     pub barrier: Option<Real>,
     pub rebate: Option<Real>,
     pub payoff: Option<PlainVanillaPayoff>,
+    pub binary_payoff: Option<Shared<dyn StrikedTypePayoff>>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
 
@@ -311,6 +335,7 @@ impl AnalyticBarrierEngine {
             args.barrier = arguments.barrier;
             args.rebate = arguments.rebate;
             args.payoff = arguments.payoff;
+            args.binary_payoff = arguments.binary_payoff.as_ref().map(Shared::clone);
             args.exercise = arguments.exercise.as_ref().map(Shared::clone);
         }
         PricingEngine::calculate(self)?;
