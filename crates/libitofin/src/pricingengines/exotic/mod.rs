@@ -5,6 +5,7 @@
 mod analyticcomplexchooserengine;
 mod analyticcompoundoptionengine;
 mod analyticeuropeanmargrabeengine;
+mod analyticholderextensibleoptionengine;
 mod analyticsimplechooserengine;
 mod analytictwoassetcorrelationengine;
 mod analyticwriterextensibleoptionengine;
@@ -17,6 +18,9 @@ pub use analyticcompoundoptionengine::{
 };
 pub use analyticeuropeanmargrabeengine::{
     AnalyticEuropeanMargrabeEngine, set_analytic_european_margrabe_engine,
+};
+pub use analyticholderextensibleoptionengine::{
+    AnalyticHolderExtensibleOptionEngine, set_analytic_holder_extensible_option_engine,
 };
 pub use analyticsimplechooserengine::{
     AnalyticSimpleChooserEngine, set_analytic_simple_chooser_engine,

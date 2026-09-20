@@ -26,6 +26,7 @@ mod floatfloatswap;
 mod forwardrateagreement;
 mod forwardvanillaoption;
 mod futures;
+mod holderextensibleoption;
 mod inflationcapfloor;
 mod lookbackoption;
 mod makecapfloor;
@@ -108,6 +109,9 @@ pub use floatfloatswap::FloatFloatSwap;
 pub use forwardrateagreement::ForwardRateAgreement;
 pub use forwardvanillaoption::{ForwardOptionArguments, ForwardVanillaOption};
 pub use futures::FuturesType;
+pub use holderextensibleoption::{
+    HolderExtensibleArguments, HolderExtensibleOption, HolderExtensibleResults,
+};
 pub use inflationcapfloor::{YoYInflationCapFloor, YoYInflationCapFloorArguments};
 pub use lookbackoption::{
     ContinuousFixedLookbackArguments, ContinuousFixedLookbackOption,
