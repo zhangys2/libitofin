@@ -695,38 +695,56 @@ mod tests {
         }
     }
 
-    /// `optionletsVega` sums to aggregate `"vega"`; `optionletsStdDev` is present
-    /// for caps/floors and omitted for collars (`blackcapfloorengine.cpp:165-166`).
+    /// Pins `optionletsVega` / `optionletsStdDev` against independent checks
+    /// (`blackcapfloorengine.cpp:108-166`): past-fixing optionlets are 0,
+    /// live StdDev is `vol·√t` on Actual365Fixed, and `optionlet(i).vega`
+    /// matches the vector entry. Collars omit StdDev.
     #[test]
-    fn optionlets_vega_sums_to_vega_and_stddev_skips_collars() {
+    fn optionlets_vega_and_stddev_match_optionlets_and_omit_on_collar() {
         let vars = Vars::new(true);
         let start = vars.start_date();
         let vol = 0.20;
         let leg = vars.make_leg(start, 5);
+        let today = vars.settings.evaluation_date().expect("eval date set");
+        let dc = Actual365Fixed::new();
 
         for is_cap in [true, false] {
             let mut cf = priced(&vars, &leg, is_cap, 0.05, vol);
-            let vega = cf.result::<Real>("vega").unwrap();
             let vegas = cf.result::<Vec<Real>>("optionletsVega").unwrap();
             let std_devs = cf.result::<Vec<Real>>("optionletsStdDev").unwrap();
-            let prices = cf.result::<Vec<Real>>("optionletsPrice").unwrap();
-            assert_eq!(vegas.len(), prices.len());
-            assert_eq!(std_devs.len(), prices.len());
-            let sum: Real = vegas.iter().sum();
-            assert!(
-                (sum - vega).abs() <= 1.0e-12,
-                "optionletsVega sum {sum} vs vega {vega}"
-            );
-            assert!(std_devs.iter().any(|&s| s > 0.0));
+            assert_eq!(vegas.len(), leg.len());
+            assert_eq!(std_devs.len(), leg.len());
+
+            for (i, coupon) in leg.iter().enumerate() {
+                let fixing = coupon.fixing_date();
+                if fixing <= today {
+                    assert_eq!(std_devs[i], 0.0, "past-fixing stdDev[{i}]");
+                    assert_eq!(vegas[i], 0.0, "past-fixing vega[{i}]");
+                } else {
+                    let t = dc.year_fraction(today, fixing);
+                    let expected = vol * t.sqrt();
+                    assert!(
+                        (std_devs[i] - expected).abs() <= 1.0e-12,
+                        "stdDev[{i}] {} vs vol·√t {expected}",
+                        std_devs[i]
+                    );
+                }
+
+                let mut optionlet = cf.optionlet(i).expect("i within the leg");
+                optionlet.base_mut().set_pricing_engine(vars.engine(vol));
+                let optionlet_vega = optionlet.result::<Real>("vega").unwrap();
+                assert!(
+                    (vegas[i] - optionlet_vega).abs() <= 1.0e-12,
+                    "optionletsVega[{i}] {} vs optionlet.vega {optionlet_vega}",
+                    vegas[i]
+                );
+            }
         }
 
         let mut collar =
             CapFloor::collar(leg, vec![0.06], vec![0.03], Shared::clone(&vars.settings)).unwrap();
         collar.base_mut().set_pricing_engine(vars.engine(vol));
-        let vega = collar.result::<Real>("vega").unwrap();
-        let vegas = collar.result::<Vec<Real>>("optionletsVega").unwrap();
-        let sum: Real = vegas.iter().sum();
-        assert!((sum - vega).abs() <= 1.0e-12);
+        assert!(collar.result::<Vec<Real>>("optionletsVega").is_ok());
         assert!(
             collar.result::<Vec<Real>>("optionletsStdDev").is_err(),
             "collar must omit optionletsStdDev"

@@ -420,6 +420,64 @@ mod tests {
         assert!(((numerical - analytical) / numerical).abs() <= 0.005);
     }
 
+    /// Pins Normal `optionletsVega` / `optionletsStdDev` the same way as Black:
+    /// past-fixing zeros, live StdDev = `vol·√t`, `optionlet(i).vega` match,
+    /// collar omits StdDev.
+    #[test]
+    fn optionlets_vega_and_stddev_match_optionlets_and_omit_on_collar() {
+        let (settings, curve, index) = fixture();
+        let start = curve.current_link().unwrap().reference_date().unwrap();
+        let coupons = leg5(&index, start);
+        let today = settings.evaluation_date().expect("eval date set");
+        let dc = Actual365Fixed::new();
+
+        for is_cap in [true, false] {
+            let mut cf = priced_cap_floor(&settings, &curve, &coupons, is_cap, 0.05, VOL);
+            let vegas = cf.result::<Vec<Real>>("optionletsVega").unwrap();
+            let std_devs = cf.result::<Vec<Real>>("optionletsStdDev").unwrap();
+            assert_eq!(vegas.len(), coupons.len());
+            assert_eq!(std_devs.len(), coupons.len());
+
+            for (i, coupon) in coupons.iter().enumerate() {
+                let fixing = coupon.fixing_date();
+                if fixing <= today {
+                    assert_eq!(std_devs[i], 0.0, "past-fixing stdDev[{i}]");
+                    assert_eq!(vegas[i], 0.0, "past-fixing vega[{i}]");
+                } else {
+                    let t = dc.year_fraction(today, fixing);
+                    let expected = VOL * t.sqrt();
+                    assert!(
+                        (std_devs[i] - expected).abs() <= 1.0e-12,
+                        "stdDev[{i}] {} vs vol·√t {expected}",
+                        std_devs[i]
+                    );
+                }
+
+                let mut optionlet = cf.optionlet(i).expect("i within the leg");
+                optionlet
+                    .base_mut()
+                    .set_pricing_engine(engine(&curve, &settings, VOL));
+                let optionlet_vega = optionlet.result::<Real>("vega").unwrap();
+                assert!(
+                    (vegas[i] - optionlet_vega).abs() <= 1.0e-12,
+                    "optionletsVega[{i}] {} vs optionlet.vega {optionlet_vega}",
+                    vegas[i]
+                );
+            }
+        }
+
+        let mut collar =
+            CapFloor::collar(coupons, vec![0.06], vec![0.03], Shared::clone(&settings)).unwrap();
+        collar
+            .base_mut()
+            .set_pricing_engine(engine(&curve, &settings, VOL));
+        assert!(collar.result::<Vec<Real>>("optionletsVega").is_ok());
+        assert!(
+            collar.result::<Vec<Real>>("optionletsStdDev").is_err(),
+            "collar must omit optionletsStdDev"
+        );
+    }
+
     #[test]
     fn cap_minus_floor_equals_the_underlying_swap() {
         let (settings, curve, index) = fixture();
