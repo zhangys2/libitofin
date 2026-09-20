@@ -71,7 +71,7 @@ credit.
 | Hull–White forward process | `HullWhiteForwardProcess` | identity (hybrid suite is engines) | f≡0 E/V vs closed form; T-forward drift Δ; `a>0`/`a=0` `M_T`; notify on set T @ 1e-12; hybrid join deferred |
 | Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | FDM SABR operator | `FdmSabrOp` | identity (`fdsabr.cpp` `testFdmSabrOp` needs engine) | closed-form L[f²]/L[x²]/L[fx] interior pins (ν≠1); Shared yield snapshot; engine/NoArb deferred |
-| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | `capfloor.cpp` `testBachelierOptionLetsDelta` | parity / collar / vega FD / optionletsPrice; CapHelper Normal ≡ ATM; analytic δ vs forward FD @ 1e-6; stripper Normal deferred |
+| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | `capfloor.cpp` `testBachelierOptionLetsDelta` | parity / vega FD / optionletsPrice; CapHelper Normal ≡ ATM; analytic δ vs forward FD @ 1e-6; stripper Normal deferred |
 | Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip |
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |
