@@ -16,6 +16,7 @@ mod claim;
 mod cliquetoption;
 mod cmsswap;
 mod complexchooseroption;
+mod compoundoption;
 mod continuousaveragingasianoption;
 mod creditdefaultswap;
 mod discreteaveragingasianoption;
@@ -82,6 +83,7 @@ pub use cmsswap::CmsSwap;
 pub use complexchooseroption::{
     ComplexChooserArguments, ComplexChooserOption, ComplexChooserResults,
 };
+pub use compoundoption::{CompoundArguments, CompoundOption, CompoundResults};
 pub use continuousaveragingasianoption::{
     AverageType, ContinuousAveragingAsianArguments, ContinuousAveragingAsianOption,
     ContinuousAveragingAsianResults,
