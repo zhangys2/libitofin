@@ -60,7 +60,7 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::pricingengines::BlackCalculator;
 use crate::processes::GeneralizedBlackScholesProcess;
-use crate::shared::{shared, Shared};
+use crate::shared::{Shared, shared};
 use crate::types::Real;
 
 /// Pricing engine for European vanilla options using analytical formulae.
@@ -218,7 +218,7 @@ pub(crate) mod test_market {
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
-    use crate::shared::{shared, shared_mut, Shared, SharedMut};
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -705,7 +705,7 @@ mod greek_gate {
     fn recursive_input_writeback_leaves_the_m1_greeks_unchanged() {
         use crate::patterns::observable::Observer;
         use crate::quotes::SimpleQuote;
-        use crate::shared::{shared_mut, Shared, SharedMut};
+        use crate::shared::{Shared, SharedMut, shared_mut};
 
         let spot0 = 100.0;
         let market = market();
@@ -765,8 +765,8 @@ mod mixed_day_counters {
     //! the vol curve's - a swap is invisible to the flat-market oracles
     //! (which share Actual360 across all three) but fails here.
 
-    use super::test_market::today;
     use super::AnalyticEuropeanEngine;
+    use super::test_market::today;
     use crate::exercise::EuropeanExercise;
     use crate::handle::Handle;
     use crate::instrument::Instrument;
@@ -778,7 +778,7 @@ mod mixed_day_counters {
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
-    use crate::shared::{shared, shared_mut, Shared, SharedMut};
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -1367,8 +1367,8 @@ mod test_greeks {
     //! `test_gap`. The full `europeanoption.cpp` kk==1..3 moving-curve grids
     //! remain deferred.
 
-    use super::test_market::{quote_handle, time_to_days, today};
     use super::AnalyticEuropeanEngine;
+    use super::test_market::{quote_handle, time_to_days, today};
     use crate::exercise::EuropeanExercise;
     use crate::handle::Handle;
     use crate::instrument::Instrument;
@@ -1379,7 +1379,7 @@ mod test_greeks {
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::SimpleQuote;
     use crate::settings::Settings;
-    use crate::shared::{shared, shared_mut, Shared, SharedMut};
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::BlackConstantVol;
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;

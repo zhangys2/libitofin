@@ -7,9 +7,12 @@
 //! follow-up work.
 //!
 //! Known limitation carried over from the reference: the zero-volatility
-//! branches below return the plain-vanilla ladder, which is meaningless for a
-//! digital payoff. C++ has the same gap - its branches read the option type
-//! off `alpha_ >= 0`, and a digital's `alpha_` is always zero.
+//! branches below return the plain-vanilla ladder. C++ detects the option
+//! type with `alpha_ >= 0`, which is meaningless for cash-or-nothing and
+//! asset-or-nothing (`alpha_` is always zero). Gap keeps vanilla α/β and
+//! only rewrites `x` / `DxDstrike`, so the C++ type detection works, but
+//! the ATM zero-vol ladder is still the vanilla kink rather than the jump
+//! at `K1` when `K2 ≠ K1`.
 //!
 //! Divergence, throughout: every argument requirement here is QuantLib's own
 //! (`blackcalculator.cpp:66,68,72,74` for the constructor, `:204` and `:316`

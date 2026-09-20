@@ -67,11 +67,7 @@ impl Payoff for PlainVanillaPayoff {
             OptionType::Call => price - self.strike,
             OptionType::Put => self.strike - price,
         };
-        if intrinsic < 0.0 {
-            0.0
-        } else {
-            intrinsic
-        }
+        if intrinsic < 0.0 { 0.0 } else { intrinsic }
     }
 }
 
@@ -163,11 +159,7 @@ impl FloatingTypePayoff {
             OptionType::Call => price - strike,
             OptionType::Put => strike - price,
         };
-        if intrinsic < 0.0 {
-            0.0
-        } else {
-            intrinsic
-        }
+        if intrinsic < 0.0 { 0.0 } else { intrinsic }
     }
 }
 
@@ -304,11 +296,7 @@ impl Payoff for AssetOrNothingPayoff {
             OptionType::Call => price - self.strike,
             OptionType::Put => self.strike - price,
         };
-        if moneyness > 0.0 {
-            price
-        } else {
-            0.0
-        }
+        if moneyness > 0.0 { price } else { 0.0 }
     }
 }
 
