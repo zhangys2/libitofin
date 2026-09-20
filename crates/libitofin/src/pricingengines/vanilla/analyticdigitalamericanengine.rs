@@ -1,8 +1,8 @@
 //! Analytic American digital engine (`analyticdigitalamericanengine`).
 //!
-//! At-hit cash/asset-or-nothing via `AmericanPayoffAtHit`. At-expiry,
-//! knock-out, and γ/ρ are deferred (D10: `.gamma()` / `.rho()` stay
-//! `"not provided"`). The engine does fill δ.
+//! At-hit via `AmericanPayoffAtHit` (fills δ). At-expiry knock-in via
+//! `AmericanPayoffAtExpiry` (NPV only; QL has no at-expiry greeks). Knock-out
+//! and γ/ρ stay deferred (D10: `.gamma()` / `.rho()` remain `"not provided"`).
 
 use std::any::Any;
 
@@ -138,7 +138,106 @@ impl AmericanPayoffAtHit {
     }
 }
 
-/// Analytic American digital (knock-in / at-hit) engine.
+/// Haug cash/asset-(at-expiry)-or-nothing pricer (`americanpayoffatexpiry`).
+pub struct AmericanPayoffAtExpiry {
+    discount: Real,
+    k: Real,
+    x: Real,
+    y: Real,
+    cum_d1: Real,
+    cum_d2: Real,
+}
+
+impl AmericanPayoffAtExpiry {
+    pub fn new(
+        spot: Real,
+        discount: Real,
+        q_disc: Real,
+        variance: Real,
+        payoff: &dyn StrikedTypePayoff,
+        knock_in: bool,
+    ) -> QlResult<Self> {
+        require!(spot > 0.0, "positive spot value required");
+        require!(discount > 0.0, "positive discount required");
+        require!(q_disc > 0.0, "positive dividend discount required");
+        require!(variance >= 0.0, "negative variance not allowed");
+        let std_dev = variance.sqrt();
+        let strike = payoff.strike();
+        let ty = payoff.option_type();
+        let forward = spot * q_disc / discount;
+        let mut mu = (q_disc / discount).ln() / variance - 0.5;
+        let any = payoff as &dyn Any;
+        let k = if let Some(coo) = any.downcast_ref::<CashOrNothingPayoff>() {
+            coo.cash_payoff()
+        } else if any.downcast_ref::<AssetOrNothingPayoff>().is_some() {
+            mu += 1.0;
+            forward
+        } else {
+            fail!("unsupported payoff type");
+        };
+        let log_h_s = (strike / spot).ln();
+        let log_s_h = (spot / strike).ln();
+        let (eta, phi) = match (ty, knock_in) {
+            (OptionType::Call, true) => (-1.0, 1.0),
+            (OptionType::Call, false) => (-1.0, -1.0),
+            (OptionType::Put, true) => (1.0, -1.0),
+            (OptionType::Put, false) => (1.0, 1.0),
+        };
+        let n = CumulativeNormalDistribution::standard();
+        let (mut cum_d1, mut cum_d2) = if variance >= f64::EPSILON {
+            (
+                n.value(phi * (log_s_h / std_dev + mu * std_dev)),
+                n.value(eta * (log_h_s / std_dev + mu * std_dev)),
+            )
+        } else {
+            (
+                if log_s_h * phi > 0.0 { 1.0 } else { 0.0 },
+                if log_h_s * eta > 0.0 { 1.0 } else { 0.0 },
+            )
+        };
+        // QL uses strike_<=spot_ (call) / strike_>=spot_ (put) here, not the
+        // strict inTheMoney_ test used for X_/Y_.
+        match ty {
+            OptionType::Call if strike <= spot => {
+                cum_d1 = if knock_in { 0.5 } else { 0.0 };
+                cum_d2 = cum_d1;
+            }
+            OptionType::Put if strike >= spot => {
+                cum_d1 = if knock_in { 0.5 } else { 0.0 };
+                cum_d2 = cum_d1;
+            }
+            _ => {}
+        }
+        let in_the_money = matches!(
+            (ty, strike < spot, strike > spot),
+            (OptionType::Call, true, _) | (OptionType::Put, _, true)
+        );
+        let mut y = if in_the_money {
+            1.0
+        } else if cum_d2 == 0.0 {
+            0.0
+        } else {
+            (strike / spot).powf(2.0 * mu)
+        };
+        if !knock_in {
+            y *= -1.0;
+        }
+        Ok(Self {
+            discount,
+            k,
+            x: 1.0,
+            y,
+            cum_d1,
+            cum_d2,
+        })
+    }
+
+    pub fn value(&self) -> Real {
+        self.discount * self.k * (self.x * self.cum_d1 + self.y * self.cum_d2)
+    }
+}
+
+/// Analytic American digital (knock-in / at-hit and at-expiry) engine.
 pub struct AnalyticDigitalAmericanEngine {
     base: OneAssetOptionEngine,
     process: Shared<GeneralizedBlackScholesProcess>,
@@ -184,7 +283,6 @@ impl PricingEngine for AnalyticDigitalAmericanEngine {
             exercise.dates()[0] <= vol.reference_date()?,
             "American option with window exercise not handled yet"
         );
-        require!(!exercise.payoff_at_expiry(), "payoff at expiry deferred");
         let Some(payoff) = args.payoff.as_ref() else {
             fail!("non-striked payoff given");
         };
@@ -202,10 +300,18 @@ impl PricingEngine for AnalyticDigitalAmericanEngine {
             .risk_free_rate()
             .current_link()?
             .discount_date(last, false)?;
-        let pricer = AmericanPayoffAtHit::new(spot, rf_disc, q_disc, variance, &**payoff)?;
-        let results = self.base.results_mut();
-        results.instrument.value = Some(pricer.value());
-        results.greeks.delta = Some(pricer.delta());
+        let at_expiry = exercise.payoff_at_expiry();
+        if at_expiry {
+            let value =
+                AmericanPayoffAtExpiry::new(spot, rf_disc, q_disc, variance, &**payoff, true)?
+                    .value();
+            self.base.results_mut().instrument.value = Some(value);
+        } else {
+            let pricer = AmericanPayoffAtHit::new(spot, rf_disc, q_disc, variance, &**payoff)?;
+            let results = self.base.results_mut();
+            results.instrument.value = Some(pricer.value());
+            results.greeks.delta = Some(pricer.delta());
+        }
         Ok(())
     }
 }
@@ -261,7 +367,7 @@ mod tests {
     }
 
     type Row = (OptionType, Real, Real, Real, Real, Real, Real, Real);
-    fn price(row: Row, cash: Real) -> Real {
+    fn price(row: Row, cash: Real, at_expiry: bool) -> Real {
         let (ty, k, s, q, r, t, v, _) = row;
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
@@ -272,7 +378,10 @@ mod tests {
         };
         let mut opt = VanillaOption::new(
             payoff,
-            shared(AmericanExercise::over(today(), today() + (t * 360.0).round() as i32).unwrap()),
+            shared(
+                AmericanExercise::new(today(), today() + (t * 360.0).round() as i32, at_expiry)
+                    .unwrap(),
+            ),
             settings,
         );
         opt.base_mut()
@@ -313,7 +422,7 @@ mod tests {
     fn check(rows: &[Row], cash: Real) {
         for &(ty, k, s, q, r, t, v, expected) in rows {
             let tol = if expected.fract() == 0.0 { 1e-16 } else { 1e-4 };
-            let got = price((ty, k, s, q, r, t, v, expected), cash);
+            let got = price((ty, k, s, q, r, t, v, expected), cash, false);
             assert!(
                 (got - expected).abs() <= tol,
                 "{ty:?} K={k} S={s} q={q} cash={cash}: {got} vs {expected}"
@@ -372,5 +481,52 @@ mod tests {
             ))) as SharedMut<dyn PricingEngine>);
         assert_eq!(opt.npv().unwrap(), 105.0);
         assert_eq!(opt.delta().unwrap(), 0.0);
+    }
+
+    /// `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` knock-in (cash=15).
+    #[rustfmt::skip]
+    const CASH_EXPIRY: &[(Row, Real)] = &[
+        ((Put,  100.0, 105.0, 0.00, 0.10, 0.5, 0.20,  9.3604), 1e-4),
+        ((Call, 100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 11.2223), 1e-4),
+        ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20,  0.0),    1e-12),
+        ((Put,  100.0,  95.0, 0.00, 0.10, 0.5, 0.20,  0.0),    1e-12),
+    ];
+    /// `digitaloption.cpp` `testAssetAtExpiryOrNothingAmericanValues` knock-in.
+    #[rustfmt::skip]
+    const ASSET_EXPIRY: &[(Row, Real)] = &[
+        ((Put,  100.0, 105.0, 0.00, 0.10, 0.5, 0.20, 64.8426), 1e-4),
+        ((Call, 100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 77.7017), 1e-4),
+        ((Put,  100.0, 105.0, 0.01, 0.10, 0.5, 0.20, 65.5291), 1e-4),
+        ((Call, 100.0,  95.0, 0.01, 0.10, 0.5, 0.20, 76.5951), 1e-4),
+        ((Call, 100.0, 105.0, 0.00, 0.10, 0.5, 0.20,105.0000), 1e-12),
+        ((Put,  100.0,  95.0, 0.00, 0.10, 0.5, 0.20, 95.0000), 1e-12),
+        ((Call, 100.0, 105.0, 0.01, 0.10, 0.5, 0.20,  0.0),    1e-12),
+        ((Put,  100.0,  95.0, 0.01, 0.10, 0.5, 0.20,  0.0),    1e-12),
+    ];
+
+    fn check_expiry(rows: &[(Row, Real)], cash: Real) {
+        for &((ty, k, s, q, r, t, v, expected), tol) in rows {
+            let expected = if expected == 0.0 && cash > 0.0 {
+                cash * (-r * t).exp()
+            } else if expected == 0.0 {
+                s * (-q * t).exp()
+            } else {
+                expected
+            };
+            let got = price((ty, k, s, q, r, t, v, expected), cash, true);
+            assert!(
+                (got - expected).abs() <= tol,
+                "{ty:?} K={k} S={s} q={q} cash={cash}: {got} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn cash_at_expiry_or_nothing_american_values() {
+        check_expiry(CASH_EXPIRY, 15.0);
+    }
+    #[test]
+    fn asset_at_expiry_or_nothing_american_values() {
+        check_expiry(ASSET_EXPIRY, 0.0);
     }
 }
