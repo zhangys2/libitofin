@@ -173,6 +173,7 @@ credit.
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |
 | Single-barrier Vanna/Volga FX | `VannaVolgaBarrierEngine` + `AnalyticBarrierEngine` | `barrieroption.cpp` `testVannaVolgaSimpleBarrierValues` | FX subset (UpOut/UpIn/DownOut/DownIn, T=1/2) @ 1e-4 (`adaptVanDelta`) |
 | Variance swap (replicating) | `VarianceSwap` + `ReplicatingVarianceSwapEngine` | `varianceswap.cpp` `testReplicatingVarianceSwap` | Derman 1999 fair variance 0.04189 @ 1e-4; Long NPV 93.271669 / Short=−Long; `q=0.05` hybrid 0.0422989 (carry uses `2r`/`S/DF_r` as C++, options see `q`); MC / variance option deferred |
+| FD BS swing | `VanillaSwingOption` + `FdSimpleBSSwingEngine` | `swingoption.cpp` `testFdBSSwingOption` | monthly Put swing vs Bermudan upper (+0.01) and remaining-European lower (−4e-2); ExtOU-jump deferred |
 | Barrier knock-in/out parity | `AnalyticBarrierEngine` + `AnalyticEuropeanEngine` | `barrieroption.cpp` `testParity` | DownIn + DownOut ≡ European call @ 1e-7 (Actual360 and Business252 vol) |
 | Barrier put-call symmetry | `AnalyticBarrierEngine` | `barrieroption.cpp` `testPutCallSymmetry` | inverted knock-out put ≡ scaled call @ 1e-4 (DownOut/UpOut pairs) |
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3) |

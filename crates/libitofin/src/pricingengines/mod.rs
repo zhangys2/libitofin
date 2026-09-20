@@ -121,7 +121,8 @@ pub use swaption::{
 pub use vanilla::{
     AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine, AnalyticEuropeanEngine,
     BaroneAdesiWhaleyApproximationEngine, CashDividendModel, FdBlackScholesVanillaEngine,
-    FdHestonVanillaEngine, JumpDiffusionEngine, QuantoEuropeanEngine,
+    FdHestonVanillaEngine, FdSimpleBSSwingEngine, JumpDiffusionEngine, QuantoEuropeanEngine,
+    set_fd_simple_bs_swing_engine,
 };
 
 pub use blackformula::{
