@@ -9,6 +9,7 @@ mod analyticholderextensibleoptionengine;
 mod analyticsimplechooserengine;
 mod analytictwoassetcorrelationengine;
 mod analyticwriterextensibleoptionengine;
+mod mceverestengine;
 
 pub use analyticcomplexchooserengine::{
     AnalyticComplexChooserEngine, set_analytic_complex_chooser_engine,
@@ -30,4 +31,7 @@ pub use analytictwoassetcorrelationengine::{
 };
 pub use analyticwriterextensibleoptionengine::{
     AnalyticWriterExtensibleOptionEngine, set_analytic_writer_extensible_option_engine,
+};
+pub use mceverestengine::{
+    EverestMultiPathPricer, MCEverestEngine, MakeMcEverestEngine, set_mc_everest_engine,
 };

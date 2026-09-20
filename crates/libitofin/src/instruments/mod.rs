@@ -21,6 +21,7 @@ mod continuousaveragingasianoption;
 mod creditdefaultswap;
 mod discreteaveragingasianoption;
 mod doublebarrieroption;
+mod everestoption;
 mod fixedvsfloatingswap;
 mod floatfloatswap;
 mod forwardrateagreement;
@@ -101,6 +102,7 @@ pub use discreteaveragingasianoption::{
 pub use doublebarrieroption::{
     DoubleBarrierArguments, DoubleBarrierOption, DoubleBarrierType, double_barrier_triggered,
 };
+pub use everestoption::{EverestArguments, EverestOption, EverestResults};
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
     FixedVsFloatingSwapResults, FloatingArgumentsFn,

@@ -77,11 +77,11 @@ pub use credit::{IntegralCdsEngine, MidPointCdsEngine};
 pub use exotic::{
     AnalyticComplexChooserEngine, AnalyticCompoundOptionEngine, AnalyticEuropeanMargrabeEngine,
     AnalyticHolderExtensibleOptionEngine, AnalyticSimpleChooserEngine,
-    AnalyticTwoAssetCorrelationEngine, AnalyticWriterExtensibleOptionEngine,
-    set_analytic_complex_chooser_engine, set_analytic_compound_option_engine,
+    AnalyticTwoAssetCorrelationEngine, AnalyticWriterExtensibleOptionEngine, MCEverestEngine,
+    MakeMcEverestEngine, set_analytic_complex_chooser_engine, set_analytic_compound_option_engine,
     set_analytic_european_margrabe_engine, set_analytic_holder_extensible_option_engine,
     set_analytic_simple_chooser_engine, set_analytic_two_asset_correlation_engine,
-    set_analytic_writer_extensible_option_engine,
+    set_analytic_writer_extensible_option_engine, set_mc_everest_engine,
 };
 pub use forward::{
     AnalyticForwardPerformanceVanillaEngine, AnalyticForwardVanillaEngine,
