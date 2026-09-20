@@ -636,7 +636,7 @@ mod tests {
     use crate::time::period::Period;
     use crate::time::schedule::MakeSchedule;
     use crate::time::timeunit::TimeUnit;
-    use crate::types::{Integer, Rate, Spread, Volatility};
+    use crate::types::{Integer, Rate, Real, Spread, Volatility};
 
     const SETTLEMENT_DAYS: Integer = 2;
 
@@ -1179,9 +1179,7 @@ mod tests {
     /// `testImpliedVolatility` (`swaption.cpp:825`): recover the input Black
     /// flat vol from Spot NPV via [`Swaption::implied_volatility`] @ 1e-8,
     /// Physical settlement, skipping zero-price bracket cases QL also skips.
-    /// Cash/`ParYieldCurve` arm in
-    /// [`implied_volatility_recovers_cash_par_yield_black_vol`]; Forward / OIS
-    /// deferred; Normal arm in
+    /// Cash/`ParYieldCurve`, Forward, and OIS arms in sibling pins; Normal in
     /// [`implied_volatility_recovers_the_input_normal_vol`].
     #[test]
     fn implied_volatility_recovers_the_input_black_vol() {
@@ -1396,6 +1394,164 @@ mod tests {
                         (value - value2).abs() <= tolerance,
                         "Cash ParYield implied {implied} vs input {vol}: \
                          price {value} vs reprice {value2} ({swap_type:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reduced Forward-price arm of `testImpliedVolatility` (`swaption.cpp:835`):
+    /// invert from the Black engine's `forwardPrice` additional result with
+    /// [`SwaptionPriceType::Forward`] @ 1e-8, Physical settlement.
+    #[test]
+    fn implied_volatility_recovers_forward_price_black_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let exercise_date = vars.years(vars.today, 5);
+        let start_date = vars.spot(exercise_date);
+        let length = 10;
+        let strike = 0.05;
+        let vols = [0.05, 0.10, 0.20];
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            for vol in vols {
+                let make_swap = || {
+                    vars.make_vanilla(start_date, length, strike, 0.0, swap_type)
+                        .into_fixed_vs_floating()
+                };
+                let make = |v| {
+                    vars.make_swaption(
+                        make_swap(),
+                        exercise_date,
+                        v,
+                        SettlementType::Physical,
+                        SettlementMethod::PhysicalOTC,
+                    )
+                };
+                let mut swaption = make(vol);
+                let value: Real = swaption.result("forwardPrice").unwrap();
+                let implied = match swaption.implied_volatility(
+                    value,
+                    vars.curve.clone(),
+                    0.10,
+                    tolerance,
+                    100,
+                    1.0e-7,
+                    4.0,
+                    VolatilityType::ShiftedLognormal,
+                    0.0,
+                    crate::instruments::SwaptionPriceType::Forward,
+                ) {
+                    Ok(implied) => implied,
+                    Err(_) => {
+                        let mut zero = make(0.0);
+                        let value2: Real = zero.result("forwardPrice").unwrap();
+                        if (value - value2).abs() < tolerance {
+                            continue;
+                        }
+                        panic!(
+                            "Forward implied vol failed to bracket: \
+                             {swap_type:?} vol={vol} forwardPrice={value}"
+                        );
+                    }
+                };
+                if (implied - vol).abs() > tolerance {
+                    let mut check = make(implied);
+                    let value2: Real = check.result("forwardPrice").unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "Forward implied {implied} vs input {vol}: \
+                         forwardPrice {value} vs reprice {value2} ({swap_type:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reduced Spot Physical arm of `testImpliedVolatilityOis`
+    /// (`swaption.cpp:921`): Eonia OIS underlying, DiscountCurve-default IV
+    /// helper via Physical settlement @ 1e-8.
+    #[test]
+    fn implied_volatility_recovers_ois_spot_black_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let exercise_date = vars.years(vars.today, 5);
+        let start_date = vars.spot(exercise_date);
+        let length = 10;
+        let strike = 0.05;
+        let vols = [0.05, 0.10, 0.20];
+        let spreaded: Handle<dyn YieldTermStructure> = Handle::new(shared(
+            ZeroSpreadedTermStructure::new(vars.curve.clone(), make_quote_handle(-0.01).handle()),
+        )
+            as Shared<dyn YieldTermStructure>);
+        let ois_index = shared(Eonia::new(spreaded, Shared::clone(&vars.settings)));
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            for vol in vols {
+                let make_swap = || {
+                    let ois = MakeOis::new(
+                        Period::new(length, TimeUnit::Years),
+                        Shared::clone(&ois_index),
+                        Some(strike),
+                        Period::new(0, TimeUnit::Days),
+                        Shared::clone(&vars.settings),
+                    )
+                    .with_effective_date(start_date)
+                    .with_payment_frequency(Frequency::Annual)
+                    .with_fixed_leg_day_count(Vars::fixed_day_count())
+                    .with_type(swap_type)
+                    .build()
+                    .unwrap();
+                    assert_eq!(
+                        ois.fixed_vs_floating().swap_type(),
+                        swap_type,
+                        "MakeOis::with_type must stick on the built OIS"
+                    );
+                    ois.into_fixed_vs_floating()
+                };
+                let make = |v| {
+                    vars.make_swaption(
+                        make_swap(),
+                        exercise_date,
+                        v,
+                        SettlementType::Physical,
+                        SettlementMethod::PhysicalOTC,
+                    )
+                };
+                let mut swaption = make(vol);
+                let value = swaption.npv().unwrap();
+                let implied = match swaption.implied_volatility(
+                    value,
+                    vars.curve.clone(),
+                    0.10,
+                    tolerance,
+                    100,
+                    1.0e-7,
+                    4.0,
+                    VolatilityType::ShiftedLognormal,
+                    0.0,
+                    crate::instruments::SwaptionPriceType::Spot,
+                ) {
+                    Ok(implied) => implied,
+                    Err(_) => {
+                        let mut zero = make(0.0);
+                        let value2 = zero.npv().unwrap();
+                        if (value - value2).abs() < tolerance {
+                            continue;
+                        }
+                        panic!(
+                            "OIS implied vol failed to bracket: \
+                             {swap_type:?} vol={vol} price={value}"
+                        );
+                    }
+                };
+                if (implied - vol).abs() > tolerance {
+                    let mut check = make(implied);
+                    let value2 = check.npv().unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "OIS implied {implied} vs input {vol}: price {value} \
+                         vs reprice {value2} ({swap_type:?})"
                     );
                 }
             }
