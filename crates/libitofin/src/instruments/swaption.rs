@@ -23,24 +23,49 @@
 //!   [`SettlementType`], [`SettlementMethod`] and
 //!   [`check_type_and_method_consistency`]; the consistency check returns a
 //!   [`QlResult`] rather than throwing.
-//! - `impliedVolatility` (needs the unported implied-vol solver family) and the
-//!   `deepUpdate` observer optimisation are deferred; the ported tests reach
-//!   neither. [`MakeSwaption`](crate::instruments::MakeSwaption) builds vanilla
+//! - [`Swaption::implied_volatility`] pins `testImpliedVolatility` (Spot Black
+//!   arm); OIS implied-vol and Bachelier round-trips remain deferred. The
+//!   `deepUpdate` observer optimisation is also deferred.
+//!   [`MakeSwaption`](crate::instruments::MakeSwaption) builds vanilla
 //!   swaptions from a [`SwapIndex`](crate::indexes::SwapIndex).
 
 use std::any::Any;
+use std::cell::RefCell;
 
 use crate::errors::QlResult;
 use crate::event::event_has_occurred;
-use crate::exercise::Exercise;
+use crate::exercise::{Exercise, ExerciseType};
+use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
 use crate::instruments::fixedvsfloatingswap::{FixedVsFloatingSwap, FixedVsFloatingSwapArguments};
 use crate::instruments::swap::SwapType;
-use crate::pricingengine::{Arguments, GenericEngine};
+use crate::math::solver1d::{DerivativeSolver, Function1D};
+use crate::math::solvers1d::newtonsafe::NewtonSafe;
+use crate::pricingengine::{Arguments, GenericEngine, PricingEngine};
+use crate::pricingengines::swaption::{
+    BachelierSwaptionEngine, BlackSwaptionEngine, CashAnnuityModel,
+};
+use crate::quotes::{Quote, SimpleQuote};
 use crate::settings::Settings;
-use crate::shared::{Shared, SharedMut};
+use crate::shared::{Shared, SharedMut, shared};
+use crate::termstructures::volatility::VolatilityType;
+use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
+use crate::time::daycounters::actual365fixed::Actual365Fixed;
+use crate::types::{Real, Size, Volatility};
 use crate::{fail, require};
+
+/// Whether an implied-vol target is a spot NPV or a forward price
+/// (`Swaption::PriceType`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SwaptionPriceType {
+    /// Spot NPV (`Swaption::Spot`).
+    #[default]
+    Spot,
+    /// Forward price (`Swaption::Forward`); converted to spot via the discount
+    /// to the exercise date before the Newton solve.
+    Forward,
+}
 
 /// How a swaption is settled on exercise (`Settlement::Type`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -199,6 +224,151 @@ impl Swaption {
     /// The exercise schedule (`exercise()`, on the C++ `Option` base).
     pub fn exercise(&self) -> &Shared<dyn Exercise> {
         &self.exercise
+    }
+
+    /// Implied term volatility that reprices this swaption to `target_value`
+    /// (`Swaption::impliedVolatility`, `swaption.cpp:182-205`).
+    ///
+    /// Uses [`NewtonSafe`] on a temporary Black or Bachelier engine whose flat
+    /// vol is a [`SimpleQuote`], matching `ImpliedSwaptionVolHelper`. Defaults
+    /// in C++: `accuracy = 1e-4`, `max_evaluations = 100`, `min_vol = 1e-7`,
+    /// `max_vol = 4.0`, `ShiftedLognormal`, `displacement = 0.0`, Spot.
+    ///
+    /// A [`SwaptionPriceType::Forward`] target is converted to spot by
+    /// multiplying by the discount to the first exercise date.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        mut target_value: Real,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        guess: Volatility,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+        vol_type: VolatilityType,
+        displacement: Real,
+        price_type: SwaptionPriceType,
+    ) -> QlResult<Volatility> {
+        require!(!self.is_expired()?, "instrument expired");
+        require!(
+            self.exercise.exercise_type() == ExerciseType::European,
+            "not a European option"
+        );
+
+        if price_type == SwaptionPriceType::Forward {
+            let exercise_date = self.exercise.dates()[0];
+            target_value *= discount_curve
+                .current_link()?
+                .discount_date(exercise_date, false)?;
+        }
+
+        let vol = shared(SimpleQuote::new(-1.0));
+        let vol_handle = Handle::new(Shared::clone(&vol) as Shared<dyn Quote>);
+        // Match the fixture's `make_swaption` annuity model so round-trips pin
+        // against the same engine surface the suite prices with.
+        let model = CashAnnuityModel::SwapRate;
+        let mut engine: Box<dyn PricingEngine> = match vol_type {
+            VolatilityType::ShiftedLognormal => Box::new(BlackSwaptionEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                displacement,
+                model,
+                Shared::clone(&self.settings),
+            )),
+            VolatilityType::Normal => Box::new(BachelierSwaptionEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                0.0,
+                model,
+                Shared::clone(&self.settings),
+            )),
+        };
+        self.setup_arguments(engine.arguments_mut())?;
+        engine.arguments_mut().validate()?;
+
+        let failure = RefCell::new(None);
+        let helper = ImpliedSwaptionVolHelper {
+            engine,
+            vol,
+            target_value,
+            failure: &failure,
+        };
+        let solver = NewtonSafe::new().with_max_evaluations(max_evaluations);
+        let root = solver.solve_bracketed(helper, accuracy, guess, min_vol, max_vol);
+        match failure.into_inner() {
+            Some(error) => Err(error),
+            None => root,
+        }
+    }
+}
+
+/// Newton objective for [`Swaption::implied_volatility`] (`ImpliedSwaptionVolHelper`).
+struct ImpliedSwaptionVolHelper<'a> {
+    engine: Box<dyn PricingEngine>,
+    vol: Shared<SimpleQuote>,
+    target_value: Real,
+    failure: &'a RefCell<Option<crate::errors::QlError>>,
+}
+
+impl ImpliedSwaptionVolHelper<'_> {
+    fn ensure_priced(&mut self, x: Volatility) {
+        let current = self.vol.value().ok();
+        if current != Some(x) {
+            self.vol.set_value(x);
+            if let Err(error) = self.engine.calculate() {
+                self.failure.borrow_mut().get_or_insert(error);
+            }
+        }
+    }
+
+    fn npv(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.value)
+    }
+
+    fn vega(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.additional_results.get("vega"))
+            .and_then(|v| v.as_ref().downcast_ref::<Real>().copied())
+    }
+}
+
+impl Function1D for ImpliedSwaptionVolHelper<'_> {
+    fn value(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.npv() {
+            Some(value) => value - self.target_value,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new(
+                        "no results returned from pricing engine",
+                        file!(),
+                        line!(),
+                    )
+                });
+                Real::NAN
+            }
+        }
+    }
+
+    fn derivative(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.vega() {
+            Some(vega) => vega,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new("vega not provided", file!(), line!())
+                });
+                Real::NAN
+            }
+        }
     }
 }
 
