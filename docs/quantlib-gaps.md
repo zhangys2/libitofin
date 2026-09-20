@@ -31,7 +31,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Cap/floor Black extras | `CapFloor`, Black engine | bindings | true | partial | Cached NPV/vega + δ + `impliedVolatility` + ATM/parity + `optionlet(i)` + `optionletsVega`/`StdDev` + `deepUpdate` invalidation pinned; remaining: Python/FFI `optionlet` |
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` | true | partial | Cached NPV/vega/cash-settled + Spot/Forward Physical Black + reduced IBOR/OIS Spot/Cash/Forward (all reduced cartesian cells) + reduced Normal `impliedVolatility` pinned; remaining: full IV grid |
 | Rates | Gaussian1d / float–float / nonstandard swaption | `Gaussian1d*SwaptionEngine`, `FloatFloatSwaption`, `NonstandardSwaption` | `swaption.cpp`, `gaussian1dswaption.cpp` | false | none | HW/G2 engines only |
-| Rates | Bermudan OIS swaption (HW/G2) | OIS-underlying `Swaption` | `bermudanswaption.cpp` OIS cases | true | none | IBOR Bermudan cached; OIS cases not |
+| Rates | Bermudan OIS swaption (HW/G2) | OIS-underlying `Swaption` | `bermudanswaption.cpp` OIS cases | true | partial | HW FDM `testBermudanOISSwaptionWithHW` + Simple/Compound averaging feature pin; G2 + lockout deferred |
 | Rates | Vanilla IRS extras | `VanillaSwap` | `swap.cpp` (beyond cached/fair) | true | partial | Cached + fair pinned; in-arrears/stubs open |
 | Rates | OIS bootstrap / cached NPV | `OvernightIndexedSwap`, `MakeOIS` | `overnightindexedswap.cpp` | true | partial | Compound bootstrap pinned; arithmetic/lookback siblings + type-level cached NPV deferred |
 | Rates | Float–float basis swap | `FloatFloatSwap` | `floatfloatswap.cpp` | true | partial | Identity/fair-spread only |

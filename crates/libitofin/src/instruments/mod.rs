@@ -106,7 +106,7 @@ pub use doublebarrieroption::{
 pub use everestoption::{EverestArguments, EverestOption, EverestResults};
 pub use fixedvsfloatingswap::{
     FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FixedVsFloatingSwapEngine,
-    FixedVsFloatingSwapResults, FloatingArgumentsFn,
+    FixedVsFloatingSwapResults, FloatingArgumentsFn, OvernightIndexedExtras,
 };
 pub use floatfloatswap::FloatFloatSwap;
 pub use forwardrateagreement::ForwardRateAgreement;

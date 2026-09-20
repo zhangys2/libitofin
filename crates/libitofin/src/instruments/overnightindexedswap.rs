@@ -78,7 +78,7 @@ use crate::indexes::OvernightIndex;
 use crate::indexes::interestrateindex::InterestRateIndex;
 use crate::instrument::{Instrument, InstrumentBase};
 use crate::instruments::fixedvsfloatingswap::{
-    FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FloatingArgumentsFn,
+    FixedVsFloatingSwap, FixedVsFloatingSwapArguments, FloatingArgumentsFn, OvernightIndexedExtras,
 };
 use crate::instruments::swap::SwapType;
 use crate::pricingengine::{Arguments, Results};
@@ -202,7 +202,7 @@ impl OvernightIndexedSwap {
         let floating_arguments: FloatingArgumentsFn =
             Box::new(move |_swap, args| fill_floating_arguments(&coupons, args));
 
-        let base = FixedVsFloatingSwap::new(
+        let mut base = FixedVsFloatingSwap::new(
             swap_type,
             fixed_nominals,
             fixed_schedule,
@@ -220,6 +220,12 @@ impl OvernightIndexedSwap {
             floating_arguments,
             settings,
         )?;
+        base.attach_overnight_extras(OvernightIndexedExtras {
+            payment_lag,
+            payment_calendar: resolved_calendar.clone(),
+            payment_adjustment,
+            averaging_method,
+        });
 
         Ok(OvernightIndexedSwap {
             base,
@@ -246,12 +252,11 @@ impl OvernightIndexedSwap {
     ///
     /// The Rust counterpart of C++'s `shared_ptr<OvernightIndexedSwap>` upcast
     /// to `shared_ptr<FixedVsFloatingSwap>` when a swaption takes ownership of
-    /// its underlying (`blackswaptionengine`). The OIS-specific members
-    /// (overnight index, payment lag, calendar, averaging) drive construction
-    /// only and are not read on the swaption engine's pricing path, and the one
-    /// override, `setupFloatingArguments`, lives in the base as a
+    /// its underlying. Overnight lag / calendar / averaging ride along on
+    /// [`FixedVsFloatingSwap::overnight_extras`] so FDM rebuild can recover
+    /// them; `setupFloatingArguments` lives on the base as a
     /// [`FloatingArgumentsFn`](crate::instruments::fixedvsfloatingswap::FloatingArgumentsFn)
-    /// closure, so moving the base out preserves behaviour.
+    /// closure.
     pub fn into_fixed_vs_floating(self) -> FixedVsFloatingSwap {
         self.base
     }
