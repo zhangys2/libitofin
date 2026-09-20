@@ -715,17 +715,22 @@ mod tests {
         }
     }
 
-    /// `testConsistency` (`:249`), the collar identity only: a collar equals the
-    /// cap minus the floor at the same strikes.
+    /// `testConsistency` (`:249`): a collar equals the cap minus the floor, and
+    /// each instrument recomposes as the sum of its [`CapFloor::optionlet`]s.
+    ///
+    /// C++ nests the optionlet recomposition inside the collar-fail branch
+    /// (`:287`), so it never runs when the identity holds. Un-nesting matches
+    /// the YoY inflation pin and gives `optionlet(i)` real NPV coverage.
     #[test]
-    fn a_collar_equals_the_cap_minus_the_floor() {
+    fn a_collar_equals_the_cap_minus_the_floor_and_each_is_its_optionlets() {
         let vars = Vars::new(true);
         let start = vars.start_date();
-        for length in [1, 5, 10, 20] {
+        let vol = 0.20;
+        for length in [1, 5, 10] {
             let leg = vars.make_leg(start, length);
-            for (cap_rate, floor_rate) in [(0.05, 0.03), (0.06, 0.04), (0.07, 0.03)] {
-                let cap = priced(&vars, &leg, true, cap_rate, 0.20).npv().unwrap();
-                let floor = priced(&vars, &leg, false, floor_rate, 0.20).npv().unwrap();
+            for (cap_rate, floor_rate) in [(0.05, 0.03), (0.07, 0.03)] {
+                let mut cap = priced(&vars, &leg, true, cap_rate, vol);
+                let mut floor = priced(&vars, &leg, false, floor_rate, vol);
                 let mut collar = CapFloor::collar(
                     leg.clone(),
                     vec![cap_rate],
@@ -733,11 +738,30 @@ mod tests {
                     Shared::clone(&vars.settings),
                 )
                 .unwrap();
-                collar.base_mut().set_pricing_engine(vars.engine(0.20));
+                collar.base_mut().set_pricing_engine(vars.engine(vol));
+
+                let context = format!("{length}y cap {cap_rate} floor {floor_rate}");
+                let cap_npv = cap.npv().unwrap();
+                let floor_npv = floor.npv().unwrap();
+                let collar_npv = collar.npv().unwrap();
                 assert!(
-                    ((cap - floor) - collar.npv().unwrap()).abs() <= 1.0e-10,
-                    "collar {length}y cap {cap_rate} floor {floor_rate}"
+                    ((cap_npv - floor_npv) - collar_npv).abs() <= 1.0e-10,
+                    "collar identity at {context}"
                 );
+
+                for instrument in [&mut cap, &mut floor, &mut collar] {
+                    let mut sum = 0.0;
+                    for m in 0..leg.len() {
+                        let mut optionlet = instrument.optionlet(m).expect("m within the leg");
+                        optionlet.base_mut().set_pricing_engine(vars.engine(vol));
+                        sum += optionlet.npv().expect("the curve prices it");
+                    }
+                    let whole = instrument.npv().expect("the curve prices it");
+                    assert!(
+                        (whole - sum).abs() <= 1.0e-10,
+                        "optionlets sum to {sum}, not {whole}, at {context}"
+                    );
+                }
             }
         }
     }

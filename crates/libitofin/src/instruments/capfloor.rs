@@ -26,7 +26,8 @@
 //! - [`MakeCapFloor`](super::MakeCapFloor) builds the market cap/floor and
 //!   [`CapFloor::last_floating_rate_coupon`] exposes the trailing coupon the
 //!   optionlet stripper reads; [`CapFloor::implied_volatility`] pins
-//!   `testImpliedVolatility`. `optionlet` and `deepUpdate` remain unported.
+//!   `testImpliedVolatility`; [`CapFloor::optionlet`] pins the
+//!   `testConsistency` recomposition. `deepUpdate` remains unported.
 //! - The `CapFloor::arguments` bundle carries `start_dates` (read by the analytic
 //!   Hull-White engine to form each optionlet's exercise maturity, #438); the C++
 //!   `spreads` and `indexes` are filled but unread by any ported engine, so they
@@ -231,6 +232,45 @@ impl CapFloor {
     /// off. `None` only for an empty leg, which the constructors never produce.
     pub fn last_floating_rate_coupon(&self) -> Option<&Shared<IborCoupon>> {
         self.coupons.last()
+    }
+
+    /// The `i`-th optionlet as a cap/floor over that one coupon
+    /// (`CapFloor::optionlet`, `capfloor.cpp:195-208`).
+    ///
+    /// Keeps the parent's type and carries only the strikes that type uses, so
+    /// summing the optionlets' NPVs recomposes the parent's
+    /// (`testConsistency` recomposition, un-nested here as in the YoY pin).
+    ///
+    /// # Errors
+    ///
+    /// When `i` is past the end of the leg.
+    pub fn optionlet(&self, i: usize) -> QlResult<CapFloor> {
+        require!(
+            i < self.coupons.len(),
+            "optionlet {i} does not exist, only {}",
+            self.coupons.len()
+        );
+        let mut cap_rates = Vec::new();
+        let mut floor_rates = Vec::new();
+        if matches!(
+            self.cap_floor_type,
+            CapFloorType::Cap | CapFloorType::Collar
+        ) {
+            cap_rates.push(self.cap_rates[i]);
+        }
+        if matches!(
+            self.cap_floor_type,
+            CapFloorType::Floor | CapFloorType::Collar
+        ) {
+            floor_rates.push(self.floor_rates[i]);
+        }
+        CapFloor::new(
+            self.cap_floor_type,
+            vec![Shared::clone(&self.coupons[i])],
+            cap_rates,
+            floor_rates,
+            Shared::clone(&self.settings),
+        )
     }
 
     /// The leg's earliest accrual start (`startDate`).
@@ -539,6 +579,25 @@ mod tests {
         assert_eq!(collar.cap_floor_type(), CapFloorType::Collar);
         assert_eq!(collar.cap_rates(), vec![0.06; n].as_slice());
         assert_eq!(collar.floor_rates(), vec![0.02; n].as_slice());
+    }
+
+    /// `optionlet(i)` keeps the parent's type and carries that coupon's strike
+    /// (`capfloor.cpp:195-208`).
+    #[test]
+    fn an_optionlet_carries_one_coupon_and_its_own_strike() {
+        let settings = settings_on(Date::new(2, Month::January, 2026));
+        let coupons = leg(settings.clone());
+        let n = coupons.len();
+        let collar = CapFloor::collar(coupons, vec![0.06], vec![0.02], settings).unwrap();
+
+        let optionlet = collar.optionlet(1).unwrap();
+        assert_eq!(optionlet.cap_floor_type(), CapFloorType::Collar);
+        assert_eq!(optionlet.coupons().len(), 1);
+        assert_eq!(optionlet.cap_rates(), [0.06].as_slice());
+        assert_eq!(optionlet.floor_rates(), [0.02].as_slice());
+
+        let err = collar.optionlet(n).err().expect("past the leg");
+        assert!(err.message().contains("does not exist"), "err was: {err}");
     }
 
     #[test]
