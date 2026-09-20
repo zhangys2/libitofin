@@ -205,14 +205,16 @@ impl PricingEngine for FdHullWhiteSwaptionEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cashflows::RateAveraging;
     use crate::exercise::{BermudanExercise, EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::indexes::IborIndex;
     use crate::indexes::InterestRateIndex;
-    use crate::indexes::ibor::Euribor;
+    use crate::indexes::ibor::{Eonia, Euribor};
     use crate::instrument::Instrument;
     use crate::instruments::{
-        FixedVsFloatingSwap, SettlementMethod, SettlementType, SwapType, Swaption, VanillaSwap,
+        FixedVsFloatingSwap, OvernightIndexedSwap, SettlementMethod, SettlementType, SwapType,
+        Swaption, VanillaSwap,
     };
     use crate::interestrate::Compounding;
     use crate::pricingengines::swap::DiscountingSwapEngine;
@@ -593,5 +595,186 @@ mod tests {
                 (got - cached).abs()
             );
         }
+    }
+
+    /// Port of `bermudanswaption.cpp` `testBermudanOISSwaptionWithHW`.
+    ///
+    /// Under a flat single curve, OIS Bermudan FDM values are positive,
+    /// monotone ITM > ATM > OTM, and within 5% relative of the VanillaSwap
+    /// Bermudan on the same fixed-leg economics.
+    #[test]
+    fn bermudan_ois_swaption_with_hw() {
+        let today = Date::new(15, Month::February, 2002);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        settings.set_using_at_par_coupons(false);
+
+        let calendar = Target::new();
+        let settlement = Date::new(19, Month::February, 2002);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            0.04875825,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let euribor: Shared<IborIndex> =
+            shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+        let eonia = shared(Eonia::new(curve.clone(), Shared::clone(&settings)));
+
+        let start = calendar.advance_by_period(
+            settlement,
+            Period::new(1, TimeUnit::Years),
+            BusinessDayConvention::Following,
+            false,
+        );
+        let maturity = calendar.advance_by_period(
+            start,
+            Period::new(5, TimeUnit::Years),
+            BusinessDayConvention::Following,
+            false,
+        );
+        let fixed_schedule = MakeSchedule::new()
+            .from(start)
+            .to(maturity)
+            .with_frequency(Frequency::Annual)
+            .with_calendar(calendar.clone())
+            .with_convention(BusinessDayConvention::Unadjusted)
+            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .forwards()
+            .end_of_month(false)
+            .build();
+        let floating_schedule = MakeSchedule::new()
+            .from(start)
+            .to(maturity)
+            .with_frequency(Frequency::Semiannual)
+            .with_calendar(calendar.clone())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
+            .forwards()
+            .end_of_month(false)
+            .build();
+
+        let make_vanilla = |fixed_rate: Real| -> SharedMut<FixedVsFloatingSwap> {
+            let floating_dc = euribor.day_counter().clone();
+            shared_mut(
+                VanillaSwap::new(
+                    SwapType::Payer,
+                    1000.0,
+                    fixed_schedule.clone(),
+                    fixed_rate,
+                    Thirty360::with_convention(Convention::BondBasis),
+                    floating_schedule.clone(),
+                    Shared::clone(&euribor),
+                    0.0,
+                    floating_dc,
+                    None,
+                    Shared::clone(&settings),
+                )
+                .unwrap()
+                .into_fixed_vs_floating(),
+            )
+        };
+        let make_ois = |fixed_rate: Real| -> SharedMut<FixedVsFloatingSwap> {
+            shared_mut(
+                OvernightIndexedSwap::with_nominal(
+                    SwapType::Payer,
+                    1000.0,
+                    fixed_schedule.clone(),
+                    fixed_rate,
+                    Thirty360::with_convention(Convention::BondBasis),
+                    floating_schedule.clone(),
+                    Shared::clone(&eonia),
+                    0.0,
+                    0,
+                    BusinessDayConvention::ModifiedFollowing,
+                    None,
+                    RateAveraging::Compound,
+                    Shared::clone(&settings),
+                )
+                .unwrap()
+                .into_fixed_vs_floating(),
+            )
+        };
+
+        let discounting = shared_mut(DiscountingSwapEngine::new(
+            curve.clone(),
+            None,
+            None,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        let atm_swap = make_vanilla(0.0);
+        atm_swap
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(SharedMut::clone(&discounting));
+        let atm_rate = atm_swap.borrow_mut().fair_rate().unwrap();
+
+        let exercise_dates: Vec<Date> = make_ois(atm_rate)
+            .borrow()
+            .fixed_leg()
+            .iter()
+            .map(|flow| {
+                flow.as_coupon()
+                    .expect("fixed leg carries coupons")
+                    .accrual_start_date()
+            })
+            .collect();
+        let exercise =
+            shared(BermudanExercise::new(exercise_dates, false).unwrap()) as Shared<dyn Exercise>;
+
+        let hw = HullWhite::new(curve, 0.048696, 0.0058904).unwrap();
+        let engine = shared_mut(FdHullWhiteSwaptionEngine::new(hw)) as SharedMut<dyn PricingEngine>;
+
+        let price = |swap: SharedMut<FixedVsFloatingSwap>| {
+            let mut swaption = Swaption::new(
+                swap,
+                Shared::clone(&exercise),
+                SettlementType::Physical,
+                SettlementMethod::PhysicalOTC,
+                Shared::clone(&settings),
+            );
+            swaption
+                .base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine));
+            swaption.npv().unwrap()
+        };
+
+        let itm_ois = price(make_ois(0.8 * atm_rate));
+        let atm_ois = price(make_ois(atm_rate));
+        let otm_ois = price(make_ois(1.2 * atm_rate));
+        assert!(itm_ois > 0.0, "ITM OIS Bermudan non-positive: {itm_ois}");
+        assert!(atm_ois > 0.0, "ATM OIS Bermudan non-positive: {atm_ois}");
+        assert!(otm_ois > 0.0, "OTM OIS Bermudan non-positive: {otm_ois}");
+        assert!(
+            itm_ois > atm_ois,
+            "ITM OIS {itm_ois} should exceed ATM {atm_ois}"
+        );
+        assert!(
+            atm_ois > otm_ois,
+            "ATM OIS {atm_ois} should exceed OTM {otm_ois}"
+        );
+
+        let rel_diff = |a: Real, b: Real| (a - b).abs() / b.abs().max(1.0e-10);
+        let rel_tol = 0.05;
+        let itm_vs = price(make_vanilla(0.8 * atm_rate));
+        let atm_vs = price(make_vanilla(atm_rate));
+        let otm_vs = price(make_vanilla(1.2 * atm_rate));
+        assert!(
+            rel_diff(itm_ois, itm_vs) <= rel_tol,
+            "ITM OIS {itm_ois} vs Vanilla {itm_vs}, rel {}",
+            rel_diff(itm_ois, itm_vs)
+        );
+        assert!(
+            rel_diff(atm_ois, atm_vs) <= rel_tol,
+            "ATM OIS {atm_ois} vs Vanilla {atm_vs}, rel {}",
+            rel_diff(atm_ois, atm_vs)
+        );
+        assert!(
+            rel_diff(otm_ois, otm_vs) <= rel_tol,
+            "OTM OIS {otm_ois} vs Vanilla {otm_vs}, rel {}",
+            rel_diff(otm_ois, otm_vs)
+        );
     }
 }

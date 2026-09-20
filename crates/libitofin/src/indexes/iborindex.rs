@@ -384,6 +384,15 @@ impl OvernightIndex {
         self.0.clone()
     }
 
+    /// Re-wraps an overnight-configured [`IborIndex`] as [`OvernightIndex`].
+    ///
+    /// Used when an OIS has been erased to [`FixedVsFloatingSwap`] (which stores
+    /// only the ibor face) and an FDM inner-value rebuild needs the overnight
+    /// clone branch of QuantLib's `FdmAffineModelSwapInnerValue`.
+    pub fn from_ibor(index: Shared<IborIndex>) -> OvernightIndex {
+        OvernightIndex(index)
+    }
+
     /// Re-curves the overnight index onto a different forwarding handle,
     /// preserving its configuration (the C++ `clone(h)` override that
     /// `OISRateHelper::initialize` calls, `oisratehelper.cpp:114`). The result

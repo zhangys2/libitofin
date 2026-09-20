@@ -8,10 +8,13 @@
 //!
 //! ## Scope
 //!
-//! Vanilla Ibor swaps. G2 `getState` returns the two factor coordinates;
-//! Hull–White `getState` returns the short rate `x + φ(t)` (C++ specializations
-//! in `fdmaffinemodelswapinnervalue.cpp`). The Overnight-index rebuild branch
-//! is deferred.
+//! Vanilla Ibor and overnight-indexed swaps. G2 `getState` returns the two
+//! factor coordinates; Hull–White `getState` returns the short rate
+//! `x + φ(t)` (C++ specializations in `fdmaffinemodelswapinnervalue.cpp`).
+//! An overnight underlying (1*Days ibor tenor, the erased OIS face) rebuilds
+//! as [`OvernightIndexedSwap`] with compound averaging and zero payment lag —
+//! the HW Bermudan OIS oracle defaults; telescopic / lookback / lockout stay
+//! deferred with the overnight leg.
 //!
 //! ## Divergences from QuantLib
 //!
@@ -19,13 +22,17 @@
 //! - Exercise times are a `Vec<(Time, Date)>` with exact `Time` match (C++
 //!   `std::map<Time, Date>`).
 //! - Coupon `amount()` / discount failures panic with a message (C++ throws).
+//! - OIS identity uses the 1*Days tenor heuristic (C++
+//!   `dynamic_pointer_cast<OvernightIndexedSwap>`); averaging / lag /
+//!   lockout metadata erased by `into_fixed_vs_floating` are defaulted.
 
 use std::cell::RefCell;
 
+use crate::cashflows::RateAveraging;
 use crate::errors::QlResult;
 use crate::handle::RelinkableHandle;
-use crate::indexes::InterestRateIndex;
-use crate::instruments::{FixedVsFloatingSwap, SwapType, VanillaSwap};
+use crate::indexes::{InterestRateIndex, OvernightIndex};
+use crate::instruments::{FixedVsFloatingSwap, OvernightIndexedSwap, SwapType, VanillaSwap};
 use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
 use crate::methods::finitedifferences::operators::FdmLinearOpIterator;
@@ -34,10 +41,60 @@ use crate::shared::{Shared, SharedMut, shared};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::calendars::nullcalendar::NullCalendar;
 use crate::time::date::Date;
+use crate::time::period::Period;
+use crate::time::timeunit::TimeUnit;
 use crate::types::{Real, Size, Time};
 
 use super::fdmaffinemodeltermstructure::FdmAffineModelTermStructure;
 use super::fdminnervaluecalculator::FdmInnerValueCalculator;
+
+/// Rebuilds `swap` onto `fwd_ts` for FDM exercise NPV
+/// (`FdmAffineModelSwapInnerValue` ctor lambda, `fdmaffinemodelswapinnervalue.hpp`).
+///
+/// Overnight underlyings (1*Days tenor) become [`OvernightIndexedSwap`];
+/// everything else becomes [`VanillaSwap`].
+fn rebuild_swap_on_forecast(
+    swap: &FixedVsFloatingSwap,
+    fwd_ts: &RelinkableHandle<dyn YieldTermStructure>,
+) -> QlResult<FixedVsFloatingSwap> {
+    let settings = Shared::clone(swap.ibor_index().base().settings());
+    let overnight = swap.ibor_index().tenor() == Period::new(1, TimeUnit::Days);
+    if overnight {
+        let overnight_index = shared(OvernightIndex::from_ibor(shared(
+            swap.ibor_index().clone_with(fwd_ts.handle()),
+        )));
+        return Ok(OvernightIndexedSwap::with_nominal(
+            swap.swap_type(),
+            swap.nominal()?,
+            swap.fixed_schedule().clone(),
+            swap.fixed_rate(),
+            swap.fixed_day_count().clone(),
+            swap.floating_schedule().clone(),
+            overnight_index,
+            swap.spread(),
+            0,
+            swap.payment_convention(),
+            Some(swap.floating_schedule().calendar().clone()),
+            RateAveraging::Compound,
+            settings,
+        )?
+        .into_fixed_vs_floating());
+    }
+    Ok(VanillaSwap::new(
+        swap.swap_type(),
+        swap.nominal()?,
+        swap.fixed_schedule().clone(),
+        swap.fixed_rate(),
+        swap.fixed_day_count().clone(),
+        swap.floating_schedule().clone(),
+        shared(swap.ibor_index().clone_with(fwd_ts.handle())),
+        swap.spread(),
+        swap.floating_day_count().clone(),
+        Some(swap.payment_convention()),
+        settings,
+    )?
+    .into_fixed_vs_floating())
+}
 
 /// G2++ affine-model swap inner value (`fdmaffinemodelswapinnervalue.hpp`).
 pub struct FdmAffineModelSwapInnerValue {
@@ -55,7 +112,7 @@ pub struct FdmAffineModelSwapInnerValue {
 
 impl FdmAffineModelSwapInnerValue {
     /// `FdmAffineModelSwapInnerValue(disModel, fwdModel, swap, exerciseDates,
-    /// mesher, direction)` — vanilla Ibor rebuild only.
+    /// mesher, direction)` — Ibor or overnight rebuild onto `fwdTs_`.
     ///
     /// The floating index is cloned onto an empty [`RelinkableHandle`] that
     /// [`inner_value`](FdmInnerValueCalculator::inner_value) fills with an
@@ -74,20 +131,7 @@ impl FdmAffineModelSwapInnerValue {
     ) -> QlResult<FdmAffineModelSwapInnerValue> {
         let dis_ts = RelinkableHandle::empty();
         let fwd_ts = RelinkableHandle::empty();
-        let settings = Shared::clone(swap.ibor_index().base().settings());
-        let rebuilt = VanillaSwap::new(
-            swap.swap_type(),
-            swap.nominal()?,
-            swap.fixed_schedule().clone(),
-            swap.fixed_rate(),
-            swap.fixed_day_count().clone(),
-            swap.floating_schedule().clone(),
-            shared(swap.ibor_index().clone_with(fwd_ts.handle())),
-            swap.spread(),
-            swap.floating_day_count().clone(),
-            Some(swap.payment_convention()),
-            settings,
-        )?;
+        let rebuilt = rebuild_swap_on_forecast(swap, &fwd_ts)?;
 
         Ok(FdmAffineModelSwapInnerValue {
             dis_ts,
@@ -96,7 +140,7 @@ impl FdmAffineModelSwapInnerValue {
             fwd_affine: RefCell::new(None),
             dis_model,
             fwd_model,
-            swap: rebuilt.into_fixed_vs_floating(),
+            swap: rebuilt,
             exercise_dates,
             mesher,
             direction,
@@ -230,7 +274,8 @@ pub struct FdmHullWhiteSwapInnerValue {
 
 impl FdmHullWhiteSwapInnerValue {
     /// `FdmAffineModelSwapInnerValue<HullWhite>(disModel, fwdModel, swap,
-    /// exerciseDates, mesher, direction)` — vanilla Ibor rebuild only.
+    /// exerciseDates, mesher, direction)` — Ibor or overnight rebuild onto
+    /// `fwdTs_`.
     ///
     /// # Errors
     ///
@@ -245,20 +290,7 @@ impl FdmHullWhiteSwapInnerValue {
     ) -> QlResult<FdmHullWhiteSwapInnerValue> {
         let dis_ts = RelinkableHandle::empty();
         let fwd_ts = RelinkableHandle::empty();
-        let settings = Shared::clone(swap.ibor_index().base().settings());
-        let rebuilt = VanillaSwap::new(
-            swap.swap_type(),
-            swap.nominal()?,
-            swap.fixed_schedule().clone(),
-            swap.fixed_rate(),
-            swap.fixed_day_count().clone(),
-            swap.floating_schedule().clone(),
-            shared(swap.ibor_index().clone_with(fwd_ts.handle())),
-            swap.spread(),
-            swap.floating_day_count().clone(),
-            Some(swap.payment_convention()),
-            settings,
-        )?;
+        let rebuilt = rebuild_swap_on_forecast(swap, &fwd_ts)?;
 
         Ok(FdmHullWhiteSwapInnerValue {
             dis_ts,
@@ -267,7 +299,7 @@ impl FdmHullWhiteSwapInnerValue {
             fwd_affine: RefCell::new(None),
             dis_model,
             fwd_model,
-            swap: rebuilt.into_fixed_vs_floating(),
+            swap: rebuilt,
             exercise_dates,
             mesher,
             direction,

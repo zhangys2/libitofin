@@ -116,6 +116,7 @@ credit.
 | FdmHullWhiteSolver | `FdmHullWhiteSolver` | `fdmhullwhitesolver` | constant→discount-ish; zero payoff→0 |
 | FdmHullWhiteSwapInnerValue | `FdmHullWhiteSwapInnerValue` | `fdmaffinemodelswapinnervalue` HW spec | ATM≈0; deep ITM payer>0; getState = short rate |
 | FdHullWhiteSwaptionEngine | `FdHullWhiteSwaptionEngine` (Douglas default) | `fdhullwhiteswaptionengine` / `testCachedValues` | ITM European>0; ≈ Jamshidian; Bermudan≥European; cached FDM @ 1e-4 (non-par) |
+| Bermudan OIS (HW FDM) | OIS-underlying `Swaption` + overnight FDM rebuild | `bermudanswaption.cpp` `testBermudanOISSwaptionWithHW` | ITM/ATM/OTM >0, monotone; vs Vanilla Bermudan @ 5% rel |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | G2 two-factor tree | `TwoFactorShortRateTree` / `G2::tree` | `twofactormodel` / `g2` | discount=exp(-(φ+x+y)dt); root φ-only; product size; builds under analytic φ |
