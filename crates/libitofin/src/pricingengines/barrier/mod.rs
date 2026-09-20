@@ -8,6 +8,7 @@ mod analyticbinarybarrierengine;
 mod analyticdoublebarrierengine;
 mod analyticpartialtimebarrieroptionengine;
 mod analyticsoftbarrierengine;
+mod analytictwoassetbarrierengine;
 mod binomialbarrierengine;
 mod fdblackscholesbarrierengine;
 mod fdblackscholesrebateengine;
@@ -30,6 +31,9 @@ pub use analyticpartialtimebarrieroptionengine::{
     AnalyticPartialTimeBarrierOptionEngine, set_analytic_partial_time_barrier_engine,
 };
 pub use analyticsoftbarrierengine::{AnalyticSoftBarrierEngine, set_analytic_soft_barrier_engine};
+pub use analytictwoassetbarrierengine::{
+    AnalyticTwoAssetBarrierEngine, set_analytic_two_asset_barrier_engine,
+};
 pub use binomialbarrierengine::{BinomialBarrierEngine, set_binomial_barrier_engine};
 pub use fdblackscholesbarrierengine::{
     FdBlackScholesBarrierEngine, set_fd_black_scholes_barrier_engine,
