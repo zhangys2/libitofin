@@ -170,6 +170,7 @@ credit.
 | Double-barrier Heston FD | `FdHestonDoubleBarrierEngine` 251×76×3 | `doublebarrieroption.cpp` `testEuropeanHaugValues` | KnockOut subset @ 0.025 (near-Black σ=0.001); KnockIn / leverage deferred |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |
+| Single-barrier Vanna/Volga FX | `VannaVolgaBarrierEngine` + `AnalyticBarrierEngine` | `barrieroption.cpp` `testVannaVolgaSimpleBarrierValues` | FX subset (UpOut/UpIn/DownOut/DownIn, T=1/2) @ 1e-4 (`adaptVanDelta`) |
 | Barrier knock-in/out parity | `AnalyticBarrierEngine` + `AnalyticEuropeanEngine` | `barrieroption.cpp` `testParity` | DownIn + DownOut ≡ European call @ 1e-7 (Actual360 and Business252 vol) |
 | Barrier put-call symmetry | `AnalyticBarrierEngine` | `barrieroption.cpp` `testPutCallSymmetry` | inverted knock-out put ≡ scaled call @ 1e-4 (DownOut/UpOut pairs) |
 | Barrier Haug values | `AnalyticBarrierEngine` | `barrieroption.cpp` `testHaugValues` | European table @ 1e-4 (rebate 3) |
