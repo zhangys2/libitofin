@@ -47,6 +47,7 @@ mod swaption;
 mod twoassetbarrieroption;
 mod twoassetcorrelationoption;
 mod vanillaswap;
+mod writerextensibleoption;
 mod xccybasisswap;
 mod yearonyearinflationswap;
 mod zerocouponinflationswap;
@@ -151,6 +152,9 @@ pub use twoassetcorrelationoption::{
     TwoAssetCorrelationArguments, TwoAssetCorrelationOption, TwoAssetCorrelationResults,
 };
 pub use vanillaswap::VanillaSwap;
+pub use writerextensibleoption::{
+    WriterExtensibleArguments, WriterExtensibleOption, WriterExtensibleResults,
+};
 pub use xccybasisswap::XccyBasisSwap;
 pub use yearonyearinflationswap::YearOnYearInflationSwap;
 pub use zerocouponinflationswap::ZeroCouponInflationSwap;
