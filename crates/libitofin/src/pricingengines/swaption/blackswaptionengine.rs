@@ -1468,6 +1468,75 @@ mod tests {
         }
     }
 
+    /// Reduced Cash/`ParYieldCurve` × Forward-price arm of
+    /// `testImpliedVolatility` (`swaption.cpp:833-835`): IBOR underlying,
+    /// `DiscountCurve` annuity, invert from `forwardPrice` @ 1e-8.
+    #[test]
+    fn implied_volatility_recovers_cash_forward_price_black_vol() {
+        let vars = Vars::new(Date::new(13, Month::March, 2002), true);
+        let tolerance = 1.0e-8;
+        let exercise_date = vars.years(vars.today, 5);
+        let start_date = vars.spot(exercise_date);
+        let length = 10;
+        let strike = 0.05;
+        let vols = [0.05, 0.10, 0.20];
+
+        for swap_type in [SwapType::Payer, SwapType::Receiver] {
+            for vol in vols {
+                let make_swap = || {
+                    vars.make_vanilla(start_date, length, strike, 0.0, swap_type)
+                        .into_fixed_vs_floating()
+                };
+                let make = |v| {
+                    vars.make_black_swaption(
+                        make_swap(),
+                        exercise_date,
+                        v,
+                        SettlementType::Cash,
+                        SettlementMethod::ParYieldCurve,
+                        CashAnnuityModel::DiscountCurve,
+                    )
+                };
+                let mut swaption = make(vol);
+                let value: Real = swaption.result("forwardPrice").unwrap();
+                let implied = match swaption.implied_volatility(
+                    value,
+                    vars.curve.clone(),
+                    0.10,
+                    tolerance,
+                    100,
+                    1.0e-7,
+                    4.0,
+                    VolatilityType::ShiftedLognormal,
+                    0.0,
+                    crate::instruments::SwaptionPriceType::Forward,
+                ) {
+                    Ok(implied) => implied,
+                    Err(_) => {
+                        let mut zero = make(0.0);
+                        let value2: Real = zero.result("forwardPrice").unwrap();
+                        if (value - value2).abs() < tolerance {
+                            continue;
+                        }
+                        panic!(
+                            "Cash Forward implied vol failed to bracket: \
+                             {swap_type:?} vol={vol} forwardPrice={value}"
+                        );
+                    }
+                };
+                if (implied - vol).abs() > tolerance {
+                    let mut check = make(implied);
+                    let value2: Real = check.result("forwardPrice").unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "Cash Forward implied {implied} vs input {vol}: \
+                         forwardPrice {value} vs reprice {value2} ({swap_type:?})"
+                    );
+                }
+            }
+        }
+    }
+
     /// Reduced Spot Physical arm of `testImpliedVolatilityOis`
     /// (`swaption.cpp:921`): Eonia OIS underlying, DiscountCurve-default IV
     /// helper via Physical settlement @ 1e-8.
