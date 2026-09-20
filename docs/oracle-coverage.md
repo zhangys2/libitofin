@@ -18,8 +18,9 @@ credit.
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
-| American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16); KO deferred |
-| American digital at-expiry (knock-in) | `AnalyticDigitalAmericanEngine` + `AmericanPayoffAtExpiry` | `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` / `testAssetAtExpiryOrNothingAmericanValues` | Haug p.95 knock-in cash+asset at-expiry @ 1e-4 (ITM discounted @ 1e-12); KO deferred |
+| American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16) |
+| American digital at-expiry (knock-in) | `AnalyticDigitalAmericanEngine` + `AmericanPayoffAtExpiry` | `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` / `testAssetAtExpiryOrNothingAmericanValues` | Haug p.95 knock-in cash+asset at-expiry @ 1e-4 (ITM discounted @ 1e-12) |
+| American digital at-expiry (knock-out) | `AnalyticDigitalAmericanKOEngine` | `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` / `testAssetAtExpiryOrNothingAmericanValues` | Haug p.95 KO cash 4.9081/3.0461 + asset 40.1574/17.2983 @ 1e-4; out-of-bonds 0; KI+KO ≡ prepaid |
 | Analytic quanto vanilla | `QuantoEuropeanEngine` (`QuantoEngine<VanillaOption, AnalyticEuropeanEngine>`) | `quantooption.cpp` `testValues` | Haug call 5.3280/1.5, put 8.1636 @ 1e-4; NPV/greeks ≡ quanto-q Black |
 | Analytic quanto greeks | `QuantoEuropeanEngine` | `quantooption.cpp` `testGreeks` | FD bump grid (δ/γ/θ/ρ/divRho/vega/qρ/qvega/qλ) @ 1e-5 relative to spot |
 | Analytic quanto barrier | `QuantoBarrierEngine` (`QuantoEngine<BarrierOption, AnalyticBarrierEngine>`) | `quantooption.cpp` `testBarrierValues` | Haug DownOut call 8.247 / put 2.274, DownIn put 2.85 @ tol 0.5; NPV ≡ quanto-q barrier |
@@ -72,8 +73,8 @@ credit.
 | Hull–White forward process | `HullWhiteForwardProcess` | identity (hybrid suite is engines) | f≡0 E/V vs closed form; T-forward drift Δ; `a>0`/`a=0` `M_T`; notify on set T @ 1e-12; hybrid join deferred |
 | Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | FDM SABR operator | `FdmSabrOp` | identity (`fdsabr.cpp` `testFdmSabrOp` needs engine) | closed-form L[f²]/L[x²]/L[fx] interior pins (ν≠1); Shared yield snapshot; engine/NoArb deferred |
-| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | identity (`testBachelierOptionLetsDelta` needs δ) | parity / collar / vega FD / optionletsPrice sum; CapHelper Normal ≡ independent Bachelier ATM; stripper Normal deferred |
-| Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip; Bachelier δ / ATM / parity deferred |
+| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | `capfloor.cpp` `testBachelierOptionLetsDelta` | parity / vega FD / optionletsPrice; CapHelper Normal ≡ ATM; analytic δ vs forward FD @ 1e-6; stripper Normal deferred |
+| Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip |
 | Cap/floor optionlet | `CapFloor::optionlet` | `capfloor.cpp` `testConsistency` recomposition | collar ≡ cap−floor @ 1e-10; Σ optionlet NPV ≡ parent @ 1e-10 (un-nested) |
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |
@@ -153,7 +154,7 @@ credit.
 | Complex chooser Haug value | `AnalyticComplexChooserEngine` | `chooseroption.cpp` `testAnalyticComplexChooserEngine` | Haug example @ 1e-4 |
 | Cliquet Haug value | `AnalyticCliquetEngine` | `cliquetoption.cpp` `testValues` | Haug p.37 call @ 1e-4 |
 | Analytic performance cliquet | `AnalyticPerformanceEngine` | `cliquetoption.cpp` `testPerformanceGreeks` | δ=γ=0; NPV independent of spot; expired greeks 0; ρ/divρ/ν/θ vs FD @ 1e-5 relative to spot |
-| Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4 (q=0); book-vba q≠0 and remaining touched-barrier cash extras deferred |
+| Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4; cash book-vba q≠0 and touched-barrier extras closed; double-binary deferred |
 | Double-barrier Haug values | `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testEuropeanHaugValues` | Ikeda/Kunitomo 90-row table @ 1e-4 (KnockOut/In call+put) |
 | Double-barrier MC vs analytic | `MCDoubleBarrierEngine` | `doublebarrieroption.cpp` `testMonteCarloDoubleBarrierWithAnalytical` | KnockIn relative ≤ 1% @ 5000 steps/antithetic/seed 1; KnockOut absolute ≤ 0.01 @ seed 10 |
 | Double-barrier Vanna/Volga FX | `VannaVolgaDoubleBarrierEngine` + `AnalyticDoubleBarrierEngine` | `doublebarrieroption.cpp` `testVannaVolgaDoubleBarrierValues` | 20 FX rows × KO/KI @ 5e-3 (analytic inner, adaptVanDelta) |

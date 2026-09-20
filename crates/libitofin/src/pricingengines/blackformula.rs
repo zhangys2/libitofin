@@ -8,13 +8,16 @@
 //! not the volatility itself, and an optional lognormal `displacement`
 //! shifting both forward and strike.
 //!
-//! The Bachelier (normal-model) pricing pair, [`bachelier_black_formula`] and
-//! its forward derivative [`bachelier_black_formula_forward_derivative`], sit
-//! beside the Black family; the optionlet volatility surface selects between
-//! the two through its volatility type. Unlike the lognormal family the normal
-//! model admits negative forwards and strikes and applies no displacement, so
-//! these two functions deliberately skip [`check_parameters`]: they validate
-//! only the standard deviation and discount, exactly as the C++ reference does.
+//! The Bachelier (normal-model) pricing family —
+//! [`bachelier_black_formula`], [`bachelier_black_formula_forward_derivative`],
+//! [`bachelier_black_formula_std_dev_derivative`], and
+//! [`bachelier_black_formula_asset_itm_probability`] — sits beside the Black
+//! family; the optionlet volatility surface selects between the two through its
+//! volatility type. Unlike the lognormal family the normal model admits
+//! negative forwards and strikes and applies no displacement, so these
+//! functions deliberately skip [`check_parameters`]: they validate only the
+//! standard deviation (and discount where required), exactly as the C++
+//! reference does.
 //!
 //! Out of scope, left as follow-ups with the quotes that need them: the
 //! implied-standard-deviation family (approximations and solvers), including
@@ -513,6 +516,30 @@ pub fn bachelier_black_formula_std_dev_derivative(
     Ok(discount * phi.derivative(d1))
 }
 
+/// Risk-neutral probability of exercise in the asset martingale measure under
+/// the normal model, `N(h)` with `h = (forward - strike) * sign / std_dev`
+/// (`bachelierBlackFormulaAssetItmProbability`, `blackformula.cpp:950-963`).
+///
+/// At `std_dev == 0` the C++ reference returns `max((forward - strike) * sign,
+/// 0)` (a moneyness, not a probability); the port matches that quirk. Cap/floor
+/// engines leave δ=0 when `sqrtTime == 0`, so the live FD oracles never hit it.
+pub fn bachelier_black_formula_asset_itm_probability(
+    option_type: OptionType,
+    strike: Real,
+    forward: Real,
+    std_dev: Real,
+) -> QlResult<Real> {
+    check_std_dev(std_dev)?;
+
+    let d = (forward - strike) * sign_of(option_type);
+    if std_dev == 0.0 {
+        return Ok(d.max(0.0));
+    }
+    let h = d / std_dev;
+    let phi = CumulativeNormalDistribution::standard();
+    Ok(phi.value(h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1009,6 +1036,112 @@ mod tests {
         );
         assert!(bachelier_black_formula_std_dev_derivative(1.0, 1.0, -0.1, 0.95).is_err());
         assert!(bachelier_black_formula_std_dev_derivative(1.0, 1.0, 0.1, 0.0).is_err());
+    }
+
+    /// `bachelierBlackFormulaAssetItmProbability` (`blackformula.cpp:950-963`):
+    /// live path is `N(h)`; ATM is 0.5; equals forward δ / (sign · discount).
+    #[test]
+    fn bachelier_asset_itm_probability_matches_n_of_h() {
+        let forward = 0.06;
+        let strike = 0.05;
+        let std_dev = 0.01 * 10.0_f64.sqrt();
+        let discount = 0.95;
+        let call = bachelier_black_formula_asset_itm_probability(
+            OptionType::Call,
+            strike,
+            forward,
+            std_dev,
+        )
+        .expect("valid inputs");
+        let put = bachelier_black_formula_asset_itm_probability(
+            OptionType::Put,
+            strike,
+            forward,
+            std_dev,
+        )
+        .expect("valid inputs");
+        // Independent N(h) via erf: h = (F-K)/σ√T ≈ 0.316228 → N(h) ≈ 0.624085.
+        assert_close(call, 0.6240851829770753, 1e-12);
+        assert_close(put, 1.0 - call, 1e-12);
+
+        let atm = bachelier_black_formula_asset_itm_probability(
+            OptionType::Call,
+            forward,
+            forward,
+            std_dev,
+        )
+        .expect("ATM");
+        assert_close(atm, 0.5, 1e-15);
+
+        for option_type in [OptionType::Call, OptionType::Put] {
+            let probability = bachelier_black_formula_asset_itm_probability(
+                option_type,
+                strike,
+                forward,
+                std_dev,
+            )
+            .expect("valid inputs");
+            let delta = bachelier_black_formula_forward_derivative(
+                option_type,
+                strike,
+                forward,
+                std_dev,
+                discount,
+            )
+            .expect("valid inputs");
+            assert_close(
+                probability,
+                delta / (sign_of(option_type) * discount),
+                1e-15,
+            );
+        }
+    }
+
+    /// Zero-vol branch is QL's moneyness quirk (`max((F-K)·sign, 0)`), not 0/1.
+    #[test]
+    fn bachelier_asset_itm_probability_zero_vol_is_moneyness() {
+        let itm_call =
+            bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.06, 0.0)
+                .expect("zero std dev");
+        let otm_call =
+            bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.06, 0.05, 0.0)
+                .expect("zero std dev");
+        let atm = bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.05, 0.0)
+            .expect("zero std dev");
+        assert_eq!(itm_call, (0.06_f64 - 0.05).max(0.0));
+        assert_eq!(otm_call, 0.0);
+        assert_eq!(atm, 0.0);
+
+        let itm_put =
+            bachelier_black_formula_asset_itm_probability(OptionType::Put, 0.06, 0.05, 0.0)
+                .expect("zero std dev");
+        assert_eq!(itm_put, (0.06_f64 - 0.05).max(0.0));
+    }
+
+    #[test]
+    fn bachelier_asset_itm_probability_allows_negative_rates_and_rejects_bad_std_dev() {
+        let ok =
+            bachelier_black_formula_asset_itm_probability(OptionType::Call, -0.02, -0.01, 0.05)
+                .expect("negative rates allowed");
+        assert!(ok.is_finite() && ok > 0.5);
+
+        assert!(
+            bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.06, -0.1)
+                .is_err()
+        );
+        assert!(
+            bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.06, Real::NAN)
+                .is_err()
+        );
+        assert!(
+            bachelier_black_formula_asset_itm_probability(
+                OptionType::Call,
+                0.05,
+                0.06,
+                Real::INFINITY
+            )
+            .is_err()
+        );
     }
 
     /// Round-trips vol -> price -> implied stddev across Call/Put and ITM/OTM,
