@@ -161,6 +161,7 @@ credit.
 | Two-asset barrier Haug NPV | `AnalyticTwoAssetBarrierEngine` | `twoassetbarrieroption.cpp` `testHaugValues` | Haug 4-row Out table @ 4e-3; independent q≠0 KO, distinct-asset KO, and q≠0 KI pins (QL has no further suite cases) |
 | Writer-extensible Haug NPV | `AnalyticWriterExtensibleOptionEngine` | `extensibleoptions.cpp` `testAnalyticWriterExtensibleOptionEngine` | Haug writer call @ 1e-4; independent put and q≠0 call pins (QL has no further writer cases) |
 | Holder-extensible Haug NPV | `AnalyticHolderExtensibleOptionEngine` | `extensibleoptions.cpp` `testAnalyticHolderExtensibleOptionEngine` | Haug holder call @ 1e-4; independent put and q≠0 call pins (QL suite is call-only) |
+| Everest MC cached NPV | `MCEverestEngine` | `everestoption.cpp` `testCached` | PseudoRandom 1023 samples / 1 step/year / seed 86421 @ 1e-8; errorEstimate absolute-tolerance arm |
 | Cliquet Haug value | `AnalyticCliquetEngine` | `cliquetoption.cpp` `testValues` | Haug p.37 call @ 1e-4 |
 | Analytic performance cliquet | `AnalyticPerformanceEngine` | `cliquetoption.cpp` `testPerformanceGreeks` | δ=γ=0; NPV independent of spot; expired greeks 0; ρ/divρ/ν/θ vs FD @ 1e-5 relative to spot |
 | Binary barrier Haug values | `AnalyticBinaryBarrierEngine` | `binaryoption.cpp` `testCashOrNothingHaugValues` / `testAssetOrNothingHaugValues` | Haug p.180 cash+asset book rows @ 1e-4; cash book-vba q≠0 and touched-barrier extras closed; double-binary deferred |
