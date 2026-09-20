@@ -555,6 +555,37 @@ mod tests {
         }
     }
 
+    /// `CapFloor::deepUpdate` (`capfloor.cpp:271`): after a successful NPV the
+    /// instrument is calculated; `deep_update` clears that cache so the next
+    /// NPV recalculates (and recovers the same value).
+    #[test]
+    fn deep_update_invalidates_the_cached_npv() {
+        let vars = Vars::new(true);
+        let start = vars.start_date();
+        let leg = vars.make_leg(start, 20);
+        let mut cap = CapFloor::cap(leg, vec![0.07], Shared::clone(&vars.settings)).unwrap();
+        cap.base_mut().set_pricing_engine(vars.engine(0.20));
+
+        assert!(!cap.base().is_calculated());
+        let first = cap.npv().unwrap();
+        assert!(
+            cap.base().is_calculated(),
+            "NPV must leave the cap calculated"
+        );
+
+        cap.deep_update();
+        assert!(
+            !cap.base().is_calculated(),
+            "deep_update must clear the calculated flag"
+        );
+        let second = cap.npv().unwrap();
+        assert!(
+            (first - second).abs() <= 1.0e-12,
+            "reprice after deep_update: {first} vs {second}"
+        );
+        assert!(cap.base().is_calculated());
+    }
+
     /// Builds a cap (or floor) over `leg`, priced with the flat-vol engine.
     fn priced(
         vars: &Vars,
