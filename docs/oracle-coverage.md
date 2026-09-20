@@ -67,7 +67,7 @@ credit.
 | Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | FDM SABR operator | `FdmSabrOp` | identity (`fdsabr.cpp` `testFdmSabrOp` needs engine) | closed-form L[f²]/L[x²]/L[fx] interior pins (ν≠1); Shared yield snapshot; engine/NoArb deferred |
 | Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | identity (`testBachelierOptionLetsDelta` needs δ) | parity / collar / vega FD / optionletsPrice sum; CapHelper Normal ≡ independent Bachelier ATM; stripper Normal deferred |
-| Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal round-trip @ 1e-8; Bachelier δ / ATM / parity deferred |
+| Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip; Bachelier δ / ATM / parity deferred |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |

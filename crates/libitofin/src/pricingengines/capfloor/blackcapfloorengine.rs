@@ -21,8 +21,8 @@
 //!   [`ConstantOptionletVolatility`] it builds (D5).
 //! - Only the [`ShiftedLognormal`](VolatilityType::ShiftedLognormal) path is
 //!   priced. The C++ `optionletsDelta`/`optionletsStdDev`/`optionletsAtmForward`
-//!   additional results feed only the deferred delta and implied-vol tests and
-//!   are not produced.
+//!   additional results feed only the deferred delta tests and are not produced.
+//!   Term implied vol lives on [`CapFloor::implied_volatility`](crate::instruments::CapFloor::implied_volatility).
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
@@ -288,6 +288,7 @@ mod tests {
     use crate::instruments::{SwapType, VanillaSwap};
     use crate::interestrate::Compounding;
     use crate::pricingengines::DiscountingSwapEngine;
+    use crate::pricingengines::capfloor::BachelierCapFloorEngine;
     use crate::quotes::make_quote_handle;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::VolatilityType;
@@ -328,7 +329,8 @@ mod tests {
                 Actual360::new(),
                 Compounding::Continuous,
                 Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>);
+            ))
+                as Shared<dyn YieldTermStructure>);
             let curve = term_structure.handle();
             let index = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
             Vars {
@@ -424,6 +426,19 @@ mod tests {
                 vol,
                 Actual365Fixed::new(),
                 0.0,
+                Shared::clone(&self.settings),
+            )
+            .unwrap();
+            shared_mut(engine) as SharedMut<dyn PricingEngine>
+        }
+
+        /// Flat Normal (Bachelier) engine for the Normal implied-vol arm.
+        fn bachelier_engine(&self, volatility: Volatility) -> SharedMut<dyn PricingEngine> {
+            let vol = make_quote_handle(volatility).handle();
+            let engine = BachelierCapFloorEngine::with_flat_vol(
+                self.curve.clone(),
+                vol,
+                Actual365Fixed::new(),
                 Shared::clone(&self.settings),
             )
             .unwrap();
@@ -699,12 +714,10 @@ mod tests {
             for cap_floor_type in types {
                 for strike in strikes {
                     let mut capfloor = match cap_floor_type {
-                        CapFloorType::Cap => CapFloor::cap(
-                            leg.clone(),
-                            vec![strike],
-                            Shared::clone(&vars.settings),
-                        )
-                        .unwrap(),
+                        CapFloorType::Cap => {
+                            CapFloor::cap(leg.clone(), vec![strike], Shared::clone(&vars.settings))
+                                .unwrap()
+                        }
                         CapFloorType::Floor => CapFloor::floor(
                             leg.clone(),
                             vec![strike],
@@ -716,9 +729,7 @@ mod tests {
                     for rate in rates {
                         vars.link_rate(rate);
                         for vol in vols {
-                            capfloor
-                                .base_mut()
-                                .set_pricing_engine(vars.engine(vol));
+                            capfloor.base_mut().set_pricing_engine(vars.engine(vol));
                             let value = capfloor.npv().unwrap();
                             let implied = match capfloor.implied_volatility(
                                 value,
@@ -735,9 +746,7 @@ mod tests {
                                 Err(_) => {
                                     // QL skips when the price matches the zero-vol
                                     // price (no bracket).
-                                    capfloor
-                                        .base_mut()
-                                        .set_pricing_engine(vars.engine(0.0));
+                                    capfloor.base_mut().set_pricing_engine(vars.engine(0.0));
                                     let value2 = capfloor.npv().unwrap();
                                     assert!(
                                         (value - value2).abs() < tolerance,
@@ -748,9 +757,7 @@ mod tests {
                                 }
                             };
                             if (implied - vol).abs() > tolerance {
-                                capfloor
-                                    .base_mut()
-                                    .set_pricing_engine(vars.engine(implied));
+                                capfloor.base_mut().set_pricing_engine(vars.engine(implied));
                                 let value2 = capfloor.npv().unwrap();
                                 assert!(
                                     (value - value2).abs() <= tolerance,
@@ -761,6 +768,58 @@ mod tests {
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// Reduced Normal-arm pin for [`CapFloor::implied_volatility`] with
+    /// `VolatilityType::Normal` (QL `testImpliedVolatility` is Black-only).
+    #[test]
+    fn implied_volatility_recovers_the_input_normal_vol() {
+        let vars = Vars::new(true);
+        let start = vars.start_date();
+        let tolerance = 1.0e-8;
+        let leg = vars.make_leg(start, 5);
+        let strike = 0.05;
+        let vols = [0.005, 0.01, 0.02];
+
+        for is_cap in [true, false] {
+            let mut capfloor = if is_cap {
+                CapFloor::cap(leg.clone(), vec![strike], Shared::clone(&vars.settings)).unwrap()
+            } else {
+                CapFloor::floor(leg.clone(), vec![strike], Shared::clone(&vars.settings)).unwrap()
+            };
+            for &vol in &vols {
+                capfloor
+                    .base_mut()
+                    .set_pricing_engine(vars.bachelier_engine(vol));
+                let value = capfloor.npv().unwrap();
+                let implied = capfloor
+                    .implied_volatility(
+                        value,
+                        vars.curve.clone(),
+                        0.01,
+                        tolerance,
+                        100,
+                        1.0e-7,
+                        4.0,
+                        VolatilityType::Normal,
+                        0.0,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("Normal implied vol failed (cap={is_cap} v={vol}): {e}")
+                    });
+                if (implied - vol).abs() > tolerance {
+                    capfloor
+                        .base_mut()
+                        .set_pricing_engine(vars.bachelier_engine(implied));
+                    let value2 = capfloor.npv().unwrap();
+                    assert!(
+                        (value - value2).abs() <= tolerance,
+                        "cap={is_cap} v={vol}: implied={implied} price={value} \
+                         implied_price={value2}"
+                    );
                 }
             }
         }
