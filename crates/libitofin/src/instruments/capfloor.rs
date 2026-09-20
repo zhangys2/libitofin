@@ -68,7 +68,7 @@ pub enum CapFloorType {
 /// nominal, gearing, the coupon's adjusted forward (`None` for a past-fixing
 /// coupon, the C++ `Null<Rate>`), and the de-spread cap and floor strikes
 /// (`None` where the type has none).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CapFloorArguments {
     /// The instrument type, set by `setup_arguments`.
     pub cap_floor_type: Option<CapFloorType>,
