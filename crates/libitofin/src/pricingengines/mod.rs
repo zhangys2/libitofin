@@ -49,15 +49,17 @@ pub use asian::{
     set_mc_discrete_geometric_average_price_asian_heston_engine, set_turnbull_wakeman_asian_engine,
 };
 pub use barrier::{
-    AnalyticDoubleBarrierEngine, AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine,
-    BarrierPathPricer, BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
+    AnalyticBinaryBarrierEngine, AnalyticDoubleBarrierEngine,
+    AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine, BarrierPathPricer,
+    BiasedBarrierPathPricer, BinomialBarrierEngine, FdBlackScholesBarrierEngine,
     FdBlackScholesRebateEngine, FdHestonBarrierEngine, FdHestonRebateEngine, MCBarrierEngine,
     MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
-    QuantoDoubleBarrierEngine, VannaVolgaDoubleBarrierEngine, set_analytic_double_barrier_engine,
-    set_analytic_partial_time_barrier_engine, set_analytic_soft_barrier_engine,
-    set_binomial_barrier_engine, set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,
-    set_mc_barrier_engine, set_mc_double_barrier_engine, set_quanto_barrier_engine,
-    set_quanto_double_barrier_engine, set_vanna_volga_double_barrier_engine,
+    QuantoDoubleBarrierEngine, VannaVolgaDoubleBarrierEngine, set_analytic_binary_barrier_engine,
+    set_analytic_double_barrier_engine, set_analytic_partial_time_barrier_engine,
+    set_analytic_soft_barrier_engine, set_binomial_barrier_engine,
+    set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine, set_mc_barrier_engine,
+    set_mc_double_barrier_engine, set_quanto_barrier_engine, set_quanto_double_barrier_engine,
+    set_vanna_volga_double_barrier_engine,
 };
 pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
 pub use blackcalculator::BlackCalculator;
