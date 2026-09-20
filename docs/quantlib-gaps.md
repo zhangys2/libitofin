@@ -70,7 +70,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Alphabet baskets (Everest/Himalaya/Pagoda) | experimental exotic options + MC | `everestoption.cpp` (+ Himalaya/Pagoda often experimental-only) | true | partial | Everest MC cached NPV @ 1e-8 (`testCached`) closed. Himalaya/Pagoda experimental, deferred. |
 | Equity | Basket beyond Choi / single-factor | Kirk/Stulz/Pearson/MC/FD-nD basket | `basketoption.cpp`, `spreadoption.cpp` | true | partial | Choi golden example pinned |
 | Equity | FD Heston double-barrier | `FdHestonDoubleBarrierEngine` | `doublebarrieroption.cpp` | true | partial | KnockOut FD vs Haug `testEuropeanHaugValues` subset @ 0.025 (251×76×3 near-Black). KnockIn / leverage / mixing / greeks deferred |
-| Equity | Vanna–Volga single barrier | VV barrier (non-double) | `barrieroption.cpp` | false | none | Double-barrier VV only |
+| Equity | Vanna–Volga single barrier | VV barrier (non-double) | `barrieroption.cpp` | true | partial | `VannaVolgaBarrierEngine` FX subset of `testVannaVolgaSimpleBarrierValues` @ 1e-4 (`adaptVanDelta`). Rest of table deferred |
 | Equity | Cliquet performance engines | `AnalyticPerformanceEngine`, `MCPerformanceEngine` | `cliquetoption.cpp` | true | partial | `AnalyticPerformanceEngine` FD ρ/divρ/ν/θ + δ=γ=0 closed; `MCPerformanceEngine` / full `testPerformanceGreeks` grid deferred |
 | Equity | Variance swap / variance option | `VarianceSwap`, `VarianceOption` | `varianceswap.cpp`, `varianceoption.cpp` | false | none | |
 | Equity | Swing option | `VanillaSwingOption`, FD engines | `swingoption.cpp` | false | none | |

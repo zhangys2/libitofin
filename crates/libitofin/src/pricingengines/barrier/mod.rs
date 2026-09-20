@@ -19,6 +19,7 @@ mod mcbarrierengine;
 mod mcdoublebarrierengine;
 mod quantobarrierengine;
 mod quantodoublebarrierengine;
+mod vannavolgabarrierengine;
 mod vannavolgadoublebarrierengine;
 mod vannavolgainterpolation;
 
@@ -55,6 +56,7 @@ pub use mcdoublebarrierengine::{
 };
 pub use quantobarrierengine::{QuantoBarrierEngine, set_quanto_barrier_engine};
 pub use quantodoublebarrierengine::{QuantoDoubleBarrierEngine, set_quanto_double_barrier_engine};
+pub use vannavolgabarrierengine::{VannaVolgaBarrierEngine, set_vanna_volga_barrier_engine};
 pub use vannavolgadoublebarrierengine::{
     VannaVolgaDoubleBarrierEngine, set_vanna_volga_double_barrier_engine,
 };
