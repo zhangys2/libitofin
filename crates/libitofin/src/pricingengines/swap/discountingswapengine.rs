@@ -197,7 +197,8 @@ impl PricingEngine for DiscountingSwapEngine {
 mod tests {
     //! The swap's numeric oracle: `swap.cpp` `testCachedValue` (:289), the first
     //! swap priced end to end against a hardcoded C++ NPV, plus the mode-agnostic
-    //! `testFairRate` (:107) and `testFairSpread` (:131) self-consistency checks.
+    //! `testFairRate` (:107) and `testFairSpread` (:131) self-consistency checks
+    //! and the `testRateDependency` / `testSpreadDependency` monotonicity pins.
     //! The fixture reproduces `swap.cpp` `CommonVars` (:52-104): a Payer swap on a
     //! nominal of 100, fixed 10Y annual Thirty360(BondBasis) versus floating
     //! semiannual Euribor 6M / Actual360, discounted on a flat 5% Actual365Fixed
@@ -389,6 +390,64 @@ mod tests {
                     npv.abs() <= 1.0e-10,
                     "length {length}y rate {rate}: npv {npv} not zero"
                 );
+            }
+        }
+    }
+
+    /// `swap.cpp` `testRateDependency` (:157): for each length and floating
+    /// spread, raising the fixed rate must not increase the Payer NPV
+    /// (adjacent NPVs are weakly decreasing).
+    #[test]
+    fn payer_npv_is_non_increasing_in_the_fixed_rate() {
+        let vars = Vars::new(Date::new(17, Month::June, 2002), true);
+        let lengths: [Integer; 5] = [1, 2, 5, 10, 20];
+        let spreads: [Spread; 5] = [-0.001, -0.01, 0.0, 0.01, 0.001];
+        let rates: [Rate; 5] = [0.03, 0.04, 0.05, 0.06, 0.07];
+
+        for length in lengths {
+            for spread in spreads {
+                let values: Vec<Real> = rates
+                    .iter()
+                    .map(|&rate| vars.make_swap(length, rate, spread).npv().unwrap())
+                    .collect();
+                for window in values.windows(2) {
+                    assert!(
+                        window[0] >= window[1],
+                        "length {length}y spread {spread}: NPV rose with fixed rate \
+                         ({:?} → {:?})",
+                        window[0],
+                        window[1]
+                    );
+                }
+            }
+        }
+    }
+
+    /// `swap.cpp` `testSpreadDependency` (:190): for each length and fixed rate,
+    /// raising the floating spread must not decrease the Payer NPV (adjacent
+    /// NPVs are weakly increasing).
+    #[test]
+    fn payer_npv_is_non_decreasing_in_the_floating_spread() {
+        let vars = Vars::new(Date::new(17, Month::June, 2002), true);
+        let lengths: [Integer; 5] = [1, 2, 5, 10, 20];
+        let rates: [Rate; 4] = [0.04, 0.05, 0.06, 0.07];
+        let spreads: [Spread; 7] = [-0.01, -0.002, -0.001, 0.0, 0.001, 0.002, 0.01];
+
+        for length in lengths {
+            for rate in rates {
+                let values: Vec<Real> = spreads
+                    .iter()
+                    .map(|&spread| vars.make_swap(length, rate, spread).npv().unwrap())
+                    .collect();
+                for window in values.windows(2) {
+                    assert!(
+                        window[0] <= window[1],
+                        "length {length}y rate {rate}: NPV fell with floating spread \
+                         ({:?} → {:?})",
+                        window[0],
+                        window[1]
+                    );
+                }
             }
         }
     }
