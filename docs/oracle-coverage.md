@@ -16,6 +16,7 @@ credit.
 | Domain | libitofin surface | QuantLib oracle(s) | Status |
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
+| QMC European | `MakeMcEuropeanEngine::<LowDiscrepancy>` | `europeanoption.cpp` `testQmcEngines` | 108 call/put grid, 1 step, 4095 samples; abs(QMC−analytic)/spot ≤ 0.01 |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
 | American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16) |
@@ -82,6 +83,12 @@ credit.
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | QL tree collar oracle + CapHelper Normal | collar/cap/floor @ 1e-8 (30/100 steps); TimeGrid ctor; past-start known-fixing intrinsic; CapHelper Normal market/model pin + tree σ calibrate; tree→analytic rel <1e-3 @600. MC/G1d deferred |
 | Overnight index future | `OvernightIndexFuture` + `OvernightIndexFutureRateHelper` / `SofrFutureRateHelper` | `sofrfutures.cpp` + holiday-clipped daily accrual | Juneteenth/bootstrap prices + curve nodes @ 1e-9; Simple/Compound holiday clip + today-fixing @ 1e-9; convexity/lifecycle |
+| Iterative bootstrap robustness | `IterativeBootstrap` options on yield piecewise | independent QL 1.43 `oracle.py` | sign-aware bound widening; fallback scan; cached recovery; 99-iter limit @ 1e-12 nodes; yield factories only |
+| Custom pillars | FRA/swap/OIS/inflation helpers `Pillar::CustomDate` | independent QL helper dates | window-valid custom pillars; invalid bounds; last-valid date recovery |
+| Joint Ibor-Ibor yield curves | `JointYieldCurves` + `IborIborBasisSwapRateHelper` | `piecewiseyieldcurve.cpp` multi-curve + independent FRA/swap reprice | 3M/6M coupled GlobalBootstrap; 1e-12 reprice; live quote/date/fixing |
+| Overnight-Ibor basis helper | `OvernightIborBasisSwapRateHelper` | experimental `basisswapratehelpers.cpp` + overnight_basis fixture | omitted/explicit discount + coupled OIS/Ibor @ 1e-12 rel |
+| Swaption vol matrix | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | five constructors; 120 nodes @ 1e-16; live-input observability + handle relink |
+| SABR cube backward-flat | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` sparse/dense | 72 QL 1.43 rows, both flags, @ 1e-6; live quote/date; ZABR deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
