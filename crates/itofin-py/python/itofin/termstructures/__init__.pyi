@@ -30,17 +30,21 @@ __all__ = [
     "FraRateHelper",
     "FuturesRateHelper",
     "FuturesType",
+    "IborIborBasisSwapRateHelper",
     "InterpolatedDefaultDensityCurve",
     "InterpolatedHazardRateCurve",
     "InterpolatedSwaptionVolatilityCube",
     "InterpolatedYoYInflationCurve",
     "InterpolatedZeroInflationCurve",
+    "IterativeBootstrapOptions",
+    "JointYieldCurves",
     "KInterpolatedYoYOptionletVolatilitySurface",
     "KerkhofSeasonality",
     "MultiplicativePriceSeasonality",
     "OISRateHelper",
     "OptionletStripper1",
     "OptionletVolatilityStructure",
+    "OvernightIndexFutureRateHelper",
     "PiecewiseConvexMonotoneForward",
     "PiecewiseCubicZero",
     "PiecewiseDefaultCurve",
@@ -58,6 +62,7 @@ __all__ = [
     "SabrSmileSection",
     "SabrSwaptionVolatilityCube",
     "SimpleQuoteVariables",
+    "SofrFutureRateHelper",
     "SpreadCdsHelper",
     "StrippedOptionletAdapter",
     "SwapRateHelper",
@@ -1147,6 +1152,11 @@ class FlatForward(YieldTermStructure):
                 frequency.
             day_counter (DayCounter): The day count times are measured in.
         """
+    @staticmethod
+    def from_quote(reference_date: time.Date, quote: quotes.SimpleQuote, day_counter: time.DayCounter) -> FlatForward:
+        r"""
+        Build a flat curve backed by a retained, observable quote.
+        """
 
 @typing.final
 class FlatHazardRate(DefaultProbabilityTermStructure):
@@ -1273,7 +1283,7 @@ class FraRateHelper(RateHelper):
     forward. from_dates fixes the window at construction (it does not shift on an
     evaluation-date change).
     """
-    def __init__(self, quote: quotes.SimpleQuote, period_to_start: time.Period, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate) -> None:
+    def __init__(self, quote: quotes.SimpleQuote, period_to_start: time.Period, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
         r"""
         Build the helper over the window period_to_start past spot.
 
@@ -1289,7 +1299,7 @@ class FraRateHelper(RateHelper):
                 LastRelevantDate.
         """
     @staticmethod
-    def from_rate(rate: builtins.float, period_to_start: time.Period, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate) -> FraRateHelper:
+    def from_rate(rate: builtins.float, period_to_start: time.Period, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> FraRateHelper:
         r"""
         Build the helper over a fixed rate.
 
@@ -1299,13 +1309,14 @@ class FraRateHelper(RateHelper):
             period_to_start (Period): How long after spot the window starts.
             index (IborIndex): The index whose tenor the window spans.
             use_indexed_coupon (bool): The implied-quote mode; see __init__.
+            custom_pillar_date (Date | None): Required with CustomDate.
             pillar (Pillar): The date the curve node sits at.
 
         Returns:
             FraRateHelper: The helper fitting that rate.
         """
     @staticmethod
-    def from_months(quote: quotes.SimpleQuote, months_to_start: builtins.int, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate) -> FraRateHelper:
+    def from_months(quote: quotes.SimpleQuote, months_to_start: builtins.int, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> FraRateHelper:
         r"""
         Build the helper with a start given in months after spot.
 
@@ -1315,13 +1326,14 @@ class FraRateHelper(RateHelper):
                 starts.
             index (IborIndex): The index whose tenor the window spans.
             use_indexed_coupon (bool): The implied-quote mode; see __init__.
+            custom_pillar_date (Date | None): Required with CustomDate.
             pillar (Pillar): The date the curve node sits at.
 
         Returns:
             FraRateHelper: The helper over that window.
         """
     @staticmethod
-    def from_dates(quote: quotes.SimpleQuote, start_date: time.Date, end_date: time.Date, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate) -> FraRateHelper:
+    def from_dates(quote: quotes.SimpleQuote, start_date: time.Date, end_date: time.Date, index: indexes.IborIndex, use_indexed_coupon: builtins.bool = True, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> FraRateHelper:
         r"""
         Build the helper over an explicit window.
 
@@ -1334,6 +1346,7 @@ class FraRateHelper(RateHelper):
             end_date (Date): The window's end.
             index (IborIndex): The index the forward is read off.
             use_indexed_coupon (bool): The implied-quote mode; see __init__.
+            custom_pillar_date (Date | None): Required with CustomDate.
             pillar (Pillar): The date the curve node sits at.
 
         Returns:
@@ -1434,6 +1447,21 @@ class FuturesRateHelper(RateHelper):
 
         Returns:
             float: The convexity quote's value, or zero when none was supplied.
+        """
+
+@typing.final
+class IborIborBasisSwapRateHelper(RateHelper):
+    r"""
+    A basis spread helper, with the spread paid on the base-index leg.
+
+    JointYieldCurves copies its construction inputs into private helpers. The
+    original helper remains independent and is not assigned to a joint curve;
+    its quote and date inspectors remain usable, but implied_quote needs a
+    standalone curve assignment. Quotes, indices and discount curves are retained.
+    """
+    def __init__(self, quote: quotes.SimpleQuote, tenor: time.Period, settlement_days: builtins.int, calendar: time.Calendar, convention: time.BusinessDayConvention, end_of_month: builtins.bool, base_index: indexes.IborIndex, other_index: indexes.IborIndex, discount: YieldTermStructure, bootstrap_base_curve: builtins.bool) -> None:
+        r"""
+        Construct a live basis helper fitting either the base or other index.
         """
 
 @typing.final
@@ -1694,6 +1722,38 @@ class InterpolatedZeroInflationCurve(ZeroInflationTermStructure):
         """
 
 @typing.final
+class IterativeBootstrapOptions:
+    r"""
+    Immutable controls for iterative yield-curve bootstrap.
+
+    Bounds are initial guesses for the solver bracket, not constraints on the
+    final curve. Attempts widen those bounds by the specified factors.
+    dont_throw explicitly accepts an approximate fallback when solving fails;
+    helper evaluation errors still propagate. None accuracy uses curve accuracy.
+    """
+    def __new__(cls, accuracy: typing.Optional[builtins.float] = None, min_value: typing.Optional[builtins.float] = None, max_value: typing.Optional[builtins.float] = None, max_attempts: builtins.int = 1, max_factor: builtins.float = 2.0, min_factor: builtins.float = 2.0, dont_throw: builtins.bool = False, dont_throw_steps: builtins.int = 10, max_evaluations: builtins.int = 100) -> IterativeBootstrapOptions: ...
+
+@typing.final
+class JointYieldCurves:
+    r"""
+    Two mutually coupled Discount/LogLinear/GlobalBootstrap curves.
+
+    Member 0 forecasts the base index and member 1 the other index. Basis helpers
+    must include both bootstrap sides and share the same index objects/settings.
+    Plain helper strips are reserved for this assembly and must not be reused by
+    another curve. Returned curves retain both members and the joint owner after
+    this Python object is collected. No internal helper or forecast link escapes.
+    """
+    def __init__(self, reference_date: time.Date, first_helpers: typing.Sequence[RateHelper], second_helpers: typing.Sequence[RateHelper], basis_helpers: typing.Sequence[IborIborBasisSwapRateHelper], day_counter: time.DayCounter, accuracy: builtins.float = 1e-10) -> None:
+        r"""
+        Assemble both curves; numerical bootstrap errors are raised on query.
+        """
+    def curve(self, member: builtins.int) -> YieldTermStructure:
+        r"""
+        Return member 0 or 1, retaining the complete joint assembly.
+        """
+
+@typing.final
 class KInterpolatedYoYOptionletVolatilitySurface:
     r"""
     The year-on-year optionlet volatility surface stripped out of a quoted
@@ -1918,10 +1978,10 @@ class OISRateHelper(RateHelper):
     optional knobs trail with defaults. discounting_curve=None discounts off the
     bootstrapping curve; overnight_spread=None is an empty (zero) spread. The
     deferred core knobs past averaging_method (telescopic value dates, lookback,
-    lockout, observation shift, custom pillar, per-leg calendars) take benign
+    lockout, observation shift, per-leg calendars) take benign
     defaults.
     """
-    def __init__(self, settlement_days: builtins.int, tenor: time.Period, quote: quotes.SimpleQuote, overnight_index: indexes.OvernightIndex, payment_lag: builtins.int, payment_convention: time.BusinessDayConvention, payment_frequency: time.Frequency, forward_start: time.Period, settings: itofin.Settings, discounting_curve: typing.Optional[YieldTermStructure] = None, overnight_spread: typing.Optional[quotes.SimpleQuote] = None, pillar: Pillar = Pillar.LastRelevantDate, averaging_method: RateAveraging = RateAveraging.Compound) -> None:
+    def __init__(self, settlement_days: builtins.int, tenor: time.Period, quote: quotes.SimpleQuote, overnight_index: indexes.OvernightIndex, payment_lag: builtins.int, payment_convention: time.BusinessDayConvention, payment_frequency: time.Frequency, forward_start: time.Period, settings: itofin.Settings, discounting_curve: typing.Optional[YieldTermStructure] = None, overnight_spread: typing.Optional[quotes.SimpleQuote] = None, pillar: Pillar = Pillar.LastRelevantDate, averaging_method: RateAveraging = RateAveraging.Compound, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
         r"""
         Build the helper over the schedule of a spot-starting OIS.
 
@@ -2125,6 +2185,16 @@ class OptionletVolatilityStructure:
         """
 
 @typing.final
+class OvernightIndexFutureRateHelper(RateHelper):
+    r"""
+    Bootstrap a quoted overnight futures price over explicit dates.
+    """
+    def __init__(self, price: quotes.SimpleQuote, value_date: time.Date, maturity_date: time.Date, index: indexes.OvernightIndex, convexity_adjustment: typing.Optional[quotes.SimpleQuote] = None, averaging_method: RateAveraging = RateAveraging.Compound, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
+        r"""
+        Construct a helper retaining the index history, price and convexity quote.
+        """
+
+@typing.final
 class PiecewiseConvexMonotoneForward(YieldTermStructure):
     r"""
     A curve bootstrapped in forward-rate space with convex-monotone interpolation.
@@ -2136,7 +2206,7 @@ class PiecewiseConvexMonotoneForward(YieldTermStructure):
     convergence loop. data() are instantaneous forward rates; the interpolation
     ignores node [0], which only mirrors the first solved pillar.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, bootstrap: builtins.str = 'iterative') -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, bootstrap: builtins.str = 'iterative', iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2186,7 +2256,7 @@ class PiecewiseCubicZero(YieldTermStructure):
     instead of a single pass. data() are continuously-compounded zero rates, so
     data()[0] mirrors the first solved pillar's rate rather than a 1.0 discount.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2337,7 +2407,7 @@ class PiecewiseFlatForward(YieldTermStructure):
     identical to PiecewiseLogLinearDiscount under every query; only data(),
     forward rates against discount factors, tells the two apart.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2378,7 +2448,7 @@ class PiecewiseLinearForward(YieldTermStructure):
     The verbatim QuantLib-SWIG name for the blessed (ForwardRate, Linear)
     combination. data() are instantaneous forward rates.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2420,7 +2490,7 @@ class PiecewiseLinearZero(YieldTermStructure):
     combination. data() are continuously-compounded zero rates, so data()[0]
     mirrors the first solved pillar's rate rather than a 1.0 discount.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2464,7 +2534,7 @@ class PiecewiseLogLinearDiscount(YieldTermStructure):
     handle discards. data() are discount factors, so data()[0] is the reference
     node's 1.0.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2537,7 +2607,7 @@ class PiecewiseYieldCurve(YieldTermStructure):
     max_date is the exception: it swallows a bootstrap failure and reports the
     current grid bound, or the reference date before a grid has been installed.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2936,9 +3006,9 @@ class SabrSwaptionVolatilityCube(SwaptionVolatilityStructure):
     recalibration API is unported in the core: re-fit by bumping the guess or
     vol-spread quotes.
     """
-    def __init__(self, atm_vol: SwaptionVolatilityStructure, option_tenors: typing.Sequence[time.Period], swap_tenors: typing.Sequence[time.Period], strike_spreads: typing.Sequence[builtins.float], vol_spreads: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], swap_index_base: indexes.SwapIndex, short_swap_index_base: indexes.SwapIndex, parameters_guess: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], is_parameter_fixed: typing.Sequence[builtins.bool], is_atm_calibrated: builtins.bool, settings: itofin.Settings, vega_weighted_smile_fit: builtins.bool = False, use_max_error: builtins.bool = False, max_guesses: builtins.int = 50, cutoff_strike: builtins.float = 0.0001) -> None:
+    def __init__(self, atm_vol: SwaptionVolatilityStructure, option_tenors: typing.Sequence[time.Period], swap_tenors: typing.Sequence[time.Period], strike_spreads: typing.Sequence[builtins.float], vol_spreads: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], swap_index_base: indexes.SwapIndex, short_swap_index_base: indexes.SwapIndex, parameters_guess: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], is_parameter_fixed: typing.Sequence[builtins.bool], is_atm_calibrated: builtins.bool, settings: itofin.Settings, vega_weighted_smile_fit: builtins.bool = False, use_max_error: builtins.bool = False, max_guesses: builtins.int = 50, cutoff_strike: builtins.float = 0.0001, backward_flat: builtins.bool = False) -> None:
         r"""
-        Build the cube, calibrating every node on construction.
+        Build the cube; calibrate every node on the first volatility query.
 
         The end criteria, the maximum error tolerance, the optimisation method
         and the accepted error are left at the core's C++ defaults.
@@ -2969,6 +3039,8 @@ class SabrSwaptionVolatilityCube(SwaptionVolatilityStructure):
                 error rather than the aggregate one.
             max_guesses (int): How many starting guesses a node may try.
             cutoff_strike (float): The strike floor the fit is evaluated above.
+            backward_flat (bool): Backward-flat option-time interpolation of SABR
+                parameters and forwards; swap-length interpolation stays linear.
 
         Raises:
             ItofinError: On an empty or ragged vol_spreads or parameters_guess
@@ -3010,6 +3082,16 @@ class SimpleQuoteVariables:
     def __init__(self, quotes: typing.Sequence[quotes.SimpleQuote], initial_guesses: typing.Optional[typing.Sequence[builtins.float]] = None, lower_bounds: typing.Optional[typing.Sequence[builtins.float]] = None) -> None:
         r"""
         Configure external quotes, optional initial guesses, and lower bounds.
+        """
+
+@typing.final
+class SofrFutureRateHelper(RateHelper):
+    r"""
+    Monthly simple-average and quarterly compounded CME SOFR futures helpers.
+    """
+    def __init__(self, price: quotes.SimpleQuote, reference_month: builtins.int, reference_year: builtins.int, reference_frequency: time.Frequency, settings: itofin.Settings, convexity_adjustment: typing.Optional[quotes.SimpleQuote] = None, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
+        r"""
+        Construct a SOFR helper using the supplied settings and shared SOFR history.
         """
 
 @typing.final
@@ -3100,9 +3182,9 @@ class SwapRateHelper(RateHelper):
     A helper fitting a par swap rate (spot-starting, no spread).
 
     The spot-starting form the curve-consistency oracle builds: no spread, no
-    forward start, no exogenous discounting curve, and the default pillar.
+    forward start, with optional exogenous discounting and custom pillars.
     """
-    def __init__(self, quote: quotes.SimpleQuote, tenor: time.Period, calendar: time.Calendar, fixed_frequency: time.Frequency, fixed_convention: time.BusinessDayConvention, fixed_day_count: time.DayCounter, ibor_index: indexes.IborIndex) -> None:
+    def __init__(self, quote: quotes.SimpleQuote, tenor: time.Period, calendar: time.Calendar, fixed_frequency: time.Frequency, fixed_convention: time.BusinessDayConvention, fixed_day_count: time.DayCounter, ibor_index: indexes.IborIndex, discount: typing.Optional[YieldTermStructure] = None, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
         r"""
         Build the helper over the schedule of a spot-starting swap.
 
@@ -3114,6 +3196,9 @@ class SwapRateHelper(RateHelper):
             fixed_convention (BusinessDayConvention): The fixed leg's roll.
             fixed_day_count (DayCounter): The fixed leg's day count.
             ibor_index (IborIndex): The index the floating leg fixes off.
+            discount (YieldTermStructure | None): Optional exogenous discount curve.
+            pillar (Pillar): Node convention; defaults to LastRelevantDate.
+            custom_pillar_date (Date | None): Required with CustomDate.
         """
 
 @typing.final
@@ -3316,14 +3401,11 @@ class YearOnYearInflationSwapHelper(YoYInflationHelper):
     of index linked to a handle of its own, so the caller's index need not be
     linked to any curve.
 
-    pillar is accepted for signature parity but never read: it only ever
-    discriminates on the interpolated path, which is refused.
-
-    Fallible: CpiInterpolationType.Linear is refused outright, and the swap is
-    built here, so an observation lag its legs cannot be built under fails at
-    construction.
+    Linear interpolation supports schedule-derived or custom pillars within
+    the final fixing period. Flat interpolation uses its single fixing date.
+    Invalid observation lags or custom dates fail at construction.
     """
-    def __init__(self, quote: quotes.SimpleQuote, swap_obs_lag: time.Period, maturity: time.Date, calendar: time.Calendar, payment_convention: time.BusinessDayConvention, day_counter: time.DayCounter, index: indexes.YoYInflationIndex, interpolation: indexes.CpiInterpolationType, nominal_term_structure: YieldTermStructure, settings: itofin.Settings, pillar: Pillar = Pillar.LastRelevantDate) -> None:
+    def __init__(self, quote: quotes.SimpleQuote, swap_obs_lag: time.Period, maturity: time.Date, calendar: time.Calendar, payment_convention: time.BusinessDayConvention, day_counter: time.DayCounter, index: indexes.YoYInflationIndex, interpolation: indexes.CpiInterpolationType, nominal_term_structure: YieldTermStructure, settings: itofin.Settings, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
         r"""
         Build the helper on a swap maturing at maturity.
 
@@ -3348,14 +3430,12 @@ class YearOnYearInflationSwapHelper(YoYInflationHelper):
             settings (Settings): The explicit settings supplying the evaluation
                 date the swap starts at, which must be set before this
                 constructor runs.
-            pillar (Pillar): Accepted for signature parity but never read; it
-                only ever discriminates on the interpolated path.
+            pillar (Pillar): Node convention on the Linear interpolation path.
+            custom_pillar_date (Date | None): Required with CustomDate; Flat
+                interpolation keeps its single fixing date.
 
         Raises:
-            ItofinError: On Linear interpolation, which the core refuses
-                outright pending the interpolated branch (#847), and on an
-                observation lag the helper's own swap legs cannot be built
-                under.
+            ItofinError: On invalid observation lags or custom pillar dates.
         """
 
 class YieldTermStructure:
@@ -3723,7 +3803,7 @@ class ZeroCouponInflationSwapHelper(ZeroInflationHelper):
     pillar picks which of the two nodes an interpolated swap straddles the helper
     fits; a flat swap reads a single fixing and ignores it.
     """
-    def __init__(self, quote: quotes.SimpleQuote, swap_obs_lag: time.Period, maturity: time.Date, calendar: time.Calendar, payment_convention: time.BusinessDayConvention, day_counter: time.DayCounter, index: indexes.ZeroInflationIndex, observation_interpolation: indexes.CpiInterpolationType, settings: itofin.Settings, pillar: Pillar = Pillar.LastRelevantDate) -> None:
+    def __init__(self, quote: quotes.SimpleQuote, swap_obs_lag: time.Period, maturity: time.Date, calendar: time.Calendar, payment_convention: time.BusinessDayConvention, day_counter: time.DayCounter, index: indexes.ZeroInflationIndex, observation_interpolation: indexes.CpiInterpolationType, settings: itofin.Settings, pillar: Pillar = Pillar.LastRelevantDate, custom_pillar_date: typing.Optional[time.Date] = None) -> None:
         r"""
         Build the helper on a swap maturing at maturity.
 
@@ -3753,6 +3833,7 @@ class ZeroCouponInflationSwapHelper(ZeroInflationHelper):
             pillar (Pillar): Which of the two nodes an interpolated swap
                 straddles the helper fits; a flat swap reads a single fixing
                 and ignores it.
+            custom_pillar_date (Date | None): Required with CustomDate.
 
         Raises:
             ItofinError: On an observation lag the index cannot observe
@@ -3975,12 +4056,12 @@ class Pillar:
     r"""
     The date the curve node a helper fits sits at.
 
-    MaturityDate and LastRelevantDate (the default) are the two schedule-derived
-    choices. Pillar.CustomDate is deferred in the core (#343), so its omission
-    here is deliberate, not an oversight.
+    MaturityDate and LastRelevantDate are schedule-derived. CustomDate requires
+    the separate custom_pillar_date argument within the helper date bounds.
     """
     MaturityDate: typing.ClassVar[Pillar]
     LastRelevantDate: typing.ClassVar[Pillar]
+    CustomDate: typing.ClassVar[Pillar]
     def __new__(cls, _unconstructible: typing.NoReturn) -> Pillar: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]

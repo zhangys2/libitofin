@@ -8,11 +8,13 @@ from itofin import indexes
 from itofin import models
 from itofin import pricingengines
 from itofin import processes
+from itofin import quotes
 from itofin import results
 from itofin import termstructures
 from itofin import time
 import typing
 __all__ = [
+    "BermudanExercise",
     "CapFloor",
     "CapFloorType",
     "CreditDefaultSwap",
@@ -24,6 +26,7 @@ __all__ = [
     "MakeVanillaSwap",
     "MakeYoYInflationCapFloor",
     "OptionType",
+    "OvernightIndexFuture",
     "OvernightIndexedSwap",
     "Position",
     "PricingModel",
@@ -38,6 +41,20 @@ __all__ = [
     "YoYInflationCapFloor",
     "ZeroCouponInflationSwap",
 ]
+
+@typing.final
+class BermudanExercise:
+    r"""
+    A copied, sorted set of exercise dates. Duplicate dates are retained.
+    """
+    def __init__(self, dates: typing.Sequence[time.Date]) -> None:
+        r"""
+        Build an exercise schedule; an empty list raises ItofinError.
+        """
+    def dates(self) -> builtins.list[time.Date]:
+        r"""
+        Return a copy of the sorted exercise dates.
+        """
 
 @typing.final
 class CapFloor:
@@ -175,6 +192,8 @@ class CapFloor:
             engine (BlackCapFloorEngine): The engine and its optionlet
                 volatility surface.
         """
+    def set_bachelier_engine(self, engine: pricingengines.BachelierCapFloorEngine) -> None: ...
+    def set_tree_engine(self, engine: pricingengines.TreeCapFloorEngine) -> None: ...
     def calculate(self) -> None:
         r"""
         Force the valuation. Idempotent.
@@ -892,6 +911,36 @@ class MakeYoYInflationCapFloor:
         """
 
 @typing.final
+class OvernightIndexFuture:
+    r"""
+    An overnight futures price, with live index fixings and convexity adjustment.
+    """
+    def __init__(self, index: indexes.OvernightIndex, value_date: time.Date, maturity_date: time.Date, convexity_adjustment: typing.Optional[quotes.SimpleQuote] = None, averaging_method: termstructures.RateAveraging = termstructures.RateAveraging.Compound) -> None:
+        r"""
+        Construct a fixed reference-period future; Compound is the default.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Return the futures price, or zero after expiry.
+        """
+    def convexity_adjustment(self) -> builtins.float:
+        r"""
+        Return the current convexity adjustment.
+        """
+    def value_date(self) -> time.Date:
+        r"""
+        First accrual date.
+        """
+    def maturity_date(self) -> time.Date:
+        r"""
+        Exclusive end of the reference period.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Whether the settlement event has occurred under the index settings.
+        """
+
+@typing.final
 class OvernightIndexedSwap:
     r"""
     A fixed leg versus a simple-averaged or compounded overnight leg.
@@ -983,11 +1032,11 @@ class OvernightIndexedSwap:
 @typing.final
 class Swaption:
     r"""
-    A European option to enter a vanilla or overnight swap.
+    An option to enter a vanilla or overnight swap.
 
     The swaption registers with the underlying swap and with the evaluation
     date on the Settings it was built with (D5). Pricing needs an engine: call
-    one of the three setters before npv.
+    an engine setter before npv.
     """
     def __init__(self, swap: VanillaSwap, exercise: EuropeanExercise, settlement_type: SettlementType, settlement_method: SettlementMethod, settings: itofin.Settings) -> None:
         r"""
@@ -1006,13 +1055,18 @@ class Swaption:
                 date the swaption prices against.
         """
     @staticmethod
+    def from_bermudan(swap: VanillaSwap, exercise: BermudanExercise, settlement_type: SettlementType, settlement_method: SettlementMethod, settings: itofin.Settings) -> Swaption:
+        r"""
+        Build a Bermudan option retaining the original vanilla swap.
+        """
+    @staticmethod
     def from_ois(swap: OvernightIndexedSwap, exercise: EuropeanExercise, settlement_type: SettlementType, settlement_method: SettlementMethod, settings: itofin.Settings) -> Swaption:
         r"""
         Build an option on an overnight swap, retaining the same shared underlying.
         """
     def exercise_date(self) -> time.Date:
         r"""
-        Return the single European exercise date.
+        Return the first exercise date (the sole date for a European option).
         """
     def underlying_fixed_rate(self) -> builtins.float:
         r"""
@@ -1044,6 +1098,10 @@ class Swaption:
         Args:
             engine (BlackSwaptionEngine): The engine and its volatility
                 surface.
+        """
+    def set_tree_engine(self, engine: pricingengines.TreeSwaptionEngine) -> None:
+        r"""
+        Attach a Hull-White tree engine. OIS underlyings are unsupported.
         """
     def set_bachelier_engine(self, engine: pricingengines.BachelierSwaptionEngine) -> None:
         r"""
@@ -1183,6 +1241,14 @@ class VanillaOption:
         Args:
             engine (MCEuropeanEngine): The engine, which already holds the
                 process it prices on.
+        """
+    def set_qmc_engine(self, engine: pricingengines.QMCEuropeanEngine) -> None:
+        r"""
+        Attach the fixed-sample Sobol European engine.
+        """
+    def price_qmc(self, engine: pricingengines.QMCEuropeanEngine) -> builtins.float:
+        r"""
+        Attach the Sobol engine and return its NPV, without an error estimate.
         """
     def set_mc_heston_engine(self, engine: pricingengines.MCEuropeanHestonEngine) -> None:
         r"""

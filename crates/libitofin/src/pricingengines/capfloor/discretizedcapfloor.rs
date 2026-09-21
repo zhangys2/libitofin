@@ -1,51 +1,101 @@
-//! Cap/floor on a short-rate lattice.
-//!
-//! Port of `ql/pricingengines/capfloor/discretizedcapfloor.{hpp,cpp}`:
-//! at each optionlet start, prices a discount-bond put/call (cap/floor).
-//!
-//! The past-start intrinsic path (`post_adjust_values_impl`) matches QL but is
-//! unreachable through [`TreeCapFloorEngine`](super::TreeCapFloorEngine)'s
-//! time-steps ctor: `mandatory_times` still includes negative starts (QL
-//! parity), and `TimeGrid::with_mandatory_times` rejects them. A fixed-grid
-//! ctor (deferred) is the escape hatch.
+//! Cap, floor and collar cash flows on a short-rate lattice.
 
 use crate::discretizedasset::{DiscretizedAsset, DiscretizedAssetBase, DiscretizedDiscountBond};
 use crate::errors::QlResult;
-use crate::fail;
 use crate::instruments::{CapFloorArguments, CapFloorType};
 use crate::math::array::Array;
-use crate::shared::Shared;
+use crate::pricingengine::Arguments;
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::types::{Real, Size, Time};
+use crate::{fail, require};
 
-/// Cap/floor discretized on a lattice (`discretizedcapfloor.hpp`).
+/// Bond-option representation of caplets and floorlets, following QuantLib.
 pub struct DiscretizedCapFloor {
     base: DiscretizedAssetBase,
-    arguments: CapFloorArguments,
+    kind: CapFloorType,
     start_times: Vec<Time>,
     end_times: Vec<Time>,
+    accruals: Vec<Time>,
+    nominals: Vec<Real>,
+    gearings: Vec<Real>,
+    cap_rates: Vec<Option<Real>>,
+    floor_rates: Vec<Option<Real>>,
+    forwards: Vec<Option<Real>>,
 }
 
 impl DiscretizedCapFloor {
-    /// `DiscretizedCapFloor(args, referenceDate, dayCounter)`.
-    pub fn new(args: CapFloorArguments, reference_date: Date, day_counter: &DayCounter) -> Self {
-        let start_times = args
-            .start_dates
-            .iter()
-            .map(|&d| day_counter.year_fraction(reference_date, d))
-            .collect();
-        let end_times = args
-            .end_dates
-            .iter()
-            .map(|&d| day_counter.year_fraction(reference_date, d))
-            .collect();
-        Self {
-            base: DiscretizedAssetBase::default(),
-            arguments: args,
-            start_times,
-            end_times,
+    /// Copies the coupon inputs and converts dates to lattice times.
+    ///
+    /// # Errors
+    /// Rejects inconsistent arguments and missing or non-finite required values.
+    pub fn new(args: &CapFloorArguments, reference: Date, dc: &DayCounter) -> QlResult<Self> {
+        args.validate()?;
+        require!(
+            reference != Date::null(),
+            "cap/floor reference date is null"
+        );
+        let Some(kind) = args.cap_floor_type else {
+            fail!("cap/floor type not set");
+        };
+        for i in 0..args.end_dates.len() {
+            require!(
+                args.start_dates[i] != Date::null()
+                    && args.end_dates[i] != Date::null()
+                    && args.end_dates[i] >= args.start_dates[i],
+                "payment precedes accrual start"
+            );
+            require!(
+                args.accrual_times[i].is_finite() && args.accrual_times[i] > 0.0,
+                "invalid accrual time"
+            );
+            require!(
+                (args.nominals[i] * args.gearings[i] * args.accrual_times[i]).is_finite(),
+                "invalid nominal or gearing"
+            );
+            if matches!(kind, CapFloorType::Cap | CapFloorType::Collar) {
+                require!(
+                    args.cap_rates[i].is_some_and(|r| r.is_finite()
+                        && (r * args.accrual_times[i]).is_finite()
+                        && 1.0 + r * args.accrual_times[i] > 0.0),
+                    "invalid cap rate"
+                );
+            }
+            if matches!(kind, CapFloorType::Floor | CapFloorType::Collar) {
+                require!(
+                    args.floor_rates[i].is_some_and(|r| r.is_finite()
+                        && (r * args.accrual_times[i]).is_finite()
+                        && 1.0 + r * args.accrual_times[i] > 0.0),
+                    "invalid floor rate"
+                );
+            }
+            if args.start_dates[i] < reference && args.end_dates[i] >= reference {
+                require!(
+                    args.forwards[i].is_some_and(Real::is_finite),
+                    "a still-live cap/floor coupon has no finite forward set"
+                );
+            }
         }
+        Ok(Self {
+            base: DiscretizedAssetBase::default(),
+            kind,
+            start_times: args
+                .start_dates
+                .iter()
+                .map(|&d| dc.year_fraction(reference, d))
+                .collect(),
+            end_times: args
+                .end_dates
+                .iter()
+                .map(|&d| dc.year_fraction(reference, d))
+                .collect(),
+            accruals: args.accrual_times.clone(),
+            nominals: args.nominals.clone(),
+            gearings: args.gearings.clone(),
+            cap_rates: args.cap_rates.clone(),
+            floor_rates: args.floor_rates.clone(),
+            forwards: args.forwards.clone(),
+        })
     }
 }
 
@@ -53,125 +103,94 @@ impl DiscretizedAsset for DiscretizedCapFloor {
     fn base(&self) -> &DiscretizedAssetBase {
         &self.base
     }
-
     fn base_mut(&mut self) -> &mut DiscretizedAssetBase {
         &mut self.base
     }
-
     fn as_asset_mut(&mut self) -> &mut dyn DiscretizedAsset {
         self
     }
-
     fn reset(&mut self, size: Size) -> QlResult<()> {
+        let method = self.require_method()?;
+        for time in self
+            .mandatory_times()
+            .into_iter()
+            .filter(|time| *time >= 0.0)
+        {
+            method.time_grid().index(time)?;
+        }
         *self.values_mut() = Array::filled(size, 0.0);
         self.adjust_values()
     }
-
     fn mandatory_times(&self) -> Vec<Time> {
-        let mut times = self.start_times.clone();
-        times.extend_from_slice(&self.end_times);
-        times
+        self.start_times
+            .iter()
+            .chain(&self.end_times)
+            .copied()
+            .collect()
     }
-
     fn pre_adjust_values_impl(&mut self) -> QlResult<()> {
-        let method = self.require_method()?;
-        let time = self.time();
-        let n = self.start_times.len();
-        let Some(cap_floor_type) = self.arguments.cap_floor_type else {
-            fail!("cap/floor type not set");
-        };
-
-        for i in 0..n {
-            if !self.is_on_time(self.start_times[i]) {
+        for i in 0..self.start_times.len() {
+            if self.start_times[i] < 0.0 || !self.is_on_time(self.start_times[i]) {
                 continue;
             }
-            let end = self.end_times[i];
-            let tenor = self.arguments.accrual_times[i];
-            let gearing = self.arguments.gearings[i];
-            let nominal = self.arguments.nominals[i];
-
             let mut bond = DiscretizedDiscountBond::new();
-            bond.initialize(Shared::clone(&method), end)?;
-            bond.rollback(time)?;
-
-            let has_cap = matches!(cap_floor_type, CapFloorType::Cap | CapFloorType::Collar);
-            let has_floor = matches!(cap_floor_type, CapFloorType::Floor | CapFloorType::Collar);
-
-            if has_cap {
-                let Some(cap) = self.arguments.cap_rates[i] else {
-                    fail!("cap rate not set for a cap/collar");
-                };
-                let accrual = 1.0 + cap * tenor;
-                let strike = 1.0 / accrual;
-                let values = self.values_mut();
-                for j in 0..values.size() {
-                    values[j] += nominal * accrual * gearing * (strike - bond.values()[j]).max(0.0);
+            bond.initialize(self.require_method()?, self.end_times[i])?;
+            bond.rollback(self.time())?;
+            let scale = self.nominals[i] * self.gearings[i];
+            for j in 0..self.values().size() {
+                if matches!(self.kind, CapFloorType::Cap | CapFloorType::Collar)
+                    && let Some(rate) = self.cap_rates[i]
+                {
+                    let accrual = 1.0 + rate * self.accruals[i];
+                    self.values_mut()[j] +=
+                        scale * accrual * (1.0 / accrual - bond.values()[j]).max(0.0);
                 }
-            }
-            if has_floor {
-                let Some(floor) = self.arguments.floor_rates[i] else {
-                    fail!("floor rate not set for a floor/collar");
-                };
-                let accrual = 1.0 + floor * tenor;
-                let strike = 1.0 / accrual;
-                let mult: Real = if cap_floor_type == CapFloorType::Floor {
-                    1.0
-                } else {
-                    -1.0
-                };
-                let values = self.values_mut();
-                for j in 0..values.size() {
-                    values[j] +=
-                        nominal * accrual * mult * gearing * (bond.values()[j] - strike).max(0.0);
+                if matches!(self.kind, CapFloorType::Floor | CapFloorType::Collar)
+                    && let Some(rate) = self.floor_rates[i]
+                {
+                    let accrual = 1.0 + rate * self.accruals[i];
+                    let sign = if self.kind == CapFloorType::Floor {
+                        1.0
+                    } else {
+                        -1.0
+                    };
+                    self.values_mut()[j] +=
+                        scale * accrual * sign * (bond.values()[j] - 1.0 / accrual).max(0.0);
                 }
             }
         }
         Ok(())
     }
-
     fn post_adjust_values_impl(&mut self) -> QlResult<()> {
-        let n = self.end_times.len();
-        let Some(cap_floor_type) = self.arguments.cap_floor_type else {
-            fail!("cap/floor type not set");
-        };
-
-        for i in 0..n {
-            if !self.is_on_time(self.end_times[i]) || self.start_times[i] >= 0.0 {
+        for i in 0..self.end_times.len() {
+            if self.start_times[i] >= 0.0
+                || self.end_times[i] < 0.0
+                || !self.is_on_time(self.end_times[i])
+            {
                 continue;
             }
-            let Some(fixing) = self.arguments.forwards[i] else {
-                continue;
+            let Some(fixing) = self.forwards[i] else {
+                fail!("past-start coupon has no forward");
             };
-            let nominal = self.arguments.nominals[i];
-            let accrual = self.arguments.accrual_times[i];
-            let gearing = self.arguments.gearings[i];
-            let scale = accrual * nominal * gearing;
-
-            if matches!(cap_floor_type, CapFloorType::Cap | CapFloorType::Collar) {
-                let Some(cap) = self.arguments.cap_rates[i] else {
-                    fail!("cap rate not set for a cap/collar");
-                };
-                let add = (fixing - cap).max(0.0) * scale;
-                let values = self.values_mut();
-                for j in 0..values.size() {
-                    values[j] += add;
-                }
+            let scale = self.nominals[i] * self.accruals[i] * self.gearings[i];
+            let mut amount = 0.0;
+            if matches!(self.kind, CapFloorType::Cap | CapFloorType::Collar)
+                && let Some(rate) = self.cap_rates[i]
+            {
+                amount += scale * (fixing - rate).max(0.0);
             }
-            if matches!(cap_floor_type, CapFloorType::Floor | CapFloorType::Collar) {
-                let Some(floor) = self.arguments.floor_rates[i] else {
-                    fail!("floor rate not set for a floor/collar");
-                };
-                let add = (floor - fixing).max(0.0) * scale;
-                let values = self.values_mut();
-                if cap_floor_type == CapFloorType::Floor {
-                    for j in 0..values.size() {
-                        values[j] += add;
-                    }
+            if matches!(self.kind, CapFloorType::Floor | CapFloorType::Collar)
+                && let Some(rate) = self.floor_rates[i]
+            {
+                let sign = if self.kind == CapFloorType::Floor {
+                    1.0
                 } else {
-                    for j in 0..values.size() {
-                        values[j] -= add;
-                    }
-                }
+                    -1.0
+                };
+                amount += sign * scale * (rate - fixing).max(0.0);
+            }
+            for value in self.values_mut().iter_mut() {
+                *value += amount;
             }
         }
         Ok(())

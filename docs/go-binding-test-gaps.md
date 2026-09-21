@@ -9,6 +9,12 @@ This inventory does not claim exhaustive QuantLib product coverage.
 
 | Scope | Executable evidence |
 | --- | --- |
+| Custom pillars: independent QuantLib helper dates and curve values, invalid bounds, retained inputs and date recovery | `TestCustomYieldPillarsQuantLibAndRecovery`, `TestCustomInflationPillarsQuantLib`, `TestCustomFraOverloadsAndSwapDiscount` |
+| Overnight futures: both accrual conventions, holiday clipping, live convexity/fixings, expiry and released inputs at `1e-9` | `TestOvernightFutureQuantLibAccrualAndRetention`, `TestSofrFutureBootstrapAndCustomPillars` |
+| Hull-White Bermudan tree, six indexed/par QuantLib cached prices, bumped-quote oracle, retained inputs and invalid-input recovery | [Tree swaption tests](../sdk/go/tree_swaption_test.go) |
+| Iterative bootstrap signed bound widening, approximate fallback, evaluation limits, cached retry and retained inputs | `TestIterativeBootstrapQuantLibOracle`, `TestIterativeBootstrapAllYieldFactories`, `TestIterativeBootstrapRetryRetentionAndErrors`, `TestIterativeBootstrapInvalidOptions` |
+| Mutually coupled Ibor basis curves, independent FRA/swap repricing, quote/discount/date/fixing updates and retained joint ownership | `TestJointYieldCurvesQuantLibRepricingAndUpdates`, `TestJointYieldCurvesFixingsAndCloseOrders`, `TestJointYieldCurvesInvalidInputs` |
+| SABR backward-flat sparse/dense QuantLib oracle, quote/date recalibration, retained inputs and error recovery | `TestSABRBackwardFlatQuantLibOracle`, `TestSABRBackwardFlatUpdatesAndRetainedInputs`, `TestSABRBackwardFlatInvalidInputs` |
 | Kerkhof monthly factors, independent zero corrections, copied factors, retained handles and YoY errors | `TestKerkhofSeasonalityQuantLibOracle`, `TestKerkhofSeasonalityOwnershipAndErrors` |
 | Lazy zero-inflation base dates, independent nodes/forecasts, fixing/date/quote updates and retained dependencies | `TestLazyInflationBaseMatchesQuantLibAndRetainsDependencies` |
 | Zero/YoY index representations and retained ratio identity | `TestInflationCompletionIndexRepresentations` |
@@ -32,6 +38,8 @@ This inventory does not claim exhaustive QuantLib product coverage.
 | OIS today-to-history error recovery and live additive-spread rebootstrap | `TestOvernightTodayForecastRecoversAfterMissingPastFixing`, `TestOvernightAdditiveSpreadQuoteRebootstrapsExistingCurve` |
 | Heston PriceError/ImpliedVolError fitted parameters and signed residuals | `TestHestonCalibrationPriceAndImpliedVolOracles` |
 | Hull-White fixed reversion and mixed omitted/explicit optimizer and stopping settings | `TestHullWhiteCalibrationFixedReversionAndOptionalCombinations` |
+| Normal cap/floor/collar prices and vegas, negative rates, zero volatility, tree prices and retained inputs | `TestCapNormalAndTreeOracles` |
+| Normal CapHelper calibration, mandatory grids, live quotes and invalid-input recovery | `TestCapHelperNormalCalibrationAndRecovery` |
 | Hull-White zero-start-delay calibration after input wrappers close, original QuantLib PAR cache at `1e-5` | `TestHullWhiteCachedNoStartDelayAfterInputsClosed` |
 
 The CDS builder includes the final accrual day; the current explicit Go
@@ -52,9 +60,9 @@ covers all three language surfaces.
 forecast discount-ratio compounding, today's fixing enforcement and daily-spread
 treatment with QuantLib, including partial forecast intervals. Both previously
 excluded coupon cases now run. Exact enforcement and daily-spread switches remain
-Rust-only: Python/Go expose neither those settings nor fixing-history writes.
-Their OIS tests cover the exposed pricing and recovery from missing-history
-errors; they do not claim coverage of unexposed switches.
+Rust-only; #808 additionally exposes overnight fixing-history writes in Python/Go.
+The OIS tests cover exposed pricing and recovery from missing-history errors;
+they do not claim coverage of unexposed switches.
 [#1047](https://github.com/benbenbang/libitofin/issues/1047) registers the helper's
 additive-spread handle with its existing observer, so a live spread change
 invalidates and rebootstraps the same fitted curve in Rust, Python and Go.

@@ -4,6 +4,7 @@
 import builtins
 import itofin
 from itofin import indexes
+from itofin import models
 from itofin import processes
 from itofin import quotes
 from itofin import termstructures
@@ -11,6 +12,7 @@ from itofin import time
 import typing
 __all__ = [
     "AccrualBias",
+    "BachelierCapFloorEngine",
     "BachelierSwaptionEngine",
     "BlackCapFloorEngine",
     "BlackSwaptionEngine",
@@ -23,8 +25,20 @@ __all__ = [
     "MCEuropeanHestonEngine",
     "MidPointCdsEngine",
     "NumericalFix",
+    "QMCEuropeanEngine",
+    "TreeCapFloorEngine",
+    "TreeSwaptionEngine",
     "YoYInflationCapFloorEngine",
 ]
+
+@typing.final
+class BachelierCapFloorEngine:
+    r"""
+    Normal-volatility engine for caps, floors and collars.
+    """
+    def __new__(cls, vol: termstructures.OptionletVolatilityStructure, discount: termstructures.YieldTermStructure) -> BachelierCapFloorEngine: ...
+    @staticmethod
+    def with_flat_vol(discount: termstructures.YieldTermStructure, vol: quotes.SimpleQuote, day_counter: time.DayCounter, settings: itofin.Settings) -> BachelierCapFloorEngine: ...
 
 @typing.final
 class BachelierSwaptionEngine:
@@ -260,7 +274,7 @@ class MCAmericanEngine:
     r"""
     The Longstaff-Schwartz least-squares Monte Carlo engine for American
     payoffs, over the pseudo-random RNG policy. The low-discrepancy policy is
-    not exposed (#454), and the Monomial regression basis is not selectable
+    not exposed for this engine, and the Monomial regression basis is not selectable
     (#453).
 
     The option priced must come from VanillaOption.american(...): a
@@ -307,7 +321,7 @@ class MCAmericanEngine:
 class MCEuropeanEngine:
     r"""
     The Monte Carlo engine for European payoffs, over the pseudo-random RNG
-    policy. The low-discrepancy policy is not exposed (#454).
+    policy.
 
     Pricing is seeded and deterministic: the same seed reproduces the NPV
     bitwise, and the standard error is read back through
@@ -403,6 +417,36 @@ class MidPointCdsEngine:
                 on.
             settings (Settings): The explicit settings; must be the same object
                 the contract this engine prices was built with.
+        """
+
+@typing.final
+class QMCEuropeanEngine:
+    r"""
+    Fixed-sample Sobol European engine, without an error estimate.
+    """
+    def __init__(self, process: processes.BlackScholesProcess, steps: typing.Optional[builtins.int] = None, steps_per_year: typing.Optional[builtins.int] = None, samples: typing.Optional[builtins.int] = None, absolute_tolerance: typing.Optional[builtins.float] = None, max_samples: typing.Optional[builtins.int] = None, seed: typing.Optional[builtins.int] = None, antithetic: typing.Optional[builtins.bool] = None) -> None:
+        r"""
+        Build a Sobol engine with a positive fixed sample count.
+
+        No statistical error estimate is available. Absolute tolerance and
+        max_samples are rejected. Seed selects Sobol direction initialization;
+        it is deterministic even when omitted or zero.
+        """
+
+@typing.final
+class TreeCapFloorEngine:
+    def __new__(cls, model: models.HullWhite, time_steps: builtins.int) -> TreeCapFloorEngine: ...
+    @staticmethod
+    def with_time_grid(model: models.HullWhite, times: typing.Sequence[builtins.float]) -> TreeCapFloorEngine: ...
+
+@typing.final
+class TreeSwaptionEngine:
+    r"""
+    A Hull-White tree engine with a positive number of time steps.
+    """
+    def __init__(self, model: models.HullWhite, time_steps: builtins.int, settings: itofin.Settings) -> None:
+        r"""
+        Retain the model and settings; zero steps raise ItofinError.
         """
 
 @typing.final

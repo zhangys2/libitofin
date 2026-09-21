@@ -1,7 +1,7 @@
-//! Bachelier (normal) cap/floor engine (`bacheliercapfloorengine.{hpp,cpp}`).
-//! Prices [`CapFloor`](crate::instruments::CapFloor) optionlets with
-//! [`bachelier_black_formula`] on a Normal surface; reports `value`/`vega`/
-//! `optionletsPrice`/`optionletsDelta`/`optionletsVega`/
+//! Normal-volatility pricing for caps, floors and collars.
+//!
+//! Port of `ql/pricingengines/capfloor/bacheliercapfloorengine.{hpp,cpp}`:
+//! reports `value`/`vega`/`optionletsPrice`/`optionletsDelta`/`optionletsVega`/
 //! `optionletsDiscountFactor`/`optionletsAtmForward`, plus `optionletsStdDev`
 //! for caps and floors (not collars). Flat-vol forces Normal (QL defaults
 //! ShiftedLognormal); explicit [`Settings`] (D5).
@@ -32,7 +32,7 @@ use crate::types::Real;
 use crate::{fail, require};
 use std::any::Any;
 
-/// Normal-model engine for caps, floors and collars.
+/// Bachelier normal-formula engine for caps, floors and collars.
 pub struct BachelierCapFloorEngine {
     base: GenericEngine<CapFloorArguments, InstrumentResults>,
     discount_curve: Handle<dyn YieldTermStructure>,
@@ -40,35 +40,32 @@ pub struct BachelierCapFloorEngine {
 }
 
 impl BachelierCapFloorEngine {
-    /// Discount curve + Normal optionlet surface (`…cpp:62-73`).
+    /// Builds a normal-volatility engine over an optionlet surface.
     pub fn new(
         discount_curve: Handle<dyn YieldTermStructure>,
         vol: Handle<dyn OptionletVolatilityStructure>,
     ) -> QlResult<Self> {
-        let surface = vol.current_link()?;
         require!(
-            surface.volatility_type() == VolatilityType::Normal,
+            vol.current_link()?.volatility_type() == VolatilityType::Normal,
             "BachelierCapFloorEngine needs a normal optionlet surface"
         );
-        drop(surface);
-
         let base = GenericEngine::new(CapFloorArguments::default(), InstrumentResults::default());
         discount_curve.register_observer(&base.observer());
         vol.register_observer(&base.observer());
-        Ok(Self {
+        Ok(BachelierCapFloorEngine {
             base,
             discount_curve,
             vol,
         })
     }
 
-    /// Flat Normal volatility on a moving [`ConstantOptionletVolatility`].
+    /// Builds a moving normal-volatility surface from an observable quote.
     pub fn with_flat_vol(
         discount_curve: Handle<dyn YieldTermStructure>,
         vol: Handle<dyn Quote>,
         day_counter: DayCounter,
         settings: Shared<Settings<Date>>,
-    ) -> QlResult<Self> {
+    ) -> QlResult<BachelierCapFloorEngine> {
         let surface = ConstantOptionletVolatility::moving_with_quote(
             0,
             NullCalendar::new(),
@@ -80,7 +77,7 @@ impl BachelierCapFloorEngine {
             settings,
         );
         let vol = Handle::new(shared(surface) as Shared<dyn OptionletVolatilityStructure>);
-        Self::new(discount_curve, vol)
+        BachelierCapFloorEngine::new(discount_curve, vol)
     }
 }
 
@@ -104,8 +101,13 @@ impl PricingEngine for BachelierCapFloorEngine {
     }
 
     fn calculate(&mut self) -> QlResult<()> {
+        self.base.arguments().validate()?;
         let discount = self.discount_curve.current_link()?;
         let surface = self.vol.current_link()?;
+        require!(
+            surface.volatility_type() == VolatilityType::Normal,
+            "normal surface required"
+        );
         let today = surface.reference_date()?;
         let settlement = discount.reference_date()?;
 
@@ -148,14 +150,14 @@ impl PricingEngine for BachelierCapFloorEngine {
                 arguments.nominals[i] * arguments.gearings[i] * arguments.accrual_times[i];
             let discounted_accrual = d * accrual_factor;
             let Some(forward) = arguments.forwards[i] else {
-                values.push(0.0);
-                deltas.push(0.0);
-                vegas.push(0.0);
-                std_devs.push(0.0);
-                continue;
+                fail!("missing forward for live cap/floor coupon");
             };
             atm_forwards[i] = forward;
 
+            require!(
+                forward.is_finite() && discounted_accrual.is_finite(),
+                "non-finite cap/floor input"
+            );
             let fixing_date = arguments.fixing_dates[i];
             let sqrt_time = if fixing_date > today {
                 surface.time_from_reference(fixing_date)?.sqrt()
@@ -163,18 +165,29 @@ impl PricingEngine for BachelierCapFloorEngine {
                 0.0
             };
 
+            require!(
+                sqrt_time.is_finite() && sqrt_time >= 0.0,
+                "invalid cap/floor fixing time"
+            );
             let mut optionlet_value = 0.0;
             let mut optionlet_vega = 0.0;
             let mut optionlet_delta = 0.0;
             let mut optionlet_std_dev = 0.0;
 
             if has_cap {
-                let strike = arguments.cap_rates[i].expect("cap rate set for cap/collar");
+                let strike = arguments.cap_rates[i].ok_or_else(|| {
+                    crate::errors::QlError::new("cap rate missing", file!(), line!())
+                })?;
+                require!(strike.is_finite(), "non-finite cap/floor strike");
                 let mut std_dev = 0.0;
                 if sqrt_time > 0.0 {
-                    std_dev = surface
-                        .black_variance_date(fixing_date, strike, false)?
-                        .sqrt();
+                    let volatility = surface.volatility_date(fixing_date, strike, false)?;
+                    require!(
+                        volatility.is_finite() && volatility >= 0.0,
+                        "normal volatility must be finite and non-negative"
+                    );
+                    std_dev = volatility * sqrt_time;
+                    require!(std_dev.is_finite(), "non-finite normal volatility");
                     optionlet_std_dev = std_dev;
                     optionlet_vega += bachelier_black_formula_std_dev_derivative(
                         strike,
@@ -199,14 +212,21 @@ impl PricingEngine for BachelierCapFloorEngine {
             }
 
             if has_floor {
-                let strike = arguments.floor_rates[i].expect("floor rate set for floor/collar");
+                let strike = arguments.floor_rates[i].ok_or_else(|| {
+                    crate::errors::QlError::new("floor rate missing", file!(), line!())
+                })?;
+                require!(strike.is_finite(), "non-finite cap/floor strike");
                 let mut std_dev = 0.0;
                 let mut floorlet_vega = 0.0;
                 let mut floorlet_delta = 0.0;
                 if sqrt_time > 0.0 {
-                    std_dev = surface
-                        .black_variance_date(fixing_date, strike, false)?
-                        .sqrt();
+                    let volatility = surface.volatility_date(fixing_date, strike, false)?;
+                    require!(
+                        volatility.is_finite() && volatility >= 0.0,
+                        "normal volatility must be finite and non-negative"
+                    );
+                    std_dev = volatility * sqrt_time;
+                    require!(std_dev.is_finite(), "non-finite normal volatility");
                     optionlet_std_dev = std_dev;
                     floorlet_vega = bachelier_black_formula_std_dev_derivative(
                         strike,
@@ -240,6 +260,10 @@ impl PricingEngine for BachelierCapFloorEngine {
                 }
             }
 
+            require!(
+                optionlet_value.is_finite() && optionlet_vega.is_finite(),
+                "non-finite cap/floor optionlet result"
+            );
             values.push(optionlet_value);
             deltas.push(optionlet_delta);
             vegas.push(optionlet_vega);
@@ -248,6 +272,10 @@ impl PricingEngine for BachelierCapFloorEngine {
             vega += optionlet_vega;
         }
 
+        require!(
+            value.is_finite() && vega.is_finite(),
+            "non-finite cap/floor result"
+        );
         drop(discount);
         drop(surface);
 
@@ -299,7 +327,7 @@ mod tests {
     use crate::interestrate::Compounding;
     use crate::pricingengines::DiscountingSwapEngine;
     use crate::quotes::{Quote, SimpleQuote, make_quote_handle};
-    use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::shared::{SharedMut, shared_mut};
     use crate::termstructures::yields::{FlatForward, ZeroSpreadedTermStructure};
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
@@ -308,7 +336,7 @@ mod tests {
     use crate::time::frequency::Frequency;
     use crate::time::schedule::MakeSchedule;
     use crate::time::timeunit::TimeUnit;
-    use crate::types::{Rate, Real, Volatility};
+    use crate::types::{Rate, Volatility};
 
     const VOL: Volatility = 0.01;
 
@@ -395,6 +423,61 @@ mod tests {
         cf.base_mut()
             .set_pricing_engine(engine(curve, settings, vol));
         cf
+    }
+
+    #[test]
+    fn same_day_intrinsic_and_malformed_input_recovery() {
+        let date = Date::new(15, Month::January, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(date);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            date,
+            -0.01,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let quote = shared(SimpleQuote::new(0.01));
+        let mut engine = BachelierCapFloorEngine::with_flat_vol(
+            curve,
+            Handle::new(quote),
+            Actual365Fixed::new(),
+            settings,
+        )
+        .unwrap();
+        let args = CapFloorArguments {
+            cap_floor_type: Some(CapFloorType::Cap),
+            start_dates: vec![date],
+            fixing_dates: vec![date],
+            end_dates: vec![date + 365],
+            accrual_times: vec![1.0],
+            cap_rates: vec![Some(-0.02)],
+            floor_rates: vec![None],
+            forwards: vec![Some(-0.01)],
+            gearings: vec![1.0],
+            nominals: vec![100.0],
+        };
+        *engine.base.arguments_mut() = args;
+        engine.calculate().unwrap();
+        let value = engine.base.results().value.unwrap();
+        assert!((value - 0.01_f64.exp()).abs() < 1e-12);
+        let vega = engine.base.results().additional_results["vega"]
+            .downcast_ref::<f64>()
+            .unwrap();
+        assert_eq!(*vega, 0.0);
+        engine.base.arguments_mut().forwards[0] = None;
+        assert!(engine.calculate().is_err());
+        engine.base.arguments_mut().forwards[0] = Some(-0.01);
+        engine.base.arguments_mut().cap_rates[0] = Some(f64::NAN);
+        assert!(engine.calculate().is_err());
+        engine.base.arguments_mut().cap_rates[0] = Some(-0.02);
+        engine.base.arguments_mut().nominals[0] = f64::MAX;
+        engine.base.arguments_mut().gearings[0] = f64::MAX;
+        assert!(engine.calculate().is_err());
+        engine.base.arguments_mut().nominals[0] = 100.0;
+        engine.base.arguments_mut().gearings[0] = 1.0;
+        engine.calculate().unwrap();
+        assert_eq!(engine.base.results().value, Some(value));
     }
 
     #[test]

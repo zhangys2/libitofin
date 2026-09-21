@@ -21,8 +21,9 @@
 //! interior points between them; the lattice engines need it so swap reset/pay
 //! times land on exact grid nodes.
 //!
-//! Deferred (not needed yet): the initializer-list ctors (`timegrid.hpp:141,143`)
-//! and `closest_time` (`timegrid.hpp:153`).
+//! The value-semantics mandatory-times constructor preserves only supplied
+//! nodes and an initial zero. Initializer-list conveniences and `closest_time`
+//! remain unexposed.
 
 use std::ops::Index;
 
@@ -40,6 +41,36 @@ pub struct TimeGrid {
 }
 
 impl TimeGrid {
+    /// Builds an exact grid from mandatory times, sorting and removing duplicates.
+    /// Zero is prepended when absent, without inserting intermediate nodes.
+    ///
+    /// # Errors
+    /// Rejects empty, negative or non-finite times and a grid without a positive end.
+    pub fn from_mandatory_times(times: &[Time]) -> QlResult<Self> {
+        require!(!times.is_empty(), "empty time sequence");
+        require!(
+            times.iter().all(|t| t.is_finite() && *t >= 0.0),
+            "invalid grid time"
+        );
+        let mut mandatory_times = times.to_vec();
+        mandatory_times.sort_by(f64::total_cmp);
+        mandatory_times.dedup_by(|a, b| close_enough(*a, *b));
+        require!(
+            mandatory_times.last().is_some_and(|t| *t > 0.0),
+            "positive grid end required"
+        );
+        let mut times = mandatory_times.clone();
+        if times[0] > 0.0 {
+            times.insert(0, 0.0);
+        }
+        let dt = times.windows(2).map(|p| p[1] - p[0]).collect();
+        Ok(Self {
+            times,
+            dt,
+            mandatory_times,
+        })
+    }
+
     /// Regularly spaced grid: `steps + 1` points `0, dt, 2*dt, ..., end` with
     /// `dt = end / steps`.
     ///
@@ -61,41 +92,6 @@ impl TimeGrid {
             times,
             dt: vec![dt; steps],
             mandatory_times: vec![end],
-        })
-    }
-
-    /// Grid through a set of mandatory times, with regularly spaced interior
-    /// points (`timegrid.hpp:87`, the `(begin, end, steps)` ctor).
-    ///
-    /// Mandatory times only: no interior fill (`timegrid.hpp:54-87`).
-    ///
-    /// Guarantees every distinct input time is a grid node. Prepends `0` when
-    /// the earliest mandatory time is strictly positive. Use
-    /// [`with_mandatory_times`] when a target step count should densify the grid.
-    ///
-    /// # Errors
-    /// Returns `Err` if `times` is empty or contains a negative time.
-    pub fn from_mandatory_times(times: &[Time]) -> QlResult<Self> {
-        require!(!times.is_empty(), "empty time sequence");
-        let mut mandatory = times.to_vec();
-        mandatory.sort_by(|a, b| {
-            a.partial_cmp(b)
-                .expect("time-grid mandatory times must be totally ordered")
-        });
-        require!(mandatory[0] >= 0.0, "negative times not allowed");
-        mandatory.dedup_by(|a, b| close_enough(*a, *b));
-
-        let mut grid_times = Vec::with_capacity(mandatory.len() + 1);
-        if mandatory[0] > 0.0 {
-            grid_times.push(0.0);
-        }
-        grid_times.extend_from_slice(&mandatory);
-
-        let dt = grid_times.windows(2).map(|w| w[1] - w[0]).collect();
-        Ok(TimeGrid {
-            times: grid_times,
-            dt,
-            mandatory_times: mandatory,
         })
     }
 
@@ -414,5 +410,24 @@ mod tests {
         assert_eq!(grid.closest_index(-1.0), 0);
         // A midpoint tie: dt1 (0.25 - 0.125) == dt2, so the lower node wins.
         assert_eq!(grid.closest_index(0.125), 0);
+    }
+}
+
+#[cfg(test)]
+mod exact_grid_tests {
+    use super::*;
+    #[test]
+    fn exact_grid_keeps_nodes_and_rejects_invalid_times() {
+        let grid = TimeGrid::from_mandatory_times(&[100.0, 1e-12, 100.0]).unwrap();
+        assert_eq!(grid.times(), &[0.0, 1e-12, 100.0]);
+        for times in [
+            &[][..],
+            &[0.0][..],
+            &[f64::NAN, 1.0][..],
+            &[f64::INFINITY][..],
+            &[-1.0, 1.0][..],
+        ] {
+            assert!(TimeGrid::from_mandatory_times(times).is_err());
+        }
     }
 }

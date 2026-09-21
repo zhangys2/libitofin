@@ -21,7 +21,7 @@
 //! the leg accessors on a built instrument beyond coupon_count().
 
 use crate::PyQlError;
-use crate::capfloorengine::PyBlackCapFloorEngine;
+use crate::capfloorengine::{PyBachelierCapFloorEngine, PyBlackCapFloorEngine};
 use crate::cashflows::PyIborLeg;
 use crate::hullwhite::PyIborIndex;
 use crate::results::Results;
@@ -245,6 +245,13 @@ impl PyCapFloor {
     ///     engine (BlackCapFloorEngine): The engine and its optionlet
     ///         volatility surface.
     fn set_black_engine(&mut self, engine: &PyBlackCapFloorEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+
+    fn set_bachelier_engine(&mut self, engine: &PyBachelierCapFloorEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+    fn set_tree_engine(&mut self, engine: &crate::caphelper::PyTreeCapFloorEngine) {
         self.inner.base_mut().set_pricing_engine(engine.engine());
     }
 

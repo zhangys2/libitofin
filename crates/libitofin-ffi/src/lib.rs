@@ -16,6 +16,7 @@ pub mod simulation_api;
 pub mod simulation_kernel;
 pub use boundary::{Context, ItofinError};
 pub mod calendar_api;
+pub mod cap_calibration_api;
 pub mod cashflows_api;
 pub mod credit_api;
 pub mod credit_helpers_api;
@@ -32,10 +33,14 @@ pub mod inflation_products_api;
 pub mod inflation_seasonality_api;
 pub mod inflation_vol_api;
 pub mod inflation_volgrid_api;
+pub mod iterative_bootstrap_api;
+pub mod joint_curves_api;
 pub mod market_api;
 pub mod mc_api;
 pub mod models_api;
 pub mod options_api;
+pub mod overnight_futures_api;
+pub mod poisson_rng_api;
 pub mod rates_api;
 pub mod rates_engines;
 pub mod rates_fra;
@@ -51,6 +56,7 @@ pub mod settings_api;
 pub mod smile_api;
 pub mod stripper_api;
 pub mod time_api;
+pub mod tree_swaption_api;
 pub mod version_api;
 pub mod vol_api;
 #[cfg(test)]
@@ -60,3 +66,6 @@ pub mod volgrid_api;
 
 #[cfg(test)]
 mod swaption_facades_tests;
+
+#[cfg(test)]
+mod cap_calibration_tests;
