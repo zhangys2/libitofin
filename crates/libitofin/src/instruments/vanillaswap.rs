@@ -225,9 +225,11 @@ mod tests {
     //! builds, the payer flags, the fixed/spread/nominal accessors - and the one
     //! real override: the floating hook filling the argument vectors from the
     //! swap's `IborCoupon`s, hand-checked against the erased floating leg.
+    //! Cash-flow observer wiring is pinned by
+    //! [`forecast_curve_relink_notifies_the_swap`] (`swap.cpp` `testNotifications`).
 
     use super::*;
-    use crate::handle::Handle;
+    use crate::handle::{Handle, RelinkableHandle};
     use crate::indexes::ibor::Euribor;
     use crate::instruments::swap::SwapArguments;
     use crate::interestrate::Compounding;
@@ -236,6 +238,7 @@ mod tests {
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::test_support::{Flag, as_observer};
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
@@ -243,6 +246,7 @@ mod tests {
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
     use crate::time::schedule::MakeSchedule;
+    use crate::time::timeunit::TimeUnit;
 
     const NOMINAL: Real = 1_000_000.0;
     const FIXED_RATE: Rate = 0.05;
@@ -479,5 +483,101 @@ mod tests {
         );
         assert_eq!(swap.fixed_vs_floating().nominal().unwrap(), 100.0);
         assert_eq!(swap.fixed_vs_floating().fixed_rate(), 0.03);
+    }
+
+    /// `swap.cpp` `testNotifications` (:338-380): after an initial NPV, a Flag
+    /// registered on the swap must raise when the floating index's forecast
+    /// curve is relinked (coupon → index → handle observer chain).
+    #[test]
+    fn forecast_curve_relink_notifies_the_swap() {
+        let today = Date::new(15, Month::September, 2015);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let calendar = Target::new();
+        let spot = calendar.advance(
+            today,
+            2,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let end = calendar.advance(
+            spot,
+            2,
+            TimeUnit::Years,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let schedule = MakeSchedule::new()
+            .from(spot)
+            .to(end)
+            .with_calendar(calendar)
+            .with_frequency(Frequency::Semiannual)
+            .build();
+
+        let forecast: RelinkableHandle<dyn YieldTermStructure> = RelinkableHandle::empty();
+        forecast.link_to(shared(FlatForward::with_rate(
+            today,
+            0.02,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+
+        let discount: RelinkableHandle<dyn YieldTermStructure> = RelinkableHandle::empty();
+        discount.link_to(shared(FlatForward::with_rate(
+            today,
+            0.02,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+
+        let index = shared(Euribor::six_months(
+            forecast.handle(),
+            Shared::clone(&settings),
+        ));
+        let engine_settings = Shared::clone(&settings);
+        let mut swap = VanillaSwap::new(
+            SwapType::Payer,
+            100_000.0,
+            schedule.clone(),
+            0.03,
+            Actual365Fixed::new(),
+            schedule,
+            index,
+            0.0,
+            Actual365Fixed::new(),
+            None,
+            settings,
+        )
+        .unwrap();
+        let engine = shared_mut(DiscountingSwapEngine::new(
+            discount.handle(),
+            Some(false),
+            None,
+            None,
+            engine_settings,
+        ));
+        swap.base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        let _ = swap.npv().unwrap();
+
+        let flag = Flag::new();
+        swap.base().register_observer(&as_observer(&flag));
+        Flag::lower(&flag);
+
+        forecast.link_to(shared(FlatForward::with_rate(
+            today,
+            0.03,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+
+        assert!(
+            Flag::is_up(&flag),
+            "swap was not notified of forecast-curve relink"
+        );
     }
 }
