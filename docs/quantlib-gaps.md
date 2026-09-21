@@ -32,7 +32,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` | true | partial | Cached NPV/vega/cash-settled + Spot/Forward Physical Black + reduced IBOR/OIS Spot/Cash/Forward (all reduced cartesian cells) + reduced Normal `impliedVolatility` pinned; remaining: full IV grid |
 | Rates | Gaussian1d / float–float / nonstandard swaption | `Gaussian1d*SwaptionEngine`, `FloatFloatSwaption`, `NonstandardSwaption` | `swaption.cpp`, `gaussian1dswaption.cpp` | false | none | HW/G2 engines only |
 | Rates | Bermudan OIS swaption (HW/G2) | OIS-underlying `Swaption` | `bermudanswaption.cpp` OIS cases | true | partial | HW + G2 FDM OIS Bermudan pinned (+ Simple/Compound feature pins); lockout deferred |
-| Rates | Vanilla IRS extras | `VanillaSwap` | `swap.cpp` (beyond cached/fair) | true | partial | Cached + fair + notifications + rate/spread dependency pinned; in-arrears/stubs open |
+| Rates | Vanilla IRS extras | `VanillaSwap` | `swap.cpp` (beyond cached/fair) | true | partial | Cached + fair + notifications + rate/spread dependency + ThirdWednesdayInclusive pinned; in-arrears / MakeVanillaSwap::with_rule open |
 | Rates | OIS bootstrap / cached NPV | `OvernightIndexedSwap`, `MakeOIS` | `overnightindexedswap.cpp` | true | partial | Compound bootstrap pinned; arithmetic/lookback siblings + type-level cached NPV deferred |
 | Rates | Float–float basis swap | `FloatFloatSwap` | `floatfloatswap.cpp` | true | partial | Identity/fair-spread only |
 | Rates | Const-notional XCCY swaps | `ConstNotionalCrossCurrency*` | `constnotionalcrosscurrency*.cpp` | false | none | `XccyBasisSwap` ≠ this family |

@@ -121,6 +121,7 @@ credit.
 | Bermudan OIS (G2 FDM) | OIS-underlying `Swaption` + `FdG2SwaptionEngine` | `bermudanswaption.cpp` `testBermudanOISSwaptionWithG2` (+ reduced averaging feature pin) | ATM OIS >0; vs Vanilla @ 5% rel; Simple≠Compound ≥0.1% |
 | VanillaSwap notifications | `VanillaSwap` observer chain | `swap.cpp` `testNotifications` | Flag raises on forecast-curve relink after NPV |
 | VanillaSwap rate/spread dependency | `VanillaSwap` + `DiscountingSwapEngine` | `swap.cpp` `testRateDependency` / `testSpreadDependency` | Payer NPV weakly ↓ in fixed rate; weakly ↑ in floating spread |
+| VanillaSwap ThirdWednesdayInclusive | `VanillaSwap` schedules | `swap.cpp` `testThirdWednesdayAdjustment` | floating start 16-Sep-2015 / end 21-Sep-2016 |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | G2 two-factor tree | `TwoFactorShortRateTree` / `G2::tree` | `twofactormodel` / `g2` | discount=exp(-(φ+x+y)dt); root φ-only; product size; builds under analytic φ |

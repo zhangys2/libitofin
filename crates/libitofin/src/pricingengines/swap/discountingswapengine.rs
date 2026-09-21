@@ -197,8 +197,9 @@ impl PricingEngine for DiscountingSwapEngine {
 mod tests {
     //! The swap's numeric oracle: `swap.cpp` `testCachedValue` (:289), the first
     //! swap priced end to end against a hardcoded C++ NPV, plus the mode-agnostic
-    //! `testFairRate` (:107) and `testFairSpread` (:131) self-consistency checks
-    //! and the `testRateDependency` / `testSpreadDependency` monotonicity pins.
+    //! `testFairRate` (:107) and `testFairSpread` (:131) self-consistency checks,
+    //! the `testRateDependency` / `testSpreadDependency` monotonicity pins, and
+    //! `testThirdWednesdayAdjustment` (:321).
     //! The fixture reproduces `swap.cpp` `CommonVars` (:52-104): a Payer swap on a
     //! nominal of 100, fixed 10Y annual Thirty360(BondBasis) versus floating
     //! semiannual Euribor 6M / Actual360, discounted on a flat 5% Actual365Fixed
@@ -216,6 +217,7 @@ mod tests {
     use crate::time::calendar::Calendar;
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
+    use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
@@ -269,8 +271,20 @@ mod tests {
         }
 
         /// The `swap.cpp` `makeSwap` (:65-83): a `length`-year Payer swap priced
-        /// through the discounting engine over the fixture's curve.
+        /// through the discounting engine over the fixture's curve. The optional
+        /// `rule` defaults to [`DateGeneration::Forward`], matching the C++
+        /// default argument.
         fn make_swap(&self, length: Integer, fixed_rate: Rate, spread: Spread) -> VanillaSwap {
+            self.make_swap_with_rule(length, fixed_rate, spread, DateGeneration::Forward)
+        }
+
+        fn make_swap_with_rule(
+            &self,
+            length: Integer,
+            fixed_rate: Rate,
+            spread: Spread,
+            rule: DateGeneration,
+        ) -> VanillaSwap {
             let maturity = self.calendar.advance(
                 self.settlement,
                 length,
@@ -285,7 +299,7 @@ mod tests {
                 .with_calendar(self.calendar.clone())
                 .with_convention(BusinessDayConvention::Unadjusted)
                 .with_termination_date_convention(BusinessDayConvention::Unadjusted)
-                .forwards()
+                .with_rule(rule)
                 .end_of_month(false)
                 .build();
             let float_schedule = MakeSchedule::new()
@@ -295,7 +309,7 @@ mod tests {
                 .with_calendar(self.calendar.clone())
                 .with_convention(BusinessDayConvention::ModifiedFollowing)
                 .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
-                .forwards()
+                .with_rule(rule)
                 .end_of_month(false)
                 .build();
             let mut swap = VanillaSwap::new(
@@ -450,6 +464,36 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `swap.cpp` `testThirdWednesdayAdjustment` (:321): a 1Y CommonVars swap
+    /// built with `DateGeneration::ThirdWednesdayInclusive` snaps the floating
+    /// schedule to the third Wednesdays of September 2015 / 2016. The fixture
+    /// evaluation date is 14-Sep-2015 so TARGET settlement is 16-Sep-2015 (the
+    /// C++ suite relies on the ambient Settings date; here it is pinned).
+    #[test]
+    fn third_wednesday_inclusive_snaps_the_floating_schedule() {
+        let vars = Vars::new(Date::new(14, Month::September, 2015), true);
+        assert_eq!(
+            vars.settlement,
+            Date::new(16, Month::September, 2015),
+            "settlement must be the third Wednesday so Inclusive leaves it"
+        );
+        let swap =
+            vars.make_swap_with_rule(1, 0.0, -0.001, DateGeneration::ThirdWednesdayInclusive);
+        let floating = swap.fixed_vs_floating().floating_schedule();
+        assert_eq!(
+            floating.start_date(),
+            Date::new(16, Month::September, 2015),
+            "Wrong Start Date {}",
+            floating.start_date()
+        );
+        assert_eq!(
+            floating.end_date(),
+            Date::new(21, Month::September, 2016),
+            "Wrong End Date {}",
+            floating.end_date()
+        );
     }
 
     /// An empty discount-curve handle is rejected before any discounting, as the
