@@ -117,6 +117,7 @@ pub use swaption::{
     BachelierSpec, BachelierSwaptionEngine, Black76Spec, BlackStyleSpec, BlackStyleSwaptionEngine,
     BlackSwaptionEngine, CashAnnuityModel, DiscretizedSwap, FdG2SwaptionEngine,
     FdHullWhiteSwaptionEngine, G2SwaptionEngine, JamshidianSwaptionEngine, TreeG2SwaptionEngine,
+    TreeSwaptionEngine,
 };
 pub use vanilla::{
     AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine, AnalyticEuropeanEngine,

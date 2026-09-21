@@ -11,9 +11,7 @@
 //! constructors are deferred with the swap-index port. The `OISRateHelper`
 //! explicit-start/end-date constructor is deferred likewise.
 //!
-//! [`FraRateHelper`] defers three `FraRateHelper` constructor paths visibly: the
-//! `Pillar::CustomDate` variants (that enum arm is not ported, see [`Pillar`]),
-//! the from-scratch constructors that build a synthetic `"no-fix"` [`IborIndex`]
+//! [`FraRateHelper`] defers the from-scratch constructors that build a synthetic `"no-fix"` [`IborIndex`]
 //! (`ratehelpers.cpp:263,293`), and the IMM-offset constructors
 //! (`ratehelpers.cpp:322`, with the `nthImmDate` helper). None sit on the
 //! bootstrap oracle path. Unlike C++, which registers the helper with its cloned
@@ -27,7 +25,7 @@ use std::cell::RefCell;
 use std::rc::Weak;
 
 use crate::cashflows::RateAveraging;
-use crate::errors::QlResult;
+use crate::errors::{QlError, QlResult};
 use crate::handle::{Handle, RelinkableHandle};
 use crate::indexes::OvernightIndex;
 use crate::indexes::iborindex::IborIndex;
@@ -55,6 +53,7 @@ use crate::time::period::Period;
 use crate::time::timeunit::TimeUnit;
 use crate::time::{asx, imm};
 use crate::types::{Integer, Natural, Real};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 /// Bootstrap helper over a deposit rate (`DepositRateHelper`).
 ///
@@ -419,21 +418,46 @@ impl RateHelper for FuturesRateHelper {
     }
 }
 
-/// The date the curve node a helper fits sits at (`Pillar::Choice`).
-///
-/// Only the two schedule-derived choices are ported: [`LastRelevantDate`] (the
-/// C++ default) and [`MaturityDate`]. `Pillar::CustomDate`, which needs an
-/// explicit pillar date threaded through construction plus its bounds check, is
-/// deferred to #343 with the constructors that pass one.
-///
-/// [`LastRelevantDate`]: Pillar::LastRelevantDate
-/// [`MaturityDate`]: Pillar::MaturityDate
+/// Selects the date at which a helper places its curve node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pillar {
     /// The instrument's maturity date.
     MaturityDate,
     /// The latest date the instrument needs data at.
     LastRelevantDate,
+    /// A fixed date within the helper's earliest and latest relevant dates.
+    CustomDate(Date),
+}
+
+impl Pillar {
+    pub(crate) fn resolve(self, earliest: Date, maturity: Date, latest: Date) -> QlResult<Date> {
+        match self {
+            Self::MaturityDate => Ok(maturity),
+            Self::LastRelevantDate => Ok(latest),
+            Self::CustomDate(date) => {
+                crate::require!(date != Date::null(), "custom pillar date must be provided");
+                crate::require!(
+                    date >= earliest,
+                    "pillar date must be later than or equal to the instrument's earliest date"
+                );
+                crate::require!(
+                    date <= latest,
+                    "pillar date must be before or equal to the instrument's latest relevant date"
+                );
+                Ok(date)
+            }
+        }
+    }
+}
+
+fn rebuild_dates<T>(rebuild: impl FnOnce() -> QlResult<T>) -> QlResult<T> {
+    catch_unwind(AssertUnwindSafe(rebuild)).unwrap_or_else(|_| {
+        Err(QlError::new(
+            "helper dates exceed supported range",
+            file!(),
+            line!(),
+        ))
+    })
 }
 
 /// Bootstrap helper over a forward-rate-agreement rate (`FraRateHelper`).
@@ -454,6 +478,7 @@ pub enum Pillar {
 /// pinned at the maturity (`ratehelpers.cpp:361`).
 pub struct FraRateHelper {
     base: BootstrapHelperBase,
+    date_error: RefCell<Option<QlError>>,
     index: IborIndex,
     term_structure_handle: RelinkableHandle<dyn YieldTermStructure>,
     period_to_start: Option<Period>,
@@ -464,6 +489,82 @@ pub struct FraRateHelper {
 }
 
 impl FraRateHelper {
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        quote: Handle<dyn Quote>,
+        period_to_start: Period,
+        index: &IborIndex,
+        use_indexed_coupon: bool,
+        pillar: Pillar,
+    ) -> QlResult<Shared<FraRateHelper>> {
+        let helper = Self::new(quote, period_to_start, index, use_indexed_coupon, pillar);
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_from_rate(
+        rate: Real,
+        period_to_start: Period,
+        index: &IborIndex,
+        use_indexed_coupon: bool,
+        pillar: Pillar,
+    ) -> QlResult<Shared<FraRateHelper>> {
+        let helper = Self::from_rate(rate, period_to_start, index, use_indexed_coupon, pillar);
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_from_months(
+        quote: Handle<dyn Quote>,
+        months_to_start: Natural,
+        index: &IborIndex,
+        use_indexed_coupon: bool,
+        pillar: Pillar,
+    ) -> QlResult<Shared<FraRateHelper>> {
+        crate::require!(
+            months_to_start <= i32::MAX as u32,
+            "months to start exceed supported range"
+        );
+        let helper = Self::from_months(quote, months_to_start, index, use_indexed_coupon, pillar);
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_from_dates(
+        quote: Handle<dyn Quote>,
+        start_date: Date,
+        end_date: Date,
+        index: &IborIndex,
+        use_indexed_coupon: bool,
+        pillar: Pillar,
+    ) -> QlResult<Shared<FraRateHelper>> {
+        let helper = Self::from_dates(
+            quote,
+            start_date,
+            end_date,
+            index,
+            use_indexed_coupon,
+            pillar,
+        );
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Returns the last schedule error, if a date change invalidated the helper.
+    pub fn validate_dates(&self) -> QlResult<()> {
+        match self.date_error.borrow().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
     /// A FRA helper fitting `quote` over the window starting `period_to_start`
     /// after spot and spanning `index`'s tenor (the index-based `Period`
     /// constructor, `ratehelpers.cpp:305`).
@@ -561,6 +662,7 @@ impl FraRateHelper {
                 BootstrapHelperBase::new_relative(quote, settings, update_dates, on_eval_change);
             let helper = FraRateHelper {
                 base,
+                date_error: RefCell::new(None),
                 index,
                 term_structure_handle,
                 period_to_start,
@@ -597,6 +699,7 @@ impl RateHelper for FraRateHelper {
     /// forward `(discount(earliest)/discount(maturity) - 1)/spanning_time` read
     /// straight from the curve's discount factors.
     fn implied_quote(&self) -> QlResult<Real> {
+        self.validate_dates()?;
         let term_structure = self.base.term_structure()?;
         if self.use_indexed_coupon {
             self.index.fixing(self.fixing_date.get(), true)
@@ -633,53 +736,69 @@ impl RelativeDateRateHelper for FraRateHelper {
     /// `index.maturity_date(earliest)`, par mode at the maturity and caches the
     /// spanning year fraction.
     fn initialize_dates(&self) {
-        if self.base.update_dates() {
-            let evaluation_date = self
-                .base
-                .evaluation_date()
-                .expect("a relative-date helper always tracks an evaluation date");
-            let calendar = self.index.fixing_calendar();
-            let reference = calendar.adjust(evaluation_date, BusinessDayConvention::Following);
-            let spot = self
-                .index
-                .value_date(reference)
-                .expect("spot date of an adjusted business day is valid");
-            let period_to_start = self
-                .period_to_start
-                .expect("a relative-date FRA helper carries a period to start");
-            let convention = self.index.business_day_convention();
-            let end_of_month = self.index.end_of_month();
-            let earliest =
-                calendar.advance_by_period(spot, period_to_start, convention, end_of_month);
-            let maturity = calendar.advance_by_period(
-                spot,
-                period_to_start + self.index.tenor(),
-                convention,
-                end_of_month,
-            );
-            self.base.set_earliest_date(earliest);
-            self.base.set_maturity_date(maturity);
-        }
+        *self.date_error.borrow_mut() = self.try_initialize_dates().err();
+    }
+}
 
-        let earliest = self.base.earliest_date();
-        let maturity = self.base.maturity_date();
-        let latest_relevant = if self.use_indexed_coupon {
-            self.index
-                .maturity_date(earliest)
-                .expect("maturity date of a value date is valid")
-        } else {
-            self.spanning_time
-                .set(self.index.day_counter().year_fraction(earliest, maturity));
-            maturity
-        };
+impl FraRateHelper {
+    fn try_initialize_dates(&self) -> QlResult<()> {
+        let (earliest, maturity, latest_relevant, pillar, fixing_date, spanning_time) =
+            rebuild_dates(|| {
+                let (earliest, maturity) = if self.base.update_dates() {
+                    let evaluation_date = self
+                        .base
+                        .evaluation_date()
+                        .expect("a relative-date helper always tracks an evaluation date");
+                    let calendar = self.index.fixing_calendar();
+                    let reference =
+                        calendar.adjust(evaluation_date, BusinessDayConvention::Following);
+                    let spot = self
+                        .index
+                        .value_date(reference)
+                        .expect("spot date of an adjusted business day is valid");
+                    let period_to_start = self
+                        .period_to_start
+                        .expect("a relative-date FRA helper carries a period to start");
+                    let convention = self.index.business_day_convention();
+                    let end_of_month = self.index.end_of_month();
+                    let earliest =
+                        calendar.advance_by_period(spot, period_to_start, convention, end_of_month);
+                    let maturity = calendar.advance_by_period(
+                        spot,
+                        period_to_start + self.index.tenor(),
+                        convention,
+                        end_of_month,
+                    );
+                    (earliest, maturity)
+                } else {
+                    (self.base.earliest_date(), self.base.maturity_date())
+                };
+                let spanning_time = self.index.day_counter().year_fraction(earliest, maturity);
+                let latest_relevant = if self.use_indexed_coupon {
+                    self.index.maturity_date(earliest)?
+                } else {
+                    maturity
+                };
+                let pillar = self.pillar.resolve(earliest, maturity, latest_relevant)?;
+                let fixing_date = self.index.fixing_date(earliest);
+                Ok((
+                    earliest,
+                    maturity,
+                    latest_relevant,
+                    pillar,
+                    fixing_date,
+                    spanning_time,
+                ))
+            })?;
+        self.base.set_earliest_date(earliest);
+        self.base.set_maturity_date(maturity);
         self.base.set_latest_relevant_date(latest_relevant);
-        let pillar = match self.pillar {
-            Pillar::MaturityDate => maturity,
-            Pillar::LastRelevantDate => latest_relevant,
-        };
+
         self.base.set_pillar_date(pillar);
         self.base.set_latest_date(pillar);
-        self.fixing_date.set(self.index.fixing_date(earliest));
+        self.fixing_date.set(fixing_date);
+        self.spanning_time.set(spanning_time);
+        Ok(())
     }
 }
 
@@ -706,6 +825,7 @@ impl RelativeDateRateHelper for FraRateHelper {
 /// `None` against [`Settings::using_at_par_coupons`] (D5, #315/#342).
 pub struct SwapRateHelper {
     base: BootstrapHelperBase,
+    date_error: RefCell<Option<QlError>>,
     swap: RefCell<Option<VanillaSwap>>,
     ibor_index: Shared<IborIndex>,
     term_structure_handle: RelinkableHandle<dyn YieldTermStructure>,
@@ -725,6 +845,46 @@ pub struct SwapRateHelper {
 }
 
 impl SwapRateHelper {
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_with_details(
+        quote: Handle<dyn Quote>,
+        tenor: Period,
+        calendar: Calendar,
+        fixed_frequency: Frequency,
+        fixed_convention: BusinessDayConvention,
+        fixed_day_count: DayCounter,
+        ibor_index: &IborIndex,
+        spread: Handle<dyn Quote>,
+        forward_start: Period,
+        discounting_curve: Option<Handle<dyn YieldTermStructure>>,
+        pillar: Pillar,
+    ) -> QlResult<Shared<SwapRateHelper>> {
+        let helper = Self::with_details(
+            quote,
+            tenor,
+            calendar,
+            fixed_frequency,
+            fixed_convention,
+            fixed_day_count,
+            ibor_index,
+            spread,
+            forward_start,
+            discounting_curve,
+            pillar,
+        );
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Returns the last schedule error, if a date change invalidated the helper.
+    pub fn validate_dates(&self) -> QlResult<()> {
+        match self.date_error.borrow().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
     /// A swap helper fitting `quote` with the schedule of a spot-starting swap
     /// of `tenor`, the form the curve-consistency oracle builds
     /// (`piecewiseyieldcurve.cpp:293`): no spread, no forward start, no exogenous
@@ -841,6 +1001,7 @@ impl SwapRateHelper {
             );
             let helper = SwapRateHelper {
                 base,
+                date_error: RefCell::new(None),
                 swap: RefCell::new(None),
                 ibor_index,
                 term_structure_handle,
@@ -884,6 +1045,7 @@ impl RateHelper for SwapRateHelper {
     /// floating-leg BPS, and the fixed-leg BPS, rather than read from
     /// `fair_rate()`.
     fn implied_quote(&self) -> QlResult<Real> {
+        self.validate_dates()?;
         self.base.term_structure()?;
         let mut guard = self.swap.borrow_mut();
         let swap = guard
@@ -935,60 +1097,63 @@ impl RelativeDateRateHelper for SwapRateHelper {
     /// it does not price at construction. Earliest and maturity come from the
     /// leg schedules; the pillar follows the [`Pillar`] choice.
     ///
-    /// The `latest_relevant_date` is set to the maturity. C++ takes the maximum
-    /// of the maturity and the last floating coupon's `fixingEndDate`; that
-    /// refinement needs an `IborCoupon` fixing-end-date accessor the cash-flow
-    /// surface does not yet expose, so it is deferred to the bootstrap ticket
-    /// (#341) that exercises pillar ordering.
+    /// The latest relevant date includes the final floating coupon fixing end.
     fn initialize_dates(&self) {
-        let fixed_tenor = if self.fixed_frequency == Frequency::Once {
-            self.tenor
-        } else {
-            Period::try_from(self.fixed_frequency)
-                .expect("a swap's fixed frequency maps to a valid period")
-        };
-        let swap = MakeVanillaSwap::new(
-            self.tenor,
-            Shared::clone(&self.ibor_index),
-            Some(0.0),
-            self.forward_start,
-            Shared::clone(&self.settings),
-        )
-        .with_discounting_term_structure(self.discount_relinkable_handle.handle())
-        .with_fixed_leg_day_count(self.fixed_day_count.clone())
-        .with_fixed_leg_tenor(fixed_tenor)
-        .with_fixed_leg_convention(self.fixed_convention)
-        .with_fixed_leg_termination_date_convention(self.fixed_convention)
-        .with_fixed_leg_calendar(self.calendar.clone())
-        .with_fixed_leg_end_of_month(self.end_of_month)
-        .with_floating_leg_calendar(self.calendar.clone())
-        .with_floating_leg_end_of_month(self.end_of_month)
-        .with_indexed_coupons(self.use_indexed_coupons)
-        .build()
-        .expect("a 0% fixed-rate swap with a valid evaluation date builds without pricing");
+        *self.date_error.borrow_mut() = self.try_initialize_dates().err();
+    }
+}
 
-        let base = swap.fixed_vs_floating();
-        let earliest = base
-            .fixed_schedule()
-            .start_date()
-            .min(base.floating_schedule().start_date());
-        let maturity = base
-            .fixed_schedule()
-            .end_date()
-            .max(base.floating_schedule().end_date());
+impl SwapRateHelper {
+    fn try_initialize_dates(&self) -> QlResult<()> {
+        let (swap, earliest, maturity, latest_relevant, pillar) = rebuild_dates(|| {
+            let fixed_tenor = if self.fixed_frequency == Frequency::Once {
+                self.tenor
+            } else {
+                Period::try_from(self.fixed_frequency)
+                    .expect("a swap's fixed frequency maps to a valid period")
+            };
+            let swap = MakeVanillaSwap::new(
+                self.tenor,
+                Shared::clone(&self.ibor_index),
+                Some(0.0),
+                self.forward_start,
+                Shared::clone(&self.settings),
+            )
+            .with_discounting_term_structure(self.discount_relinkable_handle.handle())
+            .with_fixed_leg_day_count(self.fixed_day_count.clone())
+            .with_fixed_leg_tenor(fixed_tenor)
+            .with_fixed_leg_convention(self.fixed_convention)
+            .with_fixed_leg_termination_date_convention(self.fixed_convention)
+            .with_fixed_leg_calendar(self.calendar.clone())
+            .with_fixed_leg_end_of_month(self.end_of_month)
+            .with_floating_leg_calendar(self.calendar.clone())
+            .with_floating_leg_end_of_month(self.end_of_month)
+            .with_indexed_coupons(self.use_indexed_coupons)
+            .build()?;
 
-        let latest_relevant = maturity;
+            let base = swap.fixed_vs_floating();
+            let earliest = base
+                .fixed_schedule()
+                .start_date()
+                .min(base.floating_schedule().start_date());
+            let maturity = base
+                .fixed_schedule()
+                .end_date()
+                .max(base.floating_schedule().end_date());
+
+            let latest_relevant = maturity.max(swap.last_fixing_end_date()?);
+            let pillar = self.pillar.resolve(earliest, maturity, latest_relevant)?;
+            Ok((swap, earliest, maturity, latest_relevant, pillar))
+        })?;
         self.base.set_earliest_date(earliest);
         self.base.set_maturity_date(maturity);
         self.base.set_latest_relevant_date(latest_relevant);
-        let pillar = match self.pillar {
-            Pillar::MaturityDate => maturity,
-            Pillar::LastRelevantDate => latest_relevant,
-        };
+
         self.base.set_pillar_date(pillar);
         self.base.set_latest_date(pillar);
 
         *self.swap.borrow_mut() = Some(swap);
+        Ok(())
     }
 }
 
@@ -1010,6 +1175,7 @@ impl RelativeDateRateHelper for SwapRateHelper {
 /// with [`Instrument::recalculate`] before reading the legs.
 pub struct OISRateHelper {
     base: BootstrapHelperBase,
+    date_error: RefCell<Option<QlError>>,
     swap: RefCell<Option<OvernightIndexedSwap>>,
     overnight_index: Shared<OvernightIndex>,
     term_structure_handle: RelinkableHandle<dyn YieldTermStructure>,
@@ -1028,6 +1194,50 @@ pub struct OISRateHelper {
 }
 
 impl OISRateHelper {
+    /// Builds the helper and returns schedule or custom-pillar errors.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new(
+        settlement_days: Natural,
+        tenor: Period,
+        quote: Handle<dyn Quote>,
+        overnight_index: &OvernightIndex,
+        discounting_curve: Option<Handle<dyn YieldTermStructure>>,
+        payment_lag: Integer,
+        payment_convention: BusinessDayConvention,
+        payment_frequency: Frequency,
+        forward_start: Period,
+        overnight_spread: Handle<dyn Quote>,
+        pillar: Pillar,
+        averaging_method: RateAveraging,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Shared<OISRateHelper>> {
+        let helper = Self::new(
+            settlement_days,
+            tenor,
+            quote,
+            overnight_index,
+            discounting_curve,
+            payment_lag,
+            payment_convention,
+            payment_frequency,
+            forward_start,
+            overnight_spread,
+            pillar,
+            averaging_method,
+            settings,
+        );
+        helper.validate_dates()?;
+        Ok(helper)
+    }
+
+    /// Returns the last schedule error, if a date change invalidated the helper.
+    pub fn validate_dates(&self) -> QlResult<()> {
+        match self.date_error.borrow().as_ref() {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
+        }
+    }
+
     /// An OIS helper fitting `quote` with the schedule of a swap of `tenor`
     /// starting `settlement_days` after the evaluation date, the form the
     /// bootstrap oracle builds (`overnightindexedswap.cpp:236-256`).
@@ -1072,6 +1282,7 @@ impl OISRateHelper {
             overnight_spread.register_observer(&base.observer());
             let helper = OISRateHelper {
                 base,
+                date_error: RefCell::new(None),
                 swap: RefCell::new(None),
                 overnight_index: cloned_index,
                 term_structure_handle,
@@ -1113,6 +1324,7 @@ impl RateHelper for OISRateHelper {
     /// overnight-leg BPS, and the fixed-leg BPS, rather than read from
     /// `fair_rate()`.
     fn implied_quote(&self) -> QlResult<Real> {
+        self.validate_dates()?;
         self.base.term_structure()?;
         let mut guard = self.swap.borrow_mut();
         let swap = guard
@@ -1163,65 +1375,70 @@ impl RelativeDateRateHelper for OISRateHelper {
     /// tenor built through [`MakeOis`]' whole builder chain with a 0% fixed rate
     /// so it does not price at construction.
     ///
-    /// The `latest_relevant_date` is `max(maturity, lastPaymentDate)`.  C++ also
-    /// maxes in `fixingEndDate = overnightIndex.maturityDate(valueDate(
-    /// lastFixingDate))` (`oisratehelper.cpp:170-172`); that term is dominated by
-    /// `lastPaymentDate` whenever the payment lag is at least one business day
-    /// (the bootstrap oracle uses lag 2), and reaching the last coupon's fixing
-    /// date needs a typed accessor the `dyn CashFlow` leg does not expose, so it
-    /// remains deferred.
+    /// The latest relevant date includes payments and the final fixing end.
     fn initialize_dates(&self) {
-        let swap = MakeOis::new(
-            self.tenor,
-            Shared::clone(&self.overnight_index),
-            Some(0.0),
-            self.forward_start,
-            Shared::clone(&self.settings),
-        )
-        .with_discounting_term_structure(self.discount_relinkable_handle.handle())
-        .with_telescopic_value_dates(false)
-        .with_payment_lag(self.payment_lag)
-        .with_payment_adjustment(self.payment_convention)
-        .with_payment_frequency(self.payment_frequency)
-        .with_averaging_method(self.averaging_method)
-        .with_lookback_days(None)
-        .with_lockout_days(0)
-        .with_rule(DateGeneration::Backward)
-        .with_convention(BusinessDayConvention::ModifiedFollowing)
-        .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
-        .with_observation_shift(false)
-        .with_settlement_days(self.settlement_days)
-        .build()
-        .expect("a 0% fixed-rate OIS with benign deferred knobs builds without pricing");
+        *self.date_error.borrow_mut() = self.try_initialize_dates().err();
+    }
+}
 
-        let base_swap = swap.fixed_vs_floating();
-        let earliest = swap
-            .overnight_schedule()
-            .start_date()
-            .min(base_swap.fixed_schedule().start_date());
-        let maturity = swap
-            .overnight_schedule()
-            .end_date()
-            .max(base_swap.fixed_schedule().end_date());
+impl OISRateHelper {
+    fn try_initialize_dates(&self) -> QlResult<()> {
+        let (swap, earliest, maturity, latest_relevant, pillar) = rebuild_dates(|| {
+            let swap = MakeOis::new(
+                self.tenor,
+                Shared::clone(&self.overnight_index),
+                Some(0.0),
+                self.forward_start,
+                Shared::clone(&self.settings),
+            )
+            .with_discounting_term_structure(self.discount_relinkable_handle.handle())
+            .with_telescopic_value_dates(false)
+            .with_payment_lag(self.payment_lag)
+            .with_payment_adjustment(self.payment_convention)
+            .with_payment_frequency(self.payment_frequency)
+            .with_averaging_method(self.averaging_method)
+            .with_lookback_days(None)
+            .with_lockout_days(0)
+            .with_rule(DateGeneration::Backward)
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
+            .with_observation_shift(false)
+            .with_settlement_days(self.settlement_days)
+            .build()?;
 
-        let last_overnight_payment = swap.overnight_leg().last().map_or(maturity, |cf| cf.date());
-        let last_fixed_payment = base_swap
-            .fixed_leg()
-            .last()
-            .map_or(maturity, |cf| cf.date());
-        let latest_relevant = maturity.max(last_overnight_payment).max(last_fixed_payment);
+            let base_swap = swap.fixed_vs_floating();
+            let earliest = swap
+                .overnight_schedule()
+                .start_date()
+                .min(base_swap.fixed_schedule().start_date());
+            let maturity = swap
+                .overnight_schedule()
+                .end_date()
+                .max(base_swap.fixed_schedule().end_date());
 
+            let last_overnight_payment =
+                swap.overnight_leg().last().map_or(maturity, |cf| cf.date());
+            let last_fixed_payment = base_swap
+                .fixed_leg()
+                .last()
+                .map_or(maturity, |cf| cf.date());
+            let latest_relevant = maturity
+                .max(last_overnight_payment)
+                .max(last_fixed_payment)
+                .max(swap.last_fixing_end_date()?);
+
+            let pillar = self.pillar.resolve(earliest, maturity, latest_relevant)?;
+            Ok((swap, earliest, maturity, latest_relevant, pillar))
+        })?;
         self.base.set_earliest_date(earliest);
         self.base.set_maturity_date(maturity);
         self.base.set_latest_relevant_date(latest_relevant);
         self.base.set_latest_date(latest_relevant);
-        let pillar = match self.pillar {
-            Pillar::MaturityDate => maturity,
-            Pillar::LastRelevantDate => latest_relevant,
-        };
+
         self.base.set_pillar_date(pillar);
 
         *self.swap.borrow_mut() = Some(swap);
+        Ok(())
     }
 }
 

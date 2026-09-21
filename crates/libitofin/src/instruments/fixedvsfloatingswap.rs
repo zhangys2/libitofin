@@ -227,6 +227,7 @@ pub struct FixedVsFloatingSwap {
     same_nominals: bool,
     /// Present when this base was built by [`OvernightIndexedSwap`].
     overnight: Option<OvernightIndexedExtras>,
+    pub(crate) is_vanilla: bool,
 }
 
 impl FixedVsFloatingSwap {
@@ -313,6 +314,7 @@ impl FixedVsFloatingSwap {
             constant_nominals,
             same_nominals,
             overnight: None,
+            is_vanilla: false,
         })
     }
 

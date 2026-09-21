@@ -2,6 +2,12 @@
 
 [Project index](../README.md)
 
+## Random policies
+
+Unreleased: [QMC European pricing and fallible Poisson generators](../docs/docs/random-policies.md)
+are available in Rust, Python, C and Go (#454). The complete 108-case QuantLib
+QMC grid and stored Gaussian/Poisson seed oracles retain their original tolerances.
+
 ## Releases and binding delivery
 
 Rust, Python, and Go are published together. The Go module uses a matching
@@ -14,6 +20,16 @@ parity [#1030](https://github.com/benbenbang/libitofin/issues/1030), and behavio
 follow-ups [#1036](https://github.com/benbenbang/libitofin/issues/1036) are closed.
 API accounting, numerical tests, and statement coverage measure different things;
 see the [Go validation record](../docs/go-binding-test-gaps.md).
+
+## Cap/floor normal and lattice engines
+
+[#440](https://github.com/benbenbang/libitofin/issues/440) adds Bachelier cap/floor
+pricing, Hull-White tree engines, and normal-volatility CapHelper calibration in
+Rust, Python and Go, awaiting release. Fixed grids preserve supplied nodes;
+missing coupon times are errors. The tree engine requires a nonnegative first
+accrual start; Rust's discretized asset also supports known historical fixings.
+Other short-rate models remain outside this concrete engine's API (#466).
+See the [independent oracles](../crates/libitofin/tests/fixtures/tree_capfloor/README.md).
 
 ## Credit extensions
 
@@ -57,6 +73,20 @@ The [oracle](../crates/libitofin/tests/fixtures/lazy_inflation_base/README.md) c
 rebuilt node grids with fresh QuantLib curves and documents its persistent-grid
 difference. Existing fixed-base constructors remain available.
 
+## Iterative bootstrap recovery
+
+[#941](https://github.com/benbenbang/libitofin/issues/941) is implemented for the
+next release. The generic Rust driver retries a failed cached curve from fresh
+state before applying optional sign-aware bound widening. Explicit `dont_throw`
+permits an inclusive fallback scan or the final unconverged outer pass; it does
+not promise exact repricing. Defaults remain strict.
+
+Python/C/Go expose validated options on iterative yield-curve constructors.
+Credit and inflation retain their existing default configuration and share the
+cached-state recovery. Local/global bootstrap factories reject iterative options.
+The [QuantLib oracle](../crates/libitofin/tests/fixtures/iterative_bootstrap/README.md)
+checks widening, fallback values, cached recovery, and the outer iteration limit.
+
 ## Joint curve bootstrapping
 
 Rust exposes `IborIborBasisSwapRateHelper` and the genuinely coupled 3M/6M
@@ -64,9 +94,36 @@ Rust exposes `IborIborBasisSwapRateHelper` and the genuinely coupled 3M/6M
 Both helper sets read the opposite curve; QuantLib's FRA and swap repricing
 tolerances are preserved. Fixing-history updates on either index invalidate
 and recalibrate the live curve without observing its own forecast handle.
-This work shipped in v0.26.0. Concrete Python/C/Go joint-curve assembly
-remains [#1066](https://github.com/benbenbang/libitofin/issues/1066); the overnight
-basis-helper sibling remains [#1060](https://github.com/benbenbang/libitofin/issues/1060).
+The Ibor-Ibor core shipped in v0.26.0. The next release adds the concrete
+Python/C/Go `JointYieldCurves` assembly and basis-helper facade
+([#1066](https://github.com/benbenbang/libitofin/issues/1066)), with retained joint
+ownership and live quote, discount, date and fixing updates. See the
+[joint-curve guide](../docs/docs/joint-curves.md).
+
+Rust also exposes `OvernightIborBasisSwapRateHelper`
+([#1060](https://github.com/benbenbang/libitofin/issues/1060)): it fits the Ibor
+forecast curve, with basis paid on the compounded overnight leg. An omitted
+discount curve uses fitted Ibor, matching QuantLib executable behavior despite
+the upstream header prose. The [independent oracle](../crates/libitofin/tests/fixtures/overnight_basis/README.md)
+covers both discount modes and coupled OIS/Ibor curves. Construction and date
+updates report errors and recover after valid inputs return. Python/C/Go
+exposure of this overnight helper remains outside the supported binding scope.
+
+## Custom pillars and overnight futures
+
+[#808](https://github.com/benbenbang/libitofin/issues/808) adds custom pillar dates
+for FRA, swap, OIS and inflation helpers across Rust/Python/C/Go. Dates must lie
+within the helper's relevant window; flat inflation helpers retain QuantLib's
+single-node behavior. Relative helpers retain their last valid dates after a
+failed update and report the error on pricing until the evaluation date recovers.
+Existing C layouts and default pillar choices are preserved.
+
+SOFR and generic overnight futures support Simple/Compound accrual, historical
+fixings, live convexity and fixed reference periods. Monthly SOFR helpers use
+Simple, quarterly helpers Compound. The [QuantLib fixtures](../crates/libitofin/tests/fixtures/sofr_futures/README.md)
+pin holiday clipping, Juneteenth and the upstream `1e-9` price gates, and describe
+the upstream monthly holiday-end bootstrap residuals. These additions await the
+next release.
 
 ## Hull-White calibration
 
@@ -77,6 +134,15 @@ including calibration after input wrappers are released.
 [Binding regressions](../crates/itofin-py/tests/test_hullwhite_calibration.py).
 
 ## Swaption foundation
+
+The next release completes [#467](https://github.com/benbenbang/libitofin/issues/467):
+Hull-White tree swaptions rebuild vanilla coupon schedules after inclusive
+seven-day exercise-date snapping. Rust, Python and C/Go support Bermudan exercise;
+all six indexed/par QuantLib cached values pass at `1e-4` absolute tolerance with
+50 steps, and the European convergence gate is retained. Original schedules and
+shared fixing history are preserved. The tree engine requires a vanilla Ibor
+underlying; OIS remains supported by the existing Black/Bachelier engines.
+
 
 [EPIC-10 #358](https://github.com/benbenbang/libitofin/issues/358) covers the
 constant volatility surface, swaption instrument, Black engine, Eonia, SwapIndex
@@ -106,13 +172,20 @@ live quotes, moving numeric values and explicit option dates. The
 pins 120 volatility nodes at `1e-16`; Rust also checks Black prices, volatility
 recovery through a test-only flat engine, and quote-handle relinks.
 
-Rust supports backward-flat SABR parameter cubes
-([#606](https://github.com/benbenbang/libitofin/issues/606)), with independent
-QuantLib sparse/dense oracles and live quote/date recalculation checks. Both
-axes require at least two nodes. This feature shipped in v0.26.0;
-Python/C/Go flag exposure remains [#1065](https://github.com/benbenbang/libitofin/issues/1065).
-SABR variants [#586](https://github.com/benbenbang/libitofin/issues/586) and ZABR
-[#597](https://github.com/benbenbang/libitofin/issues/597) retain separate scope.
+Rust, Python and C/Go support backward-flat SABR parameter cubes
+([#606](https://github.com/benbenbang/libitofin/issues/606),
+[#1065](https://github.com/benbenbang/libitofin/issues/1065)). Python's trailing
+`backward_flat=False` and Go's `BackwardFlat` preserve bilinear defaults. The new
+C `itofin_sabr_swaption_vol_cube_new` accepts the unchanged config plus a 0/1 flag;
+the existing constructor retains its old behavior. Go rejects `BackwardFlat=true`
+for interpolated cubes. Both axes require at least two nodes. Parameter/forward
+layers 0-4 are backward-flat in option time and linear in swap length; market
+volatility and local-spread grids remain bilinear. All 72 independent QuantLib
+1.43 sparse/dense fixture rows are checked for both flags at `1e-6`, with live
+quote/date recalculation and retained-input tests in Python and Go.
+Normal SABR [#586](https://github.com/benbenbang/libitofin/issues/586), ZABR/generic
+XABR [#597](https://github.com/benbenbang/libitofin/issues/597), public section
+recalibration and standalone interpolation bindings retain separate scope.
 
 ## Dependency layers
 
@@ -136,7 +209,7 @@ QuantLib parity.
 | **L8** | instruments | fixed-rate bonds, vanilla / OIS swaps, swaptions, caps & floors, vanilla options |
 | **L9** | methods | lattices, trees (trinomial + Hull-White), Monte Carlo (path generators + antithetic), finite differences (European, American and Bermudan Black-Scholes vanilla) |
 | **L10** | models | `CalibratedModel` + `calibrate()`, short-rate (Vasicek, CIR, Hull-White), Heston, calibration helpers |
-| **L11** | engines | analytic European & Heston (Fourier), swaption (Black / Bachelier / Jamshidian), discounting swap / bond, Black cap/floor |
+| **L11** | engines | analytic European & Heston (Fourier), swaption (Black / Bachelier / Jamshidian / Hull-White tree), discounting swap / bond, Black / Bachelier / Hull-White tree cap/floor |
 
 **Milestone 1 (done):** a European option prices end-to-end - quote → flat
 yield/vol curves → generalized Black-Scholes process → analytic engine → lazy

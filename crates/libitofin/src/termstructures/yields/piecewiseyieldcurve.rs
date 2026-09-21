@@ -161,10 +161,14 @@ where
         // `bootstrap_.setup(this)` -> `registerWithObservables`).
         let observer = SharedMut::clone(&curve.updater) as SharedMut<dyn Observer>;
         for helper in &curve.instruments {
+            helper.base().register_curve_owner(curve.self_weak.clone());
             helper.observable().register_observer(&observer);
         }
         // Helpers the bootstrap owns rather than fits - GlobalBootstrap's
         // additional helpers - register too (`globalbootstrap.hpp:219-220`).
+        curve
+            .bootstrap
+            .register_helper_owner(curve.self_weak.clone());
         for observable in curve.bootstrap.additional_observables() {
             observable.register_observer(&observer);
         }
@@ -1134,6 +1138,63 @@ mod tests {
             "expected the ported non-convergence error, got: {}",
             err.message()
         );
+    }
+
+    #[test]
+    fn iterative_dont_throw_accepts_quantlib_outer_iteration_limit() {
+        use crate::math::interpolations::cubic::Cubic;
+        use crate::termstructures::iterativebootstrap::IterativeBootstrapOptions;
+
+        let options = IterativeBootstrapOptions {
+            accuracy: Some(1e-20),
+            ..Default::default()
+        };
+        let (settlement, helpers) = build_mixed_strip();
+        let strict = PiecewiseYieldCurve::<ZeroYield, Cubic>::with_bootstrap(
+            settlement,
+            helpers,
+            Actual360::new(),
+            Cubic,
+            IterativeBootstrap::with_options(options).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            strict
+                .data()
+                .unwrap_err()
+                .message()
+                .contains("convergence not reached after 99 iterations")
+        );
+        let (settlement, helpers) = build_mixed_strip();
+        let approximate = PiecewiseYieldCurve::<ZeroYield, Cubic>::with_bootstrap(
+            settlement,
+            helpers,
+            Actual360::new(),
+            Cubic,
+            IterativeBootstrap::with_options(IterativeBootstrapOptions {
+                dont_throw: true,
+                ..options
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        let expected = [
+            0.04556980479980728,
+            0.04556980479980728,
+            0.045722782061681094,
+            0.045306695749048304,
+            0.044971019254881964,
+            0.04524031189811902,
+            0.04444472969987271,
+            0.045733003721961214,
+            0.048219698779681415,
+        ];
+        for (actual, expected) in approximate.data().unwrap().into_iter().zip(expected) {
+            assert!(
+                actual.is_finite() && (actual - expected).abs() < 1e-12,
+                "{actual} != {expected}"
+            );
+        }
     }
 
     /// A genuine duplicate pillar - two 3M deposits on the same index reduce to

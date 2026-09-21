@@ -21,27 +21,26 @@
 //! subobject.
 //!
 //! # Date snapping
-//! The ctor calls [`prepare_swaption_with_snapped_dates`]
-//! (`discretizedswaption.cpp:39,82`): coupon schedule dates within a week of an
-//! exercise date collapse onto that exercise (and flip to the post-adjustment
-//! pass when the unadjusted date sits in the previous week). Without this, the
-//! annual/semi Bermudan geometry misprices floating resets that fall a few days
-//! off the exercise nodes.
+//! Coupon schedule dates within seven days of an exercise date are collapsed
+//! onto it before rebuilding the vanilla swap. Dates moved forward use the
+//! post-adjustment pass. The final schedule dates remain unchanged.
+//! Flattened arguments without their source swap and non-vanilla underlyings
+//! are rejected: they cannot reproduce the source's coupon reconstruction.
 
 use crate::discretizedasset::{
     CouponAdjustment, DiscretizedAsset, DiscretizedAssetBase, DiscretizedOption,
 };
 use crate::errors::QlResult;
-use crate::fail;
+use crate::indexes::InterestRateIndex;
 use crate::instrument::Instrument;
-use crate::instruments::{Swaption, SwaptionArguments, VanillaSwap};
-use crate::require;
+use crate::instruments::{FixedVsFloatingSwapArguments, SwaptionArguments, VanillaSwap};
 use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::schedule::Schedule;
 use crate::types::{Size, Time};
+use crate::{fail, require};
 
 use super::DiscretizedSwap;
 
@@ -58,27 +57,23 @@ pub struct DiscretizedSwaption {
 
 impl DiscretizedSwaption {
     /// `DiscretizedSwaption(args, referenceDate, dayCounter)`
-    /// (`discretizedswaption.cpp:36`), with coupon dates snapped to nearby
-    /// exercise dates (`prepareSwaptionWithSnappedDates`).
+    /// (`discretizedswaption.cpp:36`), rebuilding the underlying vanilla swap
+    /// after collapsing nearby schedule dates onto exercise dates.
     ///
     /// # Errors
-    /// Fails if the arguments carry no exercise, no swap, no fixed coupons or no
-    /// floating coupons, if the snapped swap cannot be rebuilt, or if
-    /// [`DiscretizedSwap::with_adjustments`](super::DiscretizedSwap::with_adjustments)
-    /// fails.
+    /// Fails for missing exercise/source swap, non-vanilla underlyings, invalid
+    /// snapped schedules, or an error rebuilding/discretizing the coupons.
     pub fn new(
         args: &SwaptionArguments,
         reference_date: Date,
         day_counter: &DayCounter,
-        settings: &Shared<Settings<Date>>,
+        settings: &Settings<Date>,
     ) -> QlResult<Self> {
-        let (snapped_args, fixed_adj, floating_adj) =
-            prepare_swaption_with_snapped_dates(args, Shared::clone(settings))?;
-
-        let Some(exercise) = snapped_args.exercise.as_ref() else {
+        let Some(exercise) = args.exercise.as_ref() else {
             fail!("exercise not set");
         };
-        let swap_args = &snapped_args.swap_arguments;
+        let prepared = prepare_swaption_with_snapped_dates(args)?;
+        let swap_args = &prepared.arguments;
 
         let exercise_times: Vec<Time> = exercise
             .dates()
@@ -101,9 +96,9 @@ impl DiscretizedSwaption {
             swap_args,
             reference_date,
             day_counter,
-            fixed_adj,
-            floating_adj,
-            settings.as_ref(),
+            prepared.fixed_adjustments,
+            prepared.floating_adjustments,
+            settings,
         )?;
         let underlying: SharedMut<dyn DiscretizedAsset> = shared_mut(swap);
         let option = DiscretizedOption::new(underlying, exercise_type, exercise_times);
@@ -113,6 +108,80 @@ impl DiscretizedSwaption {
             last_payment,
         })
     }
+}
+
+struct PreparedSwaption {
+    arguments: FixedVsFloatingSwapArguments,
+    fixed_adjustments: Vec<CouponAdjustment>,
+    floating_adjustments: Vec<CouponAdjustment>,
+}
+
+fn snap_dates(dates: &mut [Date], exercise_dates: &[Date]) -> QlResult<Vec<CouponAdjustment>> {
+    require!(
+        dates.len() >= 2,
+        "swap schedule requires at least two dates"
+    );
+    let mut adjustments = vec![CouponAdjustment::Pre; dates.len() - 1];
+    for &exercise_date in exercise_dates {
+        for (date, adjustment) in dates.iter_mut().zip(&mut adjustments) {
+            let distance = exercise_date - *date;
+            if distance != 0 && distance.abs() <= 7 {
+                *date = exercise_date;
+                if distance > 0 {
+                    *adjustment = CouponAdjustment::Post;
+                }
+            }
+        }
+    }
+    require!(
+        dates.windows(2).all(|pair| pair[0] < pair[1]),
+        "snapped swap schedule must remain strictly increasing"
+    );
+    Ok(adjustments)
+}
+
+fn prepare_swaption_with_snapped_dates(args: &SwaptionArguments) -> QlResult<PreparedSwaption> {
+    let Some(source) = args.swap.as_ref() else {
+        fail!("source swap not set");
+    };
+    let source = source.borrow();
+    require!(
+        source.is_vanilla,
+        "date snapping requires a vanilla Ibor swap"
+    );
+    let Some(exercise) = args.exercise.as_ref() else {
+        fail!("exercise not set");
+    };
+    require!(!exercise.dates().is_empty(), "no exercise date given");
+    require!(
+        exercise.dates().iter().all(|d| *d != Date::null()),
+        "null exercise date"
+    );
+    let mut fixed_dates = source.fixed_schedule().dates().to_vec();
+    let mut floating_dates = source.floating_schedule().dates().to_vec();
+    let fixed_adjustments = snap_dates(&mut fixed_dates, exercise.dates())?;
+    let floating_adjustments = snap_dates(&mut floating_dates, exercise.dates())?;
+    let index = source.ibor_index();
+    let rebuilt = VanillaSwap::new(
+        source.swap_type(),
+        source.nominal()?,
+        Schedule::from_dates(fixed_dates),
+        source.fixed_rate(),
+        source.fixed_day_count().clone(),
+        Schedule::from_dates(floating_dates),
+        Shared::clone(index),
+        source.spread(),
+        source.floating_day_count().clone(),
+        Some(source.payment_convention()),
+        Shared::clone(index.base().settings()),
+    )?;
+    let mut arguments = FixedVsFloatingSwapArguments::default();
+    rebuilt.setup_arguments(&mut arguments)?;
+    Ok(PreparedSwaption {
+        arguments,
+        fixed_adjustments,
+        floating_adjustments,
+    })
 }
 
 impl DiscretizedAsset for DiscretizedSwaption {
@@ -157,122 +226,6 @@ impl DiscretizedAsset for DiscretizedSwaption {
     }
 }
 
-fn within_previous_week(d1: Date, d2: Date) -> bool {
-    d2 >= d1 - 7 && d2 <= d1
-}
-
-fn within_next_week(d1: Date, d2: Date) -> bool {
-    d2 >= d1 && d2 <= d1 + 7
-}
-
-fn within_one_week(d1: Date, d2: Date) -> bool {
-    within_previous_week(d1, d2) || within_next_week(d1, d2)
-}
-
-/// `prepareSwaptionWithSnappedDates` (`discretizedswaption.cpp:82`): collapse
-/// nearby coupon schedule dates onto exercise dates and tag previous-week snaps
-/// as [`CouponAdjustment::Post`].
-fn prepare_swaption_with_snapped_dates(
-    args: &SwaptionArguments,
-    settings: Shared<Settings<Date>>,
-) -> QlResult<(
-    SwaptionArguments,
-    Vec<CouponAdjustment>,
-    Vec<CouponAdjustment>,
-)> {
-    let Some(swap_rc) = args.swap.as_ref() else {
-        fail!("swap not set");
-    };
-    let Some(exercise) = args.exercise.as_ref() else {
-        fail!("exercise not set");
-    };
-
-    let swap = swap_rc.borrow();
-    let mut fixed_dates = swap.fixed_schedule().dates().to_vec();
-    let mut float_dates = swap.floating_schedule().dates().to_vec();
-
-    let mut fixed_coupon_adjustments = vec![CouponAdjustment::Pre; swap.fixed_leg().len()];
-    let mut floating_coupon_adjustments = vec![CouponAdjustment::Pre; swap.floating_leg().len()];
-
-    require!(
-        fixed_coupon_adjustments.len() + 1 == fixed_dates.len(),
-        "fixed schedule date count must be one more than the fixed coupon count"
-    );
-    require!(
-        floating_coupon_adjustments.len() + 1 == float_dates.len(),
-        "floating schedule date count must be one more than the floating coupon count"
-    );
-
-    for &exercise_date in exercise.dates() {
-        for j in 0..fixed_dates.len() - 1 {
-            let unadjusted = fixed_dates[j];
-            if exercise_date != unadjusted && within_one_week(exercise_date, unadjusted) {
-                fixed_dates[j] = exercise_date;
-                if within_previous_week(exercise_date, unadjusted) {
-                    fixed_coupon_adjustments[j] = CouponAdjustment::Post;
-                }
-            }
-        }
-        for j in 0..float_dates.len() - 1 {
-            let unadjusted = float_dates[j];
-            if exercise_date != unadjusted && within_one_week(exercise_date, unadjusted) {
-                float_dates[j] = exercise_date;
-                if within_previous_week(exercise_date, unadjusted) {
-                    floating_coupon_adjustments[j] = CouponAdjustment::Post;
-                }
-            }
-        }
-    }
-
-    let snapped_swap = shared_mut(
-        VanillaSwap::new(
-            swap.swap_type(),
-            swap.nominal()?,
-            Schedule::from_dates(fixed_dates),
-            swap.fixed_rate(),
-            swap.fixed_day_count().clone(),
-            Schedule::from_dates(float_dates),
-            Shared::clone(swap.ibor_index()),
-            swap.spread(),
-            swap.floating_day_count().clone(),
-            Some(swap.payment_convention()),
-            Shared::clone(&settings),
-        )?
-        .into_fixed_vs_floating(),
-    );
-    drop(swap);
-
-    let snapped_swaption = Swaption::new(
-        snapped_swap,
-        Shared::clone(exercise),
-        args.settlement_type,
-        args.settlement_method,
-        settings,
-    );
-    let mut snapped_args = SwaptionArguments::default();
-    snapped_swaption.setup_arguments(&mut snapped_args)?;
-    Ok((
-        snapped_args,
-        fixed_coupon_adjustments,
-        floating_coupon_adjustments,
-    ))
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::time::date::Month;
-
-    #[test]
-    fn within_week_helpers_match_quantlib() {
-        let d1 = Date::new(19, Month::September, 2017);
-        assert!(within_previous_week(d1, d1 - 3));
-        assert!(within_previous_week(d1, d1));
-        assert!(!within_previous_week(d1, d1 + 1));
-        assert!(within_next_week(d1, d1 + 3));
-        assert!(!within_next_week(d1, d1 - 1));
-        assert!(within_one_week(d1, d1 - 7));
-        assert!(within_one_week(d1, d1 + 7));
-        assert!(!within_one_week(d1, d1 + 8));
-    }
-}
+#[path = "discretizedswaption_tests.rs"]
+mod tests;

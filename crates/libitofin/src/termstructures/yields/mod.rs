@@ -12,6 +12,8 @@ mod forwardcurve;
 mod forwardspreadedtermstructure;
 mod forwardstructure;
 mod impliedtermstructure;
+mod jointyieldcurves;
+mod overnightbasisswapratehelper;
 mod piecewiseyieldcurve;
 mod quantotermstructure;
 mod ratehelpers;
@@ -28,6 +30,8 @@ pub use forwardcurve::{ForwardCurve, InterpolatedForwardCurve};
 pub use forwardspreadedtermstructure::ForwardSpreadedTermStructure;
 pub use forwardstructure::ForwardRateStructure;
 pub use impliedtermstructure::ImpliedTermStructure;
+pub use jointyieldcurves::{BasisSwapHelperConfig, JointYieldCurves};
+pub use overnightbasisswapratehelper::OvernightIborBasisSwapRateHelper;
 pub use piecewiseyieldcurve::PiecewiseYieldCurve;
 pub use quantotermstructure::QuantoTermStructure;
 pub use ratehelpers::{
@@ -56,3 +60,6 @@ pub(super) fn sync_extrapolation(
         }
     }
 }
+
+pub mod overnightfutureratehelpers;
+pub use overnightfutureratehelpers::{OvernightIndexFutureRateHelper, SofrFutureRateHelper};

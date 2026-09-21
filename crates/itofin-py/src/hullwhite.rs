@@ -167,6 +167,17 @@ impl PyHullWhite {
         .map_err(PyQlError::from)?;
         Ok(())
     }
+    fn calibrate_caps(
+        &self,
+        helpers: Vec<PyRef<crate::caphelper::PyCapHelper>>,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
+        method: &mut PyLevenbergMarquardt,
+        end_criteria: &PyEndCriteria,
+        fix_reversion: bool,
+        time_steps: usize,
+    ) -> PyResult<()> {
+        self.calibrate_caps_impl(helpers, method, end_criteria, fix_reversion, time_steps)
+    }
 }
 
 impl PyHullWhite {
@@ -262,6 +273,17 @@ impl PyIborIndex {
                 settings.inner(),
             )),
         }
+    }
+
+    /// Store a historical fixing and notify all same-name indices in these settings.
+    fn add_fixing(&self, fixing_date: &PyDate, value: f64) -> PyResult<()> {
+        if !value.is_finite() {
+            return Err(crate::ItofinError::new_err("fixing must be finite"));
+        }
+        self.inner
+            .add_fixing(fixing_date.inner(), value)
+            .map_err(PyQlError::from)?;
+        Ok(())
     }
 
     /// Return the index fixing for fixing_date.

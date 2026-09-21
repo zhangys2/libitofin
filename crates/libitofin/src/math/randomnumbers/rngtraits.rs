@@ -19,6 +19,7 @@
 //!   slice); [`LowDiscrepancy`] wraps it in [`SobolSequenceGenerator`] so the
 //!   inverse-cumulative adapter sees the same `Sample<Vec<Real>>` surface as
 //!   the Mersenne-Twister sequence generator.
+//! - Poisson factories use fallible draws because quantile inversion can fail.
 
 use super::inversecumulativersg::InverseCumulativeRsg;
 use super::mt19937uniformrng::MersenneTwisterUniformRng;
@@ -70,7 +71,10 @@ impl InverseCumulative for InverseCumulativeNormal {
     /// feed it uniform deviates that the sequence generator guarantees lie
     /// strictly in `(0, 1)`, where [`InverseCumulativeNormal::value`] is always
     /// finite, so the `expect` never fires. The public [`InverseCumulativeNormal`]
-    /// API stays fallible; only this local precondition is asserted here.
+    /// API stays fallible; Sobol skips the zeroth point and starts at 0.5. Its
+    /// nonzero 32-bit direction-matrix points stay interior until period exhaustion.
+    /// Generic or endpoint-capable sources should use `FallibleInverseCumulativeRsg`.
+    /// Only this local precondition is asserted here.
     fn evaluate(&self, x: Real) -> Real {
         self.value(x)
             .expect("inverse cumulative normal is finite for a uniform deviate in (0, 1)")
@@ -92,6 +96,9 @@ pub trait McRngTraits {
     /// (`rngtraits.hpp:50`).
     const ALLOWS_ERROR_ESTIMATE: bool;
 
+    /// Maximum number of sequence draws, when the underlying generator is finite.
+    const MAX_SAMPLES: Option<usize> = None;
+
     /// Builds a `dimension`-wide sequence generator seeded with `seed`.
     ///
     /// # Errors
@@ -103,6 +110,18 @@ pub trait McRngTraits {
 /// Default pseudo-random policy: Mersenne-Twister uniforms mapped through the
 /// inverse cumulative normal (`rngtraits.hpp:70`).
 pub struct PseudoRandom;
+
+impl PseudoRandom {
+    /// Build the scalar inverse-normal generator with fallible endpoint handling.
+    pub fn make_scalar_generator(
+        seed: u32,
+    ) -> super::InverseCumulativeRng<MersenneTwisterUniformRng, InverseCumulativeNormal> {
+        super::InverseCumulativeRng::new(
+            MersenneTwisterUniformRng::new(seed),
+            InverseCumulativeNormal::standard(),
+        )
+    }
+}
 
 impl McRngTraits for PseudoRandom {
     type RsgType = InverseCumulativeRsg<
@@ -126,6 +145,7 @@ impl McRngTraits for PseudoRandom {
 /// [`SobolRsg`](super::sobol::SobolRsg) exposes a bare `&[f64]` draw; this
 /// adapter stores the last sample with weight `1.0` so
 /// [`InverseCumulativeRsg`] can consume it.
+#[derive(Clone)]
 pub struct SobolSequenceGenerator {
     rsg: SobolRsg,
     sample: Sample<Vec<Real>>,
@@ -177,6 +197,7 @@ impl McRngTraits for LowDiscrepancy {
     type RsgType = InverseCumulativeRsg<SobolSequenceGenerator, InverseCumulativeNormal>;
 
     const ALLOWS_ERROR_ESTIMATE: bool = false;
+    const MAX_SAMPLES: Option<usize> = Some(u32::MAX as usize);
 
     fn make_sequence_generator(dimension: usize, seed: u32) -> QlResult<Self::RsgType> {
         let ursg = SobolSequenceGenerator::new(dimension, seed)?;
