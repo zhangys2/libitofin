@@ -2,7 +2,7 @@
 
 use super::inversecumulativersg::InverseCumulativeRsg;
 use super::rngtraits::{InverseCumulative, McRngTraits, SequenceGenerator};
-use super::sobol::{DirectionIntegers, SobolRsg, PPMT_MAX_DIM};
+use super::sobol::{DirectionIntegers, PPMT_MAX_DIM, SobolRsg};
 use crate::errors::QlResult;
 use crate::math::distributions::normal::InverseCumulativeNormal;
 use crate::methods::montecarlo::Sample;

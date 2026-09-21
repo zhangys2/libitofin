@@ -19,7 +19,7 @@ use crate::pricingengines::blackformula::{
 };
 use crate::quotes::Quote;
 use crate::settings::Settings;
-use crate::shared::{shared, Shared};
+use crate::shared::{Shared, shared};
 use crate::termstructures::volatility::{
     ConstantOptionletVolatility, OptionletVolatilityStructure, VolatilityType,
 };
@@ -326,8 +326,8 @@ mod tests {
     use crate::instruments::{CapFloor, SwapType, VanillaSwap};
     use crate::interestrate::Compounding;
     use crate::pricingengines::DiscountingSwapEngine;
-    use crate::quotes::{make_quote_handle, Quote, SimpleQuote};
-    use crate::shared::{shared_mut, SharedMut};
+    use crate::quotes::{Quote, SimpleQuote, make_quote_handle};
+    use crate::shared::{SharedMut, shared_mut};
     use crate::termstructures::yields::{FlatForward, ZeroSpreadedTermStructure};
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
