@@ -14,7 +14,8 @@ prioritized work to GitHub issues after the prioritization lens.
 **QL pin for this inventory:** QuantLib tag `v1.43` (matches repo fixtures).
 Inventories merged 2026-09-19 from Wayfinder research tickets
 [oracle case inventory](../.wayfinder/tickets/oracle-case-inventory.md) and
-[surface module inventory](../.wayfinder/tickets/surface-module-inventory.md).
+[surface module inventory](../.wayfinder/tickets/surface-module-inventory.md);
+reclassified 2026-09-21 against `main` after the v0.27 merge (#204).
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|
@@ -28,11 +29,10 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | partial | none | `FdmSabrOp` (dir/mixed/split identity); `FdSabrVanillaEngine` / `NoArbSabr*` deferred |
 | Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | partial | partial | Engine NPV/vega + CapHelper Normal + `optionletsDelta` FD; stripper Normal deferred |
 | Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | partial | partial | `TreeCapFloorEngine` + `DiscretizedCapFloor` (QL collar oracle + TimeGrid ctor + past-start intrinsic + CapHelper Normal pin); MC / Gaussian1d / CapHelper `addTimesTo` deferred |
-| Rates | Cap/floor Black extras | `CapFloor`, Black engine | bindings | true | partial | Cached NPV/vega + δ + `impliedVolatility` + ATM/parity + `optionlet(i)` + `optionletsVega`/`StdDev` + `deepUpdate` invalidation pinned; remaining: Python/FFI `optionlet` |
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` | true | partial | Cached NPV/vega/cash-settled + Spot/Forward Physical Black + reduced IBOR/OIS Spot/Cash/Forward (all reduced cartesian cells) + reduced Normal `impliedVolatility` pinned; remaining: full IV grid |
 | Rates | Gaussian1d / float–float / nonstandard swaption | `Gaussian1d*SwaptionEngine`, `FloatFloatSwaption`, `NonstandardSwaption` | `swaption.cpp`, `gaussian1dswaption.cpp` | false | none | HW/G2 engines only |
 | Rates | Bermudan OIS swaption (HW/G2) | OIS-underlying `Swaption` | `bermudanswaption.cpp` OIS cases | true | partial | HW + G2 FDM OIS Bermudan pinned (+ Simple/Compound feature pins); lockout deferred |
-| Rates | Vanilla IRS extras | `VanillaSwap` | `swap.cpp` (beyond cached/fair) | true | partial | Cached + fair + notifications + rate/spread dependency pinned; in-arrears/stubs open |
+| Rates | Vanilla IRS extras | `VanillaSwap` | `swap.cpp` (beyond cached/fair) | true | partial | Cached + fair + cash-flow notifications + `is_vanilla` + rate/spread dependency pinned; in-arrears/stubs open |
 | Rates | OIS bootstrap / cached NPV | `OvernightIndexedSwap`, `MakeOIS` | `overnightindexedswap.cpp` | true | partial | Compound bootstrap pinned; arithmetic/lookback siblings + type-level cached NPV deferred |
 | Rates | Float–float basis swap | `FloatFloatSwap` | `floatfloatswap.cpp` | true | partial | Identity/fair-spread only |
 | Rates | Const-notional XCCY swaps | `ConstNotionalCrossCurrency*` | `constnotionalcrosscurrency*.cpp` | false | none | `XccyBasisSwap` ≠ this family |
@@ -51,9 +51,8 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Tree discounting swap engine | `TreeSwapEngine` | `swap.cpp` | false | none | `DiscountingSwapEngine` only |
 | Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
 | Rates | Caplet vol stripping (normal / shifted / ON) | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Flat Black strip pinned; normal/shifted/ON open |
-| Rates | Swaption vol matrix observability | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | true | partial | Coherence pinned; observability open |
-| Rates | Swaption SABR/ZABR cube extras | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` | true | partial | Some SABR fixtures; ZABR/smile/ATM grid open |
-| Rates | Piecewise yield bootstrap extras | `PiecewiseYieldCurve` | `piecewiseyieldcurve.cpp` | true | partial | Many arms pinned; BMA / some globals skipped |
+| Rates | Swaption SABR/ZABR cube extras | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` | true | partial | Backward-flat 72-row QL 1.43 sparse/dense @ 1e-6 closed; ZABR / Normal SABR / remaining smile-ATM grid open |
+| Rates | Piecewise yield bootstrap extras | `PiecewiseYieldCurve` | `piecewiseyieldcurve.cpp` | true | partial | Custom pillars + iterative-bootstrap recovery pinned; BMA / some globals skipped |
 | Rates | Hull–White / affine short-rate suite | `HullWhite`, trees, helpers | `shortratemodels.cpp` | true | partial | Coverage “Core done”; full `testSwaps` breadth not mapped |
 | Equity | Heston analytic/FD/MC full suite | `HestonModel`, engines | `hestonmodel.cpp` | true | partial | FD-cached ambition closed (`testFdBarrierVsCached` / `testFdVanillaVsCached` / dividends / `testFdAmerican`). Remaining: Lewis/Kahl–Jaeckel, COS/AP/integrals, piecewise TD, etc. |
 | Equity | Heston FD scheme grid | `FdHeston*` | `fdheston.cpp` | true | partial | Variance mesher + Black limit + American/Ikonen/div/barrier NPV + ADI convergence (HS/MCS/mod-HS/CS) + Haug barrier-vs-BS table + MethodOfLines vs Hundsdorfer + American call–put parity + spurious oscillations (CS/HS/mod-HS/Douglas) closed. Still open: ExplicitEuler arm, 2-D CN/TrBDF2/ImplicitEuler (#636), intraday (`QL_HIGH_RESOLUTION_DATE`) |
@@ -63,9 +62,6 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Equity | Binary / double-binary barrier | `AnalyticBinaryBarrierEngine`, `AnalyticDoubleBarrierBinaryEngine` | `binaryoption.cpp`, `doublebarrieroption.cpp` | true | partial | `AnalyticBinaryBarrierEngine` Haug p.180 cash/asset book + cash book-vba q≠0 + touched-barrier extras closed; double-binary deferred |
 | Equity | Compound option | `CompoundOption`, analytic engine | `compoundoption.cpp` | true | partial | European NPV vs `testValues` Haug/sitmo subset @ 1e-3 closed. Still open: greeks, put-call parity table |
 | Equity | Margrabe / exchange | `MargrabeOption` | `margrabeoption.cpp` | true | partial | European NPV vs Haug `testEuroExchangeTwoAssets` subset @ 1e-3 closed. Still open: extra greeks, American engine, `testGreeks` |
-| Equity | Two-asset barrier | `TwoAssetBarrierOption` | `twoassetbarrieroption.cpp` / barrier suite | true | partial | Heynen–Kat analytic Haug 4-row `testHaugValues` @ 4e-3 closed, plus independent q≠0 KO, distinct-asset KO, and q≠0 knock-in pins. QL has no In rows or further Haug table. |
-| Equity | Two-asset correlation | `TwoAssetCorrelationOption` | `twoassetcorrelationoption.cpp` | true | partial | Analytic Haug European call @ 1e-4 (`testAnalyticEngine`) closed, plus independent put and q≠0 call pins. QL has no further suite cases. Engine still applies the European formula to any `Exercise` (QL-parity) |
-| Equity | Extensible options | Holder/writer extensible | `extensibleoptions.cpp` | true | partial | Writer analytic Haug call @ 1e-4 closed (put + q≠0 pins). Holder analytic Haug call @ 1e-4 (`testAnalyticHolderExtensibleOptionEngine`) closed, plus independent put and q≠0 call pins. QL suite is call-only. |
 | Equity | Alphabet baskets (Everest/Himalaya/Pagoda) | experimental exotic options + MC | `everestoption.cpp` (+ Himalaya/Pagoda often experimental-only) | true | partial | Everest MC cached NPV @ 1e-8 (`testCached`) closed. Himalaya/Pagoda experimental, deferred. |
 | Equity | Basket beyond Choi / single-factor | Kirk/Stulz/Pearson/MC/FD-nD basket | `basketoption.cpp`, `spreadoption.cpp` | true | partial | Choi golden example pinned |
 | Equity | FD Heston double-barrier | `FdHestonDoubleBarrierEngine` | `doublebarrieroption.cpp` | true | partial | KnockOut FD vs Haug `testEuropeanHaugValues` subset @ 0.025 (251×76×3 near-Black). KnockIn / leverage / mixing / greeks deferred |
