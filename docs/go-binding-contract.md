@@ -59,6 +59,24 @@ Prefer explicit Go configuration structs to long positional argument lists.
 Use Go-owned scalar arrays for synchronous native calls only; retain no Go memory
 in Rust. Batch large numerical work across the boundary.
 
+## Joint yield curves
+
+`JointYieldCurves` assembles exactly two global discount/log-linear curves. Basis
+helper templates must include both bootstrap sides and share their input index
+objects/settings. The assembler clones those indices onto private weak forecast
+links and copies the basis helper configurations; template helpers stay independent.
+Plain helper strips must be distinct and have no live curve owner, including an
+unqueried curve or a global bootstrap's additional-helper list. Do not reuse these
+plain helpers later in another curve; legacy generic constructors retain their
+existing behavior.
+
+Each exported curve handle retains the `MultiCurve` owner and both contributors.
+Closing the assembler, sibling curve, or input wrappers does not break consumers
+that retain an exported handle. Internal weak forecast links never retain that
+owner, so dropping the last external consumer releases the joint graph. Extracting
+only a raw Rust `current_link()` pointer does not retain the additional owner.
+See the [joint-curve guide](docs/joint-curves.md) for usage and executable examples.
+
 ## Global bootstrap callbacks
 
 `PiecewiseCurveConfig` accepts `AdditionalVariables`, `AdditionalDates`, and
@@ -96,3 +114,36 @@ dependency lifetimes, Close behavior, session isolation and concurrent callers.
 Never weaken tolerances to make tests pass. Coverage mappings must identify exact
 Python symbols and real C/Go implementations; unsupported symbols remain explicit.
 Private consumer source and test fixtures must not be copied into this repository.
+
+## Cap/floor lattice and normal calibration
+
+BachelierCapFloorEngine requires normal volatility. It observes retained quotes,
+surfaces and discount curves. TreeCapFloorEngine retains a concrete HullWhite
+model and uses either positive target steps or an explicit grid with all coupon
+reset/payment times. Fixed grids sort and deduplicate supplied nodes and prepend
+zero without subdivision. A negative first accrual start is rejected by the
+engine; the Rust discretized asset supports known historical fixings directly.
+
+CapHelper retains its quote, index and curve, refreshes the ATM cap for model and
+time queries, and supports normal or shifted-lognormal market values. The new
+HullWhite cap calibration method uses the tree engine and can fix mean reversion.
+Existing engine discriminants, constructors and C struct layouts are unchanged.
+
+## Iterative bootstrap options
+
+`PiecewiseCurveConfig.IterativeOptions` accepts `IterativeBootstrapOptions` from
+`DefaultIterativeBootstrapOptions()`. Nil retains the existing strict defaults.
+Python yield constructors accept trailing `iterative_options=None`; construct
+`IterativeBootstrapOptions` with named overrides. Options are copied, and curves
+retain helpers and their dependencies. Global/local algorithms reject them.
+
+C callers initialize the new `ItofinIterativeBootstrapOptions` with
+`itofin_iterative_bootstrap_options_default`, then call
+`itofin_piecewise_curve_new_with_options` with a non-null options pointer.
+Presence and `dont_throw` fields require 0/1. Existing constructors/layouts are
+unchanged. Explicit zero attempt/step/evaluation limits are invalid.
+
+Bounds are initial solver brackets, widened on retries; they are not constraints.
+`DontThrow`/`dont_throw` deliberately permits approximate curves that need not
+reprice helpers. Evaluation errors still propagate. These configuration facades
+cover iterative yield curves; credit/inflation constructors keep their defaults.

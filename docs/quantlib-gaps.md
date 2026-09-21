@@ -27,7 +27,7 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | partial | none | `HestonSLVProcess` (drift/diffusion/apply/evolve + const-L identity); FDM/MC model calibration deferred |
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | partial | none | `FdmSabrOp` (dir/mixed/split identity); `FdSabrVanillaEngine` / `NoArbSabr*` deferred |
 | Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | partial | partial | Engine NPV/vega + CapHelper Normal + `optionletsDelta` FD; stripper Normal deferred |
-| Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | partial | none | `TreeCapFloorEngine` + `DiscretizedCapFloor` (tree→Analytic convergence); past-start / MC / Gaussian1d / CapHelper `addTimesTo` deferred |
+| Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | partial | partial | `TreeCapFloorEngine` + `DiscretizedCapFloor` (QL collar oracle + TimeGrid ctor + past-start intrinsic + CapHelper Normal pin); MC / Gaussian1d / CapHelper `addTimesTo` deferred |
 | Rates | Cap/floor Black extras | `CapFloor`, Black engine | bindings | true | partial | Cached NPV/vega + δ + `impliedVolatility` + ATM/parity + `optionlet(i)` + `optionletsVega`/`StdDev` + `deepUpdate` invalidation pinned; remaining: Python/FFI `optionlet` |
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` | true | partial | Cached NPV/vega/cash-settled + Spot/Forward Physical Black + reduced IBOR/OIS Spot/Cash/Forward (all reduced cartesian cells) + reduced Normal `impliedVolatility` pinned; remaining: full IV grid |
 | Rates | Gaussian1d / float–float / nonstandard swaption | `Gaussian1d*SwaptionEngine`, `FloatFloatSwaption`, `NonstandardSwaption` | `swaption.cpp`, `gaussian1dswaption.cpp` | false | none | HW/G2 engines only |
@@ -49,7 +49,6 @@ Inventories merged 2026-09-19 from Wayfinder research tickets
 | Rates | CMS fixed-rate bond | `CmsRateBond` | `bonds.cpp` | false | none | |
 | Rates | Fitted bond discount curve | Nelson–Siegel / Svensson-style helpers | `fittedbondcurve.cpp` | false | none | Piecewise bootstrap only |
 | Rates | Tree discounting swap engine | `TreeSwapEngine` | `swap.cpp` | false | none | `DiscountingSwapEngine` only |
-| Rates | Overnight index future | `OvernightIndexFuture` | `overnightindexfuture.cpp` | false | none | |
 | Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
 | Rates | Caplet vol stripping (normal / shifted / ON) | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Flat Black strip pinned; normal/shifted/ON open |
 | Rates | Swaption vol matrix observability | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | true | partial | Coherence pinned; observability open |

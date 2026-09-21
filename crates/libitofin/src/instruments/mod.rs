@@ -39,6 +39,7 @@ mod makeyoyinflationcapfloor;
 mod margrabeoption;
 mod oneassetoption;
 mod overnightindexedswap;
+pub mod overnightindexfuture;
 mod partialtimebarrieroption;
 mod payoffs;
 mod protection;
@@ -173,3 +174,4 @@ pub use yearonyearinflationswap::YearOnYearInflationSwap;
 pub use zerocouponinflationswap::ZeroCouponInflationSwap;
 
 pub use crate::position::Position;
+pub use overnightindexfuture::OvernightIndexFuture;

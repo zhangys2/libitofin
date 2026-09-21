@@ -80,7 +80,8 @@ credit.
 | Cap/floor deepUpdate | `CapFloor::deep_update` | `capfloor.cpp:271-276` | clears calculated after NPV; reprice recovers prior NPV @ 1e-12 (coupon deepUpdate deferred) |
 | Swaption Black implied vol | `Swaption::implied_volatility` | `swaption.cpp` `testImpliedVolatility` / `testImpliedVolatilityOis` | Spot Physical Black + reduced IBOR/OIS Spot/Cash/Forward cartesian cells @ 1e-8 (incl. Cash×Forward); reduced Spot Physical Normal |
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
-| Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | convergence (no QL suite case) | HW tree→Analytic rel <5e-3 @400 (cap+floor); collar type-dispatch smoke; past-start / MC/G1d deferred |
+| Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | QL tree collar oracle + CapHelper Normal | collar/cap/floor @ 1e-8 (30/100 steps); TimeGrid ctor; past-start known-fixing intrinsic; CapHelper Normal market/model pin + tree σ calibrate; tree→analytic rel <1e-3 @600. MC/G1d deferred |
+| Overnight index future | `OvernightIndexFuture` + `OvernightIndexFutureRateHelper` / `SofrFutureRateHelper` | `sofrfutures.cpp` + holiday-clipped daily accrual | Juneteenth/bootstrap prices + curve nodes @ 1e-9; Simple/Compound holiday clip + today-fixing @ 1e-9; convexity/lifecycle |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |

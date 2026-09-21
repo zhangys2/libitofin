@@ -10,6 +10,7 @@ mod calibration;
 mod capfloor;
 mod capfloorengine;
 mod capfloortermvol;
+mod caphelper;
 mod cashflows;
 mod credit;
 mod creditdensity;
@@ -22,12 +23,16 @@ mod helpers;
 mod heston;
 mod hullwhite;
 mod inflation;
+mod iterativebootstrap;
+mod jointcurves;
 mod makeswaption;
 mod market;
 mod mcengine;
 mod ois;
 mod option;
 mod optionletvol;
+mod overnightfuture;
+mod poissonrng;
 mod randomnumbers;
 mod results;
 mod settings;
@@ -38,11 +43,12 @@ mod swaption;
 mod swaptionengine;
 mod swaptionvol;
 mod time;
+mod treeswaption;
 mod vol;
 
 use calibration::{PyCalibrationErrorType, PyEndCriteria, PyLevenbergMarquardt};
 use capfloor::{PyCapFloor, PyCapFloorType};
-use capfloorengine::PyBlackCapFloorEngine;
+use capfloorengine::{PyBachelierCapFloorEngine, PyBlackCapFloorEngine};
 use capfloortermvol::PyCapFloorTermVolSurface;
 use cashflows::{
     PyCappedFlooredYoYInflationCoupon, PyCashFlow, PyIborLeg, PyLeg, PyYoYInflationCoupon,
@@ -88,7 +94,9 @@ use inflation::{
 };
 use libitofin::errors::QlError;
 use market::{PyBlackScholesProcess, PySimpleQuote};
-use mcengine::{PyMCAmericanEngine, PyMCEuropeanEngine, PyMCEuropeanHestonEngine};
+use mcengine::{
+    PyMCAmericanEngine, PyMCEuropeanEngine, PyMCEuropeanHestonEngine, PyQMCEuropeanEngine,
+};
 use ois::{PyMakeOis, PyOvernightIndexedSwap};
 use option::{PyOptionType, PyVanillaOption};
 use optionletvol::{
@@ -120,6 +128,7 @@ use time::{
     PyBusinessDayConvention, PyCalendar, PyDate, PyDateGeneration, PyDayCounter, PyFrequency,
     PyPeriod, PySchedule,
 };
+use treeswaption::{PyBermudanExercise, PyTreeSwaptionEngine};
 use vol::{
     PyBlackConstantVol, PyBlackVarianceCurve, PyBlackVarianceSurface, PyBlackVolTermStructure,
     PyBlackVolTimeExtrapolation,
@@ -198,6 +207,10 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyBlackVarianceCurve>()?;
     termstructures.add_class::<PyBlackVarianceSurface>()?;
     termstructures.add_class::<PyRateHelper>()?;
+    termstructures.add_class::<jointcurves::PyIborIborBasisSwapRateHelper>()?;
+    termstructures.add_class::<jointcurves::PyJointYieldCurves>()?;
+    termstructures.add_class::<overnightfuture::PyOvernightIndexFutureRateHelper>()?;
+    termstructures.add_class::<overnightfuture::PySofrFutureRateHelper>()?;
     termstructures.add_class::<PyDepositRateHelper>()?;
     termstructures.add_class::<PySwapRateHelper>()?;
     termstructures.add_class::<PyFuturesType>()?;
@@ -209,6 +222,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyBondPriceType>()?;
     termstructures.add_class::<PyFixedRateBondHelper>()?;
     termstructures.add_class::<bootstrap::PySimpleQuoteVariables>()?;
+    termstructures.add_class::<iterativebootstrap::PyIterativeBootstrapOptions>()?;
     termstructures.add_class::<PyPiecewiseYieldCurve>()?;
     termstructures.add_class::<PyPiecewiseLogLinearDiscount>()?;
     termstructures.add_class::<PyPiecewiseLinearZero>()?;
@@ -258,6 +272,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     processes.add_class::<PyHestonProcess>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
+    indexes.add_class::<overnightfuture::PySofr>()?;
     indexes.add_class::<PyCurrency>()?;
     indexes.add_class::<PyIborIndex>()?;
     indexes.add_class::<PyEuribor>()?;
@@ -294,8 +309,10 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<PyPosition>()?;
     instruments.add_class::<PyForwardRateAgreement>()?;
     instruments.add_class::<PyOvernightIndexedSwap>()?;
+    instruments.add_class::<overnightfuture::PyOvernightIndexFuture>()?;
     instruments.add_class::<PyMakeOis>()?;
     instruments.add_class::<PyEuropeanExercise>()?;
+    instruments.add_class::<PyBermudanExercise>()?;
     instruments.add_class::<PySettlementType>()?;
     instruments.add_class::<PySettlementMethod>()?;
     instruments.add_class::<PySwaption>()?;
@@ -320,8 +337,12 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let pricingengines = PyModule::new(py, "pricingengines")?;
     pricingengines.add_class::<PyCashAnnuityModel>()?;
     pricingengines.add_class::<PyBlackSwaptionEngine>()?;
+    pricingengines.add_class::<PyTreeSwaptionEngine>()?;
     pricingengines.add_class::<PyBachelierSwaptionEngine>()?;
+    pricingengines.add_class::<caphelper::PyTreeCapFloorEngine>()?;
+    models.add_class::<caphelper::PyCapHelper>()?;
     pricingengines.add_class::<PyBlackCapFloorEngine>()?;
+    pricingengines.add_class::<PyBachelierCapFloorEngine>()?;
     pricingengines.add_class::<PyMidPointCdsEngine>()?;
     pricingengines.add_class::<PyIsdaCdsEngine>()?;
     pricingengines.add_class::<PyNumericalFix>()?;
@@ -330,6 +351,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<PyDiscountingSwapEngine>()?;
     pricingengines.add_class::<PyYoYInflationCapFloorEngine>()?;
     pricingengines.add_class::<PyMCEuropeanEngine>()?;
+    pricingengines.add_class::<PyQMCEuropeanEngine>()?;
     pricingengines.add_class::<PyMCEuropeanHestonEngine>()?;
     pricingengines.add_class::<PyMCAmericanEngine>()?;
 
@@ -338,6 +360,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     optimization.add_class::<PyEndCriteria>()?;
 
     let randomnumbers = PyModule::new(py, "randomnumbers")?;
+    randomnumbers.add_class::<poissonrng::PyPoissonRandomGenerator>()?;
+    randomnumbers.add_class::<poissonrng::PyPoissonRandomSequenceGenerator>()?;
     randomnumbers.add_class::<PyUniformRandomGenerator>()?;
     randomnumbers.add_class::<PyUniformRandomSequenceGenerator>()?;
     randomnumbers.add_class::<PyGaussianRandomGenerator>()?;
