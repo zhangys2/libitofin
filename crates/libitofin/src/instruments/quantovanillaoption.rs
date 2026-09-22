@@ -55,11 +55,18 @@ pub struct QuantoVanillaOption {
 }
 
 macro_rules! impl_greek {
-    ($fn:ident, $($path:ident).+, $desc:expr) => {
+    ($fn:ident, $desc:expr) => {
         #[doc = concat!("Sensitivity / greek `", $desc, "`.")]
         pub fn $fn(&mut self) -> QlResult<Real> {
             self.calculate()?;
-            Self::greek(self.$($path).+, $desc)
+            Self::greek(self.$fn, $desc)
+        }
+    };
+    ($fn:ident, $group:ident, $desc:expr) => {
+        #[doc = concat!("Sensitivity / greek `", $desc, "`.")]
+        pub fn $fn(&mut self) -> QlResult<Real> {
+            self.calculate()?;
+            Self::greek(self.$group.$fn, $desc)
         }
     };
 }
@@ -103,15 +110,24 @@ impl QuantoVanillaOption {
         Ok(value)
     }
 
-    impl_greek!(delta, greeks.delta, "delta");
-    impl_greek!(gamma, greeks.gamma, "gamma");
-    impl_greek!(theta, greeks.theta, "theta");
-    impl_greek!(vega, greeks.vega, "vega");
-    impl_greek!(rho, greeks.rho, "rho");
-    impl_greek!(dividend_rho, greeks.dividend_rho, "dividend rho");
-    impl_greek!(qvega, qvega, "quanto vega");
-    impl_greek!(qrho, qrho, "quanto rho");
-    impl_greek!(qlambda, qlambda, "quanto lambda");
+    impl_greek!(delta, greeks, "delta");
+    impl_greek!(gamma, greeks, "gamma");
+    impl_greek!(theta, greeks, "theta");
+    impl_greek!(vega, greeks, "vega");
+    impl_greek!(rho, greeks, "rho");
+    impl_greek!(dividend_rho, greeks, "dividend rho");
+    impl_greek!(delta_forward, more_greeks, "forward delta");
+    impl_greek!(elasticity, more_greeks, "elasticity");
+    impl_greek!(theta_per_day, more_greeks, "theta per-day");
+    impl_greek!(strike_sensitivity, more_greeks, "strike sensitivity");
+    impl_greek!(
+        itm_cash_probability,
+        more_greeks,
+        "in-the-money cash probability"
+    );
+    impl_greek!(qvega, "quanto vega");
+    impl_greek!(qrho, "quanto rho");
+    impl_greek!(qlambda, "quanto lambda");
 }
 
 impl Instrument for QuantoVanillaOption {
@@ -150,7 +166,13 @@ impl Instrument for QuantoVanillaOption {
             rho: Some(0.0),
             dividend_rho: Some(0.0),
         };
-        self.more_greeks = MoreGreeks::default();
+        self.more_greeks = MoreGreeks {
+            itm_cash_probability: Some(0.0),
+            delta_forward: Some(0.0),
+            elasticity: Some(0.0),
+            theta_per_day: Some(0.0),
+            strike_sensitivity: Some(0.0),
+        };
         self.qvega = Some(0.0);
         self.qrho = Some(0.0);
         self.qlambda = Some(0.0);
@@ -267,10 +289,15 @@ mod tests {
             for g in all_greeks(&mut opt) {
                 assert!(g.unwrap().is_finite());
             }
+
+            let div_rho = opt.dividend_rho().unwrap();
+            assert!((opt.qrho().unwrap() + div_rho).abs() < 1e-12);
+            assert!((opt.qvega().unwrap() - 0.3 * 0.2 * div_rho).abs() < 1e-12);
+            assert!((opt.qlambda().unwrap() - 0.10 * 0.2 * div_rho).abs() < 1e-12);
         }
     }
 
-    fn all_greeks(opt: &mut QuantoVanillaOption) -> [QlResult<Real>; 9] {
+    fn all_greeks(opt: &mut QuantoVanillaOption) -> [QlResult<Real>; 14] {
         [
             opt.delta(),
             opt.gamma(),
@@ -278,6 +305,11 @@ mod tests {
             opt.vega(),
             opt.rho(),
             opt.dividend_rho(),
+            opt.delta_forward(),
+            opt.elasticity(),
+            opt.theta_per_day(),
+            opt.strike_sensitivity(),
+            opt.itm_cash_probability(),
             opt.qvega(),
             opt.qrho(),
             opt.qlambda(),
@@ -336,40 +368,35 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_quanto_greeks() {
+    fn test_mock_engine_results_and_missing_greeks() {
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today());
-        let mut opt = dummy_option(settings);
 
-        let engine = shared_mut(MockEngine {
+        // 1. OneAssetOptionResults with missing quanto greeks
+        let mut opt1 = dummy_option(Shared::clone(&settings));
+        let engine1 = shared_mut(MockEngine {
             base: GenericEngine::new(OptionArguments::default(), OneAssetOptionResults::default()),
             populate: |res| {
                 res.instrument.value = Some(10.0);
                 res.greeks.delta = Some(0.5);
             },
         });
-        opt.base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
-
-        assert_eq!(opt.npv().unwrap(), 10.0);
-        assert_eq!(opt.delta().unwrap(), 0.5);
+        opt1.base_mut()
+            .set_pricing_engine(engine1 as SharedMut<dyn PricingEngine>);
+        assert_eq!(opt1.npv().unwrap(), 10.0);
+        assert_eq!(opt1.delta().unwrap(), 0.5);
         for (g, msg) in [
-            (opt.qvega(), "quanto vega not provided"),
-            (opt.qrho(), "quanto rho not provided"),
-            (opt.qlambda(), "quanto lambda not provided"),
-            (opt.gamma(), "gamma not provided"),
+            (opt1.qvega(), "quanto vega not provided"),
+            (opt1.qrho(), "quanto rho not provided"),
+            (opt1.qlambda(), "quanto lambda not provided"),
+            (opt1.gamma(), "gamma not provided"),
         ] {
             assert_eq!(g.unwrap_err().message(), msg);
         }
-    }
 
-    #[test]
-    fn test_quanto_vanilla_option_results() {
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today());
-        let mut opt = dummy_option(settings);
-
-        let engine = shared_mut(MockEngine {
+        // 2. Dedicated QuantoVanillaOptionResults
+        let mut opt2 = dummy_option(settings);
+        let engine2 = shared_mut(MockEngine {
             base: GenericEngine::new(
                 OptionArguments::default(),
                 QuantoVanillaOptionResults::default(),
@@ -382,13 +409,12 @@ mod tests {
                 res.qlambda = Some(3.45);
             },
         });
-        opt.base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
-
-        assert_eq!(opt.npv().unwrap(), 12.5);
-        assert_eq!(opt.delta().unwrap(), 0.6);
-        assert_eq!(opt.qvega().unwrap(), 1.23);
-        assert_eq!(opt.qrho().unwrap(), 2.34);
-        assert_eq!(opt.qlambda().unwrap(), 3.45);
+        opt2.base_mut()
+            .set_pricing_engine(engine2 as SharedMut<dyn PricingEngine>);
+        assert_eq!(opt2.npv().unwrap(), 12.5);
+        assert_eq!(opt2.delta().unwrap(), 0.6);
+        assert_eq!(opt2.qvega().unwrap(), 1.23);
+        assert_eq!(opt2.qrho().unwrap(), 2.34);
+        assert_eq!(opt2.qlambda().unwrap(), 3.45);
     }
 }
