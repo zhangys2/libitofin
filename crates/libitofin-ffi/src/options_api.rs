@@ -1,7 +1,7 @@
 //! Vanilla option adapters. All valuation and lazy invalidation stay in the core.
 use crate::boundary::*;
 use crate::time_api::date;
-use libitofin::exercise::{AmericanExercise, EuropeanExercise, Exercise};
+use libitofin::exercise::{AmericanExercise, EuropeanExercise, Exercise, ExerciseType};
 use libitofin::instrument::Instrument;
 use libitofin::instruments::{PlainVanillaPayoff, StrikedTypePayoff, VanillaOption};
 use libitofin::models::HestonModel;
@@ -57,6 +57,64 @@ pub unsafe extern "C" fn itofin_option_new(
     }
 }
 
+/// Build an American option whose exercise window starts at Date::min_date().
+/// # Safety
+/// Outputs must be aligned, live and non-overlapping. Context and handles must
+/// belong to the calling thread; serialize calls including destruction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_option_american_until_new(
+    ctx: *mut Context,
+    kind: i32,
+    strike: f64,
+    expiry: i32,
+    settings: u64,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let payoff = shared(PlainVanillaPayoff::new(option_type(kind)?, strike))
+                as Shared<dyn StrikedTypePayoff>;
+            let exercise =
+                shared(AmericanExercise::until(date(expiry)?, false)?) as Shared<dyn Exercise>;
+            let option =
+                VanillaOption::new(payoff, exercise, c.get::<Shared<Settings<Date>>>(settings)?);
+            output(out, c.insert(shared_mut(option))?)
+        })
+    }
+}
+
+/// Build a vanilla option retaining a Bermudan exercise handle.
+/// # Safety
+/// Outputs must be aligned, live and non-overlapping. Context and handles must
+/// belong to the calling thread; serialize calls including destruction.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_option_bermudan_new(
+    ctx: *mut Context,
+    kind: i32,
+    strike: f64,
+    exercise: u64,
+    settings: u64,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let payoff = shared(PlainVanillaPayoff::new(option_type(kind)?, strike))
+                as Shared<dyn StrikedTypePayoff>;
+            let exercise = c.get::<Shared<dyn Exercise>>(exercise)?;
+            if exercise.exercise_type() != ExerciseType::Bermudan {
+                return Err(BindingError::invalid("Bermudan exercise required"));
+            }
+            let option =
+                VanillaOption::new(payoff, exercise, c.get::<Shared<Settings<Date>>>(settings)?);
+            output(out, c.insert(shared_mut(option))?)
+        })
+    }
+}
+
 /// Engine kind: 0 analytic European (BSM process), 1 analytic Heston (model), 2 MC engine.
 #[unsafe(no_mangle)]
 /// # Safety
@@ -86,7 +144,12 @@ pub unsafe extern "C" fn itofin_option_set_engine(
                         c.get::<SharedMut<HestonModel>>(source)?,
                         integration_order,
                     )?),
-                    2 => c.get(source)?,
+                    2 => c.get::<SharedMut<dyn PricingEngine>>(source).or_else(|_| {
+                        c.get::<SharedMut<
+                            libitofin::pricingengines::vanilla::coshestonengine::CosHestonEngine,
+                        >>(source)
+                            .map(|engine| engine as SharedMut<dyn PricingEngine>)
+                    })?,
                     _ => return Err(BindingError::invalid("unknown option engine kind")),
                 };
             option.borrow_mut().base_mut().set_pricing_engine(engine);

@@ -276,39 +276,40 @@ impl Integration {
 /// Ported:
 /// - [`Gatheral`](ComplexLogFormula::Gatheral): `Fj_Helper` (Bates / classic
 ///   Heston Fourier path).
-/// - [`AngledContour`](ComplexLogFormula::AngledContour) / [`AsymptoticChF`](ComplexLogFormula::AsymptoticChF):
-///   Andersen-Piterbarg `AP_Helper` (default `OptimalCV` engine path).
+/// - All five `AP_Helper` modes: [`AndersenPiterbarg`](ComplexLogFormula::AndersenPiterbarg),
+///   [`AndersenPiterbargOptCV`](ComplexLogFormula::AndersenPiterbargOptCV),
+///   [`AsymptoticChF`](ComplexLogFormula::AsymptoticChF) (issue #426),
+///   [`AngledContour`](ComplexLogFormula::AngledContour) (issue #416), and
+///   [`AngledContourNoCV`](ComplexLogFormula::AngledContourNoCV). `optimalControlVariate`
+///   selects between AngledContour and AsymptoticChF.
 ///
-/// Deferred (#418): `BranchCorrection`, `AndersenPiterbarg`,
-/// `AndersenPiterbargOptCV`, `AngledContourNoCV`. They fail loud rather than
-/// silently stubbing to a ported branch.
+/// Deferred (#418): `BranchCorrection`. It fails loud rather than silently
+/// stubbing to a ported branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComplexLogFormula {
     /// Gatheral form of the characteristic function without control variate.
     Gatheral,
     /// Old branch-correction form (deferred).
     BranchCorrection,
-    /// Gatheral form with Andersen-Piterbarg control variate (deferred).
+    /// Gatheral form with Andersen-Piterbarg control variate.
     AndersenPiterbarg,
-    /// A slightly better Andersen-Piterbarg control variate (deferred).
+    /// Characteristic-function-matched Andersen-Piterbarg control variate.
     AndersenPiterbargOptCV,
     /// Asymptotic expansion of the characteristic function as control variate
     /// (ported, issue #426).
     AsymptoticChF,
     /// Angled-contour integration with control variate (ported).
     AngledContour,
-    /// Angled-contour integration without control variate (deferred).
+    /// Angled-contour integration without control variate.
     AngledContourNoCV,
 }
 
 /// The Andersen-Piterbarg `AP_Helper` control-variate integrand
-/// (`analytichestonengine.cpp:448-576`), AngledContour and AsymptoticChF
-/// branches.
+/// (`analytichestonengine.cpp:448-576`), AngledContour and explicit control-variate branches.
 ///
 /// In C++ `AP_Helper` holds an `AnalyticHestonEngine*` and reads the five
-/// Heston parameters plus the characteristic function `chF` off it. There is no
-/// engine yet (issue #417), so this carries a [`HestonChf`] (from issue #415)
-/// directly and reads the parameters through its accessors.
+/// Heston parameters plus the characteristic function `chF` off it. Rust carries
+/// a [`HestonChf`] directly, avoiding a circular engine/helper dependency.
 ///
 /// `phi`/`psi` (`cpp:479-488`) are the asymptotic control-variate coefficients;
 /// they are computed only for [`AsymptoticChF`](ComplexLogFormula::AsymptoticChF)
@@ -335,7 +336,7 @@ pub struct ApHelper {
 
 impl ApHelper {
     /// `AP_Helper` constructor (`analytichestonengine.cpp:448-505`),
-    /// AngledContour and AsymptoticChF branches.
+    /// Supports all explicit control-variate branches.
     ///
     /// For AsymptoticChF the C++ `switch` computes `phi_`/`psi_` (`cpp:479-488`),
     /// then `[[fallthrough]]` through the AngledContour `vAvg` (`cpp:490-492`)
@@ -351,8 +352,7 @@ impl ApHelper {
     ///
     /// # Errors
     ///
-    /// Errors for `AndersenPiterbarg`/`AndersenPiterbargOptCV`/`AngledContourNoCV`:
-    /// those branches are deferred to issue #418.
+    /// Numerical validity is checked when the control-variate value is evaluated.
     pub fn new(
         term: Time,
         fwd: Real,
@@ -371,7 +371,12 @@ impl ApHelper {
         let s_alpha = (alpha * freq).exp();
 
         let (phi, psi) = match cpx_log {
-            ComplexLogFormula::AngledContour => (Complex::new(0.0, 0.0), Complex::new(0.0, 0.0)),
+            ComplexLogFormula::AngledContour
+            | ComplexLogFormula::AndersenPiterbarg
+            | ComplexLogFormula::AndersenPiterbargOptCV
+            | ComplexLogFormula::AngledContourNoCV => {
+                (Complex::new(0.0, 0.0), Complex::new(0.0, 0.0))
+            }
             ComplexLogFormula::AsymptoticChF => {
                 let sqrt_1mrho2 = (1.0 - rho * rho).sqrt();
                 let phi = -(v0 + term * kappa * theta) / sigma * Complex::new(sqrt_1mrho2, rho);
@@ -386,12 +391,15 @@ impl ApHelper {
             }
             other => fail!(
                 "AP_Helper control variate {other:?} is deferred or not an AP formula \
-                 (issue #418): only AngledContour (issue #416) and AsymptoticChF \
-                 (issue #426) are ported for AP_Helper"
+                 (issue #418): Gatheral uses Fj_Helper; BranchCorrection is deferred"
             ),
         };
 
-        let v_avg = (1.0 - (-kappa * term).exp()) * (v0 - theta) / (kappa * term) + theta;
+        let v_avg = if cpx_log == ComplexLogFormula::AndersenPiterbargOptCV {
+            -8.0 * chf.chf(Complex::new(0.0, alpha), term).re.ln() / term
+        } else {
+            (1.0 - (-kappa * term).exp()) * (v0 - theta) / (kappa * term) + theta
+        };
 
         let r = rho - sigma * freq / (v0 + kappa * theta * term);
         let contour_angle = if r * freq < 0.0 {
@@ -399,7 +407,14 @@ impl ApHelper {
         } else {
             0.0
         };
-        let tan_phi = contour_angle.tan();
+        let tan_phi = if matches!(
+            cpx_log,
+            ComplexLogFormula::AndersenPiterbarg | ComplexLogFormula::AndersenPiterbargOptCV
+        ) {
+            0.0
+        } else {
+            contour_angle.tan()
+        };
 
         Ok(ApHelper {
             term,
@@ -434,7 +449,9 @@ impl ApHelper {
         let h_u = Complex::new(u, u * self.tan_phi - self.alpha);
         let h_prime = h_u - i;
 
-        let phi_bs = if self.cpx_log == ComplexLogFormula::AsymptoticChF {
+        let phi_bs = if self.cpx_log == ComplexLogFormula::AngledContourNoCV {
+            Complex::new(0.0, 0.0)
+        } else if self.cpx_log == ComplexLogFormula::AsymptoticChF {
             (u * Complex::new(1.0, self.tan_phi) * self.phi + self.psi).exp()
         } else {
             (-0.5
@@ -477,6 +494,20 @@ impl ApHelper {
     /// if `alpha != -0.5` (AsymptoticChF, `cpp:558`), or if the complex `Ci`/`Si`
     /// series fail to converge.
     pub fn control_variate_value(&self) -> QlResult<Real> {
+        if self.cpx_log == ComplexLogFormula::AngledContourNoCV {
+            return Ok(if self.alpha <= 0.0 { self.fwd } else { 0.0 }
+                - if self.alpha <= -1.0 { self.strike } else { 0.0 }
+                - if self.alpha == 0.0 {
+                    0.5 * self.fwd
+                } else {
+                    0.0
+                }
+                + if self.alpha == -1.0 {
+                    0.5 * self.strike
+                } else {
+                    0.0
+                });
+        }
         if self.cpx_log == ComplexLogFormula::AsymptoticChF {
             require!(self.alpha == -0.5, "alpha must be equal to -0.5");
 
@@ -1337,18 +1368,17 @@ mod tests {
         assert!(Integration::gauss_laguerre(193).is_err());
     }
 
-    /// Deferred `AP_Helper` control variates fail loud (issue #418), naming the
-    /// deferral rather than stubbing to a ported branch. `AsymptoticChF` is now
-    /// ported (issue #426) and dropped from the deferred list.
+    /// Additional explicit control variates produce finite integrands.
     #[test]
-    fn ap_helper_deferred_variants_error() {
+    fn ap_helper_additional_variants_are_finite() {
         for cpx in [
             ComplexLogFormula::AndersenPiterbarg,
             ComplexLogFormula::AndersenPiterbargOptCV,
             ComplexLogFormula::AngledContourNoCV,
         ] {
-            let err = ApHelper::new(TERM, FWD, STRIKE, cpx, fixture(), ALPHA).unwrap_err();
-            assert!(err.to_string().contains("deferred"), "{cpx:?}: {err}");
+            let helper = ApHelper::new(TERM, FWD, STRIKE, cpx, fixture(), ALPHA).unwrap();
+            assert!(helper.evaluate(0.5).is_finite());
+            assert!(helper.control_variate_value().unwrap().is_finite());
         }
     }
 

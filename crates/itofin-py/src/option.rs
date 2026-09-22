@@ -2,6 +2,7 @@
 
 use crate::PyQlError;
 use crate::heston::PyHestonModel;
+use crate::heston_engines::{PyCosHestonEngine, PyExponentialFittingHestonEngine};
 use crate::market::PyBlackScholesProcess;
 use crate::mcengine::{
     PyMCAmericanEngine, PyMCEuropeanEngine, PyMCEuropeanHestonEngine, PyQMCEuropeanEngine,
@@ -9,6 +10,7 @@ use crate::mcengine::{
 use crate::results::Results;
 use crate::settings::PySettings;
 use crate::time::PyDate;
+use crate::treeswaption::PyBermudanExercise;
 use libitofin::exercise::{AmericanExercise, EuropeanExercise, Exercise};
 use libitofin::instrument::Instrument;
 use libitofin::instruments::{PlainVanillaPayoff, StrikedTypePayoff, VanillaOption};
@@ -123,6 +125,41 @@ impl PyVanillaOption {
         })
     }
 
+    /// Build an American option exercisable from the minimum supported date.
+    #[classmethod]
+    fn american_until(
+        _cls: &Bound<'_, PyType>,
+        option_type: PyOptionType,
+        strike: f64,
+        latest: &PyDate,
+        settings: &PySettings,
+    ) -> PyResult<Self> {
+        let payoff = shared(PlainVanillaPayoff::new(option_type.inner(), strike))
+            as Shared<dyn StrikedTypePayoff>;
+        let exercise =
+            shared(AmericanExercise::until(latest.inner(), false).map_err(PyQlError::from)?)
+                as Shared<dyn Exercise>;
+        Ok(Self {
+            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+        })
+    }
+
+    /// Build an option retaining a copied Bermudan exercise schedule.
+    #[classmethod]
+    fn from_bermudan(
+        _cls: &Bound<'_, PyType>,
+        option_type: PyOptionType,
+        strike: f64,
+        exercise: &PyBermudanExercise,
+        settings: &PySettings,
+    ) -> Self {
+        let payoff = shared(PlainVanillaPayoff::new(option_type.inner(), strike))
+            as Shared<dyn StrikedTypePayoff>;
+        Self {
+            inner: VanillaOption::new(payoff, exercise.inner(), settings.inner()),
+        }
+    }
+
     /// Attach an analytic European engine built on process.
     ///
     /// Args:
@@ -160,6 +197,31 @@ impl PyVanillaOption {
         Ok(())
     }
 
+    /// Attach a COS engine retaining its model.
+    fn set_cos_heston_engine(&mut self, engine: &PyCosHestonEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+
+    /// Attach and price with a COS engine.
+    fn price_cos_heston(&mut self, engine: &PyCosHestonEngine) -> PyResult<f64> {
+        self.set_cos_heston_engine(engine);
+        self.npv()
+    }
+
+    /// Attach an exponentially fitted Heston engine retaining its model.
+    fn set_exponential_fitting_heston_engine(&mut self, engine: &PyExponentialFittingHestonEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+
+    /// Attach and price with an exponentially fitted Heston engine.
+    fn price_exponential_fitting_heston(
+        &mut self,
+        engine: &PyExponentialFittingHestonEngine,
+    ) -> PyResult<f64> {
+        self.set_exponential_fitting_heston_engine(engine);
+        self.npv()
+    }
+
     /// Attach the Monte Carlo European engine.
     ///
     /// Args:
@@ -191,7 +253,7 @@ impl PyVanillaOption {
 
     /// Attach the Monte Carlo American engine.
     ///
-    /// The option must have been built through american(): a European-exercise
+    /// The option must have American or Bermudan exercise: a European-exercise
     /// option raises ItofinError ("wrong exercise given") from npv().
     ///
     /// Args:
@@ -308,7 +370,7 @@ impl PyVanillaOption {
     /// Attach the Monte Carlo American engine and return the NPV.
     ///
     /// The one-shot form of set_mc_american_engine followed by npv. The option
-    /// must have been built through american(): a European-exercise option
+    /// must have American or Bermudan exercise: a European-exercise option
     /// raises ItofinError ("wrong exercise given").
     ///
     /// Args:

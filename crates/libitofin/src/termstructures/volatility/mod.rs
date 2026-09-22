@@ -50,7 +50,7 @@ pub use abcd::{AbcdFunction, AbcdSquared};
 pub use blackconstantvol::BlackConstantVol;
 pub use blackvariancecurve::{BlackVarianceCurve, BlackVolTimeExtrapolation};
 pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
-pub use capfloor::{CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
+pub use capfloor::{CapFloorTermVolCurve, CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
 pub use inflation::{
@@ -66,8 +66,9 @@ pub use localvolcurve::LocalVolCurve;
 pub use localvolsurface::LocalVolSurface;
 pub use localvoltermstructure::LocalVolTermStructure;
 pub use optionlet::{
-    ConstantOptionletVolatility, OptionletStripper, OptionletStripper1, OptionletStripperCaches,
-    OptionletVolatilityStructure, StrippedOptionletAdapter, StrippedOptionletBase,
+    ConstantOptionletVolatility, OptionletStripper, OptionletStripper1, OptionletStripper2,
+    OptionletStripperCaches, OptionletStripperOptions, OptionletVolatilityStructure,
+    StrippedOptionletAdapter, StrippedOptionletBase,
 };
 pub use sabr::{sabr_volatility, unsafe_sabr_volatility, validate_sabr_parameters};
 pub use sabrsmilesection::SabrSmileSection;

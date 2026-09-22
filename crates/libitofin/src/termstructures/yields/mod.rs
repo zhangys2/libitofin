@@ -63,3 +63,6 @@ pub(super) fn sync_extrapolation(
 
 pub mod overnightfutureratehelpers;
 pub use overnightfutureratehelpers::{OvernightIndexFutureRateHelper, SofrFutureRateHelper};
+
+mod bmaswapratehelper;
+pub use bmaswapratehelper::BMASwapRateHelper;
