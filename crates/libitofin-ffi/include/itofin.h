@@ -44,6 +44,64 @@ typedef struct ItofinContext ItofinContext;
 typedef struct ItofinBootstrapOutput ItofinBootstrapOutput;
 
 /**
+ * Caller-owned error. Zero code means success; message is NUL-terminated UTF-8.
+ */
+typedef struct ItofinError {
+  int32_t code;
+  char message[1024];
+} ItofinError;
+
+/**
+ * Coupon constructor; zero reference dates use the accrual dates.
+ */
+typedef struct ItofinBmaCouponConfig {
+  int32_t payment_date;
+  double nominal;
+  int32_t start_date;
+  int32_t end_date;
+  uint64_t index;
+  uint64_t day_counter;
+  double gearing;
+  double spread;
+  int32_t reference_start;
+  int32_t reference_end;
+} ItofinBmaCouponConfig;
+
+/**
+ * Complete municipal swap conventions; payer pays BMA and receives Ibor.
+ */
+typedef struct ItofinBmaSwapConfig {
+  int32_t swap_type;
+  double nominal;
+  uint64_t libor_schedule;
+  double libor_fraction;
+  double libor_spread;
+  uint64_t libor_index;
+  uint64_t libor_day_counter;
+  uint64_t bma_schedule;
+  uint64_t bma_index;
+  uint64_t bma_day_counter;
+  uint64_t settings;
+} ItofinBmaSwapConfig;
+
+/**
+ * Conventions for the quoted municipal-to-Ibor fraction helper.
+ */
+typedef struct ItofinBmaHelperConfig {
+  uint64_t quote;
+  int32_t tenor_length;
+  int32_t tenor_unit;
+  uint32_t settlement_days;
+  uint64_t calendar;
+  int32_t bma_length;
+  int32_t bma_unit;
+  int32_t bma_convention;
+  uint64_t bma_day_counter;
+  uint64_t bma_index;
+  uint64_t libor_index;
+} ItofinBmaHelperConfig;
+
+/**
  * Borrowed arrays valid only during a penalty callback; consumers must copy them.
  */
 typedef struct ItofinBootstrapState {
@@ -55,14 +113,6 @@ typedef struct ItofinBootstrapState {
   const double *helper_errors;
   size_t helper_count;
 } ItofinBootstrapState;
-
-/**
- * Caller-owned error. Zero code means success; message is NUL-terminated UTF-8.
- */
-typedef struct ItofinError {
-  int32_t code;
-  char message[1024];
-} ItofinError;
 
 /**
  * Functions and integer userdata remain valid until release is called exactly once.
@@ -269,6 +319,21 @@ typedef struct ItofinBondHelperConfig {
   int32_t issue_date;
   bool has_issue_date;
 } ItofinBondHelperConfig;
+
+/**
+ * Alternative Heston engine options. Kind 0 COS, 1 exponential fitting.
+ * CV 0 Optimal, 1 AndersenPiterbarg, 2 AndersenPiterbargOptCV,
+ * 3 AsymptoticChF, 4 AngledContour, 5 AngledContourNoCV.
+ */
+typedef struct ItofinHestonEngineConfig {
+  int32_t kind;
+  double l;
+  size_t n;
+  int32_t control_variate;
+  int32_t has_scaling;
+  double scaling;
+  double alpha;
+} ItofinHestonEngineConfig;
 
 typedef struct ItofinIborConfig {
   int32_t tenor_length;
@@ -807,6 +872,59 @@ typedef struct ItofinResultsFields {
   size_t additional_count;
 } ItofinResultsFields;
 
+/**
+ * Extended configuration; the original stripping ABI remains unchanged.
+ */
+typedef struct ItofinOptionletStripperConfig {
+  uint64_t surface;
+  uint64_t index;
+  uint64_t discount;
+  int32_t volatility_type;
+  double accuracy;
+  uint32_t max_iterations;
+  double displacement;
+  int32_t frequency_length;
+  int32_t frequency_unit;
+  uint8_t has_frequency;
+  double switch_strike;
+  uint8_t has_switch_strike;
+  uint8_t dont_throw;
+  uint8_t overnight;
+} ItofinOptionletStripperConfig;
+
+/**
+ * Live ATM cap term-volatility curve. Zero settings selects a fixed reference date.
+ */
+typedef struct ItofinCapFloorTermVolCurveConfig {
+  int32_t reference_date;
+  uint32_t settlement_days;
+  uint64_t calendar;
+  int32_t convention;
+  uint64_t day_counter;
+  uint64_t settings;
+  const int32_t *tenor_lengths;
+  const int32_t *tenor_units;
+  const uint64_t *quotes;
+  size_t count;
+} ItofinCapFloorTermVolCurveConfig;
+
+/**
+ * A compounded overnight cap/floor with index day count and Following payments.
+ */
+typedef struct ItofinOvernightCapFloorConfig {
+  int32_t kind;
+  uint64_t schedule;
+  uint64_t index;
+  uint64_t settings;
+  double nominal;
+  int32_t payment_lag;
+  int32_t payment_adjustment;
+  const double *caps;
+  size_t cap_count;
+  const double *floors;
+  size_t floor_count;
+} ItofinOvernightCapFloorConfig;
+
 typedef struct ItofinDateParts {
   int32_t day;
   int32_t month;
@@ -882,6 +1000,161 @@ typedef struct ItofinVolGridConfig {
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
+
+/**
+ * Construct a retained BMA index; zero forwarding creates an empty forecast handle.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_index_new(struct ItofinContext *ctx,
+                             uint64_t forwarding,
+                             uint64_t settings_id,
+                             uint64_t *out,
+                             struct ItofinError *error);
+
+/**
+ * Store a finite fixing on a valid weekly fixing date.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_add_fixing(struct ItofinContext *ctx,
+                              uint64_t id,
+                              int32_t serial,
+                              double value,
+                              struct ItofinError *error);
+
+/**
+ * Resolve a historical or forecast fixing.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_fixing(struct ItofinContext *ctx,
+                          uint64_t id,
+                          int32_t serial,
+                          uint8_t forecast_today,
+                          double *out,
+                          struct ItofinError *error);
+
+/**
+ * Query zero: value date; one: maturity date; two: valid-fixing flag; three: historical-fixing flag (0 or 1).
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_date(struct ItofinContext *ctx,
+                        uint64_t id,
+                        int32_t query,
+                        int32_t serial,
+                        int32_t *out,
+                        struct ItofinError *error);
+
+/**
+ * Construct an average coupon retaining its index and historical fixings.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_coupon_new(struct ItofinContext *ctx,
+                              const struct ItofinBmaCouponConfig *cfg,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Query zero: coupon rate; one: payment; two: accrual year fraction.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_coupon_value(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t query,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * Kind zero: index fixing schedule between start/end; one: coupon fixing dates.
+ * Capacity zero queries length; insufficient capacity preserves all outputs.
+ * # Safety
+ * Follow the crate-level pointer and thread contract. Output holds capacity serials.
+ */
+int32_t itofin_bma_dates(struct ItofinContext *ctx,
+                         uint64_t id,
+                         int32_t kind,
+                         int32_t start,
+                         int32_t end,
+                         int32_t *out,
+                         size_t capacity,
+                         size_t *length,
+                         struct ItofinError *error);
+
+/**
+ * Return the independently owned BMA fixing calendar.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_calendar(struct ItofinContext *ctx,
+                            uint64_t id,
+                            uint64_t *out,
+                            struct ItofinError *error);
+
+/**
+ * Clear this BMA fixing history, notifying retained consumers.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_clear_fixings(struct ItofinContext *ctx, uint64_t id, struct ItofinError *error);
+
+/**
+ * Read stored history without forecasting. An absent fixing returns found=0, value=0.
+ * # Safety
+ * Follow the crate-level pointer and thread contract. Both outputs must be valid.
+ */
+int32_t itofin_bma_past_fixing(struct ItofinContext *ctx,
+                               uint64_t id,
+                               int32_t serial,
+                               double *value,
+                               uint8_t *found,
+                               struct ItofinError *error);
+
+/**
+ * Construct a municipal swap retaining both legs and their market dependencies.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_swap_new(struct ItofinContext *ctx,
+                            const struct ItofinBmaSwapConfig *cfg,
+                            uint64_t *out,
+                            struct ItofinError *error);
+
+/**
+ * Attach a retained discounting engine with settings-driven defaults.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_swap_set_engine(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   uint64_t discount,
+                                   uint64_t settings_id,
+                                   struct ItofinError *error);
+
+/**
+ * Query zero: NPV; one: fair Ibor fraction; two: fair Ibor spread; three: cached flag;
+ * four/five: Ibor/BMA leg NPV; six/seven: Ibor/BMA leg BPS.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_swap_value(struct ItofinContext *ctx,
+                              uint64_t id,
+                              int32_t query,
+                              double *out,
+                              struct ItofinError *error);
+
+/**
+ * Construct a rate helper usable by existing piecewise yield curves.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_bma_helper_new(struct ItofinContext *ctx,
+                              const struct ItofinBmaHelperConfig *cfg,
+                              uint64_t *out,
+                              struct ItofinError *error);
 
 /**
  * Construct a global discount curve, kind 0 log-linear or 1 linear.
@@ -1820,6 +2093,52 @@ int32_t itofin_swap_helper_new_with_pillar(struct ItofinContext *ctx,
                                            int32_t custom_pillar_date,
                                            uint64_t *out,
                                            struct ItofinError *error);
+
+/**
+ * Create a retained engine usable with option engine kind 2.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Context and handles belong to the
+ * calling thread; serialize calls including destruction.
+ */
+int32_t itofin_heston_engine_new(struct ItofinContext *ctx,
+                                 uint64_t model,
+                                 const struct ItofinHestonEngineConfig *config,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * Calibrate a Heston model using the configured alternative engine.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Context and handles belong to the
+ * calling thread; serialize calls including destruction.
+ */
+int32_t itofin_heston_calibrate_engine(struct ItofinContext *ctx,
+                                       uint64_t model,
+                                       const uint64_t *helpers,
+                                       size_t helpers_len,
+                                       uint64_t method,
+                                       uint64_t criteria,
+                                       const struct ItofinHestonEngineConfig *config,
+                                       struct ItofinError *error);
+
+/**
+ * COS inspector field: 0-3 cumulants, 4 log forward/spot, 5 characteristic function.
+ * Time must be finite and nonnegative; frequency must be finite. Scalar fields
+ * write zero to the imaginary output. The engine retains its live model.
+ * # Safety
+ * Pointers must be aligned, live and valid. Outputs must not overlap each other.
+ * Context and handles belong to the calling thread; serialize all calls.
+ */
+int32_t itofin_cos_heston_value(struct ItofinContext *ctx,
+                                uint64_t engine,
+                                int32_t field,
+                                double t,
+                                double u,
+                                double *out_real,
+                                double *out_imag,
+                                struct ItofinError *error);
 
 /**
  * # Safety
@@ -3283,6 +3602,22 @@ int32_t itofin_mc_engine_new(struct ItofinContext *ctx,
                              struct ItofinError *error);
 
 /**
+ * American/Bermudan engine with an explicit basis: 0 Monomial, 1 Laguerre,
+ * 2 Hermite, 3 Hyperbolic, 6 Chebyshev2nd. Values 4 and 5 are unsupported.
+ * Chebyshev2nd supports put payoffs only; call pricing returns an error.
+ * The existing McConfig layout and default engine entrypoint are unchanged.
+ * # Safety
+ * Outputs must be aligned, live and non-overlapping. Context and handles must
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_mc_american_engine_new(struct ItofinContext *ctx,
+                                      uint64_t process,
+                                      struct McConfig cfg,
+                                      int32_t basis,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -3453,6 +3788,34 @@ int32_t itofin_option_new(struct ItofinContext *ctx,
                           uint64_t settings,
                           uint64_t *out,
                           struct ItofinError *error);
+
+/**
+ * Build an American option whose exercise window starts at Date::min_date().
+ * # Safety
+ * Outputs must be aligned, live and non-overlapping. Context and handles must
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_option_american_until_new(struct ItofinContext *ctx,
+                                         int32_t kind,
+                                         double strike,
+                                         int32_t expiry,
+                                         uint64_t settings,
+                                         uint64_t *out,
+                                         struct ItofinError *error);
+
+/**
+ * Build a vanilla option retaining a Bermudan exercise handle.
+ * # Safety
+ * Outputs must be aligned, live and non-overlapping. Context and handles must
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_option_bermudan_new(struct ItofinContext *ctx,
+                                   int32_t kind,
+                                   double strike,
+                                   uint64_t exercise,
+                                   uint64_t settings,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
 
 /**
  * Engine kind: 0 analytic European (BSM process), 1 analytic Heston (model), 2 MC engine.
@@ -4303,6 +4666,97 @@ int32_t itofin_stripped_optionlet_adapter_new(struct ItofinContext *ctx,
                                               uint64_t setting,
                                               uint64_t *out,
                                               struct ItofinError *error);
+
+/**
+ * # Safety
+ * Follow the crate C caller contract; configuration and output must be valid.
+ */
+int32_t itofin_optionlet_stripper_new_with_options(struct ItofinContext *ctx,
+                                                   const struct ItofinOptionletStripperConfig *cfg,
+                                                   uint64_t *out,
+                                                   struct ItofinError *error);
+
+/**
+ * # Safety
+ * Follow the crate C caller contract; arrays must contain count entries.
+ */
+int32_t itofin_capfloor_term_vol_curve_new(struct ItofinContext *ctx,
+                                           const struct ItofinCapFloorTermVolCurveConfig *cfg,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_capfloor_term_vol_curve_value(struct ItofinContext *ctx,
+                                             uint64_t id,
+                                             int32_t length,
+                                             int32_t unit,
+                                             uint8_t extrapolate,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_optionlet_stripper2_new(struct ItofinContext *ctx,
+                                       uint64_t stripper,
+                                       uint64_t curve,
+                                       uint64_t *out,
+                                       struct ItofinError *error);
+
+/**
+ * Query 0 ATM curve times, 1 correction spreads, 2 ATM strikes, 3 ATM prices.
+ * Pass null output/capacity zero to size the caller-owned buffer.
+ * # Safety
+ * Follow the crate C caller contract; output must have capacity entries.
+ */
+int32_t itofin_optionlet_completion_values(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           int32_t kind,
+                                           double *out,
+                                           size_t capacity,
+                                           size_t *written,
+                                           struct ItofinError *error);
+
+/**
+ * Query kind 0 time, 1 date serial, 2 tenor.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_optionlet_smile_new(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   int32_t kind,
+                                   double time,
+                                   int32_t date_serial,
+                                   int32_t length,
+                                   int32_t unit,
+                                   uint8_t extrapolate,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * Query kind 0 volatility, 1 variance, 2 exercise time.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_optionlet_smile_value(struct ItofinContext *ctx,
+                                     uint64_t id,
+                                     int32_t kind,
+                                     double strike,
+                                     double *out,
+                                     struct ItofinError *error);
+
+/**
+ * # Safety
+ * Follow the crate C caller contract; strike arrays must have their stated lengths.
+ */
+int32_t itofin_overnight_capfloor_new(struct ItofinContext *ctx,
+                                      const struct ItofinOvernightCapFloorConfig *cfg,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
 
 /**
  * # Safety

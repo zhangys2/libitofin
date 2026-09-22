@@ -175,3 +175,6 @@ pub use zerocouponinflationswap::ZeroCouponInflationSwap;
 
 pub use crate::position::Position;
 pub use overnightindexfuture::OvernightIndexFuture;
+
+pub mod bmaswap;
+pub use bmaswap::BMASwap;
