@@ -335,13 +335,17 @@ mod tests {
         }
     }
 
-    /// Full 11-row `compoundoption.cpp` `testPutCallParity` oracle (Wystup 2002 @ 1e-8).
+    /// QL `compoundoption.cpp` `testPutCallParity` oracle (Wystup 2002 @ 1e-8).
+    ///
+    /// Note: QuantLib's `values` table has 11 entries because row 0 and row 1 differ
+    /// only by `typeMother` (Put vs Call), but QL's test loop builds both mother Call
+    /// and mother Put for every row without inspecting `typeMother`, so rows 0 and 1
+    /// test the exact same daughter-market case. We test the 10 unique cases here.
     #[test]
     fn test_compound_option_put_call_parity() {
         type ParityRow = (OptionType, Real, Real, Real, Real, Real, Real, Real, Real);
         #[rustfmt::skip]
-        let rows: [ParityRow; 11] = [
-            (Call, 50.0, 520.0, 500.0, 0.03,  0.08,  0.25, 0.5, 0.35),
+        let rows: [ParityRow; 10] = [
             (Call, 50.0, 520.0, 500.0, 0.03,  0.08,  0.25, 0.5, 0.35),
             (Put,  50.0, 520.0, 500.0, 0.03,  0.08,  0.25, 0.5, 0.35),
             (Call, 0.05, 1.14,  1.20,  0.00,  0.01,  0.50, 2.0, 0.11),
