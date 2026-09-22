@@ -16,6 +16,7 @@ credit.
 | Domain | libitofin surface | QuantLib oracle(s) | Status |
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
+| QMC European | `MakeMcEuropeanEngine::<LowDiscrepancy>` | `europeanoption.cpp` `testQmcEngines` | 108 call/put grid, 1 step, 4095 samples; abs(QMC−analytic)/spot ≤ 0.01 |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
 | American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16) |
@@ -45,11 +46,14 @@ credit.
 | FD Heston-SLV American quanto | `FdHestonVanillaEngine` + constant leverage | `quantooption.cpp` `testAmericanQuantoOption` | `L=2`, `v0=θ=0.25 σ²` cached 8.90611734 @ 1e-4; equity mesher vol × path-averaged `L` |
 | FD Heston-SLV variance mesher | `FdmHestonLocalVolatilityVarianceMesher` | `fdheston.cpp` `testFdmHestonVarianceMesher` | CIR locations @ 1e-6; const `L=2.5` scales vol exactly @ 1e-6; parable `L` path-average @ 1e-3 |
 | Black-Scholes process (variance curve) | `GeneralizedBlackScholesProcess` + linear `BlackVarianceCurve` → `LocalVolCurve` | `ql/processes/blackscholesprocess.cpp` `localVolatility()` | strike-independent; `expectation`/`variance`/`evolve` exact vs `t σ_B^2(t)` increment |
+| Process discretization | `EulerDiscretization` + `DiscretizedProcess` / `DiscretizedProcess1D` | identity (`ql/processes/eulerdiscretization.cpp`) | wrap-only adapters; source exact overrides kept; invalid dt/dims/nonfinite fail |
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
 | Barone-Adesi–Whaley American | `BaroneAdesiWhaleyApproximationEngine` | `americanoption.cpp` `testBaroneAdesiWhaleyValues` | Haug p.24 NPV @ 3e-3 (QL table tolerance); negative-rate reject |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |
 | Heston | analytic + calibration | `hestonmodel.cpp` | Core done |
+| COS Heston | `CosHestonEngine` | `hestonmodel.cpp` COS cached + cumulants | 4 cached prices @ 1e-10; live spot/param; c1–c4 vs QL fixture |
+| Exponential-fitting Heston | `ExponentialFittingHestonEngine` | `hestonmodel.cpp` extreme-moneyness / CV grid | 88 fitted-quadrature prices @ 1e-8; six control variates; AsymptoticChF α=−0.5 |
 | Heston FD barrier cached | `FdHestonBarrierEngine` 200×400×100 | `hestonmodel.cpp` `testFdBarrierVsCached` | DownOut 9.0246 / DownIn 7.7627 @ 1e-3 |
 | Heston FD vanilla cached | `FdHestonVanillaEngine` 100×200×100 | `hestonmodel.cpp` `testFdVanillaVsCached` | put 0.06325 @ 1e-4 |
 | Heston FD vanilla + cash dividends | `FdHestonVanillaEngine` 200×400×100 | `hestonmodel.cpp` `testFdVanillaWithDividendsVsCached` | call 12.946 @ 5e-3 |
@@ -73,15 +77,25 @@ credit.
 | Hull–White forward process | `HullWhiteForwardProcess` | identity (hybrid suite is engines) | f≡0 E/V vs closed form; T-forward drift Δ; `a>0`/`a=0` `M_T`; notify on set T @ 1e-12; hybrid join deferred |
 | Heston SLV process | `HestonSLVProcess` | identity (`testDiffusionAndDriftSlvProcess` needs LV+FD) | const-L scales spot diffusion/drift; mixing scales √v row; evolve finite; FDM/MC models deferred |
 | FDM SABR operator | `FdmSabrOp` | identity (`fdsabr.cpp` `testFdmSabrOp` needs engine) | closed-form L[f²]/L[x²]/L[fx] interior pins (ν≠1); Shared yield snapshot; engine/NoArb deferred |
-| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | `capfloor.cpp` `testBachelierOptionLetsDelta` | parity / vega FD / optionletsPrice; CapHelper Normal ≡ ATM; analytic δ vs forward FD @ 1e-6; stripper Normal deferred |
+| Bachelier cap/floor | `BachelierCapFloorEngine` + CapHelper Normal | `capfloor.cpp` `testBachelierOptionLetsDelta` | parity / vega FD / optionletsPrice; CapHelper Normal ≡ ATM; analytic δ vs forward FD @ 1e-6 |
 | Cap/floor Black implied vol | `CapFloor::implied_volatility` | `capfloor.cpp` `testImpliedVolatility` | Black ShiftedLognormal grid @ 1e-8; Normal arm reduced round-trip |
-| Cap/floor optionlet | `CapFloor::optionlet` | `capfloor.cpp` `testConsistency` recomposition | collar ≡ cap−floor @ 1e-10; Σ optionlet NPV ≡ parent @ 1e-10 (un-nested) |
+| Cap/floor optionlet | `CapFloor::optionlet` | `capfloor.cpp` `testConsistency` recomposition | collar ≡ cap−floor @ 1e-10; Σ optionlet NPV ≡ parent @ 1e-10 (un-nested); overnight `from_overnight` indexes by `coupon_count()` |
 | Cap/floor optionlets vega | Black/`BachelierCapFloorEngine` `optionletsVega`/`StdDev` | `blackcapfloorengine.cpp:160-166` | Σ optionletsVega ≡ vega; StdDev for cap/floor only |
 | Cap/floor deepUpdate | `CapFloor::deep_update` | `capfloor.cpp:271-276` | clears calculated after NPV; reprice recovers prior NPV @ 1e-12 (coupon deepUpdate deferred) |
 | Swaption Black implied vol | `Swaption::implied_volatility` | `swaption.cpp` `testImpliedVolatility` / `testImpliedVolatilityOis` | Spot Physical Black + reduced IBOR/OIS Spot/Cash/Forward cartesian cells @ 1e-8 (incl. Cash×Forward); reduced Spot Physical Normal |
 | Black cap/floor delta | `BlackCapFloorEngine` `optionletsDelta` | `capfloor.cpp` `testOptionLetsDelta` | analytic vs forward FD @ 1e-6; discount/ATM-forward results |
 | Tree cap/floor | `TreeCapFloorEngine` + `DiscretizedCapFloor` | QL tree collar oracle + CapHelper Normal | collar/cap/floor @ 1e-8 (30/100 steps); TimeGrid ctor; past-start known-fixing intrinsic; CapHelper Normal market/model pin + tree σ calibrate; tree→analytic rel <1e-3 @600. MC/G1d deferred |
 | Overnight index future | `OvernightIndexFuture` + `OvernightIndexFutureRateHelper` / `SofrFutureRateHelper` | `sofrfutures.cpp` + holiday-clipped daily accrual | Juneteenth/bootstrap prices + curve nodes @ 1e-9; Simple/Compound holiday clip + today-fixing @ 1e-9; convexity/lifecycle |
+| Iterative bootstrap robustness | `IterativeBootstrap` options on yield piecewise | independent QL 1.43 `oracle.py` | sign-aware bound widening; fallback scan; cached recovery; 99-iter limit @ 1e-12 nodes; yield factories only |
+| Custom pillars | FRA/swap/OIS/inflation helpers `Pillar::CustomDate` | independent QL helper dates | window-valid custom pillars; invalid bounds; last-valid date recovery |
+| Joint Ibor-Ibor yield curves | `JointYieldCurves` + `IborIborBasisSwapRateHelper` | `piecewiseyieldcurve.cpp` multi-curve + independent FRA/swap reprice | 3M/6M coupled GlobalBootstrap; 1e-12 reprice; live quote/date/fixing |
+| Overnight-Ibor basis helper | `OvernightIborBasisSwapRateHelper` | experimental `basisswapratehelpers.cpp` + overnight_basis fixture | omitted/explicit discount + coupled OIS/Ibor @ 1e-12 rel |
+| Municipal BMA swap + helper | `BMASwap` + `BMASwapRateHelper` | `piecewiseyieldcurve.cpp` BMA / independent fixture | ten 1Y–30Y quotes reprice @ 1e-9 (local bootstrap @ 1e-6); independent QL prices/holidays |
+| Optionlet stripper (Black + Normal) | `OptionletStripper1` + adapter | `optionletstripper.cpp` nonflat roundtrip | lognormal and Normal grids vs flat-vol engine @ 2.5e-8 |
+| Overnight optionlet strip + cap | `OptionletStripper1::new_overnight` + `CapFloor::from_overnight` | `optionletstripper.cpp` overnight + independent oracle | stripped nodes @ 1e-9; compounded overnight cap @ 2.5e-8 |
+| Optionlet Stripper2 ATM | `OptionletStripper2` + `CapFloorTermVolCurve` | `optionletstripper.cpp` ATM correction | smile nodes unchanged when ATM matches the surface |
+| Swaption vol matrix | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | five constructors; 120 nodes @ 1e-16; live-input observability + handle relink |
+| SABR cube backward-flat | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` sparse/dense | 72 QL 1.43 rows, both flags, @ 1e-6; live quote/date; ZABR deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
 | Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
 | XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |

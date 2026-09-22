@@ -8,6 +8,8 @@
 //! Go enforces these rules through a session worker locked to one OS thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod bma_api;
+pub mod bma_swap_api;
 pub mod bootstrap_api;
 pub mod bootstrap_callbacks;
 pub mod bootstrap_variables;
@@ -23,6 +25,7 @@ pub mod credit_helpers_api;
 pub mod credit_instruments_api;
 pub mod curves_api;
 pub mod helpers_api;
+pub mod heston_engines_api;
 pub mod indexes_api;
 pub mod inflation_api;
 pub mod inflation_capfloor_api;
@@ -55,6 +58,7 @@ pub mod rng_sequence_api;
 pub mod settings_api;
 pub mod smile_api;
 pub mod stripper_api;
+pub mod stripper_completion_api;
 pub mod time_api;
 pub mod tree_swaption_api;
 pub mod version_api;

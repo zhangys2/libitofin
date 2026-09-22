@@ -17,7 +17,10 @@ __all__ = [
     "BlackCapFloorEngine",
     "BlackSwaptionEngine",
     "CashAnnuityModel",
+    "CosHestonEngine",
     "DiscountingSwapEngine",
+    "ExponentialFittingControlVariate",
+    "ExponentialFittingHestonEngine",
     "ForwardsInCouponPeriod",
     "IsdaCdsEngine",
     "MCAmericanEngine",
@@ -202,6 +205,40 @@ class BlackSwaptionEngine:
         """
 
 @typing.final
+class CosHestonEngine:
+    r"""
+    Fourier cosine expansion retaining its live Heston model.
+    """
+    def __init__(self, model: models.HestonModel, l: builtins.float = 16.0, n: builtins.int = 200) -> None:
+        r"""
+        Construct a COS engine with positive truncation width and series size.
+        """
+    def c1(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return normalized log-return cumulant 1 at nonnegative time.
+        """
+    def c2(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return normalized log-return cumulant 2 at nonnegative time.
+        """
+    def c3(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return normalized log-return cumulant 3 at nonnegative time.
+        """
+    def c4(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return normalized log-return cumulant 4 at nonnegative time.
+        """
+    def chf(self, u: builtins.float, t: builtins.float) -> tuple[builtins.float, builtins.float]:
+        r"""
+        Return the normalized characteristic function as (real, imaginary).
+        """
+    def mu_t(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return the logarithm of the forward-to-spot ratio.
+        """
+
+@typing.final
 class DiscountingSwapEngine:
     r"""
     Discounts every leg of a swap over a single yield curve.
@@ -224,6 +261,16 @@ class DiscountingSwapEngine:
                 the swap this engine prices was built with, or the two resolve
                 their dates against different evaluation dates and the NPV is
                 silently wrong.
+        """
+
+@typing.final
+class ExponentialFittingHestonEngine:
+    r"""
+    Exponentially fitted quadrature retaining its live Heston model.
+    """
+    def __init__(self, model: models.HestonModel, control_variate: ExponentialFittingControlVariate = ExponentialFittingControlVariate.Optimal, scaling: typing.Optional[builtins.float] = None, alpha: builtins.float = -0.5) -> None:
+        r"""
+        Construct the selected control variate with optional fixed scaling.
         """
 
 @typing.final
@@ -273,11 +320,10 @@ class IsdaCdsEngine:
 class MCAmericanEngine:
     r"""
     The Longstaff-Schwartz least-squares Monte Carlo engine for American
-    payoffs, over the pseudo-random RNG policy. The low-discrepancy policy is
-    not exposed for this engine, and the Monomial regression basis is not selectable
-    (#453).
+    and Bermudan payoffs, over the pseudo-random RNG policy. Sobol, Brownian
+    bridge, control variates and multi-asset paths are not exposed.
 
-    The option priced must come from VanillaOption.american(...): a
+    The option must have American or Bermudan exercise: a
     European-exercise option raises ItofinError ("wrong exercise given") when
     priced here.
 
@@ -286,7 +332,7 @@ class MCAmericanEngine:
     VanillaOption.error_estimate() and the early-exercise fraction through
     VanillaOption.exercise_probability().
     """
-    def __init__(self, process: processes.BlackScholesProcess, steps: typing.Optional[builtins.int] = None, steps_per_year: typing.Optional[builtins.int] = None, samples: typing.Optional[builtins.int] = None, absolute_tolerance: typing.Optional[builtins.float] = None, max_samples: typing.Optional[builtins.int] = None, seed: typing.Optional[builtins.int] = None, antithetic: typing.Optional[builtins.bool] = None, polynomial_order: typing.Optional[builtins.int] = None, calibration_samples: typing.Optional[builtins.int] = None) -> None:
+    def __init__(self, process: processes.BlackScholesProcess, steps: typing.Optional[builtins.int] = None, steps_per_year: typing.Optional[builtins.int] = None, samples: typing.Optional[builtins.int] = None, absolute_tolerance: typing.Optional[builtins.float] = None, max_samples: typing.Optional[builtins.int] = None, seed: typing.Optional[builtins.int] = None, antithetic: typing.Optional[builtins.bool] = None, polynomial_order: typing.Optional[builtins.int] = None, calibration_samples: typing.Optional[builtins.int] = None, basis_system: builtins.int = 0) -> None:
         r"""
         Build an engine over process, configured through the core factory.
 
@@ -307,10 +353,14 @@ class MCAmericanEngine:
                 bitwise.
             antithetic (bool | None): The antithetic variate, supported here;
                 the core oracle prices with it on.
-            polynomial_order (int | None): The order of the Monomial regression
+            polynomial_order (int | None): The order of the selected regression
                 basis. The core default is 2.
             calibration_samples (int | None): The paths the regression is fitted
                 on. The core default is 2048.
+            basis_system (int): 0 Monomial (default), 1 Laguerre, 2 Hermite,
+                3 Hyperbolic, or 6 Chebyshev2nd. Legendre (4) and Chebyshev (5)
+                are rejected, matching QuantLib's American path pricer.
+                Chebyshev2nd supports put payoffs only; call pricing returns an error.
 
         Raises:
             ItofinError: If neither or both of steps and steps_per_year are
@@ -551,6 +601,21 @@ class CashAnnuityModel:
     SwapRate: typing.ClassVar[CashAnnuityModel]
     DiscountCurve: typing.ClassVar[CashAnnuityModel]
     def __new__(cls, _unconstructible: typing.NoReturn) -> CashAnnuityModel: ...
+    def __int__(self) -> builtins.int: ...
+    __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+@typing.final
+class ExponentialFittingControlVariate:
+    r"""
+    Control variate used by the exponentially fitted Heston quadrature.
+    """
+    Optimal: typing.ClassVar[ExponentialFittingControlVariate]
+    AndersenPiterbarg: typing.ClassVar[ExponentialFittingControlVariate]
+    AndersenPiterbargOptCV: typing.ClassVar[ExponentialFittingControlVariate]
+    AsymptoticChF: typing.ClassVar[ExponentialFittingControlVariate]
+    AngledContour: typing.ClassVar[ExponentialFittingControlVariate]
+    AngledContourNoCV: typing.ClassVar[ExponentialFittingControlVariate]
+    def __new__(cls, _unconstructible: typing.NoReturn) -> ExponentialFittingControlVariate: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 
