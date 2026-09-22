@@ -26,7 +26,9 @@
 //! caps, floors or in-arrears feature is present is attached in
 //! [`coupons`](IborLeg::coupons) under the same guard; with a cap or floor set
 //! the coupons come from [`capped_floored_coupons`](IborLeg::capped_floored_coupons)
-//! and the caller installs a volatility-carrying pricer instead. C++ attaches it
+//! and the caller installs a volatility-carrying pricer instead. An in-arrears
+//! leg likewise withholds the default pricer so the caller can attach a
+//! volatility-carrying [`BlackIborCouponPricer`]. C++ attaches it
 //! through the free `setCouponPricer(leg, pricer)`, which downcasts each flow;
 //! the port's [`set_coupon_pricer`] takes the concrete coupons instead, the
 //! erased [`Leg`] carrying no downcast.
@@ -38,16 +40,18 @@
 //!
 //! ## Deferred (later sub-tickets of #69)
 //!
-//! The in-arrears convexity adjustment (`inArrears`), zero and indexed-coupon
-//! modes, digital and CMS coupons and the overnight-indexed leg. Their builder
-//! methods are omitted entirely rather than accepted and ignored. A zero
-//! gearing, which the template collapses to a `FixedRateCoupon`, is likewise not
-//! special-cased: the port's [`IborCoupon`] rejects it, so `with_gearing(0.0)`
-//! surfaces that error rather than a silent fixed coupon.
+//! Zero and indexed-coupon modes, digital and CMS coupons and the overnight-
+//! indexed leg. Their builder methods are omitted entirely rather than accepted
+//! and ignored. A zero gearing, which the template collapses to a
+//! `FixedRateCoupon`, is likewise not special-cased: the port's [`IborCoupon`]
+//! rejects it, so `with_gearing(0.0)` surfaces that error rather than a silent
+//! fixed coupon.
 //!
 //! Caps and floors (`withCaps`/`withFloors`) are ported: they yield
 //! [`CappedFlooredCoupon`](crate::cashflows::CappedFlooredCoupon)s over the
-//! [`BlackIborCouponPricer`] optionlet path.
+//! [`BlackIborCouponPricer`] optionlet path. In-arrears (`inArrears`) is ported
+//! through [`in_arrears`](IborLeg::in_arrears) with the Black76 convexity
+//! adjustment on [`BlackIborCouponPricer`].
 
 use crate::cashflow::{CashFlow, Leg};
 use crate::cashflows::capflooredcoupon::CappedFlooredCoupon;
@@ -82,6 +86,7 @@ pub struct IborLeg {
     spreads: Vec<Spread>,
     caps: Vec<Rate>,
     floors: Vec<Rate>,
+    in_arrears: bool,
     fixing_convention: BusinessDayConvention,
     ex_coupon_period: Option<Period>,
     ex_coupon_calendar: Calendar,
@@ -108,6 +113,7 @@ impl IborLeg {
             spreads: Vec::new(),
             caps: Vec::new(),
             floors: Vec::new(),
+            in_arrears: false,
             fixing_convention: BusinessDayConvention::Preceding,
             ex_coupon_period: None,
             ex_coupon_calendar: NullCalendar::new(),
@@ -202,6 +208,17 @@ impl IborLeg {
     /// default, leaves the coupons unfloored. See [`with_caps`](Self::with_caps).
     pub fn with_floors(mut self, floors: Vec<Rate>) -> IborLeg {
         self.floors = floors;
+        self
+    }
+
+    /// Coupons fix in arrears (`IborLeg::inArrears`).
+    ///
+    /// Withholds the default pricer on [`coupons`](Self::coupons): the Black76
+    /// convexity adjustment needs a volatility-carrying
+    /// [`BlackIborCouponPricer`], which the caller attaches through
+    /// [`set_coupon_pricer`].
+    pub fn in_arrears(mut self) -> IborLeg {
+        self.in_arrears = true;
         self
     }
 
@@ -314,7 +331,7 @@ impl IborLeg {
                 Some(reference_start),
                 Some(reference_end),
                 self.payment_day_counter.clone(),
-                false,
+                self.in_arrears,
                 ex_coupon_date,
                 self.fixing_convention,
             )?;
@@ -326,10 +343,11 @@ impl IborLeg {
     /// The coupons the leg is made of.
     ///
     /// Each carries the default [`BlackIborCouponPricer`] on the plain path.
-    /// With a cap or floor set the plain coupons are returned unpriced, the C++
-    /// `operator Leg()` guard withholding the default pricer;
+    /// With a cap, floor, or in-arrears set the plain coupons are returned
+    /// unpriced, the C++ `operator Leg()` guard withholding the default pricer;
     /// [`capped_floored_coupons`](Self::capped_floored_coupons) is then the
-    /// intended entry.
+    /// intended entry for caps/floors, and for in-arrears the caller installs a
+    /// volatility-carrying pricer through [`set_coupon_pricer`].
     ///
     /// # Errors
     ///
@@ -339,7 +357,7 @@ impl IborLeg {
     /// [`IborCoupon::new`] preconditions (a zero gearing among them).
     pub fn coupons(&self) -> QlResult<Vec<Shared<IborCoupon>>> {
         let coupons = self.raw_coupons()?;
-        if self.caps.is_empty() && self.floors.is_empty() {
+        if self.caps.is_empty() && self.floors.is_empty() && !self.in_arrears {
             for coupon in &coupons {
                 coupon.set_pricer(default_pricer());
             }

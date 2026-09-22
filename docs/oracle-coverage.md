@@ -138,6 +138,7 @@ credit.
 | VanillaSwap rate/spread dependency | `VanillaSwap` + `DiscountingSwapEngine` | `swap.cpp` `testRateDependency` / `testSpreadDependency` | Payer NPV weakly ↓ in fixed rate; weakly ↑ in floating spread |
 | VanillaSwap ThirdWednesdayInclusive | `VanillaSwap` schedules | `swap.cpp` `testThirdWednesdayAdjustment` | floating start 16-Sep-2015 / end 21-Sep-2016 |
 | MakeVanillaSwap with_rule | `MakeVanillaSwap::with_rule` | `makevanillaswap.cpp:238` + ThirdWednesdayInclusive | Inclusive snaps floating end 16-Sep-2016 → 21-Sep-2016 |
+| Vanilla IRS in-arrears Hull NPV | `BlackIborCouponPricer` Black76 convexity + `IborLeg::in_arrears` | `swap.cpp` `testInArrears` | NPV −144813 ± 1 (Hull 4th ed. p.550; vol 0.22) |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
 | G2 two-factor tree | `TwoFactorShortRateTree` / `G2::tree` | `twofactormodel` / `g2` | discount=exp(-(φ+x+y)dt); root φ-only; product size; builds under analytic φ |

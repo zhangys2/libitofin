@@ -42,6 +42,7 @@ use crate::time::date::Date;
 use crate::types::{Rate, Real, Spread};
 use crate::{fail, require};
 
+use super::coupon::Coupon;
 use super::floatingratecoupon::FloatingRateCoupon;
 
 /// Generic pricer for floating-rate coupons.
@@ -64,7 +65,7 @@ pub trait FloatingRateCouponPricer: AsObservable {
     /// The mode-aware entry: an [`IborCoupon`] threads its par or indexed
     /// forecast in here rather than let the pricer read the base coupon's
     /// natural forecast, which cannot see the par-coupon dates. Gearing, spread
-    /// and the in-arrears refusal are the pricer's, as in
+    /// and the Black76 in-arrears convexity adjustment are the pricer's, as in
     /// [`swaplet_rate`](Self::swaplet_rate).
     ///
     /// [`IborCoupon`]: super::iborcoupon::IborCoupon
@@ -94,11 +95,12 @@ pub trait FloatingRateCouponPricer: AsObservable {
 /// The swaplet rate is `gearing * adjustedFixing + spread`
 /// (`couponpricer.hpp:215`); for a non-in-arrears coupon under the default
 /// `Black76` timing the adjusted fixing reduces to the coupon's index fixing
-/// with no convexity adjustment, so that path needs no volatility. The caplet
-/// and floorlet rates take the optionlet path (`couponpricer.cpp:138-168`): a
-/// determined coupon (fixing on or before the evaluation date) returns the
-/// intrinsic `max`, an undetermined one the Black or Bachelier optionlet value
-/// against the caplet-volatility surface.
+/// with no convexity adjustment, so that path needs no volatility. An
+/// in-arrears coupon applies the Hull Black76 convexity adjustment against the
+/// caplet-volatility surface. The caplet and floorlet rates take the optionlet
+/// path (`couponpricer.cpp:138-168`): a determined coupon (fixing on or before
+/// the evaluation date) returns the intrinsic `max`, an undetermined one the
+/// Black or Bachelier optionlet value against the caplet-volatility surface.
 ///
 /// It captures the coupon's gearing, spread, in-arrears flag, index fixing,
 /// fixing date and the evaluation date when [`initialize`](Self::initialize)
@@ -112,10 +114,9 @@ pub trait FloatingRateCouponPricer: AsObservable {
 ///
 /// ## Divergences from QuantLib
 ///
-/// `adjustedFixing()` reduces to the threaded forward here: the in-arrears
-/// convexity adjustment is refused (as in the swaplet path) and only the
-/// `Black76` timing is modelled, so no convexity term applies. The C++
-/// `discount_` and `accrualPeriod_` feed only the omitted `*Price` methods.
+/// Only the `Black76` timing adjustment is modelled (`BivariateLognormal` is
+/// deferred). The C++ `discount_` and `accrualPeriod_` feed only the omitted
+/// `*Price` methods.
 ///
 /// [`IborCoupon`]: super::iborcoupon::IborCoupon
 pub struct BlackIborCouponPricer {
@@ -124,6 +125,9 @@ pub struct BlackIborCouponPricer {
     is_in_arrears: bool,
     index_fixing: Option<QlResult<Rate>>,
     fixing_date: Option<Date>,
+    payment_date: Option<Date>,
+    fixing_maturity_date: Option<Date>,
+    spanning_time_index_maturity: Option<Real>,
     eval_date: Option<Date>,
     caplet_vol: Handle<dyn OptionletVolatilityStructure>,
     observable: Shared<Observable>,
@@ -139,6 +143,9 @@ impl Default for BlackIborCouponPricer {
             is_in_arrears: false,
             index_fixing: None,
             fixing_date: None,
+            payment_date: None,
+            fixing_maturity_date: None,
+            spanning_time_index_maturity: None,
             eval_date: None,
             caplet_vol: Handle::empty(),
             observable,
@@ -174,6 +181,49 @@ impl BlackIborCouponPricer {
         let observer = self.forwarder.clone() as SharedMut<dyn Observer>;
         self.caplet_vol.register_observer(&observer);
         self.observable.notify_observers();
+    }
+
+    /// Black76 in-arrears convexity adjustment (`BlackIborCouponPricer::adjustedFixing`).
+    ///
+    /// Non-in-arrears coupons return `fixing` unchanged. In-arrears coupons add
+    /// `(F+s)²·var·τ/(1+Fτ)` (shifted lognormal) or `var·τ/(1+Fτ)` (normal),
+    /// skipping the adjustment when payment equals the index maturity or no
+    /// variance has accumulated yet.
+    fn adjusted_fixing(&self, fixing: Rate) -> QlResult<Rate> {
+        if !self.is_in_arrears {
+            return Ok(fixing);
+        }
+        let Some(fixing_date) = self.fixing_date else {
+            fail!("pricer not initialized: no coupon captured");
+        };
+        let Some(payment_date) = self.payment_date else {
+            fail!("pricer not initialized: no coupon captured");
+        };
+        let Some(fixing_maturity_date) = self.fixing_maturity_date else {
+            fail!("pricer not initialized: no coupon captured");
+        };
+        let Some(tau) = self.spanning_time_index_maturity else {
+            fail!("pricer not initialized: no coupon captured");
+        };
+        if payment_date == fixing_maturity_date {
+            return Ok(fixing);
+        }
+
+        require!(!self.caplet_vol.is_empty(), "missing optionlet volatility");
+        let surface = self.caplet_vol.current_link()?;
+        let reference_date = surface.reference_date()?;
+        if fixing_date <= reference_date {
+            return Ok(fixing);
+        }
+        let variance = surface.black_variance_date(fixing_date, fixing, false)?;
+        let shift = surface.displacement();
+        let adjustment = match surface.volatility_type() {
+            VolatilityType::ShiftedLognormal => {
+                (fixing + shift) * (fixing + shift) * variance * tau / (1.0 + fixing * tau)
+            }
+            VolatilityType::Normal => variance * tau / (1.0 + fixing * tau),
+        };
+        Ok(fixing + adjustment)
     }
 
     /// The optionlet rate of `option_type` struck at `eff_strike` against
@@ -235,7 +285,27 @@ impl FloatingRateCouponPricer for BlackIborCouponPricer {
         self.is_in_arrears = coupon.is_in_arrears();
         self.index_fixing = Some(coupon.index_fixing());
         self.fixing_date = Some(coupon.fixing_date());
+        self.payment_date = Some(coupon.coupon_base().payment_date());
         self.eval_date = coupon.index().base().settings().evaluation_date();
+
+        // Black76 in-arrears convexity needs the index estimation window
+        // (`IborCouponPricer::initializeCachedData`): value date off the fixing,
+        // natural maturity, and the year fraction between them.
+        let index = coupon.index();
+        match index
+            .value_date(coupon.fixing_date())
+            .and_then(|value| index.maturity_date(value).map(|maturity| (value, maturity)))
+        {
+            Ok((value, maturity)) => {
+                let tau = index.day_counter().year_fraction(value, maturity);
+                self.fixing_maturity_date = Some(maturity);
+                self.spanning_time_index_maturity = Some(tau);
+            }
+            Err(_) => {
+                self.fixing_maturity_date = None;
+                self.spanning_time_index_maturity = None;
+            }
+        }
     }
 
     fn swaplet_rate(&self) -> QlResult<Rate> {
@@ -246,11 +316,7 @@ impl FloatingRateCouponPricer for BlackIborCouponPricer {
     }
 
     fn swaplet_rate_for(&self, index_fixing: QlResult<Rate>) -> QlResult<Rate> {
-        require!(
-            !self.is_in_arrears,
-            "in-arrears convexity adjustment not ported: cap/floor slice"
-        );
-        Ok(self.gearing * index_fixing? + self.spread)
+        Ok(self.gearing * self.adjusted_fixing(index_fixing?)? + self.spread)
     }
 
     fn caplet_rate(&self, effective_cap: Rate, forward: QlResult<Rate>) -> QlResult<Rate> {
