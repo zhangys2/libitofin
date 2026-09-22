@@ -128,11 +128,6 @@ impl PricingEngine for JuQuadraticApproximationEngine {
         }
 
         // early exercise can be optimal
-        require!(
-            rf_disc < 1.0,
-            "the Ju approximation is not applicable with zero or negative interest rates"
-        );
-
         let cum_normal = CumulativeNormalDistribution::standard();
         let normal = NormalDistribution::standard();
 
@@ -378,5 +373,59 @@ mod tests {
                 num_gamma
             );
         }
+    }
+
+    #[test]
+    fn test_zero_dividend_call_matches_european() {
+        let m = market();
+        m.set(100.0, 0.0, 0.10, 0.15);
+        let ex_date = today() + time_to_days(0.5);
+
+        let mut euro = m.option(Call, 100.0, ex_date);
+
+        let payoff = shared(PlainVanillaPayoff::new(Call, 100.0));
+        let exercise = shared(AmericanExercise::over(today(), ex_date).unwrap());
+        let mut am = VanillaOption::new(payoff, exercise, Shared::clone(&m.settings));
+        am.base_mut()
+            .set_pricing_engine(
+                shared_mut(JuQuadraticApproximationEngine::new(Shared::clone(
+                    &m.process,
+                ))) as SharedMut<dyn PricingEngine>,
+            );
+
+        for (a, e) in [
+            (am.npv(), euro.npv()),
+            (am.delta(), euro.delta()),
+            (am.gamma(), euro.gamma()),
+            (am.theta(), euro.theta()),
+            (am.vega(), euro.vega()),
+            (am.rho(), euro.rho()),
+            (am.dividend_rho(), euro.dividend_rho()),
+            (am.strike_sensitivity(), euro.strike_sensitivity()),
+        ] {
+            assert!((a.unwrap() - e.unwrap()).abs() <= 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_negative_rates_are_rejected() {
+        let m = market();
+        m.set(36.0, 0.0, -0.012, 0.20);
+        let ex_date = today() + time_to_days(1.0);
+        let payoff = shared(PlainVanillaPayoff::new(Put, 40.0));
+        let exercise = shared(AmericanExercise::over(today(), ex_date).unwrap());
+        let mut put = VanillaOption::new(payoff, exercise, Shared::clone(&m.settings));
+        put.base_mut()
+            .set_pricing_engine(
+                shared_mut(JuQuadraticApproximationEngine::new(Shared::clone(
+                    &m.process,
+                ))) as SharedMut<dyn PricingEngine>,
+            );
+        let err = put.npv().unwrap_err();
+        assert!(
+            err.message().contains("negative interest rates"),
+            "unexpected error message: {}",
+            err.message()
+        );
     }
 }
