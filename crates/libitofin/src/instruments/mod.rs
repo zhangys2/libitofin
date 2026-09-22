@@ -43,6 +43,7 @@ pub mod overnightindexfuture;
 mod partialtimebarrieroption;
 mod payoffs;
 mod protection;
+mod quantovanillaoption;
 mod simplechooseroption;
 mod softbarrieroption;
 mod swap;
@@ -147,6 +148,9 @@ pub use payoffs::{
     PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
 };
 pub use protection::ProtectionSide;
+pub use quantovanillaoption::{
+    QuantoOptionResults, QuantoVanillaOption, QuantoVanillaOptionResults,
+};
 pub use simplechooseroption::{SimpleChooserArguments, SimpleChooserOption, SimpleChooserResults};
 pub use softbarrieroption::{SoftBarrierArguments, SoftBarrierOption, SoftBarrierResults};
 pub use swap::{Swap, SwapArguments, SwapEngine, SwapResults, SwapType};
