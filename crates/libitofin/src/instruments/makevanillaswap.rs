@@ -29,8 +29,6 @@
 //! C++ default (`makevanillaswap.hpp:95-116`):
 //!
 //! - swap type (`receiveFixed` / `withType`): defaults to `Payer`;
-//! - `withRule` / `withFixedLegRule` / `withFloatingLegRule`: the schedules use
-//!   `DateGeneration::Backward`;
 //! - `withPaymentConvention`: unset, so [`VanillaSwap::new`] resolves the payment
 //!   convention against the floating schedule;
 //! - `withFixedLegFirstDate` / `withFixedLegNextToLastDate` /
@@ -44,6 +42,10 @@
 //! - `withPricingEngine`: the engine is always the [`DiscountingSwapEngine`] over
 //!   the discounting curve (set) or the index's forwarding curve (default),
 //!   matching `makevanillaswap.cpp:171-199`.
+//!
+//! [`with_rule`](Self::with_rule) / [`with_fixed_leg_rule`](Self::with_fixed_leg_rule) /
+//! [`with_floating_leg_rule`](Self::with_floating_leg_rule) are ported; both
+//! schedules default to [`DateGeneration::Backward`].
 //!
 //! ## Fixed-leg currency defaults (`makevanillaswap.cpp:104-163`)
 //!
@@ -125,6 +127,8 @@ pub struct MakeVanillaSwap {
     fixed_end_of_month: bool,
     float_end_of_month: bool,
     fixed_day_count: Option<DayCounter>,
+    fixed_rule: DateGeneration,
+    float_rule: DateGeneration,
 
     use_indexed_coupons: Option<bool>,
     discounting_curve: Option<Handle<dyn YieldTermStructure>>,
@@ -169,6 +173,8 @@ impl MakeVanillaSwap {
             fixed_end_of_month: false,
             float_end_of_month: false,
             fixed_day_count: None,
+            fixed_rule: DateGeneration::Backward,
+            float_rule: DateGeneration::Backward,
             use_indexed_coupons: None,
             discounting_curve: None,
         }
@@ -272,6 +278,25 @@ impl MakeVanillaSwap {
         self
     }
 
+    /// Sets the date-generation rule on both legs (`makevanillaswap.cpp:238`).
+    pub fn with_rule(mut self, rule: DateGeneration) -> MakeVanillaSwap {
+        self.fixed_rule = rule;
+        self.float_rule = rule;
+        self
+    }
+
+    /// Sets the fixed-leg date-generation rule (`makevanillaswap.cpp:286`).
+    pub fn with_fixed_leg_rule(mut self, rule: DateGeneration) -> MakeVanillaSwap {
+        self.fixed_rule = rule;
+        self
+    }
+
+    /// Sets the floating-leg date-generation rule (`makevanillaswap.cpp:336`).
+    pub fn with_floating_leg_rule(mut self, rule: DateGeneration) -> MakeVanillaSwap {
+        self.float_rule = rule;
+        self
+    }
+
     /// Prices the swap on `discounting_term_structure` rather than the index's
     /// forwarding curve (`makevanillaswap.cpp:249`).
     pub fn with_discounting_term_structure(
@@ -343,7 +368,7 @@ impl MakeVanillaSwap {
             self.fixed_calendar.clone(),
             self.fixed_convention,
             self.fixed_termination_date_convention,
-            DateGeneration::Backward,
+            self.fixed_rule,
             self.fixed_end_of_month,
             Date::null(),
             Date::null(),
@@ -355,7 +380,7 @@ impl MakeVanillaSwap {
             self.float_calendar.clone(),
             self.float_convention,
             self.float_termination_date_convention,
-            DateGeneration::Backward,
+            self.float_rule,
             self.float_end_of_month,
             Date::null(),
             Date::null(),
@@ -406,7 +431,7 @@ impl MakeVanillaSwap {
             self.float_calendar.clone(),
             self.float_convention,
             self.float_termination_date_convention,
-            DateGeneration::Backward,
+            self.float_rule,
             self.float_end_of_month,
             Date::null(),
             Date::null(),
@@ -863,5 +888,35 @@ mod tests {
         .with_settlement_days(2)
         .build();
         assert!(result.is_err());
+    }
+
+    /// `with_rule(ThirdWednesdayInclusive)` threads the rule into both schedules
+    /// (`makevanillaswap.cpp:238`): a 1Y swap effective 16-Sep-2015 snaps the
+    /// floating end to the third Wednesday of September 2016 (21-Sep-2016), the
+    /// same Inclusive pin as `swap.cpp` `testThirdWednesdayAdjustment`.
+    #[test]
+    fn with_rule_third_wednesday_inclusive_snaps_the_floating_end() {
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(Date::new(14, Month::September, 2015));
+        let index = euribor6m(&settings);
+        let swap = MakeVanillaSwap::new(
+            Period::new(1, TimeUnit::Years),
+            index,
+            Some(0.03),
+            Period::new(0, TimeUnit::Days),
+            Shared::clone(&settings),
+        )
+        .with_effective_date(Date::new(16, Month::September, 2015))
+        .with_rule(DateGeneration::ThirdWednesdayInclusive)
+        .build()
+        .unwrap();
+
+        let floating = swap.fixed_vs_floating().floating_schedule();
+        assert_eq!(floating.start_date(), Date::new(16, Month::September, 2015));
+        assert_eq!(
+            floating.end_date(),
+            Date::new(21, Month::September, 2016),
+            "Inclusive must snap the 16-Sep-2016 maturity to the third Wednesday"
+        );
     }
 }
