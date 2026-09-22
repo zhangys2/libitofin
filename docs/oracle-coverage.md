@@ -93,7 +93,7 @@ credit.
 | Municipal BMA swap + helper | `BMASwap` + `BMASwapRateHelper` | `piecewiseyieldcurve.cpp` BMA / independent fixture | ten 1Y–30Y quotes reprice @ 1e-9 (local bootstrap @ 1e-6); independent QL prices/holidays |
 | Optionlet stripper (Black + Normal) | `OptionletStripper1` + adapter | `optionletstripper.cpp` nonflat roundtrip | lognormal and Normal grids vs flat-vol engine @ 2.5e-8 |
 | Overnight optionlet strip + cap | `OptionletStripper1::new_overnight` + `CapFloor::from_overnight` | `optionletstripper.cpp` overnight + independent oracle | stripped nodes @ 1e-9; compounded overnight cap @ 2.5e-8 |
-| Optionlet Stripper2 ATM | `OptionletStripper2` + `CapFloorTermVolCurve` | `optionletstripper.cpp` ATM correction | smile nodes unchanged when ATM matches the surface; live quote/date |
+| Optionlet Stripper2 ATM | `OptionletStripper2` + `CapFloorTermVolCurve` | `optionletstripper.cpp` ATM correction | smile nodes unchanged when ATM matches the surface |
 | Swaption vol matrix | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | five constructors; 120 nodes @ 1e-16; live-input observability + handle relink |
 | SABR cube backward-flat | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` sparse/dense | 72 QL 1.43 rows, both flags, @ 1e-6; live quote/date; ZABR deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
