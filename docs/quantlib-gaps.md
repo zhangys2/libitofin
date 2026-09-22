@@ -77,7 +77,6 @@ reclassified 2026-09-22 against `main` after the upstream sync (#208).
 | Equity | FD Black–Scholes Asian | `FdBlackScholesAsianEngine` | `asianoptions.cpp` | false | none | Analytic/MC Asian set present |
 | Equity | LSMC American max option | `McLongstaffSchwartz` max | `mclongstaffschwartzengine.cpp` | true | partial | Vanilla LSMC pinned; max-option case not |
 | Equity | Range accrual | range accrual coupons/bonds | `rangeaccrual.cpp` | false | none | |
-| Equity | Dedicated `QuantoVanillaOption` type | `quantovanillaoption.hpp` | `quantooption.cpp` | false | none | Quanto engines on vanilla/barrier exist |
 | Equity | Rough Heston | _(not in QL `v1.43` tree)_ | `roughhestonmodel.cpp` empty/absent on pin | false | none | Forward-compat only; promote when QL pin moves |
 
 ## How to update
