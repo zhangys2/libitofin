@@ -35,6 +35,7 @@ mod heston_fitting_table;
 mod hestoncumulants;
 mod hestonmarket;
 pub mod jumpdiffusionengine;
+pub mod juquadraticengine;
 pub mod mcamericanengine;
 pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
@@ -56,6 +57,7 @@ pub use fdmbermudanengine::FdmBermudanEngine;
 pub use fdmeuropeanengine::FdmEuropeanEngine;
 pub use fdsimplebsswingengine::{FdSimpleBSSwingEngine, set_fd_simple_bs_swing_engine};
 pub use jumpdiffusionengine::JumpDiffusionEngine;
+pub use juquadraticengine::JuQuadraticApproximationEngine;
 pub use mcamericanengine::{AmericanPathPricer, MCAmericanEngine, MakeMcAmericanEngine};
 pub use mceuropeanengine::{EuropeanPathPricer, MCEuropeanEngine, MakeMcEuropeanEngine};
 pub use mceuropeanhestonengine::{
