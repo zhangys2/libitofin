@@ -264,28 +264,36 @@ impl CapFloor {
         &self.coupons
     }
 
-    /// The last floating coupon (`lastFloatingRateCoupon`), the coupon the
-    /// optionlet stripper reads its fixing date, payment date and accrual period
-    /// off. `None` only for an empty leg, which the constructors never produce.
+    /// The last Ibor coupon (`lastFloatingRateCoupon`), the coupon the
+    /// optionlet stripper and [`MakeCapFloor`](super::MakeCapFloor) read.
+    /// `None` on an overnight-only instrument; use
+    /// [`last_overnight_coupon`](Self::last_overnight_coupon) there.
     pub fn last_floating_rate_coupon(&self) -> Option<&Shared<IborCoupon>> {
         self.coupons.last()
+    }
+
+    /// The last overnight coupon, or `None` on an Ibor-only instrument.
+    pub fn last_overnight_coupon(&self) -> Option<&Shared<OvernightIndexedCoupon>> {
+        self.overnight_coupons.last()
     }
 
     /// The `i`-th optionlet as a cap/floor over that one coupon
     /// (`CapFloor::optionlet`, `capfloor.cpp:195-208`).
     ///
-    /// Keeps the parent's type and carries only the strikes that type uses, so
-    /// summing the optionlets' NPVs recomposes the parent's
-    /// (`testConsistency` recomposition, un-nested here as in the YoY pin).
+    /// Index `i` runs over [`coupon_count`](Self::coupon_count): Ibor coupons
+    /// first, then overnight coupons. Keeps the parent's type and carries only
+    /// the strikes that type uses, so summing the optionlets' NPVs recomposes
+    /// the parent's (`testConsistency` recomposition, un-nested here as in the
+    /// YoY pin).
     ///
     /// # Errors
     ///
     /// When `i` is past the end of the leg.
     pub fn optionlet(&self, i: usize) -> QlResult<CapFloor> {
         require!(
-            i < self.coupons.len(),
+            i < self.coupon_count(),
             "optionlet {i} does not exist, only {}",
-            self.coupons.len()
+            self.coupon_count()
         );
         let mut cap_rates = Vec::new();
         let mut floor_rates = Vec::new();
@@ -301,13 +309,25 @@ impl CapFloor {
         ) {
             floor_rates.push(self.floor_rates[i]);
         }
-        CapFloor::new(
-            self.cap_floor_type,
-            vec![Shared::clone(&self.coupons[i])],
-            cap_rates,
-            floor_rates,
-            Shared::clone(&self.settings),
-        )
+        if i < self.coupons.len() {
+            CapFloor::new(
+                self.cap_floor_type,
+                vec![Shared::clone(&self.coupons[i])],
+                cap_rates,
+                floor_rates,
+                Shared::clone(&self.settings),
+            )
+        } else {
+            CapFloor::from_overnight(
+                self.cap_floor_type,
+                vec![Shared::clone(
+                    &self.overnight_coupons[i - self.coupons.len()],
+                )],
+                cap_rates,
+                floor_rates,
+                Shared::clone(&self.settings),
+            )
+        }
     }
 
     /// The leg's earliest accrual start (`startDate`).
@@ -591,9 +611,9 @@ impl Instrument for CapFloor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cashflows::IborLeg;
+    use crate::cashflows::{IborLeg, OvernightLeg};
     use crate::handle::Handle;
-    use crate::indexes::ibor::Euribor;
+    use crate::indexes::ibor::{Euribor, Sofr};
     use crate::shared::shared;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::businessdayconvention::BusinessDayConvention;
@@ -622,6 +642,25 @@ mod tests {
             .with_convention(BusinessDayConvention::ModifiedFollowing)
             .build();
         IborLeg::new(schedule, index)
+            .with_notional(100.0)
+            .coupons()
+            .unwrap()
+    }
+
+    /// A three-coupon 9-month overnight leg over unlinked SOFR.
+    fn overnight_leg(settings: Shared<Settings<Date>>) -> Vec<Shared<OvernightIndexedCoupon>> {
+        let index = shared(Sofr::new(
+            Handle::<dyn YieldTermStructure>::empty(),
+            settings,
+        ));
+        let schedule = MakeSchedule::new()
+            .from(Date::new(15, Month::January, 2026))
+            .to(Date::new(15, Month::October, 2026))
+            .with_frequency(Frequency::Quarterly)
+            .with_calendar(Target::new())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .build();
+        OvernightLeg::new(schedule, index)
             .with_notional(100.0)
             .coupons()
             .unwrap()
@@ -677,6 +716,44 @@ mod tests {
         assert_eq!(optionlet.floor_rates(), [0.02].as_slice());
 
         let err = collar.optionlet(n).err().expect("past the leg");
+        assert!(err.message().contains("does not exist"), "err was: {err}");
+    }
+
+    /// Overnight `from_overnight` instruments index `optionlet` by
+    /// `coupon_count()`, not the empty Ibor store.
+    #[test]
+    fn an_overnight_optionlet_carries_one_coupon_and_its_own_strike() {
+        let settings = settings_on(Date::new(2, Month::January, 2026));
+        let coupons = overnight_leg(settings.clone());
+        let n = coupons.len();
+        assert_eq!(n, 3, "fixture is a 3-coupon overnight leg");
+        let cap = CapFloor::from_overnight(
+            CapFloorType::Cap,
+            coupons.clone(),
+            vec![0.04, 0.05, 0.06],
+            Vec::new(),
+            settings,
+        )
+        .unwrap();
+
+        assert_eq!(cap.coupon_count(), n);
+        assert!(cap.last_floating_rate_coupon().is_none());
+        assert!(Shared::ptr_eq(
+            cap.last_overnight_coupon().expect("overnight cap"),
+            &coupons[n - 1]
+        ));
+
+        let optionlet = cap.optionlet(1).unwrap();
+        assert_eq!(optionlet.cap_floor_type(), CapFloorType::Cap);
+        assert!(optionlet.coupons().is_empty());
+        assert_eq!(optionlet.overnight_coupons().len(), 1);
+        assert!(Shared::ptr_eq(
+            &optionlet.overnight_coupons()[0],
+            &coupons[1]
+        ));
+        assert_eq!(optionlet.cap_rates(), [0.05].as_slice());
+
+        let err = cap.optionlet(n).err().expect("past the leg");
         assert!(err.message().contains("does not exist"), "err was: {err}");
     }
 
