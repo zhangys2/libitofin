@@ -133,6 +133,12 @@ impl IborCoupon {
         self.base.gearing()
     }
 
+    /// Whether the coupon fixes in arrears (`isInArrears`), delegated to the
+    /// base [`FloatingRateCoupon`].
+    pub fn is_in_arrears(&self) -> bool {
+        self.base.is_in_arrears()
+    }
+
     /// The coupon's fixing date (`fixingDate`).
     pub fn fixing_date(&self) -> Date {
         self.base.fixing_date()
@@ -499,14 +505,24 @@ mod tests {
         }
     }
 
-    /// The in-arrears swaplet path is refused (the convexity adjustment needs the
-    /// unported optionlet volatility), rather than returning a silent wrong
-    /// number.
+    /// An in-arrears coupon without optionlet volatility refuses the Black76
+    /// convexity adjustment, rather than returning a silent wrong number.
     #[test]
     fn an_in_arrears_coupon_refuses_to_price() {
         let today = Date::new(15, Month::June, 2026);
         let settings = settings_on(today);
-        let index = ibor6m(settings);
+        let index = shared(IborIndex::new(
+            "foo".into(),
+            Period::new(6, TimeUnit::Months),
+            2,
+            Currency::eur(),
+            Target::new(),
+            BusinessDayConvention::Following,
+            false,
+            Actual360::new(),
+            flat_curve(today, 0.03),
+            settings,
+        ));
 
         let start = Date::new(15, Month::January, 2026);
         let end = Date::new(15, Month::July, 2026);
@@ -529,7 +545,12 @@ mod tests {
         .unwrap();
         coupon.set_pricer(pricer());
 
-        assert!(coupon.rate().is_err());
+        let err = coupon.rate().unwrap_err();
+        assert!(
+            err.message().contains("missing optionlet volatility"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     /// Behind the explicit `using_at_par_coupons = false` flag an unfixed coupon

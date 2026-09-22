@@ -198,33 +198,43 @@ mod tests {
     //! The swap's numeric oracle: `swap.cpp` `testCachedValue` (:289), the first
     //! swap priced end to end against a hardcoded C++ NPV, plus the mode-agnostic
     //! `testFairRate` (:107) and `testFairSpread` (:131) self-consistency checks,
-    //! the `testRateDependency` / `testSpreadDependency` monotonicity pins, and
-    //! `testThirdWednesdayAdjustment` (:321).
+    //! the `testRateDependency` / `testSpreadDependency` monotonicity pins,
+    //! `testThirdWednesdayAdjustment` (:321), and `testInArrears` (:215) Hull NPV.
     //! The fixture reproduces `swap.cpp` `CommonVars` (:52-104): a Payer swap on a
     //! nominal of 100, fixed 10Y annual Thirty360(BondBasis) versus floating
     //! semiannual Euribor 6M / Actual360, discounted on a flat 5% Actual365Fixed
     //! curve the index also forecasts off.
 
     use super::*;
+    use crate::cashflows::{
+        BlackIborCouponPricer, FixedRateLeg, FloatingRateCouponPricer, IborLeg, set_coupon_pricer,
+    };
+    use crate::currency::Currency;
     use crate::indexes::IborIndex;
     use crate::indexes::ibor::Euribor;
     use crate::instrument::Instrument;
-    use crate::instruments::{SwapType, VanillaSwap};
+    use crate::instruments::{Swap, SwapType, VanillaSwap};
     use crate::interestrate::Compounding;
     use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::termstructures::volatility::{
+        ConstantOptionletVolatility, OptionletVolatilityStructure, VolatilityType,
+    };
     use crate::termstructures::yields::FlatForward;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendar::Calendar;
+    use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
     use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::simpledaycounter::SimpleDayCounter;
     use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
     use crate::time::schedule::MakeSchedule;
     use crate::time::timeunit::TimeUnit;
-    use crate::types::{Integer, Rate, Real, Spread};
+    use crate::types::{Integer, Natural, Rate, Real, Spread};
 
     const NOMINAL: Real = 100.0;
 
@@ -493,6 +503,110 @@ mod tests {
             Date::new(21, Month::September, 2016),
             "Wrong End Date {}",
             floating.end_date()
+        );
+    }
+
+    /// `swap.cpp` `testInArrears` (:215): Hull 4th ed. p.550 in-arrears swap with
+    /// Black76 convexity (constant caplet vol 0.22) pins NPV −144813 ± 1. Uses a
+    /// NullCalendar + SimpleDayCounter dummy 1Y Ibor so the result is
+    /// date-independent.
+    #[test]
+    fn in_arrears_hull_npv_matches_cached_value() {
+        let today = Date::new(17, Month::June, 2002);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let calendar = NullCalendar::new();
+        let day_counter = SimpleDayCounter::new();
+        let maturity = today + Period::new(5, TimeUnit::Years);
+        let schedule = MakeSchedule::new()
+            .from(today)
+            .to(maturity)
+            .with_tenor(Period::new(1, TimeUnit::Years))
+            .with_calendar(calendar.clone())
+            .with_convention(BusinessDayConvention::Following)
+            .with_termination_date_convention(BusinessDayConvention::Following)
+            .forwards()
+            .build();
+
+        let one_year: Rate = 0.05;
+        let r = (1.0_f64 + one_year).ln();
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
+            today,
+            r,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+
+        let index = shared(IborIndex::new(
+            "dummy".into(),
+            Period::new(1, TimeUnit::Years),
+            0,
+            Currency::eur(),
+            calendar.clone(),
+            BusinessDayConvention::Following,
+            false,
+            day_counter.clone(),
+            curve.clone(),
+            Shared::clone(&settings),
+        ));
+
+        let nominal = 100_000_000.0;
+        let fixed_leg = FixedRateLeg::new(schedule.clone())
+            .with_notional(nominal)
+            .with_coupon_rate(
+                one_year,
+                day_counter.clone(),
+                Compounding::Simple,
+                Frequency::Annual,
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let vol = Handle::new(shared(ConstantOptionletVolatility::new(
+            today,
+            calendar,
+            BusinessDayConvention::Following,
+            0.22,
+            day_counter.clone(),
+            VolatilityType::ShiftedLognormal,
+            0.0,
+        )) as Shared<dyn OptionletVolatilityStructure>);
+        let pricer = shared_mut(BlackIborCouponPricer::with_vol(vol))
+            as SharedMut<dyn FloatingRateCouponPricer>;
+
+        let floating_coupons = IborLeg::new(schedule, index)
+            .with_notional(nominal)
+            .with_payment_day_counter(day_counter)
+            .with_fixing_days(0 as Natural)
+            .in_arrears()
+            .coupons()
+            .unwrap();
+        set_coupon_pricer(&floating_coupons, pricer);
+        let floating_leg: crate::cashflow::Leg = floating_coupons
+            .into_iter()
+            .map(|c| c as Shared<dyn crate::cashflow::CashFlow>)
+            .collect();
+
+        let mut swap = Swap::two_leg(floating_leg, fixed_leg, Shared::clone(&settings));
+        let engine = shared_mut(DiscountingSwapEngine::new(
+            curve,
+            Some(false),
+            None,
+            None,
+            Shared::clone(&settings),
+        ));
+        swap.base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+        let npv = swap.npv().unwrap();
+        const STORED: Real = -144_813.0;
+        assert!(
+            (npv - STORED).abs() <= 1.0,
+            "Wrong NPV calculation: expected {STORED}, calculated {npv}"
         );
     }
 
