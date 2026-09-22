@@ -15,7 +15,7 @@ prioritized work to GitHub issues after the prioritization lens.
 Inventories merged 2026-09-19 from Wayfinder research tickets
 [oracle case inventory](../.wayfinder/tickets/oracle-case-inventory.md) and
 [surface module inventory](../.wayfinder/tickets/surface-module-inventory.md);
-reclassified 2026-09-21 against `main` after the v0.27 merge (#204).
+reclassified 2026-09-22 against `main` after the upstream sync (#208).
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|
@@ -27,7 +27,7 @@ reclassified 2026-09-21 against `main` after the v0.27 merge (#204).
 | Rates | Hybrid Heston × Hull–White | `HybridHestonHullWhiteProcess`, hybrid vanilla engines | `hybridhestonhullwhiteprocess.cpp`, `hestonhullwhite.cpp` | partial | none | `HullWhiteForwardProcess` (α/B/M_T + forward drift); hybrid join / evolve / engines deferred |
 | Rates | Heston SLV models | `HestonSLV*Model` | `hestonslvmodel.cpp` / `hestonslv*.cpp` | partial | none | `HestonSLVProcess` (drift/diffusion/apply/evolve + const-L identity); FDM/MC model calibration deferred |
 | Rates | FD SABR / no-arb SABR model | `FdmSabr*`, `NoArbSabr*` | `fdsabr.cpp`, `noarbsabr.cpp` | partial | none | `FdmSabrOp` (dir/mixed/split identity); `FdSabrVanillaEngine` / `NoArbSabr*` deferred |
-| Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | partial | partial | Engine NPV/vega + CapHelper Normal + `optionletsDelta` FD; stripper Normal deferred |
+| Rates | Bachelier / normal cap–floor | `BachelierCapFloorEngine` | `capfloor.cpp` | partial | partial | Engine NPV/vega + CapHelper Normal + `optionletsDelta` FD; remaining engine extras only |
 | Rates | Tree / MC / Gaussian1d cap–floor | `TreeCapFloorEngine`, `MCHullWhiteEngine`, … | `capfloor.cpp` | partial | partial | `TreeCapFloorEngine` + `DiscretizedCapFloor` (QL collar oracle + TimeGrid ctor + past-start intrinsic + CapHelper Normal pin); MC / Gaussian1d / CapHelper `addTimesTo` deferred |
 | Rates | Swaption Black extras | `Swaption`, `BlackSwaptionEngine` | `swaption.cpp` | true | partial | Cached NPV/vega/cash-settled + Spot/Forward Physical Black + reduced IBOR/OIS Spot/Cash/Forward (all reduced cartesian cells) + reduced Normal `impliedVolatility` pinned; remaining: full IV grid |
 | Rates | Gaussian1d / float–float / nonstandard swaption | `Gaussian1d*SwaptionEngine`, `FloatFloatSwaption`, `NonstandardSwaption` | `swaption.cpp`, `gaussian1dswaption.cpp` | false | none | HW/G2 engines only |
@@ -44,17 +44,16 @@ reclassified 2026-09-21 against `main` after the v0.27 merge (#204).
 | Rates | Asset swap (market ASW / Z-spread) | `AssetSwap` | `assetswap.cpp` | true | partial | Par construction identity only |
 | Rates | Multiple-resets / averaged OIS legs | `MultipleResetsSwap` | `multipleresetsswap.cpp` | false | none | |
 | Rates | Zero-coupon swap | `ZeroCouponSwap` | `zerocouponswap.cpp` | false | none | |
-| Rates | BMA swap + curve helper | `BMASwap`, BMA helpers | `piecewiseyieldcurve.cpp` BMA cases | false | none | Helper deferred (#343) |
 | Rates | Amortizing bonds (fixed/float/CMS) | `Amortizing*Bond` | `amortizingbond.cpp` | false | none | Only amortizing payment helper |
 | Rates | CMS fixed-rate bond | `CmsRateBond` | `bonds.cpp` | false | none | |
 | Rates | Fitted bond discount curve | Nelson–Siegel / Svensson-style helpers | `fittedbondcurve.cpp` | false | none | Piecewise bootstrap only |
 | Rates | Tree discounting swap engine | `TreeSwapEngine` | `swap.cpp` | false | none | `DiscountingSwapEngine` only |
 | Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
-| Rates | Caplet vol stripping (normal / shifted / ON) | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Flat Black strip pinned; normal/shifted/ON open |
+| Rates | Caplet vol stripping extras | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Nonflat Black + Normal roundtrip, overnight strip/cap, and Stripper2 smile-node identity closed; remaining: nonzero displacement; Stripper2 ATM-spread numeric pin is Python-only |
 | Rates | Swaption SABR/ZABR cube extras | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` | true | partial | Backward-flat 72-row QL 1.43 sparse/dense @ 1e-6 closed; ZABR / Normal SABR / remaining smile-ATM grid open |
-| Rates | Piecewise yield bootstrap extras | `PiecewiseYieldCurve` | `piecewiseyieldcurve.cpp` | true | partial | Custom pillars + iterative-bootstrap recovery pinned; BMA / some globals skipped |
+| Rates | Piecewise yield bootstrap extras | `PiecewiseYieldCurve` | `piecewiseyieldcurve.cpp` | true | partial | Custom pillars + iterative-bootstrap recovery + BMA helper pinned; some globals skipped |
 | Rates | Hull–White / affine short-rate suite | `HullWhite`, trees, helpers | `shortratemodels.cpp` | true | partial | Coverage “Core done”; full `testSwaps` breadth not mapped |
-| Equity | Heston analytic/FD/MC full suite | `HestonModel`, engines | `hestonmodel.cpp` | true | partial | FD-cached ambition closed (`testFdBarrierVsCached` / `testFdVanillaVsCached` / dividends / `testFdAmerican`). Remaining: Lewis/Kahl–Jaeckel, COS/AP/integrals, piecewise TD, etc. |
+| Equity | Heston analytic/FD/MC full suite | `HestonModel`, engines | `hestonmodel.cpp` | true | partial | FD-cached + COS cached (4 prices @ 1e-10) + exponential-fitting 88 extreme-moneyness @ 1e-8 closed. Remaining: Lewis/Kahl–Jaeckel, general integrals (#418), piecewise TD, etc. |
 | Equity | Heston FD scheme grid | `FdHeston*` | `fdheston.cpp` | true | partial | Variance mesher + Black limit + American/Ikonen/div/barrier NPV + ADI convergence (HS/MCS/mod-HS/CS) + Haug barrier-vs-BS table + MethodOfLines vs Hundsdorfer + American call–put parity + spurious oscillations (CS/HS/mod-HS/Douglas) closed. Still open: ExplicitEuler arm, 2-D CN/TrBDF2/ImplicitEuler (#636), intraday (`QL_HIGH_RESOLUTION_DATE`) |
 | Equity | Forward-start vanilla (non-quanto) | `ForwardVanillaOption`, forward engines | `forwardoption.cpp` | true | partial | Haug NPV + analytic greeks + greeks-init + BS MC + flat-Heston MC vs BS (`testHestonMCPrices` Test 1) + smile/t=0 Heston MC vs vanilla AnalyticHeston (`testHestonMCPrices` Test 2 MC arm) + T=0 `AnalyticHestonForwardEuropeanEngine` vs vanilla AnalyticHeston closed. Still open: `tReset>0` 2-D propagator / Bessel, analytic-vs-MC / control variate |
 | Equity | Digitals beyond cash-or-nothing | Digital payoffs + American/MC engines | `digitaloption.cpp`, `binaryoption.cpp` | true | partial | Haug cash-or-nothing + asset-or-nothing + gap; `AnalyticDigitalAmericanEngine` at-hit and at-expiry KI/KO cash/asset @ 1e-4; MC deferred |
