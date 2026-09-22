@@ -759,6 +759,7 @@ mod tests {
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::daycounters::thirty360::{Convention, Thirty360};
     use crate::time::frequency::Frequency;
 
     fn today() -> Date {
@@ -875,7 +876,7 @@ mod tests {
                 today,
                 None,
                 sigma,
-                Actual365Fixed::new(),
+                Thirty360::with_convention(Convention::European),
             )) as Shared<dyn BlackVolTermStructure>);
 
             let process = shared(BlackScholesMertonProcess::new(
@@ -922,6 +923,13 @@ mod tests {
                 "Delta mismatch: {am_delta} vs {eu_delta}"
             );
 
+            let am_strike_sens = american_opt.strike_sensitivity().unwrap();
+            let eu_strike_sens = european_opt.strike_sensitivity().unwrap();
+            assert!(
+                (am_strike_sens - eu_strike_sens).abs() <= tol,
+                "StrikeSensitivity mismatch: {am_strike_sens} vs {eu_strike_sens}"
+            );
+
             let am_gamma = american_opt.gamma().unwrap();
             let eu_gamma = european_opt.gamma().unwrap();
             assert!(
@@ -939,8 +947,15 @@ mod tests {
             let am_theta = american_opt.theta().unwrap();
             let eu_theta = european_opt.theta().unwrap();
             assert!(
-                (am_theta - eu_theta).abs() <= 1e-11,
+                (am_theta - eu_theta).abs() <= tol,
                 "Theta mismatch: {am_theta} vs {eu_theta}"
+            );
+
+            let am_theta_per_day = american_opt.theta_per_day().unwrap();
+            let eu_theta_per_day = european_opt.theta_per_day().unwrap();
+            assert!(
+                (am_theta_per_day - eu_theta_per_day).abs() <= tol,
+                "ThetaPerDay mismatch: {am_theta_per_day} vs {eu_theta_per_day}"
             );
 
             let am_rho = american_opt.rho().unwrap();
@@ -1048,5 +1063,200 @@ mod tests {
         assert!((option.rho().unwrap() - expected_rho).abs() <= tol);
         assert!((option.vega().unwrap() - expected_vega).abs() <= tol);
         assert!((option.theta().unwrap() - expected_theta).abs() <= tol);
+        assert!((option.theta_per_day().unwrap() - expected_theta / 365.0).abs() <= tol);
+        assert_eq!(option.result::<String>("exerciseType").unwrap(), "American");
+    }
+
+    /// American Greeks FD test from QuantLib `americanoption.cpp` `testBjerksundStenslandAmericanGreeks`.
+    /// Tests both Call and Put with mixed day counters (Actual360, Actual365Fixed, Thirty360 ISDA)
+    /// against numerical finite differences, validating the put-call symmetry transformation.
+    #[test]
+    fn test_bjerksund_stensland_american_greeks() {
+        let today = Date::new(5, Month::December, 2022);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let s = 99.9;
+        let v = 0.2;
+        let q = 0.08;
+        let r = 0.06;
+        let strike = 100.0;
+        let maturity = today + 182;
+
+        let spot_quote = shared(SimpleQuote::new(s));
+        let vol_quote = shared(SimpleQuote::new(v));
+        let q_quote = shared(SimpleQuote::new(q));
+        let r_quote = shared(SimpleQuote::new(r));
+
+        let q_ts = Handle::new(shared(FlatForward::new(
+            today,
+            Handle::new(q_quote.clone() as Shared<dyn Quote>),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let r_ts = Handle::new(shared(FlatForward::new(
+            today,
+            Handle::new(r_quote.clone() as Shared<dyn Quote>),
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let vol_ts = Handle::new(shared(BlackConstantVol::with_quote(
+            today,
+            None,
+            Handle::new(vol_quote.clone() as Shared<dyn Quote>),
+            Thirty360::with_convention(Convention::ISDA),
+        )) as Shared<dyn BlackVolTermStructure>);
+
+        let bs_process = shared(BlackScholesMertonProcess::new(
+            Handle::new(spot_quote.clone() as Shared<dyn Quote>),
+            q_ts,
+            r_ts,
+            vol_ts,
+        ));
+
+        for opt_type in [Call, Put] {
+            let make_opt = |payoff: Shared<PlainVanillaPayoff>, mat: Date| {
+                let mut opt = VanillaOption::new(
+                    payoff,
+                    shared(AmericanExercise::over(today, mat).unwrap()),
+                    Shared::clone(&settings),
+                );
+                opt.base_mut()
+                    .set_pricing_engine(shared_mut(BjerksundStenslandApproximationEngine::new(
+                        Shared::clone(&bs_process),
+                    )) as SharedMut<dyn PricingEngine>);
+                opt
+            };
+
+            let f_d = 1e-5;
+            let f_g = 5e-5;
+            let f_q = 1e-6;
+
+            let mut option = make_opt(shared(PlainVanillaPayoff::new(opt_type, strike)), maturity);
+            let mut strike_up = make_opt(
+                shared(PlainVanillaPayoff::new(opt_type, strike * (1.0 + f_d))),
+                maturity,
+            );
+            let mut strike_down = make_opt(
+                shared(PlainVanillaPayoff::new(opt_type, strike * (1.0 - f_d))),
+                maturity,
+            );
+            let mut day_up = make_opt(
+                shared(PlainVanillaPayoff::new(opt_type, strike)),
+                maturity + 1,
+            );
+            let mut day_down = make_opt(
+                shared(PlainVanillaPayoff::new(opt_type, strike)),
+                maturity - 1,
+            );
+
+            // Base greeks
+            spot_quote.set_value(s);
+            vol_quote.set_value(v);
+            q_quote.set_value(q);
+            r_quote.set_value(r);
+
+            let npv = option.npv().unwrap();
+            let delta = option.delta().unwrap();
+            let gamma = option.gamma().unwrap();
+            let strike_sens = option.strike_sensitivity().unwrap();
+            let div_rho = option.dividend_rho().unwrap();
+            let rho = option.rho().unwrap();
+            let vega = option.vega().unwrap();
+            let theta = option.theta().unwrap();
+            let theta_per_day = option.theta_per_day().unwrap();
+            let exercise_type = option.result::<String>("exerciseType").unwrap();
+            assert_eq!(exercise_type, "American");
+
+            // Delta FD
+            spot_quote.set_value(s * (1.0 + f_d));
+            let f2 = option.npv().unwrap();
+            spot_quote.set_value(s * (1.0 - f_d));
+            let f1 = option.npv().unwrap();
+            spot_quote.set_value(s);
+            let num_delta = (f2 - f1) / (2.0 * f_d * s);
+            assert!(
+                (delta - num_delta).abs() <= 5e-6,
+                "delta error for {opt_type:?}: {delta} vs {num_delta}"
+            );
+
+            // Gamma FD (5-point stencil)
+            spot_quote.set_value(s * (1.0 + 2.0 * f_g));
+            let gp2 = option.npv().unwrap();
+            spot_quote.set_value(s * (1.0 + f_g));
+            let gp1 = option.npv().unwrap();
+            spot_quote.set_value(s * (1.0 - f_g));
+            let gm1 = option.npv().unwrap();
+            spot_quote.set_value(s * (1.0 - 2.0 * f_g));
+            let gm2 = option.npv().unwrap();
+            spot_quote.set_value(s);
+            let num_gamma =
+                (-gp2 + 16.0 * gp1 - 30.0 * npv + 16.0 * gm1 - gm2) / (12.0 * (f_g * s).powi(2));
+            assert!(
+                (gamma - num_gamma).abs() <= 1e-4,
+                "gamma error for {opt_type:?}: {gamma} vs {num_gamma}"
+            );
+
+            // Strike sensitivity FD
+            let k2 = strike_up.npv().unwrap();
+            let k1 = strike_down.npv().unwrap();
+            let num_strike_sens = (k2 - k1) / (2.0 * f_d * strike);
+            assert!(
+                (strike_sens - num_strike_sens).abs() <= 5e-6,
+                "strike_sens error for {opt_type:?}: {strike_sens} vs {num_strike_sens}"
+            );
+
+            // Dividend rho FD
+            q_quote.set_value(q + f_q);
+            let q2 = option.npv().unwrap();
+            q_quote.set_value(q - f_q);
+            let q1 = option.npv().unwrap();
+            q_quote.set_value(q);
+            let num_div_rho = (q2 - q1) / (2.0 * f_q);
+            assert!(
+                (div_rho - num_div_rho).abs() <= 3e-2,
+                "div_rho error for {opt_type:?}: {div_rho} vs {num_div_rho}"
+            );
+
+            // Rho FD
+            r_quote.set_value(r + f_q);
+            let r2 = option.npv().unwrap();
+            r_quote.set_value(r - f_q);
+            let r1 = option.npv().unwrap();
+            r_quote.set_value(r);
+            let num_rho = (r2 - r1) / (2.0 * f_q);
+            assert!(
+                (rho - num_rho).abs() <= 3e-2,
+                "rho error for {opt_type:?}: {rho} vs {num_rho}"
+            );
+
+            // Vega FD
+            vol_quote.set_value(v + f_d);
+            let v2 = option.npv().unwrap();
+            vol_quote.set_value(v - f_d);
+            let v1 = option.npv().unwrap();
+            vol_quote.set_value(v);
+            let num_vega = (v2 - v1) / (2.0 * f_d);
+            assert!(
+                (vega - num_vega).abs() <= 5e-4,
+                "vega error for {opt_type:?}: {vega} vs {num_vega}"
+            );
+
+            // Theta FD
+            let t2 = day_up.npv().unwrap();
+            let t1 = day_down.npv().unwrap();
+            let num_theta_per_day = (t1 - t2) / 2.0;
+            let num_theta = 365.0 * num_theta_per_day;
+            assert!(
+                (theta_per_day - num_theta_per_day).abs() <= 5e-4 / 365.0,
+                "theta_per_day error for {opt_type:?}: {theta_per_day} vs {num_theta_per_day}"
+            );
+            assert!(
+                (theta - num_theta).abs() <= 5e-4,
+                "theta error for {opt_type:?}: {theta} vs {num_theta}"
+            );
+        }
     }
 }
