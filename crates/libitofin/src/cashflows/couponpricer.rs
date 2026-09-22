@@ -33,13 +33,16 @@
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
+use crate::indexes::interestrateindex::InterestRateIndex;
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable, Observer, ResetThenNotify};
 use crate::pricingengines::blackformula::{bachelier_black_formula, black_formula};
 use crate::shared::{Shared, SharedMut};
 use crate::termstructures::volatility::{OptionletVolatilityStructure, VolatilityType};
+use crate::time::businessdayconvention::BusinessDayConvention;
 use crate::time::date::Date;
-use crate::types::{Rate, Real, Spread};
+use crate::time::timeunit::TimeUnit;
+use crate::types::{Integer, Rate, Real, Spread};
 use crate::{fail, require};
 
 use super::coupon::Coupon;
@@ -126,8 +129,10 @@ pub struct BlackIborCouponPricer {
     index_fixing: Option<QlResult<Rate>>,
     fixing_date: Option<Date>,
     payment_date: Option<Date>,
-    fixing_maturity_date: Option<Date>,
-    spanning_time_index_maturity: Option<Real>,
+    /// Index maturity and spanning time for Black76 convexity
+    /// (`fixingMaturityDate_`, `spanningTimeIndexMaturity_`). `Err` preserves a
+    /// date-construction failure from initialize rather than swallowing it.
+    convexity_window: Option<QlResult<(Date, Real)>>,
     eval_date: Option<Date>,
     caplet_vol: Handle<dyn OptionletVolatilityStructure>,
     observable: Shared<Observable>,
@@ -144,8 +149,7 @@ impl Default for BlackIborCouponPricer {
             index_fixing: None,
             fixing_date: None,
             payment_date: None,
-            fixing_maturity_date: None,
-            spanning_time_index_maturity: None,
+            convexity_window: None,
             eval_date: None,
             caplet_vol: Handle::empty(),
             observable,
@@ -199,12 +203,10 @@ impl BlackIborCouponPricer {
         let Some(payment_date) = self.payment_date else {
             fail!("pricer not initialized: no coupon captured");
         };
-        let Some(fixing_maturity_date) = self.fixing_maturity_date else {
+        let Some(window) = &self.convexity_window else {
             fail!("pricer not initialized: no coupon captured");
         };
-        let Some(tau) = self.spanning_time_index_maturity else {
-            fail!("pricer not initialized: no coupon captured");
-        };
+        let (fixing_maturity_date, tau) = window.clone()?;
         if payment_date == fixing_maturity_date {
             return Ok(fixing);
         }
@@ -255,6 +257,10 @@ impl BlackIborCouponPricer {
             return Ok((a - b).max(0.0));
         }
 
+        // Undetermined path: QuantLib Blacks off `adjustedFixing()`, not the
+        // raw index fixing (`couponpricer.cpp:157-162`).
+        let forward = self.adjusted_fixing(forward)?;
+
         require!(!self.caplet_vol.is_empty(), "missing optionlet volatility");
         let surface = self.caplet_vol.current_link()?;
         let std_dev = surface
@@ -289,23 +295,26 @@ impl FloatingRateCouponPricer for BlackIborCouponPricer {
         self.eval_date = coupon.index().base().settings().evaluation_date();
 
         // Black76 in-arrears convexity needs the index estimation window
-        // (`IborCouponPricer::initializeCachedData`): value date off the fixing,
-        // natural maturity, and the year fraction between them.
+        // (`IborCouponPricer::initializeCachedData`): fixing-calendar advance
+        // off the fixing (not `value_date`, which for Libor joint-adjusts),
+        // natural maturity, and the year fraction between them — same sequence
+        // as `IborCoupon::forecast_fixing_dates`.
         let index = coupon.index();
-        match index
-            .value_date(coupon.fixing_date())
-            .and_then(|value| index.maturity_date(value).map(|maturity| (value, maturity)))
-        {
-            Ok((value, maturity)) => {
-                let tau = index.day_counter().year_fraction(value, maturity);
-                self.fixing_maturity_date = Some(maturity);
-                self.spanning_time_index_maturity = Some(tau);
-            }
-            Err(_) => {
-                self.fixing_maturity_date = None;
-                self.spanning_time_index_maturity = None;
-            }
-        }
+        let fixing_date = coupon.fixing_date();
+        let fixing_days = InterestRateIndex::fixing_days(&**index);
+        self.convexity_window = Some((|| -> QlResult<(Date, Real)> {
+            let fixing_value_date = coupon.fixing_calendar().advance(
+                fixing_date,
+                fixing_days as Integer,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false,
+            );
+            let maturity = InterestRateIndex::maturity_date(&**index, fixing_value_date)?;
+            let tau =
+                InterestRateIndex::day_counter(&**index).year_fraction(fixing_value_date, maturity);
+            Ok((maturity, tau))
+        })());
     }
 
     fn swaplet_rate(&self) -> QlResult<Rate> {
@@ -339,6 +348,7 @@ mod tests {
     use crate::handle::Handle;
     use crate::indexes::iborindex::IborIndex;
     use crate::indexes::index::Index;
+    use crate::indexes::interestrateindex::InterestRateIndex;
     use crate::interestrate::Compounding;
     use crate::settings::Settings;
     use crate::shared::shared;
@@ -467,6 +477,219 @@ mod tests {
                 .unwrap_err()
                 .message()
                 .contains("not initialized")
+        );
+    }
+
+    /// Undetermined in-arrears optionlets Black off `adjustedFixing()`, matching
+    /// QuantLib `couponpricer.cpp:157-162` — not the raw index fixing the coupon
+    /// threads in.
+    #[test]
+    fn undetermined_in_arrears_optionlet_blacks_the_adjusted_forward() {
+        use crate::termstructures::volatility::ConstantOptionletVolatility;
+        use crate::time::calendars::nullcalendar::NullCalendar;
+        use crate::time::daycounters::simpledaycounter::SimpleDayCounter;
+
+        let today = Date::new(17, Month::June, 2002);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let day_counter = SimpleDayCounter::new();
+        let calendar = NullCalendar::new();
+        let forwarding = flat_curve(today, (1.05_f64).ln());
+        let index = shared(IborIndex::new(
+            "dummy".into(),
+            Period::new(1, TimeUnit::Years),
+            0,
+            Currency::eur(),
+            calendar.clone(),
+            BusinessDayConvention::Following,
+            false,
+            day_counter.clone(),
+            forwarding,
+            Shared::clone(&settings),
+        ));
+
+        // In-arrears annual coupon paying at accrual end; index maturity is one
+        // year later, so Black76 convexity applies.
+        let start = today;
+        let end = today + Period::new(1, TimeUnit::Years);
+        let coupon = FloatingRateCoupon::new(
+            end,
+            100.0,
+            start,
+            end,
+            Some(0),
+            index,
+            1.0,
+            0.0,
+            None,
+            None,
+            Some(day_counter.clone()),
+            true,
+            None,
+            BusinessDayConvention::Following,
+        )
+        .unwrap();
+
+        let vol = Handle::new(shared(ConstantOptionletVolatility::new(
+            today,
+            calendar,
+            BusinessDayConvention::Following,
+            0.22,
+            day_counter,
+            VolatilityType::ShiftedLognormal,
+            0.0,
+        )) as Shared<dyn OptionletVolatilityStructure>);
+        let mut pricer = BlackIborCouponPricer::with_vol(vol);
+        pricer.initialize(&coupon);
+
+        let raw = coupon.index_fixing().unwrap();
+        let adjusted = pricer.adjusted_fixing(raw).unwrap();
+        assert!(
+            (adjusted - raw).abs() > 1e-10,
+            "fixture must produce a non-zero convexity adjustment"
+        );
+
+        let strike = 0.05;
+        let surface = pricer.caplet_vol.current_link().unwrap();
+        let std_dev = surface
+            .black_variance_date(coupon.fixing_date(), strike, false)
+            .unwrap()
+            .sqrt();
+        let expected = black_formula(
+            OptionType::Call,
+            strike,
+            adjusted,
+            std_dev,
+            1.0,
+            surface.displacement(),
+        )
+        .unwrap();
+        let raw_black = black_formula(
+            OptionType::Call,
+            strike,
+            raw,
+            std_dev,
+            1.0,
+            surface.displacement(),
+        )
+        .unwrap();
+        let got = pricer.caplet_rate(strike, Ok(raw)).unwrap();
+        assert!(
+            (got - expected).abs() < 1e-14,
+            "caplet must Black the adjusted forward: got {got}, expected {expected}"
+        );
+        assert!(
+            (got - raw_black).abs() > 1e-10,
+            "caplet must not Black the raw index fixing"
+        );
+    }
+
+    /// Convexity uses the fixing-calendar advance, not Libor `value_date`
+    /// (which joint-adjusts). USDLibor fixing 7-Nov-2019: calendar advance →
+    /// 11-Nov, `value_date` → 12-Nov (Veterans Day). Actual/360 τ can coincide
+    /// for both windows, so the pin is the `payment == fixingMaturityDate` skip:
+    /// payment at the advance maturity must skip; payment at the joint maturity
+    /// must not.
+    #[test]
+    fn in_arrears_convexity_uses_fixing_calendar_not_joint_value_date() {
+        use crate::indexes::ibor::UsdLibor;
+        use crate::termstructures::volatility::ConstantOptionletVolatility;
+        use crate::time::calendars::nullcalendar::NullCalendar;
+        use crate::time::daycounters::actual360::Actual360;
+
+        let today = Date::new(1, Month::November, 2019);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let forwarding = flat_curve(today, 0.03);
+        let index = shared(
+            UsdLibor::new(
+                Period::new(3, TimeUnit::Months),
+                forwarding,
+                Shared::clone(&settings),
+            )
+            .unwrap(),
+        );
+
+        let fixing = Date::new(7, Month::November, 2019);
+        let calendar = Index::fixing_calendar(&*index);
+        let accrual_end = calendar.advance(
+            fixing,
+            index.fixing_days() as Integer,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let advance_value = Date::new(11, Month::November, 2019);
+        let joint_value = Date::new(12, Month::November, 2019);
+        assert_eq!(
+            calendar.advance(
+                fixing,
+                index.fixing_days() as Integer,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false,
+            ),
+            advance_value
+        );
+        assert_eq!(index.value_date(fixing).unwrap(), joint_value);
+
+        let maturity_advance = index.maturity_date(advance_value).unwrap();
+        let maturity_joint = index.maturity_date(joint_value).unwrap();
+        assert_ne!(
+            maturity_advance, maturity_joint,
+            "fixture must separate advance vs joint maturities"
+        );
+
+        let vol = Handle::new(shared(ConstantOptionletVolatility::new(
+            today,
+            NullCalendar::new(),
+            BusinessDayConvention::Following,
+            0.20,
+            Actual360::new(),
+            VolatilityType::ShiftedLognormal,
+            0.0,
+        )) as Shared<dyn OptionletVolatilityStructure>);
+
+        let make_coupon = |payment: Date| {
+            FloatingRateCoupon::new(
+                payment,
+                100.0,
+                accrual_end - Period::new(3, TimeUnit::Months),
+                accrual_end,
+                Some(index.fixing_days()),
+                Shared::clone(&index),
+                1.0,
+                0.0,
+                None,
+                None,
+                None,
+                true,
+                None,
+                BusinessDayConvention::Preceding,
+            )
+            .unwrap()
+        };
+
+        let raw = 0.03;
+        // Payment at the fixing-calendar maturity → Black76 skip (QL `date() == d3`).
+        let mut pricer = BlackIborCouponPricer::with_vol(vol.clone());
+        let skip_coupon = make_coupon(maturity_advance);
+        assert_eq!(skip_coupon.fixing_date(), fixing);
+        pricer.initialize(&skip_coupon);
+        assert!(
+            (pricer.adjusted_fixing(raw).unwrap() - raw).abs() < 1e-15,
+            "payment == advance maturity must skip convexity"
+        );
+
+        // Payment at the joint maturity → must adjust (would skip if value_date
+        // were used for the window).
+        let mut pricer = BlackIborCouponPricer::with_vol(vol);
+        let adjust_coupon = make_coupon(maturity_joint);
+        assert_eq!(adjust_coupon.fixing_date(), fixing);
+        pricer.initialize(&adjust_coupon);
+        assert!(
+            (pricer.adjusted_fixing(raw).unwrap() - raw).abs() > 1e-10,
+            "payment == joint maturity must not skip when window uses advance"
         );
     }
 }

@@ -537,7 +537,8 @@ mod tests {
             day_counter.clone(),
             Compounding::Continuous,
             Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>);
+        ))
+            as Shared<dyn YieldTermStructure>);
 
         let index = shared(IborIndex::new(
             "dummy".into(),
