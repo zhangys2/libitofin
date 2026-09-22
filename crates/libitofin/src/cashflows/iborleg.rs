@@ -681,4 +681,27 @@ mod tests {
         assert!(capped[0].underlying().pricer().is_none());
         assert!(capped[0].rate().is_err());
     }
+
+    /// `inArrears` sets the coupon flag and withholds the default pricer (C++
+    /// `operator Leg()` guard), matching the cap/floor withhold path.
+    #[test]
+    fn in_arrears_sets_the_flag_and_withholds_the_default_pricer() {
+        let coupons = IborLeg::new(monthly_schedule(), euribor3m())
+            .with_notional(100.0)
+            .in_arrears()
+            .coupons()
+            .unwrap();
+        assert!(!coupons.is_empty());
+        for coupon in &coupons {
+            assert!(coupon.is_in_arrears());
+            assert!(coupon.pricer().is_none());
+        }
+        // Plain path still attaches the default pricer.
+        let plain = IborLeg::new(monthly_schedule(), euribor3m())
+            .with_notional(100.0)
+            .coupons()
+            .unwrap();
+        assert!(!plain[0].is_in_arrears());
+        assert!(plain[0].pricer().is_some());
+    }
 }

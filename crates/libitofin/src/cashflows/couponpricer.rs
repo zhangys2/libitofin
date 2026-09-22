@@ -692,4 +692,146 @@ mod tests {
             "payment == joint maturity must not skip when window uses advance"
         );
     }
+
+    /// Black76 skip when the fixing is on or before the optionlet vol reference
+    /// date (`couponpricer.cpp:191-194`): no variance has accumulated.
+    #[test]
+    fn in_arrears_skips_convexity_when_fixing_is_on_or_before_vol_reference() {
+        use crate::termstructures::volatility::ConstantOptionletVolatility;
+        use crate::time::calendars::nullcalendar::NullCalendar;
+        use crate::time::daycounters::simpledaycounter::SimpleDayCounter;
+
+        let today = Date::new(17, Month::June, 2002);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let day_counter = SimpleDayCounter::new();
+        let calendar = NullCalendar::new();
+        let index = shared(IborIndex::new(
+            "dummy".into(),
+            Period::new(1, TimeUnit::Years),
+            0,
+            Currency::eur(),
+            calendar.clone(),
+            BusinessDayConvention::Following,
+            false,
+            day_counter.clone(),
+            flat_curve(today, 0.05),
+            Shared::clone(&settings),
+        ));
+        // Past in-arrears coupon: fixing = accrual end = today - 1Y.
+        let end = today - Period::new(1, TimeUnit::Years);
+        let start = end - Period::new(1, TimeUnit::Years);
+        let coupon = FloatingRateCoupon::new(
+            end,
+            100.0,
+            start,
+            end,
+            Some(0),
+            index.clone(),
+            1.0,
+            0.0,
+            None,
+            None,
+            Some(day_counter.clone()),
+            true,
+            None,
+            BusinessDayConvention::Following,
+        )
+        .unwrap();
+        index.add_fixing(coupon.fixing_date(), 0.05).unwrap();
+
+        // Vol reference after the fixing → convexity skip.
+        let vol = Handle::new(shared(ConstantOptionletVolatility::new(
+            today,
+            calendar,
+            BusinessDayConvention::Following,
+            0.22,
+            day_counter,
+            VolatilityType::ShiftedLognormal,
+            0.0,
+        )) as Shared<dyn OptionletVolatilityStructure>);
+        let mut pricer = BlackIborCouponPricer::with_vol(vol);
+        pricer.initialize(&coupon);
+        let raw = 0.05;
+        assert!(
+            (pricer.adjusted_fixing(raw).unwrap() - raw).abs() < 1e-15,
+            "fixing <= vol reference must skip convexity"
+        );
+    }
+
+    /// Normal (Bachelier) in-arrears adjustment is `var·τ/(1+Fτ)`, not the
+    /// lognormal `(F+s)²` form (`couponpricer.cpp:199-205`).
+    #[test]
+    fn in_arrears_normal_vol_uses_the_bachelier_convexity_formula() {
+        use crate::termstructures::volatility::ConstantOptionletVolatility;
+        use crate::time::calendars::nullcalendar::NullCalendar;
+        use crate::time::daycounters::simpledaycounter::SimpleDayCounter;
+
+        let today = Date::new(17, Month::June, 2002);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let day_counter = SimpleDayCounter::new();
+        let calendar = NullCalendar::new();
+        let index = shared(IborIndex::new(
+            "dummy".into(),
+            Period::new(1, TimeUnit::Years),
+            0,
+            Currency::eur(),
+            calendar.clone(),
+            BusinessDayConvention::Following,
+            false,
+            day_counter.clone(),
+            flat_curve(today, 0.05),
+            Shared::clone(&settings),
+        ));
+        let start = today;
+        let end = today + Period::new(1, TimeUnit::Years);
+        let coupon = FloatingRateCoupon::new(
+            end,
+            100.0,
+            start,
+            end,
+            Some(0),
+            index,
+            1.0,
+            0.0,
+            None,
+            None,
+            Some(day_counter.clone()),
+            true,
+            None,
+            BusinessDayConvention::Following,
+        )
+        .unwrap();
+
+        let vol = Handle::new(shared(ConstantOptionletVolatility::new(
+            today,
+            calendar,
+            BusinessDayConvention::Following,
+            0.01,
+            day_counter,
+            VolatilityType::Normal,
+            0.0,
+        )) as Shared<dyn OptionletVolatilityStructure>);
+        let mut pricer = BlackIborCouponPricer::with_vol(vol);
+        pricer.initialize(&coupon);
+
+        let raw = 0.05;
+        let adjusted = pricer.adjusted_fixing(raw).unwrap();
+        let surface = pricer.caplet_vol.current_link().unwrap();
+        let variance = surface
+            .black_variance_date(coupon.fixing_date(), raw, false)
+            .unwrap();
+        let (_, tau) = pricer.convexity_window.as_ref().unwrap().as_ref().unwrap();
+        let expected_normal = raw + variance * tau / (1.0 + raw * tau);
+        let expected_lognormal = raw + (raw * raw * variance * tau / (1.0 + raw * tau));
+        assert!(
+            (adjusted - expected_normal).abs() < 1e-14,
+            "Normal adjustment: got {adjusted}, expected {expected_normal}"
+        );
+        assert!(
+            (adjusted - expected_lognormal).abs() > 1e-10,
+            "must not use the shifted-lognormal formula under Normal vol"
+        );
+    }
 }

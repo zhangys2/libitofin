@@ -133,6 +133,12 @@ impl IborCoupon {
         self.base.gearing()
     }
 
+    /// Whether the coupon fixes in arrears (`isInArrears`), delegated to the
+    /// base [`FloatingRateCoupon`].
+    pub fn is_in_arrears(&self) -> bool {
+        self.base.is_in_arrears()
+    }
+
     /// The coupon's fixing date (`fixingDate`).
     pub fn fixing_date(&self) -> Date {
         self.base.fixing_date()
