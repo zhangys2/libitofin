@@ -72,7 +72,7 @@ reclassified 2026-09-22 against `main` after the upstream sync (#208).
 | Equity | Variance gamma | `VarianceGamma*` | `variancegamma.cpp` | false | none | |
 | Equity | GJR-GARCH | `GJRGARCHModel` + engines | `gjrgarch.cpp` | false | none | |
 | Equity | Piecewise time-dependent Heston | `PiecewiseTimeDependentHestonModel` | `hestonmodel.cpp` | false | none | |
-| Equity | Analytic American approximations | Barone-Adesi–Whaley, Bjerksund–Stensland, Ju, QD+ | `americanoption.cpp` | true | partial | `BaroneAdesiWhaleyApproximationEngine` Haug p.24 NPV @ 3e-3; Bjerksund–Stensland / Ju / QD+ deferred |
+| Equity | Analytic American approximations | Barone-Adesi–Whaley, Bjerksund–Stensland, Ju, QD+ | `americanoption.cpp` | true | partial | `BaroneAdesiWhaleyApproximationEngine` Haug p.24 NPV @ 3e-3 + `BjerksundStenslandApproximationEngine` Haug/VBA/R values @ 5e-5 & European greeks equivalence; Ju / QD+ deferred |
 | Equity | FD CEV / CIR / SABR / Bates vanilla | `FdCev*`, `FdCir*`, `FdSabr*`, `FdBates*` | matching suites | false | none | |
 | Equity | FD Black–Scholes Asian | `FdBlackScholesAsianEngine` | `asianoptions.cpp` | false | none | Analytic/MC Asian set present |
 | Equity | LSMC American max option | `McLongstaffSchwartz` max | `mclongstaffschwartzengine.cpp` | true | partial | Vanilla LSMC pinned; max-option case not |

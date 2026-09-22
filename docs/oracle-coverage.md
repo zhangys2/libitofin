@@ -50,6 +50,7 @@ credit.
 | Binomial (CRR) vanilla | `BinomialVanillaEngine`, `CoxRossRubinstein` | `europeanoption.cpp` (vs analytic) | European/American; converges to Black-Scholes; groundwork for convertibles |
 | American vanilla | `FdmAmericanEngine`, `AmericanExercise` | `americanoption.cpp` `testFdValues` / Ju (1999) | Done @ 8e-2 |
 | Barone-Adesi–Whaley American | `BaroneAdesiWhaleyApproximationEngine` | `americanoption.cpp` `testBaroneAdesiWhaleyValues` | Haug p.24 NPV @ 3e-3 (QL table tolerance); negative-rate reject |
+| Bjerksund–Stensland American | `BjerksundStenslandApproximationEngine` | `americanoption.cpp` `testBjerksundStenslandValues` / `testBjerksundStenslandEuropeanGreeks` | Haug/VBA/R 8-row table @ 5e-5 (QL tolerance); early-exercise European greeks equivalence @ 1e-11; double-boundary reject |
 | Bermudan vanilla | `FdmBermudanEngine`, `BermudanExercise` | `americanoption.cpp` (Bermudan FD path) | Discrete-exercise FD; identity-bounded by European/American |
 | Heston | analytic + calibration | `hestonmodel.cpp` | Core done |
 | COS Heston | `CosHestonEngine` | `hestonmodel.cpp` COS cached + cumulants | 4 cached prices @ 1e-10; live spot/param; c1–c4 vs QL fixture |
