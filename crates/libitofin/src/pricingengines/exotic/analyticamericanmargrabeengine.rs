@@ -86,8 +86,8 @@ impl PricingEngine for AnalyticAmericanMargrabeEngine {
         );
         require!(arguments.payoff.is_some(), "non-null payoff given");
 
-        let q1 = arguments.q1.unwrap_or(1) as Real;
-        let q2 = arguments.q2.unwrap_or(1) as Real;
+        let q1 = Real::from(arguments.q1.expect("validated"));
+        let q2 = Real::from(arguments.q2.expect("validated"));
         let maturity = exercise.last_date();
 
         let s1 = self.process1.x0()?;
@@ -230,7 +230,7 @@ mod tests {
             Real,    // result
         );
         #[rustfmt::skip]
-        let rows: [Row; 18] = [
+        let rows: [Row; 21] = [
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.10, 0.20, 0.15, -0.50, 2.1357),
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.10, 0.20, 0.20, -0.50, 2.2074),
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.10, 0.20, 0.25, -0.50, 2.2902),
@@ -254,6 +254,11 @@ mod tests {
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.50, 0.20, 0.15,  0.50, 2.2053),
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.50, 0.20, 0.20,  0.50, 2.2906),
             (22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.50, 0.20, 0.25,  0.50, 2.4261),
+
+            // Quantity scaling tests: Q1*S1=22, Q2*S2=20 matches unit rows 16..18
+            (22.0, 10.0, 1, 2, 0.06, 0.04, 0.10, 0.50, 0.20, 0.15,  0.50, 2.2053),
+            (11.0, 20.0, 2, 1, 0.06, 0.04, 0.10, 0.50, 0.20, 0.20,  0.50, 2.2906),
+            (11.0, 10.0, 2, 2, 0.06, 0.04, 0.10, 0.50, 0.20, 0.25,  0.50, 2.4261),
         ];
 
         let settings = shared(Settings::new());
