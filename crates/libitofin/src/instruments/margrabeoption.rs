@@ -229,7 +229,7 @@ mod tests {
     use crate::exercise::EuropeanExercise;
     use crate::patterns::observable::{AsObservable, Observable};
     use crate::pricingengine::{GenericEngine, PricingEngine};
-    use crate::shared::{shared, shared_mut, SharedMut};
+    use crate::shared::{SharedMut, shared, shared_mut};
 
     struct MockEngine {
         base: GenericEngine<MargrabeArguments, MargrabeResults>,

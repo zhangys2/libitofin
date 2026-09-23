@@ -9,7 +9,7 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
-use crate::shared::{shared_mut, Shared, SharedMut};
+use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::daycounters::actual360::Actual360;
 use crate::types::Real;
