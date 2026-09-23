@@ -9,7 +9,7 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
-use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::shared::{shared_mut, Shared, SharedMut};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::time::daycounters::actual360::Actual360;
 use crate::types::Real;
@@ -119,6 +119,9 @@ impl PricingEngine for AnalyticEuropeanMargrabeEngine {
         let gamma1 = (rf_disc * (q1 * forward1 * nd1_pdf) / s1) / (q1 * s1 * std_dev);
         let gamma2 = (-rf_disc * (q2 * forward2 * nd2_pdf) / s2) / (-q2 * s2 * std_dev);
         let vega = rf_disc * (q1 * forward1 * nd1_pdf) * sqt;
+        // QuantLib parity: results_.theta = -((stdDev*vega/sqt)/(2*t)-(q1*quantity1*s1*results_.delta1)-(q2*quantity2*s2*results_.delta2))
+        // Note: delta1 already includes quantity1 (q1), so quantity1 is multiplied twice in the carry term.
+        // For q1=q2=1 this matches true dV/dt; for non-unit quantities this reproduces QuantLib's exact formula.
         let theta = -((std_dev * vega / sqt) / (2.0 * t)
             - (q1_rate * q1 * s1 * delta1)
             - (q2_rate * q2 * s2 * delta2));
@@ -163,6 +166,7 @@ mod tests {
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::date::{Date, Month};
     use crate::time::daycounter::DayCounter;
     use crate::time::frequency::Frequency;
@@ -172,26 +176,35 @@ mod tests {
         Handle::new(Shared::clone(q) as Shared<dyn Quote>)
     }
 
-    fn flat_rate(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::new(
-            reference,
+    fn flat_rate(
+        settings: &Shared<Settings<Date>>,
+        quote: &Shared<SimpleQuote>,
+    ) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::moving(
+            0,
+            NullCalendar::new(),
             quote_handle(quote),
             Actual360::new(),
             Compounding::Continuous,
             Frequency::Annual,
+            Shared::clone(settings),
         )) as Shared<dyn YieldTermStructure>)
     }
 
-    fn flat_vol(reference: Date, quote: &Shared<SimpleQuote>) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(shared(BlackConstantVol::with_quote(
-            reference,
-            None,
+    fn flat_vol(
+        settings: &Shared<Settings<Date>>,
+        quote: &Shared<SimpleQuote>,
+    ) -> Handle<dyn BlackVolTermStructure> {
+        Handle::new(shared(BlackConstantVol::moving_with_quote(
+            0,
+            NullCalendar::new(),
             quote_handle(quote),
             Actual360::new(),
+            Shared::clone(settings),
         )) as Shared<dyn BlackVolTermStructure>)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     #[rustfmt::skip]
     fn build_test_option(
         s1: Real, s2: Real, q1: Integer, q2: Integer,
@@ -204,6 +217,7 @@ mod tests {
         Shared<SimpleQuote>,
         Shared<SimpleQuote>,
         DayCounter,
+        Shared<Settings<Date>>,
     ) {
         let settings = shared(Settings::new());
         let today = Date::new(15, Month::May, 1998);
@@ -213,21 +227,21 @@ mod tests {
         let r_quote = shared(SimpleQuote::new(r));
         let p1 = shared(BlackScholesMertonProcess::new(
             quote_handle(&spot1),
-            flat_rate(today, &shared(SimpleQuote::new(div1))),
-            flat_rate(today, &r_quote),
-            flat_vol(today, &shared(SimpleQuote::new(v1))),
+            flat_rate(&settings, &shared(SimpleQuote::new(div1))),
+            flat_rate(&settings, &r_quote),
+            flat_vol(&settings, &shared(SimpleQuote::new(v1))),
         ));
         let p2 = shared(BlackScholesMertonProcess::new(
             quote_handle(&spot2),
-            flat_rate(today, &shared(SimpleQuote::new(div2))),
-            flat_rate(today, &r_quote),
-            flat_vol(today, &shared(SimpleQuote::new(v2))),
+            flat_rate(&settings, &shared(SimpleQuote::new(div2))),
+            flat_rate(&settings, &r_quote),
+            flat_vol(&settings, &shared(SimpleQuote::new(v2))),
         ));
         let exercise: Shared<dyn Exercise> =
             shared(EuropeanExercise::new(today + (t * 360.0).round() as i32));
-        let mut option = MargrabeOption::new(q1, q2, exercise, settings);
+        let mut option = MargrabeOption::new(q1, q2, exercise, Shared::clone(&settings));
         set_analytic_european_margrabe_engine(&mut option, p1, p2, rho);
-        (option, today, spot1, spot2, r_quote, Actual360::new())
+        (option, today, spot1, spot2, r_quote, Actual360::new(), settings)
     }
 
     /// Full 21-row `margrabeoption.cpp` `testEuroExchangeTwoAssets` oracle (Haug + quantities @ 1e-3).
@@ -306,8 +320,7 @@ mod tests {
             exp_rho,
         ) in rows
         {
-            let (mut option, _, _, _, _, _) =
-                build_test_option(s1, s2, q1, q2, d1, d2, r, t, v1, v2, rho);
+            let (mut option, ..) = build_test_option(s1, s2, q1, q2, d1, d2, r, t, v1, v2, rho);
             let val = option.npv().unwrap();
             let d1_val = option.delta1().unwrap();
             let d2_val = option.delta2().unwrap();
@@ -347,16 +360,17 @@ mod tests {
         }
     }
 
-    /// `testGreeks` finite difference bump consistency from `margrabeoption.cpp`.
+    /// Reduced moving-market finite difference Greek check from `margrabeoption.cpp`.
     #[test]
     fn test_analytic_european_margrabe_greeks_fd() {
-        let (mut option, _today, spot1, spot2, r_quote, _dc) =
+        let (mut option, today, spot1, spot2, r_quote, dc, settings) =
             build_test_option(22.0, 20.0, 1, 1, 0.06, 0.04, 0.10, 0.10, 0.20, 0.15, -0.50);
 
         let delta1 = option.delta1().unwrap();
         let delta2 = option.delta2().unwrap();
         let gamma1 = option.gamma1().unwrap();
         let gamma2 = option.gamma2().unwrap();
+        let theta = option.theta().unwrap();
         let rho = option.rho().unwrap();
 
         // Bump spot1
@@ -388,6 +402,16 @@ mod tests {
         let exp_gamma2 = (delta_p2 - delta_m2) / (2.0 * du2);
         assert!((delta2 - exp_delta2).abs() / u1 <= 1e-4);
         assert!((gamma2 - exp_gamma2).abs() / u1 <= 1e-4);
+
+        // Bump evaluation date for theta (moving curves shift reference dates)
+        let dt = dc.year_fraction(today - 1, today + 1);
+        settings.set_evaluation_date(today - 1);
+        let val_mt = option.npv().unwrap();
+        settings.set_evaluation_date(today + 1);
+        let val_pt = option.npv().unwrap();
+        settings.set_evaluation_date(today);
+        let exp_theta = (val_pt - val_mt) / dt;
+        assert!((theta - exp_theta).abs() / u1 <= 1e-4);
 
         // Bump risk-free rate
         let r = 0.10;

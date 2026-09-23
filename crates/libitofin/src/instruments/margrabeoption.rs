@@ -149,6 +149,15 @@ impl MargrabeOption {
         Self::greek(self.gamma2, "gamma2")
     }
 
+    /// Return the option theta.
+    ///
+    /// # Note on QuantLib Parity
+    /// QuantLib's analytic formula computes carry terms as `q * quantity * S * delta`.
+    /// Because `delta` already scales with `quantity`, this squares the quantity factor
+    /// whenever `quantity != 1`. For `quantity1 == 1 && quantity2 == 1`, this matches
+    /// the true calendar theta $\partial V / \partial t$. For non-unit quantities
+    /// (e.g. the last three rows of Haug's two-asset exchange table), it reproduces
+    /// QuantLib's exact results but diverges from finite-difference time decay.
     pub fn theta(&mut self) -> QlResult<Real> {
         self.calculate()?;
         Self::greek(self.theta, "theta")
@@ -218,7 +227,36 @@ impl Instrument for MargrabeOption {
 mod tests {
     use super::*;
     use crate::exercise::EuropeanExercise;
-    use crate::shared::shared;
+    use crate::patterns::observable::{AsObservable, Observable};
+    use crate::pricingengine::{GenericEngine, PricingEngine};
+    use crate::shared::{shared, shared_mut, SharedMut};
+
+    struct MockEngine {
+        base: GenericEngine<MargrabeArguments, MargrabeResults>,
+        populate: fn(&mut MargrabeResults),
+    }
+
+    impl AsObservable for MockEngine {
+        fn observable(&self) -> &Observable {
+            self.base.observable()
+        }
+    }
+
+    impl PricingEngine for MockEngine {
+        fn arguments_mut(&mut self) -> &mut dyn Arguments {
+            self.base.arguments_mut()
+        }
+        fn results(&self) -> &dyn Results {
+            self.base.results()
+        }
+        fn reset(&mut self) {
+            self.base.reset();
+        }
+        fn calculate(&mut self) -> QlResult<()> {
+            (self.populate)(self.base.results_mut());
+            Ok(())
+        }
+    }
 
     #[test]
     fn test_expired_margrabe_option() {
@@ -253,10 +291,26 @@ mod tests {
         )));
         let mut opt = MargrabeOption::new(1, 1, exercise, settings);
         assert!(opt.delta1().is_err());
-        assert!(opt.delta2().is_err());
-        assert!(opt.gamma1().is_err());
-        assert!(opt.gamma2().is_err());
-        assert!(opt.theta().is_err());
-        assert!(opt.rho().is_err());
+
+        let engine = shared_mut(MockEngine {
+            base: GenericEngine::new(MargrabeArguments::default(), MargrabeResults::default()),
+            populate: |res| {
+                res.instrument.value = Some(10.0);
+            },
+        });
+        opt.base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+
+        assert_eq!(opt.npv().unwrap(), 10.0);
+        for (g, msg) in [
+            (opt.delta1(), "delta1 not provided"),
+            (opt.delta2(), "delta2 not provided"),
+            (opt.gamma1(), "gamma1 not provided"),
+            (opt.gamma2(), "gamma2 not provided"),
+            (opt.theta(), "theta not provided"),
+            (opt.rho(), "rho not provided"),
+        ] {
+            assert_eq!(g.unwrap_err().message(), msg);
+        }
     }
 }
