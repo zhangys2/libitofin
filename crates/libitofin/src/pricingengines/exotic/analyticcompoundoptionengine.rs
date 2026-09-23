@@ -1,13 +1,14 @@
 //! Analytic compound-option engine (Wystup 2002).
 //!
-//! Port of `ql/pricingengines/exotic/analyticcompoundoptionengine.{hpp,cpp}`.
-//! NPV only; δ/γ/ν/θ follow-up. Critical spot via Brent + `black_formula`.
+//! Port of `ql/pricingengines/exotic/analyticcompoundoptionengine.{hpp,cpp}`:
+//! NPV, delta, gamma, vega, and theta. Critical spot via Brent + `black_formula`.
 
 use crate::errors::QlResult;
 use crate::instrument::Instrument;
 use crate::instruments::{CompoundArguments, CompoundResults, StrikedTypePayoff, TypePayoff};
+use crate::interestrate::Compounding;
 use crate::math::distributions::bivariatenormal::BivariateCumulativeNormalDistributionDr78;
-use crate::math::distributions::normal::CumulativeNormalDistribution;
+use crate::math::distributions::normal::{CumulativeNormalDistribution, NormalDistribution};
 use crate::math::solver1d::Solver1D;
 use crate::math::solvers1d::brent::Brent;
 use crate::patterns::observable::{AsObservable, Observable};
@@ -17,6 +18,7 @@ use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
+use crate::time::frequency::Frequency;
 use crate::types::Real;
 
 type EngineBase = GenericEngine<CompoundArguments, CompoundResults>;
@@ -104,16 +106,57 @@ impl PricingEngine for AnalyticCompoundOptionEngine {
         let dd_m = qy.discount(t_m, false)?;
         let rd_m = rf.discount(t_m, false)?;
         let sd_m = vol.black_vol_date(mat_m, str_m, true)? * t_m.sqrt();
-        let sd_d = vol.black_vol_date(mat_d, str_d, true)? * t_d.sqrt();
+        let v_d = vol.black_vol_date(mat_d, str_d, true)?;
+        let sd_d = v_d * t_d.sqrt();
         let x = ((rd_m * solved / (s * dd_m)) * (0.5 * sd_m * sd_m).exp()).ln() / sd_m;
         let fwd_d = s * dd_d / rd_d;
         let d_plus = (fwd_d / str_d).ln() / sd_d + 0.5 * sd_d;
         let d_minus = d_plus - sd_d;
         let n2 = BivariateCumulativeNormalDistributionDr78::new(w * (t_m / t_d).sqrt())?;
-        let value = phi * w * s * dd_d * n2.value(-phi * w * (x - sd_m), phi * d_plus)
-            - phi * w * str_d * rd_d * n2.value(-phi * w * x, phi * d_minus)
-            - w * str_m * rd_m * self.n.value(-phi * w * x);
-        self.base.results_mut().instrument.value = Some(value);
+
+        let tau_12 = t_d - t_m;
+        let dd_12 = qy.discount(tau_12, false)?;
+        let rd_12 = rf.discount(tau_12, false)?;
+        let fwd_12 = solved * dd_12 / rd_12;
+        let sd_12 = v_d * tau_12.sqrt();
+        let d_p_t12 = (fwd_12 / str_d).ln() / sd_12 + 0.5 * sd_12;
+
+        let e_x = (x * t_d.sqrt() + t_m.sqrt() * d_minus) / tau_12.sqrt();
+        let r_d = rf
+            .zero_rate(t_d, Compounding::Continuous, Frequency::NoFrequency, false)?
+            .rate();
+        let d_d = qy
+            .zero_rate(t_d, Compounding::Continuous, Frequency::NoFrequency, false)?
+            .rate();
+
+        let norm = NormalDistribution::standard();
+        let x_m_sm = x - sd_m;
+        let n2_xmsm = n2.value(-phi * w * x_m_sm, phi * d_plus);
+        let n2_x = n2.value(-phi * w * x, phi * d_minus);
+        let n_ex = self.n.value(-phi * w * e_x);
+        let nx = self.n.value(-phi * w * x);
+        let n_t12 = self.n.value(phi * d_p_t12);
+        let n_dp = norm.value(d_plus);
+        let n_xm = norm.value(x_m_sm);
+        let inv_m_time = 1.0 / t_m.sqrt();
+        let inv_d_time = 1.0 / t_d.sqrt();
+
+        let value =
+            phi * w * s * dd_d * n2_xmsm - phi * w * str_d * rd_d * n2_x - w * str_m * rd_m * nx;
+        let delta = phi * w * dd_d * n2_xmsm;
+        let gamma = (dd_d / (v_d * s)) * (inv_m_time * n_xm * n_t12 + w * inv_d_time * n_dp * n_ex);
+        let vega = dd_d * s * (t_m.sqrt() * n_xm * n_t12 + w * t_d.sqrt() * n_dp * n_ex);
+        let mut theta = phi * w * d_d * s * dd_d * n2_xmsm
+            - phi * w * r_d * str_d * rd_d * n2_x
+            - w * r_d * str_m * rd_m * nx;
+        theta -= 0.5 * v_d * s * dd_d * (inv_m_time * n_xm * n_t12 + w * inv_d_time * n_dp * n_ex);
+
+        let res = self.base.results_mut();
+        res.instrument.value = Some(value);
+        res.greeks.delta = Some(delta);
+        res.greeks.gamma = Some(gamma);
+        res.greeks.vega = Some(vega);
+        res.greeks.theta = Some(theta);
         Ok(())
     }
 }
@@ -134,9 +177,10 @@ mod tests {
     use crate::exercise::{EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
-    use crate::instruments::{CompoundOption, PlainVanillaPayoff};
+    use crate::instruments::{CompoundOption, EuropeanOption, PlainVanillaPayoff};
     use crate::interestrate::Compounding;
-    use crate::option::OptionType;
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
     use crate::settings::Settings;
@@ -172,8 +216,23 @@ mod tests {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[rustfmt::skip]
-    fn price(tm: OptionType, td: OptionType, km: Real, kd: Real, s: Real, q: Real, r: Real, t_m: Real, t_d: Real, v: Real) -> Real {
+    fn build_option(
+        tm: OptionType,
+        td: OptionType,
+        km: Real,
+        kd: Real,
+        s: Real,
+        q: Real,
+        r: Real,
+        t_m: Real,
+        t_d: Real,
+        v: Real,
+    ) -> (
+        CompoundOption,
+        Shared<BlackScholesMertonProcess>,
+        Date,
+        Shared<Settings<Date>>,
+    ) {
         let settings = shared(Settings::new());
         let today = Date::new(15, Month::May, 1998);
         settings.set_evaluation_date(today);
@@ -183,32 +242,156 @@ mod tests {
             flat_rate(today, &shared(SimpleQuote::new(r))),
             flat_vol(today, &shared(SimpleQuote::new(v))),
         ));
-        let mother: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + (t_m * 360.0).round() as i32));
-        let daughter: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + (t_d * 360.0).round() as i32));
+        let mother: Shared<dyn Exercise> =
+            shared(EuropeanExercise::new(today + (t_m * 360.0).round() as i32));
+        let daughter: Shared<dyn Exercise> =
+            shared(EuropeanExercise::new(today + (t_d * 360.0).round() as i32));
         let mut option = CompoundOption::new(
-            PlainVanillaPayoff::new(tm, km), mother, PlainVanillaPayoff::new(td, kd), daughter, settings,
+            PlainVanillaPayoff::new(tm, km),
+            mother,
+            PlainVanillaPayoff::new(td, kd),
+            daughter,
+            Shared::clone(&settings),
         );
-        set_analytic_compound_option_engine(&mut option, process);
-        option.npv().unwrap()
+        set_analytic_compound_option_engine(&mut option, Shared::clone(&process));
+        (option, process, today, settings)
     }
 
-    /// `compoundoption.cpp` `testValues` NPV subset (Haug / sitmo @ 1e-3).
+    /// Full 20-row `compoundoption.cpp` `testValues` oracle (Haug/sitmo/mathfinance @ 1e-3).
     #[test]
-    fn compound_option_haug_npv() {
-        use OptionType::{Call, Put};
-        type Row = (OptionType, OptionType, Real, Real, Real);
+    fn test_compound_option_values_and_greeks() {
+        type Row = (
+            OptionType,
+            OptionType,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+        );
         #[rustfmt::skip]
-        let rows: [Row; 4] = [
-            (Put,  Call, 50.0, 520.0, 21.1965),
-            (Call, Call, 50.0, 520.0, 17.5945),
-            (Call, Put,  50.0, 520.0, 18.7128),
-            (Put,  Put,  50.0, 520.0, 15.2601),
+        let rows: [Row; 20] = [
+            // Haug 2007 + sitmo.com:
+            (Put,  Call, 50.0, 520.0, 500.0, 0.03, 0.08, 0.25, 0.5, 0.35, 21.1965, -0.1966,  0.0007, -32.1241,  -3.3837),
+            (Call, Call, 50.0, 520.0, 500.0, 0.03, 0.08, 0.25, 0.5, 0.35, 17.5945,  0.3219,  0.0038, 106.5185, -65.1614),
+            (Call, Put,  50.0, 520.0, 500.0, 0.03, 0.08, 0.25, 0.5, 0.35, 18.7128, -0.2906,  0.0036, 103.3856, -46.6982),
+            (Put,  Put,  50.0, 520.0, 500.0, 0.03, 0.08, 0.25, 0.5, 0.35, 15.2601,  0.1760,  0.0005, -35.2570, -10.1126),
+            // sitmo.com:
+            (Call, Call, 0.05, 1.14,  1.20,  0.00, 0.01, 0.50, 2.0, 0.11, 0.0729,   0.6614,  2.5762,   0.5812,  -0.0297),
+            (Call, Put,  0.05, 1.14,  1.20,  0.00, 0.01, 0.50, 2.0, 0.11, 0.0074,  -0.1334,  1.9681,   0.2933,  -0.0155),
+            (Put,  Call, 0.05, 1.14,  1.20,  0.00, 0.01, 0.50, 2.0, 0.11, 0.0021,  -0.0426,  0.7252,  -0.0052,  -0.0058),
+            (Put,  Put,  0.05, 1.14,  1.20,  0.00, 0.01, 0.50, 2.0, 0.11, 0.0192,   0.1626,  0.1171,  -0.2931,  -0.0028),
+            (Call, Call, 10.0, 122.0, 120.0, 0.06, 0.02, 0.10, 0.7, 0.22, 0.4419,   0.1049,  0.0195,  11.3368,  -6.2871),
+            (Call, Put,  10.0, 122.0, 120.0, 0.06, 0.02, 0.10, 0.7, 0.22, 2.6112,  -0.3618,  0.0337,  28.4843, -13.4124),
+            (Put,  Call, 10.0, 122.0, 120.0, 0.06, 0.02, 0.10, 0.7, 0.22, 4.1616,  -0.3174,  0.0024, -26.6403,  -2.2720),
+            (Put,  Put,  10.0, 122.0, 120.0, 0.06, 0.02, 0.10, 0.7, 0.22, 1.0914,   0.1748,  0.0165,  -9.4928,  -4.8995),
+            // mathfinance VBA:
+            (Call, Call, 0.40, 8.20,  8.00,  0.05, 0.00, 2.00, 3.0, 0.08, 0.0099,   0.0285,  0.0688,   0.7764,  -0.0027),
+            (Call, Put,  0.40, 8.20,  8.00,  0.05, 0.00, 2.00, 3.0, 0.08, 0.9826,  -0.7224,  0.2158,   2.7279,  -0.3332),
+            (Put,  Call, 0.40, 8.20,  8.00,  0.05, 0.00, 2.00, 3.0, 0.08, 0.3585,  -0.0720, -0.0835,  -1.5633,  -0.0117),
+            (Put,  Put,  0.40, 8.20,  8.00,  0.05, 0.00, 2.00, 3.0, 0.08, 0.0168,   0.0378,  0.0635,   0.3882,   0.0021),
+            (Call, Call, 0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17, 0.0680, 0.4937,  2.1271,   0.4418,  -0.0843),
+            (Call, Put,  0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17, 0.0605, -0.4169, 2.0836,   0.4330,  -0.0697),
+            (Put,  Call, 0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17, 0.0081, -0.0417, 0.0761,  -0.0045,  -0.0020),
+            (Put,  Put,  0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17, 0.0078,  0.0413, 0.0326,  -0.0133,  -0.0016),
         ];
-        for (tm, td, km, kd, expected) in rows {
-            let got = price(tm, td, km, kd, 500.0, 0.03, 0.08, 0.25, 0.5, 0.35);
+
+        for (tm, td, km, kd, s, q, r, t_m, t_d, v, exp_npv, exp_d, exp_g, exp_v, exp_th) in rows {
+            let (mut opt, _, _, _) = build_option(tm, td, km, kd, s, q, r, t_m, t_d, v);
+            let npv = opt.npv().unwrap();
+            let delta = opt.delta().unwrap();
+            let gamma = opt.gamma().unwrap();
+            let vega = opt.vega().unwrap();
+            let theta = opt.theta().unwrap();
+
             assert!(
-                (got - expected).abs() <= 1e-3,
-                "{tm:?} on {td:?}: expected {expected}, got {got}"
+                (npv - exp_npv).abs() <= 1e-3,
+                "{tm:?}/{td:?} NPV: got {npv}, exp {exp_npv}"
+            );
+            assert!(
+                (delta - exp_d).abs() <= 1e-3,
+                "{tm:?}/{td:?} delta: got {delta}, exp {exp_d}"
+            );
+            assert!(
+                (gamma - exp_g).abs() <= 1e-3,
+                "{tm:?}/{td:?} gamma: got {gamma}, exp {exp_g}"
+            );
+            assert!(
+                (vega - exp_v).abs() <= 1e-3,
+                "{tm:?}/{td:?} vega: got {vega}, exp {exp_v}"
+            );
+            assert!(
+                (theta - exp_th).abs() <= 1e-3,
+                "{tm:?}/{td:?} theta: got {theta}, exp {exp_th}"
+            );
+        }
+    }
+
+    /// QL `compoundoption.cpp` `testPutCallParity` oracle (Wystup 2002 @ 1e-8).
+    ///
+    /// Note: QuantLib's `values` table has 11 entries because row 0 and row 1 differ
+    /// only by `typeMother` (Put vs Call), but QL's test loop builds both mother Call
+    /// and mother Put for every row without inspecting `typeMother`, so rows 0 and 1
+    /// test the exact same daughter-market case. We test the 10 unique cases here.
+    #[test]
+    fn test_compound_option_put_call_parity() {
+        type ParityRow = (OptionType, Real, Real, Real, Real, Real, Real, Real, Real);
+        #[rustfmt::skip]
+        let rows: [ParityRow; 10] = [
+            (Call, 50.0, 520.0, 500.0, 0.03,  0.08,  0.25, 0.5, 0.35),
+            (Put,  50.0, 520.0, 500.0, 0.03,  0.08,  0.25, 0.5, 0.35),
+            (Call, 0.05, 1.14,  1.20,  0.00,  0.01,  0.50, 2.0, 0.11),
+            (Put,  0.05, 1.14,  1.20,  0.00,  0.01,  0.50, 2.0, 0.11),
+            (Call, 10.0, 122.0, 120.0, 0.06,  0.02,  0.10, 0.7, 0.22),
+            (Put,  10.0, 122.0, 120.0, 0.06,  0.02,  0.10, 0.7, 0.22),
+            (Call, 0.40, 8.20,  8.00,  0.05,  0.00,  2.00, 3.0, 0.08),
+            (Put,  0.40, 8.20,  8.00,  0.05,  0.00,  2.00, 3.0, 0.08),
+            (Call, 0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17),
+            (Put,  0.02, 1.60,  1.60,  0.013, 0.022, 0.45, 0.5, 0.17),
+        ];
+
+        for (td, km, kd, s, q, r, t_m, t_d, v) in rows {
+            let (mut call_opt, process, today, settings) =
+                build_option(Call, td, km, kd, s, q, r, t_m, t_d, v);
+            let (mut put_opt, _, _, _) = build_option(Put, td, km, kd, s, q, r, t_m, t_d, v);
+
+            let d_date = today + (t_d * 360.0).round() as i32;
+            let m_date = today + (t_m * 360.0).round() as i32;
+
+            let mut vanilla = EuropeanOption::new(
+                shared(PlainVanillaPayoff::new(td, kd)),
+                shared(EuropeanExercise::new(d_date)),
+                settings,
+            );
+            vanilla
+                .base_mut()
+                .set_pricing_engine(
+                    shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)))
+                        as SharedMut<dyn PricingEngine>,
+                );
+
+            let disc_factor = process
+                .risk_free_rate()
+                .current_link()
+                .unwrap()
+                .discount_date(m_date, false)
+                .unwrap();
+            let disc_strike = km * disc_factor;
+
+            let parity_diff = call_opt.npv().unwrap() + disc_strike
+                - put_opt.npv().unwrap()
+                - vanilla.npv().unwrap();
+            assert!(
+                parity_diff.abs() <= 1e-8,
+                "Put-call parity failed for {td:?} (km={km}, kd={kd}): diff={parity_diff}"
             );
         }
     }

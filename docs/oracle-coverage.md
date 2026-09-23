@@ -181,7 +181,7 @@ credit.
 | Simple chooser Haug value | `AnalyticSimpleChooserEngine` | `chooseroption.cpp` `testAnalyticSimpleChooserEngine` | Haug 2nd ed. pp.39–40 @ 3e-5 |
 | Complex chooser Haug value | `AnalyticComplexChooserEngine` | `chooseroption.cpp` `testAnalyticComplexChooserEngine` | Haug example @ 1e-4 |
 | European Margrabe exchange NPV | `AnalyticEuropeanMargrabeEngine` | `margrabeoption.cpp` `testEuroExchangeTwoAssets` | Haug two-asset NPV subset @ 1e-3; extra greeks / American deferred |
-| Compound option Haug/sitmo NPV | `AnalyticCompoundOptionEngine` | `compoundoption.cpp` `testValues` | Wystup/Haug put/call-on-put/call NPV subset @ 1e-3; greeks deferred |
+| Compound option | `CompoundOption`, `AnalyticCompoundOptionEngine` | `compoundoption.cpp` `testValues` / `testPutCallParity` | 20-row Haug/sitmo/mathfinance table for NPV/delta/gamma/vega/theta @ 1e-3; QL `testPutCallParity` 10 unique daughter-market cases (11 iterations in QL) @ 1e-8; instrument `setup_expired` zeros greeks |
 | Two-asset correlation Haug NPV | `AnalyticTwoAssetCorrelationEngine` | `twoassetcorrelationoption.cpp` `testAnalyticEngine` | Haug European call @ 1e-4; independent put and q≠0 call pins (QL has no further suite cases) |
 | Two-asset barrier Haug NPV | `AnalyticTwoAssetBarrierEngine` | `twoassetbarrieroption.cpp` `testHaugValues` | Haug 4-row Out table @ 4e-3; independent q≠0 KO, distinct-asset KO, and q≠0 KI pins (QL has no further suite cases) |
 | Writer-extensible Haug NPV | `AnalyticWriterExtensibleOptionEngine` | `extensibleoptions.cpp` `testAnalyticWriterExtensibleOptionEngine` | Haug writer call @ 1e-4; independent put and q≠0 call pins (QL has no further writer cases) |
