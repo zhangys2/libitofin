@@ -51,7 +51,7 @@
 //! [`with_fixed_leg_next_to_last_date`](Self::with_fixed_leg_next_to_last_date) /
 //! [`with_floating_leg_first_date`](Self::with_floating_leg_first_date) /
 //! [`with_floating_leg_next_to_last_date`](Self::with_floating_leg_next_to_last_date)
-//! thread into [`Schedule::new`] (`makevanillaswap.cpp:146/153`); unset stub
+//! thread into [`Schedule::new`] (`makevanillaswap.cpp:139/146`); unset stub
 //! dates stay null.
 //!
 //! ## Fixed-leg currency defaults (`makevanillaswap.cpp:104-163`)
@@ -312,25 +312,25 @@ impl MakeVanillaSwap {
         self
     }
 
-    /// Sets the fixed-leg first (stub) date (`makevanillaswap.cpp:318`).
+    /// Sets the fixed-leg first (stub) date (`makevanillaswap.cpp:296`).
     pub fn with_fixed_leg_first_date(mut self, d: Date) -> MakeVanillaSwap {
         self.fixed_first_date = d;
         self
     }
 
-    /// Sets the fixed-leg next-to-last (stub) date (`makevanillaswap.cpp:324`).
+    /// Sets the fixed-leg next-to-last (stub) date (`makevanillaswap.cpp:302`).
     pub fn with_fixed_leg_next_to_last_date(mut self, d: Date) -> MakeVanillaSwap {
         self.fixed_next_to_last_date = d;
         self
     }
 
-    /// Sets the floating-leg first (stub) date (`makevanillaswap.cpp:374`).
+    /// Sets the floating-leg first (stub) date (`makevanillaswap.cpp:352`).
     pub fn with_floating_leg_first_date(mut self, d: Date) -> MakeVanillaSwap {
         self.float_first_date = d;
         self
     }
 
-    /// Sets the floating-leg next-to-last (stub) date (`makevanillaswap.cpp:380`).
+    /// Sets the floating-leg next-to-last (stub) date (`makevanillaswap.cpp:358`).
     pub fn with_floating_leg_next_to_last_date(mut self, d: Date) -> MakeVanillaSwap {
         self.float_next_to_last_date = d;
         self
@@ -626,6 +626,7 @@ mod tests {
     //! fair-rate fill) and the D5 indexed-coupon refusal.
 
     use super::*;
+    use crate::cashflows::Coupon;
     use crate::indexes::ibor::Euribor;
     use crate::instrument::Instrument;
     use crate::interestrate::Compounding;
@@ -959,11 +960,11 @@ mod tests {
         );
     }
 
-    /// Stub first / next-to-last dates thread into both schedules
-    /// (`makevanillaswap.cpp:146/153`). Pins match the irregular-first /
-    /// irregular-next-to-last cases already frozen on `Schedule`
-    /// (`schedule.rs` `backward_regular_first_period_with_first_date`), using
-    /// `NullCalendar` / `Unadjusted` so the given stub dates land verbatim.
+    /// Stub first / next-to-last dates thread into both schedules and
+    /// [`MakeVanillaSwap::floating_leg`] (`makevanillaswap.cpp:139/146`). Pins
+    /// match the irregular-first / irregular-next-to-last cases already frozen
+    /// on `Schedule` (`schedule.rs` `backward_regular_first_period_with_first_date`),
+    /// using `NullCalendar` / `Unadjusted` so the given stub dates land verbatim.
     /// First and next-to-last are exercised on separate builds (matching the
     /// Schedule oracle, which does not combine both stubs under Forward).
     #[test]
@@ -978,8 +979,9 @@ mod tests {
         let float_first = Date::new(31, Month::March, 2018);
         let float_ntl = Date::new(15, Month::March, 2024);
         let fixed_first = Date::new(30, Month::September, 2018);
+        let fixed_ntl = Date::new(15, Month::March, 2024);
 
-        let make = |first: Date, ntl: Date, rule: DateGeneration| {
+        let base = || {
             MakeVanillaSwap::new(
                 Period::new(0, TimeUnit::Days),
                 Shared::clone(&index),
@@ -994,20 +996,20 @@ mod tests {
             .with_fixed_leg_calendar(cal.clone())
             .with_fixed_leg_convention(BusinessDayConvention::Unadjusted)
             .with_fixed_leg_termination_date_convention(BusinessDayConvention::Unadjusted)
-            .with_fixed_leg_first_date(fixed_first)
             .with_fixed_leg_end_of_month(true)
             .with_floating_leg_calendar(cal.clone())
             .with_floating_leg_convention(BusinessDayConvention::Unadjusted)
             .with_floating_leg_termination_date_convention(BusinessDayConvention::Unadjusted)
-            .with_floating_leg_first_date(first)
-            .with_floating_leg_next_to_last_date(ntl)
-            .with_floating_leg_rule(rule)
             .with_floating_leg_end_of_month(true)
-            .build()
-            .unwrap()
         };
 
-        let swap_first = make(float_first, Date::null(), DateGeneration::Backward);
+        // Irregular first period (Backward + first date) on both legs.
+        let swap_first = base()
+            .with_fixed_leg_first_date(fixed_first)
+            .with_floating_leg_first_date(float_first)
+            .with_floating_leg_rule(DateGeneration::Backward)
+            .build()
+            .unwrap();
         let floating = swap_first.fixed_vs_floating().floating_schedule();
         assert_eq!(floating.date(0), effective);
         assert_eq!(
@@ -1027,8 +1029,13 @@ mod tests {
             "fixed first stub must land on the given first date"
         );
 
-        let swap_ntl = make(Date::null(), float_ntl, DateGeneration::Forward);
-        let floating = swap_ntl.fixed_vs_floating().floating_schedule();
+        // Irregular next-to-last on the floating leg (Forward + float ntl only).
+        let swap_float_ntl = base()
+            .with_floating_leg_next_to_last_date(float_ntl)
+            .with_floating_leg_rule(DateGeneration::Forward)
+            .build()
+            .unwrap();
+        let floating = swap_float_ntl.fixed_vs_floating().floating_schedule();
         let n = floating.len();
         assert_eq!(
             floating.date(n - 2),
@@ -1039,12 +1046,11 @@ mod tests {
             !floating.is_regular_at(n - 2),
             "period ending at off-grid next-to-last must be irregular"
         );
-
         let hand_float = Schedule::new(
             effective,
             termination,
             index.tenor(),
-            cal,
+            cal.clone(),
             BusinessDayConvention::Unadjusted,
             BusinessDayConvention::Unadjusted,
             DateGeneration::Forward,
@@ -1058,5 +1064,67 @@ mod tests {
             made_dates, hand_dates,
             "maker floating schedule must match a hand-built Schedule with the same stubs"
         );
+
+        // Irregular next-to-last on the fixed leg (Forward + fixed ntl only).
+        let swap_fixed_ntl = base()
+            .with_fixed_leg_next_to_last_date(fixed_ntl)
+            .with_fixed_leg_rule(DateGeneration::Forward)
+            .build()
+            .unwrap();
+        let fixed = swap_fixed_ntl.fixed_vs_floating().fixed_schedule();
+        let n = fixed.len();
+        assert_eq!(
+            fixed.date(n - 2),
+            fixed_ntl,
+            "fixed next-to-last stub must land on the given next-to-last date"
+        );
+        assert!(
+            !fixed.is_regular_at(n - 2),
+            "period ending at off-grid fixed next-to-last must be irregular"
+        );
+        let hand_fixed = Schedule::new(
+            effective,
+            termination,
+            Period::new(1, TimeUnit::Years),
+            cal.clone(),
+            BusinessDayConvention::Unadjusted,
+            BusinessDayConvention::Unadjusted,
+            DateGeneration::Forward,
+            true,
+            Date::null(),
+            fixed_ntl,
+        );
+        let made_fixed: Vec<Date> = (0..fixed.len()).map(|i| fixed.date(i)).collect();
+        let hand_fixed_dates: Vec<Date> =
+            (0..hand_fixed.len()).map(|i| hand_fixed.date(i)).collect();
+        assert_eq!(
+            made_fixed, hand_fixed_dates,
+            "maker fixed schedule must match a hand-built Schedule with the same stubs"
+        );
+
+        // `floating_leg()` must forward the same float stubs as `build()`.
+        let maker = base()
+            .with_floating_leg_first_date(float_first)
+            .with_floating_leg_rule(DateGeneration::Backward);
+        let built = maker.build().unwrap();
+        let built_starts: Vec<Date> = built
+            .fixed_vs_floating()
+            .floating_schedule()
+            .dates()
+            .windows(2)
+            .map(|w| w[0])
+            .collect();
+        // Rebuild: `build` consumed `maker`; reconstruct with the same stubs.
+        let maker = base()
+            .with_floating_leg_first_date(float_first)
+            .with_floating_leg_rule(DateGeneration::Backward);
+        let leg = maker.floating_leg().unwrap();
+        let leg_starts: Vec<Date> = leg.iter().map(|c| c.accrual_start_date()).collect();
+        assert_eq!(
+            leg_starts, built_starts,
+            "floating_leg coupon starts must match build() floating schedule periods"
+        );
+        assert_eq!(leg_starts[0], effective);
+        assert_eq!(leg_starts[1], float_first);
     }
 }
