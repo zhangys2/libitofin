@@ -311,9 +311,9 @@ mod tests {
         }
     }
 
-    /// 15-row `basketoption.cpp` `testKirkReferenceValues` oracle (Mathematica reference values @ 100*EPSILON).
+    /// 15-row `basketoption.cpp` `testStrangSplittingSpreadEngineVsMathematica` (Kirk NPV column @ 100*EPSILON).
     #[test]
-    fn test_kirk_reference_values() {
+    fn test_kirk_reference_values_mathematica() {
         type Row = (
             Real, // T
             Real, // K
@@ -458,5 +458,67 @@ mod tests {
 
         assert!(KirkEngine::new(p1.clone(), p2.clone(), 1.5).is_err());
         assert!(KirkEngine::new(p1, p2, -1.5).is_err());
+    }
+
+    #[test]
+    fn test_kirk_put_and_dividend_yield_parity() {
+        let settings = shared(Settings::new());
+        let today = Date::new(15, Month::May, 1998);
+        settings.set_evaluation_date(today);
+
+        let (s1, s2, r, q1, q2, v1, v2, rho, strike, t): (
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+            Real,
+        ) = (122.0, 120.0, 0.10, 0.04, 0.02, 0.20, 0.20, -0.5, 3.0, 0.5);
+
+        let p1 = shared(BlackScholesMertonProcess::new(
+            quote_handle(&shared(SimpleQuote::new(s1))),
+            flat_rate_360(today, &shared(SimpleQuote::new(q1))),
+            flat_rate_360(today, &shared(SimpleQuote::new(r))),
+            flat_vol_360(today, &shared(SimpleQuote::new(v1))),
+        ));
+        let p2 = shared(BlackScholesMertonProcess::new(
+            quote_handle(&shared(SimpleQuote::new(s2))),
+            flat_rate_360(today, &shared(SimpleQuote::new(q2))),
+            flat_rate_360(today, &shared(SimpleQuote::new(r))),
+            flat_vol_360(today, &shared(SimpleQuote::new(v2))),
+        ));
+
+        let exercise_date = today + (t * 360.0).round() as i32;
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
+
+        let call_payoff =
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, strike));
+        let mut call_opt = BasketOption::new(
+            call_payoff,
+            Shared::clone(&exercise),
+            Shared::clone(&settings),
+        );
+        set_kirk_engine(&mut call_opt, p1.clone(), p2.clone(), rho).unwrap();
+        let call_npv = call_opt.npv().unwrap();
+
+        let put_payoff = SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Put, strike));
+        let mut put_opt = BasketOption::new(put_payoff, exercise, Shared::clone(&settings));
+        set_kirk_engine(&mut put_opt, p1, p2, rho).unwrap();
+        let put_npv = put_opt.npv().unwrap();
+
+        // Parity: C - P = df * (F1 - F2 - K)
+        let df = (-r * t).exp();
+        let f1 = s1 * (-q1 * t).exp() / df;
+        let f2 = s2 * (-q2 * t).exp() / df;
+        let parity_diff = call_npv - put_npv;
+        let expected_parity = df * (f1 - f2 - strike);
+        assert!(
+            (parity_diff - expected_parity).abs() < 1e-10,
+            "Put-call parity violated: C={call_npv}, P={put_npv}, diff={parity_diff}, exp={expected_parity}"
+        );
     }
 }
