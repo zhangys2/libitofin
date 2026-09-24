@@ -64,7 +64,10 @@ pub use barrier::{
     set_quanto_barrier_engine, set_quanto_double_barrier_engine, set_vanna_volga_barrier_engine,
     set_vanna_volga_double_barrier_engine,
 };
-pub use basket::{ChoiBasketEngine, SingleFactorBsmBasketEngine, SumExponentialsRootSolver};
+pub use basket::{
+    ChoiBasketEngine, SingleFactorBsmBasketEngine, StulzEngine, SumExponentialsRootSolver,
+    set_stulz_engine,
+};
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
 pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};

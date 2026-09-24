@@ -72,8 +72,8 @@ pub use barrieroption::{
     set_analytic_barrier_engine,
 };
 pub use basketoption::{
-    AverageBasketPayoff, BasketArguments, BasketEngine, BasketOption, BasketResults,
-    SpreadBasketPayoff,
+    AverageBasketPayoff, BasketArguments, BasketEngine, BasketOption, BasketPayoff, BasketResults,
+    MaxBasketPayoff, MinBasketPayoff, SpreadBasketPayoff,
 };
 pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondResults};
 pub use bondforward::BondForward;
