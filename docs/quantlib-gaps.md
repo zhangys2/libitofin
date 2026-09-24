@@ -47,7 +47,7 @@ reclassified 2026-09-22 against `main` after the upstream sync (#208).
 | Rates | CMS fixed-rate bond | `CmsRateBond` | `bonds.cpp` | false | none | |
 | Rates | Fitted bond discount curve | Nelson–Siegel / Svensson-style helpers | `fittedbondcurve.cpp` | false | none | Piecewise bootstrap only |
 | Rates | Tree discounting swap engine | `TreeSwapEngine` | `swap.cpp` | false | none | `DiscountingSwapEngine` only |
-| Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | false | none | |
+| Equity | Equity total return swap | `EquityTotalReturnSwap` | `equitytotalreturnswap.cpp` | true | full | 5 test-suite cases ported (fair margin across Libor/Overnight, negative nominal error, missing calendar error, equity leg NPV, TRS NPV) |
 | Rates | Caplet vol stripping extras | `OptionletStripper*` | `optionletstripper.cpp` | true | partial | Nonflat Black + Normal roundtrip, overnight strip/cap, and Stripper2 smile-node identity closed; remaining: nonzero displacement; Stripper2 ATM-spread numeric pin is Python-only |
 | Rates | Swaption SABR/ZABR cube extras | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` | true | partial | Backward-flat 72-row QL 1.43 sparse/dense @ 1e-6 closed; ZABR / Normal SABR / remaining smile-ATM grid open |
 | Rates | Piecewise yield bootstrap extras | `PiecewiseYieldCurve` | `piecewiseyieldcurve.cpp` | true | partial | Custom pillars + iterative-bootstrap recovery + BMA helper pinned; some globals skipped |
