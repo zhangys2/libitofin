@@ -212,42 +212,41 @@ mod tests {
         Handle::new(Shared::clone(q) as Shared<dyn Quote>)
     }
 
-    fn flat_rate_360(
-        reference: Date,
-        quote: &Shared<SimpleQuote>,
-    ) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::new(
-            reference,
-            quote_handle(quote),
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    fn flat_vol_360(
-        reference: Date,
-        quote: &Shared<SimpleQuote>,
-    ) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(shared(BlackConstantVol::with_quote(
-            reference,
-            None,
-            quote_handle(quote),
-            Actual360::new(),
-        )) as Shared<dyn BlackVolTermStructure>)
-    }
-
     fn make_process_360(
         date: Date,
         spot: Real,
+        q: Real,
         r: Real,
         vol: Real,
     ) -> Shared<GeneralizedBlackScholesProcess> {
+        let q_ts: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::new(
+            date,
+            quote_handle(&shared(SimpleQuote::new(q))),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let r_ts: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::new(
+            date,
+            quote_handle(&shared(SimpleQuote::new(r))),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
+            as Shared<dyn YieldTermStructure>);
+        let vol_ts: Handle<dyn BlackVolTermStructure> =
+            Handle::new(shared(BlackConstantVol::with_quote(
+                date,
+                None,
+                quote_handle(&shared(SimpleQuote::new(vol))),
+                Actual360::new(),
+            )) as Shared<dyn BlackVolTermStructure>);
         shared(BlackScholesMertonProcess::new(
             quote_handle(&shared(SimpleQuote::new(spot))),
-            flat_rate_360(date, &shared(SimpleQuote::new(r))),
-            flat_rate_360(date, &shared(SimpleQuote::new(r))),
-            flat_vol_360(date, &shared(SimpleQuote::new(vol))),
+            q_ts,
+            r_ts,
+            vol_ts,
         ))
     }
 
@@ -293,8 +292,8 @@ mod tests {
         settings.set_evaluation_date(today);
 
         for (strike, s1, s2, r, t, v1, v2, rho, expected) in rows {
-            let p1 = make_process_360(today, s1, r, v1);
-            let p2 = make_process_360(today, s2, r, v2);
+            let p1 = make_process_360(today, s1, r, r, v1);
+            let p2 = make_process_360(today, s2, r, r, v2);
 
             let payoff = SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, strike));
             let exercise_date = today + (t * 360.0).round() as i32;
@@ -385,7 +384,7 @@ mod tests {
                     Actual365Fixed::new(),
                 )) as Shared<dyn BlackVolTermStructure>);
 
-            // In QL testKirkReferenceValues, BlackProcess is used with forward quote and rTS
+            // In QL testStrangSplittingSpreadEngineVsMathematica, BlackProcess is used with forward quote and rTS
             let p1 = shared(BlackScholesMertonProcess::new(
                 quote_handle(&shared(SimpleQuote::new(f1))),
                 r_ts.clone(),
@@ -419,8 +418,8 @@ mod tests {
         let today = Date::new(15, Month::May, 1998);
         settings.set_evaluation_date(today);
 
-        let p1 = make_process_360(today, 122.0, 0.10, 0.20);
-        let p2 = make_process_360(today, 120.0, 0.10, 0.20);
+        let p1 = make_process_360(today, 122.0, 0.10, 0.10, 0.20);
+        let p2 = make_process_360(today, 120.0, 0.10, 0.10, 0.20);
 
         let payoff = SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 3.0));
         let exercise: Shared<dyn Exercise> =
@@ -438,8 +437,8 @@ mod tests {
         let today = Date::new(15, Month::May, 1998);
         settings.set_evaluation_date(today);
 
-        let p1 = make_process_360(today, 122.0, 0.10, 0.20);
-        let p2 = make_process_360(today, 120.0, 0.10, 0.20);
+        let p1 = make_process_360(today, 122.0, 0.10, 0.10, 0.20);
+        let p2 = make_process_360(today, 120.0, 0.10, 0.10, 0.20);
 
         let payoff = MinBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 3.0));
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 36));
@@ -453,8 +452,8 @@ mod tests {
     #[test]
     fn test_kirk_rejects_invalid_correlation() {
         let today = Date::new(15, Month::May, 1998);
-        let p1 = make_process_360(today, 122.0, 0.10, 0.20);
-        let p2 = make_process_360(today, 120.0, 0.10, 0.20);
+        let p1 = make_process_360(today, 122.0, 0.10, 0.10, 0.20);
+        let p2 = make_process_360(today, 120.0, 0.10, 0.10, 0.20);
 
         assert!(KirkEngine::new(p1.clone(), p2.clone(), 1.5).is_err());
         assert!(KirkEngine::new(p1, p2, -1.5).is_err());
@@ -466,6 +465,55 @@ mod tests {
         let today = Date::new(15, Month::May, 1998);
         settings.set_evaluation_date(today);
 
+        // 1. Futures market (q = r = 0.10, Haug first row market): Call ≈ 4.753, Put ≈ 5.743
+        let pf1 = make_process_360(today, 122.0, 0.10, 0.10, 0.20);
+        let pf2 = make_process_360(today, 120.0, 0.10, 0.10, 0.20);
+        let ex01: Shared<dyn Exercise> = shared(EuropeanExercise::new(today + 36));
+
+        let mut fut_call = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 3.0)),
+            Shared::clone(&ex01),
+            Shared::clone(&settings),
+        );
+        set_kirk_engine(&mut fut_call, pf1.clone(), pf2.clone(), -0.5).unwrap();
+        let fut_c = fut_call.npv().unwrap();
+        assert!((fut_c - 4.7530).abs() < 1e-4);
+
+        let mut fut_put = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Put, 3.0)),
+            Shared::clone(&ex01),
+            Shared::clone(&settings),
+        );
+        set_kirk_engine(&mut fut_put, pf1, pf2, -0.5).unwrap();
+        let fut_p = fut_put.npv().unwrap();
+        assert!((fut_p - 5.74305).abs() < 1e-3);
+        let df01 = (-0.10_f64 * 0.1).exp();
+        assert!(((fut_c - fut_p) - df01 * (122.0 - 120.0 - 3.0)).abs() < 1e-10);
+
+        // 2. Equity market with q = 0, r = 0.10: Call ≈ 4.8152, Put ≈ 5.7853
+        let pe1 = make_process_360(today, 122.0, 0.0, 0.10, 0.20);
+        let pe2 = make_process_360(today, 120.0, 0.0, 0.10, 0.20);
+
+        let mut eq_call = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 3.0)),
+            Shared::clone(&ex01),
+            Shared::clone(&settings),
+        );
+        set_kirk_engine(&mut eq_call, pe1.clone(), pe2.clone(), -0.5).unwrap();
+        let eq_c = eq_call.npv().unwrap();
+        assert!((eq_c - 4.8152).abs() < 1e-3);
+
+        let mut eq_put = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Put, 3.0)),
+            Shared::clone(&ex01),
+            Shared::clone(&settings),
+        );
+        set_kirk_engine(&mut eq_put, pe1, pe2, -0.5).unwrap();
+        let eq_p = eq_put.npv().unwrap();
+        assert!((eq_p - 5.7853).abs() < 1e-3);
+        assert!(((eq_c - eq_p) - (122.0 - 120.0 - df01 * 3.0)).abs() < 1e-10);
+
+        // 3. General q1 != q2 != r dividend yield parity check at t = 0.5
         let (s1, s2, r, q1, q2, v1, v2, rho, strike, t): (
             Real,
             Real,
@@ -479,18 +527,8 @@ mod tests {
             Real,
         ) = (122.0, 120.0, 0.10, 0.04, 0.02, 0.20, 0.20, -0.5, 3.0, 0.5);
 
-        let p1 = shared(BlackScholesMertonProcess::new(
-            quote_handle(&shared(SimpleQuote::new(s1))),
-            flat_rate_360(today, &shared(SimpleQuote::new(q1))),
-            flat_rate_360(today, &shared(SimpleQuote::new(r))),
-            flat_vol_360(today, &shared(SimpleQuote::new(v1))),
-        ));
-        let p2 = shared(BlackScholesMertonProcess::new(
-            quote_handle(&shared(SimpleQuote::new(s2))),
-            flat_rate_360(today, &shared(SimpleQuote::new(q2))),
-            flat_rate_360(today, &shared(SimpleQuote::new(r))),
-            flat_vol_360(today, &shared(SimpleQuote::new(v2))),
-        ));
+        let pq1 = make_process_360(today, s1, q1, r, v1);
+        let pq2 = make_process_360(today, s2, q2, r, v2);
 
         let exercise_date = today + (t * 360.0).round() as i32;
         let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(exercise_date));
@@ -502,15 +540,14 @@ mod tests {
             Shared::clone(&exercise),
             Shared::clone(&settings),
         );
-        set_kirk_engine(&mut call_opt, p1.clone(), p2.clone(), rho).unwrap();
+        set_kirk_engine(&mut call_opt, pq1.clone(), pq2.clone(), rho).unwrap();
         let call_npv = call_opt.npv().unwrap();
 
         let put_payoff = SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Put, strike));
         let mut put_opt = BasketOption::new(put_payoff, exercise, Shared::clone(&settings));
-        set_kirk_engine(&mut put_opt, p1, p2, rho).unwrap();
+        set_kirk_engine(&mut put_opt, pq1, pq2, rho).unwrap();
         let put_npv = put_opt.npv().unwrap();
 
-        // Parity: C - P = df * (F1 - F2 - K)
         let df = (-r * t).exp();
         let f1 = s1 * (-q1 * t).exp() / df;
         let f2 = s2 * (-q2 * t).exp() / df;
