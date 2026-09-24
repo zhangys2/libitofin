@@ -100,7 +100,9 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier_lo = args.barrier_lo.expect("validated");
         let barrier_hi = args.barrier_hi.expect("validated");
-        let payoff = args.payoff.expect("validated");
+        let Some(payoff) = args.payoff else {
+            fail!("no plain vanilla payoff given");
+        };
         let exercise = args.exercise.as_ref().expect("validated");
         if exercise.exercise_type() != ExerciseType::European {
             fail!("this engine handles only european options");

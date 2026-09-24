@@ -5,6 +5,7 @@
 
 use crate::errors::QlResult;
 use crate::exercise::Exercise;
+use crate::fail;
 use crate::handle::Handle;
 use crate::instrument::Instrument;
 use crate::instrument::InstrumentResults;
@@ -172,12 +173,15 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
 
         let (barrier_type, barrier_lo, barrier_hi, rebate, payoff, exercise) = {
             let args = self.base.arguments();
+            let Some(payoff) = args.payoff else {
+                fail!("no plain vanilla payoff given");
+            };
             (
                 args.barrier_type.expect("validated"),
                 args.barrier_lo.expect("validated"),
                 args.barrier_hi.expect("validated"),
                 args.rebate.expect("validated"),
-                args.payoff.expect("validated"),
+                payoff,
                 Shared::clone(args.exercise.as_ref().expect("validated")),
             )
         };

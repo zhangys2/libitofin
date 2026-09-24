@@ -258,7 +258,9 @@ impl<RNG: McRngTraits> PricingEngine for MCDoubleBarrierEngine<RNG> {
 
     fn calculate(&mut self) -> QlResult<()> {
         let args = self.base.arguments();
-        let payoff = args.payoff.expect("validated");
+        let Some(payoff) = args.payoff else {
+            fail!("no plain vanilla payoff given");
+        };
         let barrier_type = args.barrier_type.expect("validated");
         let barrier_lo = args.barrier_lo.expect("validated");
         let barrier_hi = args.barrier_hi.expect("validated");

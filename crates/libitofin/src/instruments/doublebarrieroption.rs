@@ -159,12 +159,10 @@ impl Instrument for DoubleBarrierOption {
         arguments.barrier_lo = Some(self.barrier_lo);
         arguments.barrier_hi = Some(self.barrier_hi);
         arguments.rebate = Some(self.rebate);
-        if let Some(plain) = (self.payoff.as_ref() as &dyn Any).downcast_ref::<PlainVanillaPayoff>()
-        {
-            arguments.payoff = Some(*plain);
-        } else {
-            arguments.binary_payoff = Some(Shared::clone(&self.payoff));
-        }
+        arguments.payoff = (self.payoff.as_ref() as &dyn Any)
+            .downcast_ref::<PlainVanillaPayoff>()
+            .copied();
+        arguments.binary_payoff = Some(Shared::clone(&self.payoff));
         arguments.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
     }
