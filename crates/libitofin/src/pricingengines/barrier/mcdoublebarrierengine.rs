@@ -56,6 +56,13 @@ impl DoubleBarrierPathPricer {
         strike: Real,
         discounts: Vec<DiscountFactor>,
     ) -> QlResult<Self> {
+        require!(
+            matches!(
+                barrier_type,
+                DoubleBarrierType::KnockIn | DoubleBarrierType::KnockOut
+            ),
+            "only Knock-In or Knock-Out double barrier options are supported"
+        );
         require!(strike >= 0.0, "strike less than zero not allowed");
         require!(barrier_lo > 0.0, "low barrier less/equal zero not allowed");
         require!(barrier_hi > 0.0, "high barrier less/equal zero not allowed");
@@ -108,6 +115,7 @@ impl PathPricer<Path> for DoubleBarrierPathPricer {
                     }
                 }
             }
+            DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
         }
 
         if is_option_active {
@@ -119,6 +127,7 @@ impl PathPricer<Path> for DoubleBarrierPathPricer {
                     self.rebate * self.discounts[node]
                 }
                 DoubleBarrierType::KnockIn => self.rebate * self.discounts[n - 1],
+                DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
             }
         }
     }

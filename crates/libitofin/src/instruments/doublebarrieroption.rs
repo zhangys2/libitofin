@@ -8,11 +8,11 @@ use crate::errors::QlResult;
 use crate::exercise::Exercise;
 use crate::fail;
 use crate::instrument::{Instrument, InstrumentBase};
-use crate::instruments::PlainVanillaPayoff;
+use crate::instruments::{PlainVanillaPayoff, StrikedTypePayoff};
 use crate::pricingengine::Arguments;
 use crate::require;
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, shared};
 use crate::time::date::Date;
 use crate::types::Real;
 
@@ -21,6 +21,8 @@ use crate::types::Real;
 pub enum DoubleBarrierType {
     KnockIn,
     KnockOut,
+    KIKO,
+    KOKI,
 }
 
 /// Arguments for double-barrier engines.
@@ -31,6 +33,7 @@ pub struct DoubleBarrierArguments {
     pub barrier_hi: Option<Real>,
     pub rebate: Option<Real>,
     pub payoff: Option<PlainVanillaPayoff>,
+    pub binary_payoff: Option<Shared<dyn StrikedTypePayoff>>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
 
@@ -40,7 +43,10 @@ impl Arguments for DoubleBarrierArguments {
         require!(self.barrier_lo.is_some(), "no low barrier given");
         require!(self.barrier_hi.is_some(), "no high barrier given");
         require!(self.rebate.is_some(), "no rebate given");
-        require!(self.payoff.is_some(), "no payoff given");
+        require!(
+            self.payoff.is_some() || self.binary_payoff.is_some(),
+            "no payoff given"
+        );
         require!(self.exercise.is_some(), "no exercise given");
         Ok(())
     }
@@ -54,12 +60,12 @@ pub struct DoubleBarrierOption {
     barrier_lo: Real,
     barrier_hi: Real,
     rebate: Real,
-    payoff: PlainVanillaPayoff,
+    payoff: Shared<dyn StrikedTypePayoff>,
     exercise: Shared<dyn Exercise>,
 }
 
 impl DoubleBarrierOption {
-    /// Builds a double-barrier option.
+    /// Builds a double-barrier option with a plain vanilla payoff.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         barrier_type: DoubleBarrierType,
@@ -67,6 +73,28 @@ impl DoubleBarrierOption {
         barrier_hi: Real,
         rebate: Real,
         payoff: PlainVanillaPayoff,
+        exercise: Shared<dyn Exercise>,
+        settings: Shared<Settings<Date>>,
+    ) -> QlResult<Self> {
+        Self::with_striked_payoff(
+            barrier_type,
+            barrier_lo,
+            barrier_hi,
+            rebate,
+            shared(payoff) as Shared<dyn StrikedTypePayoff>,
+            exercise,
+            settings,
+        )
+    }
+
+    /// Builds a double-barrier option with any striked payoff (e.g. [`CashOrNothingPayoff`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_striked_payoff(
+        barrier_type: DoubleBarrierType,
+        barrier_lo: Real,
+        barrier_hi: Real,
+        rebate: Real,
+        payoff: Shared<dyn StrikedTypePayoff>,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
@@ -104,6 +132,9 @@ impl DoubleBarrierOption {
     pub fn rebate(&self) -> Real {
         self.rebate
     }
+    pub fn payoff(&self) -> &Shared<dyn StrikedTypePayoff> {
+        &self.payoff
+    }
 }
 
 impl Instrument for DoubleBarrierOption {
@@ -128,7 +159,12 @@ impl Instrument for DoubleBarrierOption {
         arguments.barrier_lo = Some(self.barrier_lo);
         arguments.barrier_hi = Some(self.barrier_hi);
         arguments.rebate = Some(self.rebate);
-        arguments.payoff = Some(self.payoff);
+        if let Some(plain) = (self.payoff.as_ref() as &dyn Any).downcast_ref::<PlainVanillaPayoff>()
+        {
+            arguments.payoff = Some(*plain);
+        } else {
+            arguments.binary_payoff = Some(Shared::clone(&self.payoff));
+        }
         arguments.exercise = Some(Shared::clone(&self.exercise));
         Ok(())
     }

@@ -148,6 +148,14 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
             black.value().max(0.0)
         };
 
+        require!(
+            matches!(
+                barrier_type,
+                DoubleBarrierType::KnockIn | DoubleBarrierType::KnockOut
+            ),
+            "unsupported barrier type for analytic double barrier engine"
+        );
+
         let value = match payoff.option_type() {
             OptionType::Call => match barrier_type {
                 DoubleBarrierType::KnockOut => call_ko(
@@ -180,6 +188,7 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                         df_q,
                     ))
                 .max(0.0),
+                DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
             },
             OptionType::Put => match barrier_type {
                 DoubleBarrierType::KnockOut => put_ko(
@@ -212,6 +221,7 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                         df_q,
                     ))
                 .max(0.0),
+                DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
             },
         };
 

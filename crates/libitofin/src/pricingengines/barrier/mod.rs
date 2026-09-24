@@ -5,6 +5,7 @@
 //! quanto barrier engines are here.
 
 mod analyticbinarybarrierengine;
+mod analyticdoublebarrierbinaryengine;
 mod analyticdoublebarrierengine;
 mod analyticpartialtimebarrieroptionengine;
 mod analyticsoftbarrierengine;
@@ -25,6 +26,10 @@ mod vannavolgainterpolation;
 
 pub use analyticbinarybarrierengine::{
     AnalyticBinaryBarrierEngine, set_analytic_binary_barrier_engine,
+};
+pub use analyticdoublebarrierbinaryengine::{
+    AnalyticDoubleBarrierBinaryEngine, analytic_double_barrier_binary_value,
+    set_analytic_double_barrier_binary_engine,
 };
 pub use analyticdoublebarrierengine::{
     AnalyticDoubleBarrierEngine, set_analytic_double_barrier_engine,
