@@ -53,9 +53,10 @@
 //! through [`in_arrears`](IborLeg::in_arrears) with the Black76 convexity
 //! adjustment on [`BlackIborCouponPricer`].
 
-use crate::cashflow::{CashFlow, Leg};
+use crate::cashflow::Leg;
 use crate::cashflows::capflooredcoupon::CappedFlooredCoupon;
 use crate::cashflows::couponpricer::{BlackIborCouponPricer, FloatingRateCouponPricer};
+use crate::cashflows::fixedratecoupon::FixedRateCoupon;
 use crate::cashflows::iborcoupon::IborCoupon;
 use crate::errors::QlResult;
 use crate::indexes::iborindex::IborIndex;
@@ -397,20 +398,141 @@ impl IborLeg {
     /// As [`coupons`](Self::coupons) or
     /// [`capped_floored_coupons`](Self::capped_floored_coupons).
     pub fn build(&self) -> QlResult<Leg> {
-        if self.caps.is_empty() && self.floors.is_empty() {
-            Ok(self
-                .coupons()?
-                .into_iter()
-                .map(|coupon| coupon as Shared<dyn CashFlow>)
-                .collect())
-        } else {
-            Ok(self
-                .capped_floored_coupons()?
-                .into_iter()
-                .map(|coupon| coupon as Shared<dyn CashFlow>)
-                .collect())
+        require!(!self.notionals.is_empty(), "no notional given");
+        let size = self.schedule.len();
+        require!(size >= 2, "schedule with {size} date(s) spans no period");
+        let periods = size - 1;
+        require!(
+            self.notionals.len() <= periods,
+            "too many notionals ({}), only {periods} required",
+            self.notionals.len()
+        );
+        require!(
+            self.gearings.len() <= periods,
+            "too many gearings ({}), only {periods} required",
+            self.gearings.len()
+        );
+        require!(
+            self.spreads.len() <= periods,
+            "too many spreads ({}), only {periods} required",
+            self.spreads.len()
+        );
+        require!(
+            self.caps.len() <= periods,
+            "too many caps ({}), only {periods} required",
+            self.caps.len()
+        );
+        require!(
+            self.floors.len() <= periods,
+            "too many floors ({}), only {periods} required",
+            self.floors.len()
+        );
+
+        let calendar = self.schedule.calendar();
+        let convention = self.schedule.business_day_convention();
+        let stub = |period: usize| {
+            self.schedule.has_tenor()
+                && self.schedule.has_is_regular()
+                && !self.schedule.is_regular_at(period)
+        };
+
+        let mut leg: Leg = Vec::with_capacity(periods);
+        for i in 0..periods {
+            let start = self.schedule.date(i);
+            let end = self.schedule.date(i + 1);
+            let mut reference_start = start;
+            let mut reference_end = end;
+            if i == 0 && stub(1) {
+                reference_start =
+                    calendar.advance_by_period(end, -self.schedule.tenor(), convention, false);
+            }
+            if i == periods - 1 && stub(i + 1) {
+                reference_end =
+                    calendar.advance_by_period(start, self.schedule.tenor(), convention, false);
+            }
+            let payment_date = self.payment_calendar.advance(
+                end,
+                self.payment_lag,
+                TimeUnit::Days,
+                self.payment_adjustment,
+                false,
+            );
+            let ex_coupon_date = self.ex_coupon_period.map(|period| {
+                self.ex_coupon_calendar.advance_by_period(
+                    payment_date,
+                    -period,
+                    self.ex_coupon_adjustment,
+                    self.ex_coupon_end_of_month,
+                )
+            });
+            let gearing = broadcast(&self.gearings, i, 1.0);
+            if gearing == 0.0 {
+                let rate = effective_fixed_rate(&self.spreads, &self.caps, &self.floors, i);
+                let day_counter = self
+                    .payment_day_counter
+                    .clone()
+                    .unwrap_or_else(|| self.index.day_counter().clone());
+                let coupon = FixedRateCoupon::from_rate(
+                    payment_date,
+                    broadcast(&self.notionals, i, 1.0),
+                    rate,
+                    day_counter,
+                    start,
+                    end,
+                    Some(reference_start),
+                    Some(reference_end),
+                    ex_coupon_date,
+                );
+                leg.push(shared(coupon));
+            } else {
+                let fixing_days = if self.fixing_days.is_empty() {
+                    None
+                } else {
+                    Some(broadcast(&self.fixing_days, i, self.index.fixing_days()))
+                };
+                let coupon = shared(IborCoupon::new(
+                    payment_date,
+                    broadcast(&self.notionals, i, 1.0),
+                    start,
+                    end,
+                    fixing_days,
+                    self.index.clone(),
+                    gearing,
+                    broadcast(&self.spreads, i, 0.0),
+                    Some(reference_start),
+                    Some(reference_end),
+                    self.payment_day_counter.clone(),
+                    self.in_arrears,
+                    ex_coupon_date,
+                    self.fixing_convention,
+                )?);
+                let cap = pick(&self.caps, i);
+                let floor = pick(&self.floors, i);
+                if cap.is_none() && floor.is_none() {
+                    if self.caps.is_empty() && self.floors.is_empty() && !self.in_arrears {
+                        coupon.set_pricer(default_pricer());
+                    }
+                    leg.push(coupon);
+                } else {
+                    let capped_floored = CappedFlooredCoupon::new(coupon, cap, floor)?;
+                    leg.push(shared(capped_floored));
+                }
+            }
         }
+        Ok(leg)
     }
+}
+
+/// The effective fixed rate when gearing is zero, bounded by floor and cap.
+fn effective_fixed_rate(spreads: &[Spread], caps: &[Rate], floors: &[Rate], i: usize) -> Rate {
+    let mut result = broadcast(spreads, i, 0.0);
+    if let Some(floor) = pick(floors, i) {
+        result = result.max(floor);
+    }
+    if let Some(cap) = pick(caps, i) {
+        result = result.min(cap);
+    }
+    result
 }
 
 /// The `index`-th rate as a cap/floor, or `None` when the list is empty
@@ -481,6 +603,7 @@ mod tests {
     //! default, neither of which the index currency or calendar touches.
 
     use super::*;
+    use crate::cashflow::CashFlow;
     use crate::cashflows::coupon::Coupon;
     use crate::handle::Handle;
     use crate::indexes::ibor::Euribor;

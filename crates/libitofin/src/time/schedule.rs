@@ -900,6 +900,7 @@ impl MakeSchedule {
             None => BusinessDayConvention::Unadjusted,
         };
         let termination_date_convention = self.termination_date_convention.unwrap_or(convention);
+        #[allow(clippy::unwrap_or_default)]
         let calendar = self.calendar.unwrap_or_else(NullCalendar::new);
 
         Schedule::new(

@@ -34,7 +34,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::time::businessdayconvention::BusinessDayConvention;
 use crate::time::date::{Date, Day, SerialNumber, Year};
 use crate::time::period::Period;
@@ -93,6 +93,16 @@ impl Calendar {
             added_holidays: shared_mut(BTreeSet::new()),
             removed_holidays: shared_mut(BTreeSet::new()),
         }
+    }
+
+    /// Builds an empty calendar (port of QuantLib's default `Calendar()`).
+    pub fn empty() -> Calendar {
+        Calendar::from_impl(shared(EmptyImpl))
+    }
+
+    /// Whether this calendar is empty.
+    pub fn is_empty(&self) -> bool {
+        self.imp.name().is_empty()
     }
 
     /// The name of the calendar.
@@ -251,6 +261,8 @@ impl Calendar {
             return d;
         }
 
+        assert!(!self.is_empty(), "no calendar implementation provided");
+
         let mut d1 = d;
         if c == Following || c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
             while self.is_holiday(d1) {
@@ -306,6 +318,7 @@ impl Calendar {
         end_of_month: bool,
     ) -> Date {
         assert!(d != Date::null(), "null date");
+        assert!(!self.is_empty(), "no calendar implementation provided");
 
         if n == 0 {
             return self.adjust(d, c);
@@ -506,6 +519,28 @@ pub fn orthodox_easter_monday(y: Year) -> Day {
     Day::from(EASTER_MONDAY[(y - 1901) as usize])
 }
 
+struct EmptyImpl;
+
+impl CalendarImpl for EmptyImpl {
+    fn name(&self) -> String {
+        String::new()
+    }
+
+    fn is_business_day(&self, _date: Date) -> bool {
+        false
+    }
+
+    fn is_weekend(&self, _weekday: Weekday) -> bool {
+        false
+    }
+}
+
+impl Default for Calendar {
+    fn default() -> Self {
+        Calendar::empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,5 +737,28 @@ mod tests {
         assert_eq!(western_easter_monday(2000), 115);
         // Orthodox Easter Monday 2000 was May 1st -> day of year 122.
         assert_eq!(orthodox_easter_monday(2000), 122);
+    }
+
+    #[test]
+    fn empty_calendar_properties() {
+        let empty = Calendar::empty();
+        assert!(empty.is_empty());
+        assert_eq!(empty.name(), "");
+
+        let default_cal = Calendar::default();
+        assert!(default_cal.is_empty());
+
+        let weekends = cal();
+        assert!(!weekends.is_empty());
+        assert_eq!(weekends.name(), "Weekends test");
+    }
+
+    #[test]
+    #[should_panic(expected = "no calendar implementation provided")]
+    fn empty_calendar_adjust_panics() {
+        Calendar::empty().adjust(
+            Date::new(5, Month::January, 2023),
+            BusinessDayConvention::Following,
+        );
     }
 }

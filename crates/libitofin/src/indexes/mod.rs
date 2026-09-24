@@ -31,3 +31,6 @@ pub use swapindex::SwapIndex;
 
 pub mod bmaindex;
 pub use bmaindex::BMAIndex;
+
+pub mod equityindex;
+pub use equityindex::EquityIndex;
