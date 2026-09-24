@@ -220,6 +220,11 @@ oversight) and is documented at the point of divergence in the source.
   parity. This port evaluates `0.0` for puts when `effectiveStrike <= 0`
   (since $(K_{\text{eff}} - F_1)^+ = 0$ when $F_1 > 0 \ge K_{\text{eff}}$),
   preserving $(C - P)/\text{df} = F_1 - F_2 - K$ across all strikes.
+- **`OperatorSplittingSpreadEngine` applies the discount factor in the second-order Taylor expansion branch.**
+  In QuantLib C++ (`operatorsplittingspreadengine.cpp:104`), `ooPlt` in the Taylor expansion
+  branch (`rs < EPSILON^0.625`) omitted the discount factor `df`. In this port, `discount` is
+  applied, ensuring $C^0$ continuity across the `rs` threshold for non-zero discount rates while
+  matching QuantLib's test case (`testNoDivByZeroOperatorSplitting`, where $r=0$ and $df=1$).
 
 ## Credit (EPIC Credit, #676)
 
