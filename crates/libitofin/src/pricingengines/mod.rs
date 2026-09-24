@@ -65,8 +65,8 @@ pub use barrier::{
     set_vanna_volga_double_barrier_engine,
 };
 pub use basket::{
-    ChoiBasketEngine, SingleFactorBsmBasketEngine, StulzEngine, SumExponentialsRootSolver,
-    set_stulz_engine,
+    ChoiBasketEngine, KirkEngine, SingleFactorBsmBasketEngine, StulzEngine,
+    SumExponentialsRootSolver, kirk_spread_option_value, set_kirk_engine, set_stulz_engine,
 };
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
