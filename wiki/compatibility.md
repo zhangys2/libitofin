@@ -213,7 +213,13 @@ oversight) and is documented at the point of divergence in the source.
   and `zero_volatility_otm_put_gets_put_greeks_not_call_greeks` in
   `blackcalculator.rs`, which assert the corrected numbers (OTM `0.0`, ATM
   `-0.5`, ITM `-1.0` for the put, and the call mirror), so a regression to the
-  `alpha_ >= 0` form is a test failure.
+- **`PearsonSpreadEngine` handles `effectiveStrike <= 0` for puts correctly (returning 0) and preserves put-call parity across all strikes.**
+  QuantLib `pearsonspreadengine.cpp:73-75` unconditionally evaluates
+  `phi(z) * std::max(0.0, f1_cond - effectiveStrike)`, returning positive call
+  intrinsic for put payoffs when `effectiveStrike <= 0`, violating put-call
+  parity. This port evaluates `0.0` for puts when `effectiveStrike <= 0`
+  (since $(K_{\text{eff}} - F_1)^+ = 0$ when $F_1 > 0 \ge K_{\text{eff}}$),
+  preserving $(C - P)/\text{df} = F_1 - F_2 - K$ across all strikes.
 
 ## Credit (EPIC Credit, #676)
 
