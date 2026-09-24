@@ -49,14 +49,15 @@ pub use asian::{
     set_mc_discrete_geometric_average_price_asian_heston_engine, set_turnbull_wakeman_asian_engine,
 };
 pub use barrier::{
-    AnalyticBinaryBarrierEngine, AnalyticDoubleBarrierEngine,
+    AnalyticBinaryBarrierEngine, AnalyticDoubleBarrierBinaryEngine, AnalyticDoubleBarrierEngine,
     AnalyticPartialTimeBarrierOptionEngine, AnalyticSoftBarrierEngine,
     AnalyticTwoAssetBarrierEngine, BarrierPathPricer, BiasedBarrierPathPricer,
     BinomialBarrierEngine, FdBlackScholesBarrierEngine, FdBlackScholesRebateEngine,
     FdHestonBarrierEngine, FdHestonDoubleBarrierEngine, FdHestonRebateEngine, MCBarrierEngine,
     MCDoubleBarrierEngine, MakeMcBarrierEngine, MakeMcDoubleBarrierEngine, QuantoBarrierEngine,
     QuantoDoubleBarrierEngine, VannaVolgaBarrierEngine, VannaVolgaDoubleBarrierEngine,
-    set_analytic_binary_barrier_engine, set_analytic_double_barrier_engine,
+    analytic_double_barrier_binary_value, set_analytic_binary_barrier_engine,
+    set_analytic_double_barrier_binary_engine, set_analytic_double_barrier_engine,
     set_analytic_partial_time_barrier_engine, set_analytic_soft_barrier_engine,
     set_analytic_two_asset_barrier_engine, set_binomial_barrier_engine,
     set_fd_black_scholes_barrier_engine, set_fd_heston_barrier_engine,

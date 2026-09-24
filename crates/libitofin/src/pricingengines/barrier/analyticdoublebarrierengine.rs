@@ -100,7 +100,9 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
         let barrier_type = args.barrier_type.expect("validated");
         let barrier_lo = args.barrier_lo.expect("validated");
         let barrier_hi = args.barrier_hi.expect("validated");
-        let payoff = args.payoff.expect("validated");
+        let Some(payoff) = args.payoff else {
+            fail!("no plain vanilla payoff given");
+        };
         let exercise = args.exercise.as_ref().expect("validated");
         if exercise.exercise_type() != ExerciseType::European {
             fail!("this engine handles only european options");
@@ -148,6 +150,14 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
             black.value().max(0.0)
         };
 
+        require!(
+            matches!(
+                barrier_type,
+                DoubleBarrierType::KnockIn | DoubleBarrierType::KnockOut
+            ),
+            "unsupported barrier type for analytic double barrier engine"
+        );
+
         let value = match payoff.option_type() {
             OptionType::Call => match barrier_type {
                 DoubleBarrierType::KnockOut => call_ko(
@@ -180,6 +190,7 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                         df_q,
                     ))
                 .max(0.0),
+                DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
             },
             OptionType::Put => match barrier_type {
                 DoubleBarrierType::KnockOut => put_ko(
@@ -212,6 +223,7 @@ impl PricingEngine for AnalyticDoubleBarrierEngine {
                         df_q,
                     ))
                 .max(0.0),
+                DoubleBarrierType::KIKO | DoubleBarrierType::KOKI => unreachable!(),
             },
         };
 
