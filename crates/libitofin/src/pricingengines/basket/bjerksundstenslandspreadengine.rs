@@ -57,7 +57,14 @@ pub fn bjerksund_stensland_spread_option_value(
     let stdev = (variance1 + b * b * variance2 - 2.0 * rho * b * s1 * s2)
         .max(0.0)
         .sqrt();
-    require!(stdev > 0.0, "stdev must be positive");
+    let cp = match option_type {
+        OptionType::Call => 1.0,
+        OptionType::Put => -1.0,
+    };
+
+    if stdev == 0.0 {
+        return Ok(discount * (cp * (forward1 - forward2 - strike)).max(0.0));
+    }
 
     let lfa = (forward1 / a).ln();
     let d1 = (lfa + (0.5 * variance1 + 0.5 * b * b * variance2 - b * rho * s1 * s2)) / stdev;
@@ -65,10 +72,6 @@ pub fn bjerksund_stensland_spread_option_value(
     let d3 = (lfa + (-0.5 * variance1 + 0.5 * b * b * variance2)) / stdev;
 
     let phi = CumulativeNormalDistribution::standard();
-    let cp = match option_type {
-        OptionType::Call => 1.0,
-        OptionType::Put => -1.0,
-    };
 
     Ok(discount
         * cp
@@ -330,10 +333,10 @@ mod tests {
 
         let mut opt = BasketOption::new(
             SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 0.0)),
-            exercise,
+            Shared::clone(&exercise),
             Shared::clone(&settings),
         );
-        set_bjerksund_stensland_engine(&mut opt, p1, p2, rho).unwrap();
+        set_bjerksund_stensland_engine(&mut opt, p1.clone(), p2, rho).unwrap();
         let calc_val = opt.npv().unwrap();
 
         // Margrabe formula comparison:
@@ -345,6 +348,18 @@ mod tests {
         let expected_val = (-r * t).exp() * (f1 * phi.value(d1) - f2 * phi.value(d2));
 
         assert!((calc_val - expected_val).abs() < 1e-12);
+
+        // Residual stdev == 0 case (rho = 1, K = 0, v1 = v2): returns exact discounted intrinsic payoff
+        let p_twin = make_process_365(today, 90.0, r, r, v1);
+        let mut opt_twin = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 0.0)),
+            exercise,
+            Shared::clone(&settings),
+        );
+        set_bjerksund_stensland_engine(&mut opt_twin, p1, p_twin, 1.0).unwrap();
+        let calc_twin = opt_twin.npv().unwrap();
+        let expected_twin = (-r * 1.0_f64).exp() * (f1 - 90.0);
+        assert!((calc_twin - expected_twin).abs() < 1e-12);
     }
 
     /// Parity verification with distinct dividend yields q1 != q2 != r.
