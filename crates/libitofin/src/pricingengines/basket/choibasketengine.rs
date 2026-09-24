@@ -9,7 +9,7 @@ use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
 use crate::handle::Handle;
 use crate::instrument::Instrument;
-use crate::instruments::{BasketArguments, BasketOption, BasketResults, TypePayoff};
+use crate::instruments::{BasketArguments, BasketOption, BasketPayoff, BasketResults, TypePayoff};
 use crate::math::array::Array;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
 use crate::math::integrals::gaussianquadratures::{
@@ -141,7 +141,9 @@ impl PricingEngine for ChoiBasketEngine {
 
         let fwd = &(&s * &dq) / dr0;
 
-        let avg_payoff = args.payoff.as_ref().expect("validated");
+        let BasketPayoff::Average(avg_payoff) = args.payoff.as_ref().expect("validated") else {
+            crate::fail!("AverageBasketPayoff expected");
+        };
         let weights = avg_payoff.weights().clone();
         require!(
             self.n == weights.size() && self.n > 1,

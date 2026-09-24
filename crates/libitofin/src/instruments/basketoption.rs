@@ -104,10 +104,218 @@ impl SpreadBasketPayoff {
     }
 }
 
+impl Payoff for SpreadBasketPayoff {
+    fn name(&self) -> String {
+        self.base_payoff.name()
+    }
+
+    fn description(&self) -> String {
+        format!("Spread basket {}", self.base_payoff.description())
+    }
+
+    fn value(&self, price: Real) -> Real {
+        self.base_payoff.value(price)
+    }
+}
+
+impl TypePayoff for SpreadBasketPayoff {
+    fn option_type(&self) -> crate::option::OptionType {
+        self.base_payoff.option_type()
+    }
+}
+
+impl StrikedTypePayoff for SpreadBasketPayoff {
+    fn strike(&self) -> Real {
+        self.base_payoff.strike()
+    }
+}
+
+/// Minimum basket payoff.
+#[derive(Clone, Debug)]
+pub struct MinBasketPayoff {
+    base_payoff: PlainVanillaPayoff,
+}
+
+impl MinBasketPayoff {
+    pub fn new(base_payoff: PlainVanillaPayoff) -> Self {
+        Self { base_payoff }
+    }
+
+    pub fn base_payoff(&self) -> &PlainVanillaPayoff {
+        &self.base_payoff
+    }
+
+    pub fn accumulate(&self, a: &Array) -> Real {
+        assert!(!a.is_empty(), "empty array");
+        *a.iter()
+            .min_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
+            .expect("non-empty")
+    }
+}
+
+impl Payoff for MinBasketPayoff {
+    fn name(&self) -> String {
+        self.base_payoff.name()
+    }
+
+    fn description(&self) -> String {
+        format!("Min basket {}", self.base_payoff.description())
+    }
+
+    fn value(&self, price: Real) -> Real {
+        self.base_payoff.value(price)
+    }
+}
+
+impl TypePayoff for MinBasketPayoff {
+    fn option_type(&self) -> crate::option::OptionType {
+        self.base_payoff.option_type()
+    }
+}
+
+impl StrikedTypePayoff for MinBasketPayoff {
+    fn strike(&self) -> Real {
+        self.base_payoff.strike()
+    }
+}
+
+/// Maximum basket payoff.
+#[derive(Clone, Debug)]
+pub struct MaxBasketPayoff {
+    base_payoff: PlainVanillaPayoff,
+}
+
+impl MaxBasketPayoff {
+    pub fn new(base_payoff: PlainVanillaPayoff) -> Self {
+        Self { base_payoff }
+    }
+
+    pub fn base_payoff(&self) -> &PlainVanillaPayoff {
+        &self.base_payoff
+    }
+
+    pub fn accumulate(&self, a: &Array) -> Real {
+        assert!(!a.is_empty(), "empty array");
+        *a.iter()
+            .max_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal))
+            .expect("non-empty")
+    }
+}
+
+impl Payoff for MaxBasketPayoff {
+    fn name(&self) -> String {
+        self.base_payoff.name()
+    }
+
+    fn description(&self) -> String {
+        format!("Max basket {}", self.base_payoff.description())
+    }
+
+    fn value(&self, price: Real) -> Real {
+        self.base_payoff.value(price)
+    }
+}
+
+impl TypePayoff for MaxBasketPayoff {
+    fn option_type(&self) -> crate::option::OptionType {
+        self.base_payoff.option_type()
+    }
+}
+
+impl StrikedTypePayoff for MaxBasketPayoff {
+    fn strike(&self) -> Real {
+        self.base_payoff.strike()
+    }
+}
+
+/// Payoff on a basket of assets.
+#[derive(Clone, Debug)]
+pub enum BasketPayoff {
+    Average(AverageBasketPayoff),
+    Spread(SpreadBasketPayoff),
+    Min(MinBasketPayoff),
+    Max(MaxBasketPayoff),
+}
+
+impl BasketPayoff {
+    pub fn base_payoff(&self) -> &PlainVanillaPayoff {
+        match self {
+            Self::Average(p) => p.base_payoff(),
+            Self::Spread(p) => p.base_payoff(),
+            Self::Min(p) => p.base_payoff(),
+            Self::Max(p) => p.base_payoff(),
+        }
+    }
+
+    pub fn accumulate(&self, a: &Array) -> Real {
+        match self {
+            Self::Average(p) => p.accumulate(a),
+            Self::Spread(p) => p.accumulate(a),
+            Self::Min(p) => p.accumulate(a),
+            Self::Max(p) => p.accumulate(a),
+        }
+    }
+}
+
+impl Payoff for BasketPayoff {
+    fn name(&self) -> String {
+        self.base_payoff().name()
+    }
+
+    fn description(&self) -> String {
+        match self {
+            Self::Average(p) => p.description(),
+            Self::Spread(p) => p.description(),
+            Self::Min(p) => p.description(),
+            Self::Max(p) => p.description(),
+        }
+    }
+
+    fn value(&self, price: Real) -> Real {
+        self.base_payoff().value(price)
+    }
+}
+
+impl TypePayoff for BasketPayoff {
+    fn option_type(&self) -> crate::option::OptionType {
+        self.base_payoff().option_type()
+    }
+}
+
+impl StrikedTypePayoff for BasketPayoff {
+    fn strike(&self) -> Real {
+        self.base_payoff().strike()
+    }
+}
+
+impl From<AverageBasketPayoff> for BasketPayoff {
+    fn from(p: AverageBasketPayoff) -> Self {
+        Self::Average(p)
+    }
+}
+
+impl From<SpreadBasketPayoff> for BasketPayoff {
+    fn from(p: SpreadBasketPayoff) -> Self {
+        Self::Spread(p)
+    }
+}
+
+impl From<MinBasketPayoff> for BasketPayoff {
+    fn from(p: MinBasketPayoff) -> Self {
+        Self::Min(p)
+    }
+}
+
+impl From<MaxBasketPayoff> for BasketPayoff {
+    fn from(p: MaxBasketPayoff) -> Self {
+        Self::Max(p)
+    }
+}
+
 /// Arguments for basket-option engines.
 #[derive(Default)]
 pub struct BasketArguments {
-    pub payoff: Option<AverageBasketPayoff>,
+    pub payoff: Option<BasketPayoff>,
     pub exercise: Option<Shared<dyn Exercise>>,
 }
 
@@ -142,13 +350,13 @@ pub type BasketEngine = GenericEngine<BasketArguments, BasketResults>;
 pub struct BasketOption {
     base: InstrumentBase,
     settings: Shared<Settings<Date>>,
-    payoff: AverageBasketPayoff,
+    payoff: BasketPayoff,
     exercise: Shared<dyn Exercise>,
 }
 
 impl BasketOption {
-    pub fn new(
-        payoff: AverageBasketPayoff,
+    pub fn new<P: Into<BasketPayoff>>(
+        payoff: P,
         exercise: Shared<dyn Exercise>,
         settings: Shared<Settings<Date>>,
     ) -> Self {
@@ -157,12 +365,12 @@ impl BasketOption {
         Self {
             base,
             settings,
-            payoff,
+            payoff: payoff.into(),
             exercise,
         }
     }
 
-    pub fn payoff(&self) -> &AverageBasketPayoff {
+    pub fn payoff(&self) -> &BasketPayoff {
         &self.payoff
     }
 

@@ -6,7 +6,9 @@ use std::any::Any;
 
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
-use crate::instruments::{BasketArguments, BasketResults, StrikedTypePayoff, TypePayoff};
+use crate::instruments::{
+    BasketArguments, BasketPayoff, BasketResults, StrikedTypePayoff, TypePayoff,
+};
 use crate::math::array::Array;
 use crate::math::comparison::close_enough;
 use crate::math::distributions::normal::CumulativeNormalDistribution;
@@ -120,13 +122,10 @@ impl PricingEngine for SingleFactorBsmBasketEngine {
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        let avg_payoff = self
-            .base
-            .arguments()
-            .payoff
-            .as_ref()
-            .expect("validated")
-            .clone();
+        let avg_payoff = match self.base.arguments().payoff.as_ref().expect("validated") {
+            BasketPayoff::Average(avg) => avg.clone(),
+            _ => crate::fail!("AverageBasketPayoff expected"),
+        };
         let payoff = avg_payoff.base_payoff();
         let strike = payoff.strike();
         let option_type = payoff.option_type();
