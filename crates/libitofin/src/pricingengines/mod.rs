@@ -69,7 +69,7 @@ pub use basket::{
     SingleFactorBsmBasketEngine, StulzEngine, SumExponentialsRootSolver,
     bjerksund_stensland_spread_option_value, kirk_spread_option_value, pearson_spread_option_value,
     pearson_spread_option_value_with_config, set_bjerksund_stensland_engine, set_kirk_engine,
-    set_pearson_engine, set_stulz_engine,
+    set_pearson_engine, set_pearson_engine_with_config, set_stulz_engine,
 };
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;

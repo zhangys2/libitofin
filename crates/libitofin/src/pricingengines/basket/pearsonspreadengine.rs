@@ -6,6 +6,13 @@
 //! References:
 //! Neil D. Pearson, "An Efficient Approach for Pricing Spread Options",
 //! Journal of Derivatives, 3 (1995), pp. 76–91.
+//!
+//! Compatibility note:
+//! When `effective_strike <= 0.0` (i.e. $F_2(z) + K \le 0$), this port returns `0.0` for Put
+//! options (which is economically correct because $F_1(z) > 0 \ge K_{\text{eff}}$, so
+//! $(K_{\text{eff}} - F_1)^+ = 0$), whereas QuantLib's `pearsonspreadengine.cpp` unconditionally
+//! evaluated `std::max(0.0, f1_cond - effectiveStrike)`, erroneously returning the Call intrinsic
+//! for Puts. Our implementation preserves call-put parity across all strikes.
 
 use crate::errors::{QlError, QlResult};
 use crate::exercise::ExerciseType;
@@ -23,7 +30,7 @@ use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
 use crate::shared::{Shared, SharedMut, shared_mut};
 use crate::stochasticprocess::StochasticProcess1D;
-use crate::types::Real;
+use crate::types::{Real, Size};
 
 type EngineBase = GenericEngine<BasketArguments, BasketResults>;
 
@@ -68,7 +75,7 @@ pub fn pearson_spread_option_value_with_config(
     discount: Real,
     rho: Real,
     integration_tolerance: Real,
-    max_integration_iterations: usize,
+    max_integration_iterations: Size,
     n_std: Real,
 ) -> QlResult<Real> {
     require!(
@@ -113,11 +120,19 @@ pub fn pearson_spread_option_value_with_config(
             return phi.value(z) * val;
         }
 
-        let black =
-            match BlackCalculator::new(option_type, effective_strike, f1_cond, sigma1_cond, 1.0) {
-                Ok(b) => b.value(),
-                Err(_) => 0.0,
-            };
+        let black = if f1_cond <= 0.0 {
+            match option_type {
+                OptionType::Call => 0.0,
+                OptionType::Put => effective_strike,
+            }
+        } else {
+            BlackCalculator::new(option_type, effective_strike, f1_cond, sigma1_cond, 1.0)
+                .map(|b| b.value())
+                .unwrap_or_else(|_| match option_type {
+                    OptionType::Call => (f1_cond - effective_strike).max(0.0),
+                    OptionType::Put => (effective_strike - f1_cond).max(0.0),
+                })
+        };
         phi.value(z) * black
     };
 
@@ -134,13 +149,13 @@ pub struct PearsonSpreadEngine {
     process2: Shared<GeneralizedBlackScholesProcess>,
     rho: Real,
     integration_tolerance: Real,
-    max_integration_iterations: usize,
+    max_integration_iterations: Size,
     n_std: Real,
 }
 
 impl PearsonSpreadEngine {
     pub const DEFAULT_INTEGRATION_TOLERANCE: Real = 1e-10;
-    pub const DEFAULT_MAX_INTEGRATION_ITERATIONS: usize = 10_000;
+    pub const DEFAULT_MAX_INTEGRATION_ITERATIONS: Size = 10_000;
     pub const DEFAULT_N_STD: Real = 8.0;
 
     /// Creates a new `PearsonSpreadEngine` with default integration settings.
@@ -165,7 +180,7 @@ impl PearsonSpreadEngine {
         process2: Shared<GeneralizedBlackScholesProcess>,
         rho: Real,
         integration_tolerance: Real,
-        max_integration_iterations: usize,
+        max_integration_iterations: Size,
         n_std: Real,
     ) -> QlResult<Self> {
         require!(
@@ -195,7 +210,7 @@ impl PearsonSpreadEngine {
         self.integration_tolerance
     }
 
-    pub fn max_integration_iterations(&self) -> usize {
+    pub fn max_integration_iterations(&self) -> Size {
         self.max_integration_iterations
     }
 
@@ -314,7 +329,7 @@ pub fn set_pearson_engine_with_config(
     process2: Shared<GeneralizedBlackScholesProcess>,
     rho: Real,
     integration_tolerance: Real,
-    max_integration_iterations: usize,
+    max_integration_iterations: Size,
     n_std: Real,
 ) -> QlResult<()> {
     let engine = shared_mut(PearsonSpreadEngine::with_config(
@@ -422,6 +437,10 @@ mod tests {
         );
         set_pearson_engine(&mut put_option, p1.clone(), p2.clone(), rho).unwrap();
         let put_npv = put_option.npv().unwrap();
+
+        // Pin exact QuantLib numerical values to lock the integrator:
+        assert!((call_npv - 3.583063201538177).abs() <= 1e-10);
+        assert!((put_npv - 17.851504569048082).abs() <= 1e-10);
 
         let t = Actual365Fixed::new().year_fraction(today, maturity);
         let df = (-r * t).exp();
@@ -677,5 +696,36 @@ mod tests {
         let put = pearson_spread_option_value(f1, f2, strike, OptionType::Put, 0.0, 0.0, df, rho)
             .unwrap();
         assert!(put.abs() < 1e-10);
+    }
+
+    /// Verifies that with_config and set_pearson_engine_with_config forward custom integration parameters.
+    #[test]
+    fn test_pearson_with_config_forwarding() {
+        let settings = shared(Settings::new());
+        let today = Date::new(1, Month::March, 2025);
+        settings.set_evaluation_date(today);
+
+        let maturity = today + Period::new(12, TimeUnit::Months);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+
+        let p1 = make_process_365(today, 100.0, 0.05, 0.05, 0.25);
+        let p2 = make_process_365(today, 110.0, 0.05, 0.05, 0.35);
+
+        let engine =
+            PearsonSpreadEngine::with_config(p1.clone(), p2.clone(), 0.75, 1e-8, 5000, 6.0)
+                .unwrap();
+        assert_eq!(engine.rho(), 0.75);
+        assert_eq!(engine.integration_tolerance(), 1e-8);
+        assert_eq!(engine.max_integration_iterations(), 5000);
+        assert_eq!(engine.n_std(), 6.0);
+
+        let mut opt = BasketOption::new(
+            SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, 5.0)),
+            exercise,
+            settings,
+        );
+        set_pearson_engine_with_config(&mut opt, p1, p2, 0.75, 1e-8, 5000, 6.0).unwrap();
+        let npv = opt.npv().unwrap();
+        assert!((npv - 3.583063201538177).abs() < 1e-6);
     }
 }
