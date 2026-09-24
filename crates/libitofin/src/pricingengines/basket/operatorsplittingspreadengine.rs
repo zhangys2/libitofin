@@ -903,6 +903,93 @@ mod tests {
         );
     }
 
+    /// Tests continuity across the critical point and across the Taylor branch threshold
+    /// when r != 0 (discount != 1), pinning that `discount * oo_plt` is correctly applied
+    /// on the Taylor expansion branch (addressing Cursor review concern).
+    #[test]
+    fn test_no_div_by_zero_operator_splitting_with_nonzero_rate() {
+        let settings = shared(Settings::new());
+        let today = Date::new(5, Month::December, 2024);
+        settings.set_evaluation_date(today);
+
+        let maturity = today + Period::new(18, TimeUnit::Months);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(maturity));
+
+        let strike = 50.0;
+        let spot1 = 160.0;
+        let spot2 = 100.0;
+        let vol1 = 0.75;
+        let rho = 1.0 / 3.0;
+        let r = 0.05;
+        let q1 = 0.02;
+        let q2 = 0.01;
+
+        let p1 = make_process_365(today, spot1, q1, r, vol1);
+
+        // Forward under r != 0 and q2 != 0: F2 = spot2 * exp((r - q2) * t)
+        // Critical point rs = 0 occurs when rho * vol1 = vol2 * F2 / (F2 + strike),
+        // so vol2_crit = rho * vol1 * (F2 + strike) / F2.
+        let t = 1.5;
+        let f2 = spot2 * ((r - q2) * t).exp();
+        let vol2_crit = rho * vol1 * (f2 + strike) / f2;
+
+        let make_option = |vol2: Real| -> BasketOption {
+            let p2 = make_process_365(today, spot2, q2, r, vol2);
+            let mut opt = BasketOption::new(
+                SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Put, strike)),
+                Shared::clone(&exercise),
+                Shared::clone(&settings),
+            );
+            set_operator_splitting_engine_with_order(
+                &mut opt,
+                p1.clone(),
+                p2,
+                rho,
+                OperatorSplittingOrder::Second,
+            )
+            .unwrap();
+            opt
+        };
+
+        // Continuity across rs = 0 (well inside Taylor branch)
+        let eps = 1e-5;
+        let mut l_opt = make_option(vol2_crit - eps);
+        let l_npv = l_opt.npv().unwrap();
+
+        let mut r_opt = make_option(vol2_crit + eps);
+        let r_npv = r_opt.npv().unwrap();
+
+        let expected = 0.5 * (l_npv + r_npv);
+
+        let mut center_opt = make_option(vol2_crit);
+        let calculated = center_opt.npv().unwrap();
+
+        let diff = (calculated - expected).abs();
+        let tol = 5e-8;
+        assert!(
+            !calculated.is_nan() && diff <= tol,
+            "failed r!=0 continuity check: calc={calculated}, exp={expected}, diff={diff}, tol={tol}"
+        );
+
+        // Continuity across the Taylor branch boundary (rs ≈ Real::EPSILON^0.625)
+        let thresh = Real::EPSILON.powf(0.625);
+        let delta_boundary = thresh.sqrt() * (f2 + strike) / f2;
+
+        // Just inside Taylor branch
+        let mut opt_inside = make_option(vol2_crit + delta_boundary * 0.999);
+        let npv_inside = opt_inside.npv().unwrap();
+
+        // Just outside Taylor branch (general formula)
+        let mut opt_outside = make_option(vol2_crit + delta_boundary * 1.001);
+        let npv_outside = opt_outside.npv().unwrap();
+
+        let boundary_diff = (npv_inside - npv_outside).abs();
+        assert!(
+            boundary_diff < 1e-6,
+            "failed branch boundary continuity with r!=0: inside={npv_inside}, outside={npv_outside}, diff={boundary_diff}"
+        );
+    }
+
     #[test]
     fn test_operator_splitting_validation_rejects_invalid_inputs() {
         let settings = shared(Settings::new());
@@ -915,6 +1002,26 @@ mod tests {
         // Invalid correlation
         assert!(OperatorSplittingSpreadEngine::new(p1.clone(), p2.clone(), 1.5).is_err());
         assert!(OperatorSplittingSpreadEngine::new(p1.clone(), p2.clone(), -1.5).is_err());
+
+        // Boundary correlation |rho| == 1.0 is valid
+        assert!(OperatorSplittingSpreadEngine::new(p1.clone(), p2.clone(), 1.0).is_ok());
+        assert!(OperatorSplittingSpreadEngine::new(p1.clone(), p2.clone(), -1.0).is_ok());
+
+        // variance2 must be positive (> 0.0)
+        assert!(
+            operator_splitting_spread_option_value(
+                100.0,
+                100.0,
+                10.0,
+                OptionType::Call,
+                0.04,
+                0.0, // variance2 = 0
+                0.95,
+                0.5,
+                OperatorSplittingOrder::First,
+            )
+            .is_err()
+        );
 
         // Non-European exercise
         let american_ex: Shared<dyn Exercise> =
