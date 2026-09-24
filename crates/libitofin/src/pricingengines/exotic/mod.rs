@@ -2,6 +2,7 @@
 //!
 //! Port of `ql/pricingengines/exotic/`.
 
+mod analyticamericanmargrabeengine;
 mod analyticcomplexchooserengine;
 mod analyticcompoundoptionengine;
 mod analyticeuropeanmargrabeengine;
@@ -11,6 +12,9 @@ mod analytictwoassetcorrelationengine;
 mod analyticwriterextensibleoptionengine;
 mod mceverestengine;
 
+pub use analyticamericanmargrabeengine::{
+    AnalyticAmericanMargrabeEngine, set_analytic_american_margrabe_engine,
+};
 pub use analyticcomplexchooserengine::{
     AnalyticComplexChooserEngine, set_analytic_complex_chooser_engine,
 };
