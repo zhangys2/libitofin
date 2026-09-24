@@ -89,7 +89,12 @@ pub fn operator_splitting_spread_option_value(
     let vs = vol2 / (sig_m * sig_m);
     let rs = (rho * vol1 - sig2).powi(2);
 
-    let o_plt = -sig2 * sig2 * strike * discount * norm.value(d2) * vs
+    let o_plt = -sig2
+        * sig2
+        * strike
+        * discount
+        * norm.value(d2)
+        * vs
         * (-d2 * rs / sig2
             - 0.5 * vs * sig_m * strike / denom * (rs * d1 * d2 + (1.0 - rho * rho) * variance1));
 
@@ -117,7 +122,9 @@ pub fn operator_splitting_spread_option_value(
         let ln_r1 = r1.ln();
 
         let num = -0.0625
-            * (k2 * km_r22 * vol26
+            * (k2
+                * km_r22
+                * vol26
                 * (-8.0 * r22 * r24 * (7.0 * k2 - 7.0 * strike * r2 + r22) * vol12 * vol12
                     + km_r22
                         * r24
@@ -197,7 +204,9 @@ pub fn operator_splitting_spread_option_value(
             - 8.0 * f2 * i_r23 * vol22
             + 6.0 * f22 * i_r24 * vol22)
             / (2.0 * a * c);
-    let x = u + v + (e * g * i_r2 * strike * p * vol2) / (4.0 * a * c)
+    let x = u
+        + v
+        + (e * g * i_r2 * strike * p * vol2) / (4.0 * a * c)
         + (e * i_r22 * strike * p * vol2) / (2.0 * c)
         - (e * i_r2 * strike * s * vol2) / (2.0 * c)
         - (i_r2 * strike * p * vol2 * (-(i_r2 * vol2) + f2 * i_r22 * vol2)) / (2.0 * c);
@@ -232,7 +241,11 @@ pub fn operator_splitting_spread_option_value(
                 * g
                 * i_r22
                 * vol2
-                * (4.0 * e * f2 * vol2 * (-2.0 * b * (-1.0 + f * f) * m + e * f * i_r2 * strike * vol2)
+                * (4.0
+                    * e
+                    * f2
+                    * vol2
+                    * (-2.0 * b * (-1.0 + f * f) * m + e * f * i_r2 * strike * vol2)
                     + f22
                         * g
                         * (16.0 * m + e * (2.0 * f + 3.0 * b * iat) * i_r2 * strike * vol2)
@@ -248,7 +261,9 @@ pub fn operator_splitting_spread_option_value(
                     * (4.0 * f22 * iat * i_r22 * r2 * rho * vol1
                         + 8.0 * f23 * i_r22 * n * r1 * vol2
                         - 4.0 * f24 * 3.0 * i_r23 * n * r1 * vol2
-                        - f23 * i_r22 * (4.0 * iat * rho * vol1 + f22 * i_r2 * strike * p * vol23 * w))
+                        - f23
+                            * i_r22
+                            * (4.0 * iat * rho * vol1 + f22 * i_r2 * strike * p * vol23 * w))
                     + 4.0
                         * f23
                         * f22
@@ -267,7 +282,8 @@ pub fn operator_splitting_spread_option_value(
                             - 2.0
                                 * f24
                                 * vol2
-                                * (i_r23 * n * r1 * vol22 + 4.0 * i_r23 * m * vol22 - 2.0 * i_r22 * vol22 * x)
+                                * (i_r23 * n * r1 * vol22 + 4.0 * i_r23 * m * vol22
+                                    - 2.0 * i_r22 * vol22 * x)
                             + f23
                                 * (2.0 * i_r22 * m * vol23
                                     + 6.0 * f22 * i_r24 * m * vol23
@@ -281,21 +297,59 @@ pub fn operator_splitting_spread_option_value(
                 * f22
                 * vol2
                 * (8.0 * f22 * g * i_r22 * (-i_r2 + f2 * i_r22) * m * vol23
-                    + e2 * i_r22 * vol2 * (8.0 * f2 * g * n * r1 + b * f22 * iat * i_r2 * strike * vol22 * (y - z))
-                    + 4.0 * e * vol22 * (4.0 * f2 * g * i_r22 * m + f22 * (-4.0 * g * i_r23 * m + 2.0 * g * i_r22 * x + i_r22 * m * z)))
+                    + e2 * i_r22
+                        * vol2
+                        * (8.0 * f2 * g * n * r1
+                            + b * f22 * iat * i_r2 * strike * vol22 * (y - z))
+                    + 4.0
+                        * e
+                        * vol22
+                        * (4.0 * f2 * g * i_r22 * m
+                            + f22
+                                * (-4.0 * g * i_r23 * m + 2.0 * g * i_r22 * x + i_r22 * m * z)))
             + 2.0
                 * a2
                 * a
                 * f22
                 * (-4.0 * e2 * e2 * e * f * f24 * iat * i_r24 * strike * vol23
-                    + 8.0 * e * f2 * f24 * i_r23 * (-i_r22 + f2 * i_r23) * j * strike * vol12 * vol23 * vol22
-                    + 12.0 * f2 * f24 * i_r23 * (i_r2 - f2 * i_r22).powi(2) * j * strike * vol12 * vol23 * vol23
+                    + 8.0
+                        * e
+                        * f2
+                        * f24
+                        * i_r23
+                        * (-i_r22 + f2 * i_r23)
+                        * j
+                        * strike
+                        * vol12
+                        * vol23
+                        * vol22
+                    + 12.0
+                        * f2
+                        * f24
+                        * i_r23
+                        * (i_r2 - f2 * i_r22).powi(2)
+                        * j
+                        * strike
+                        * vol12
+                        * vol23
+                        * vol23
                     + e2 * e2
                         * f2
                         * vol22
-                        * (2.0 * f24 * i_r22 * strike * vol22 * (2.0 * (i_r23 * p - i_r22 * s) + b2 * iat * i_r2 * w)
-                            + f * (4.0 * f22 * i_r22 * (4.0 * m + f22 * iat * i_r2 * i_r22 * strike * vol22)
-                                - 4.0 * f23 * (6.0 * i_r23 * m + iat * i_r24 * strike * vol22 - 2.0 * i_r22 * x)
+                        * (2.0
+                            * f24
+                            * i_r22
+                            * strike
+                            * vol22
+                            * (2.0 * (i_r23 * p - i_r22 * s) + b2 * iat * i_r2 * w)
+                            + f * (4.0
+                                * f22
+                                * i_r22
+                                * (4.0 * m + f22 * iat * i_r2 * i_r22 * strike * vol22)
+                                - 4.0
+                                    * f23
+                                    * (6.0 * i_r23 * m + iat * i_r24 * strike * vol22
+                                        - 2.0 * i_r22 * x)
                                 + f24 * i_r23 * strike * vol22 * (2.0 * b * w + iat * y)))
                     - 2.0
                         * e2
@@ -309,7 +363,8 @@ pub fn operator_splitting_spread_option_value(
                                     * vol2
                                     * (2.0
                                         * strike
-                                        * (f2 * i_r24 * p + f2 * i_r24 * p + i_r22 * s - i_r23 * (2.0 * p + f2 * s))
+                                        * (f2 * i_r24 * p + f2 * i_r24 * p + i_r22 * s
+                                            - i_r23 * (2.0 * p + f2 * s))
                                         * vol22
                                         + y
                                         - z)
@@ -318,8 +373,25 @@ pub fn operator_splitting_spread_option_value(
                 * a2
                 * e2
                 * f23
-                * (2.0 * e2 * e * f23 * i_r22 * strike * (2.0 * b * i_r22 + g * (-1.0 + f * iat) * i_r2) * vol23
-                    + 4.0 * b * f * f22 * f22 * g * i_r22 * (-i_r2 + f2 * i_r22) * m * vol22 * vol22
+                * (2.0
+                    * e2
+                    * e
+                    * f23
+                    * i_r22
+                    * strike
+                    * (2.0 * b * i_r22 + g * (-1.0 + f * iat) * i_r2)
+                    * vol23
+                    + 4.0
+                        * b
+                        * f
+                        * f22
+                        * f22
+                        * g
+                        * i_r22
+                        * (-i_r2 + f2 * i_r22)
+                        * m
+                        * vol22
+                        * vol22
                     + 2.0
                         * e2
                         * f22
@@ -330,13 +402,23 @@ pub fn operator_splitting_spread_option_value(
                                 + 2.0 * f2 * (-1.0 + 3.0 * f * m + b * f * n * r1) * vol2
                                 + f22 * strike * (-(i_r22 * p) + i_r2 * s) * vol23))
                     + e * vol22
-                        * (f2 * f22 * g * i_r22 * (g * r2 * rho * vol1 + f2 * g * (-1.0 + f * m) * vol2 + 2.0 * f2 * i_r2 * (-i_r2 + f2 * i_r22) * strike * p * vol23)
+                        * (f2
+                            * f22
+                            * g
+                            * i_r22
+                            * (g * r2 * rho * vol1
+                                + f2 * g * (-1.0 + f * m) * vol2
+                                + 2.0 * f2 * i_r2 * (-i_r2 + f2 * i_r22) * strike * p * vol23)
                             + 2.0
                                 * b
                                 * (2.0 * f2 * f22 * g * i_r22 * rho * vol1
                                     - 2.0 * f22 * g * i_r22 * r2 * rho * vol1
                                     + 4.0 * f * f23 * g * i_r22 * m * vol2
-                                    + f * f24 * vol2 * (-4.0 * g * i_r23 * m + 2.0 * g * i_r22 * x + i_r22 * m * z))))))
+                                    + f * f24
+                                        * vol2
+                                        * (-4.0 * g * i_r23 * m
+                                            + 2.0 * g * i_r22 * x
+                                            + i_r22 * m * z))))))
         / (16.0 * a2 * a2 * c * e2 * f23 * sqrt_2 * sqrt_pi * vol2);
 
     Ok(call_put_parity_price(
@@ -608,8 +690,7 @@ mod tests {
 
         for (rho, exp_first, exp_second) in test_data {
             // First order check
-            let payoff =
-                SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, strike));
+            let payoff = SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, strike));
             let mut opt_first =
                 BasketOption::new(payoff, Shared::clone(&exercise), Shared::clone(&settings));
             set_operator_splitting_engine_with_order(
@@ -879,7 +960,10 @@ mod tests {
         let p1 = make_process_365(today, s1, q1, r, vol1);
         let p2 = make_process_365(today, s2, q2, r, vol2);
 
-        for order in [OperatorSplittingOrder::First, OperatorSplittingOrder::Second] {
+        for order in [
+            OperatorSplittingOrder::First,
+            OperatorSplittingOrder::Second,
+        ] {
             let mut call_opt = BasketOption::new(
                 SpreadBasketPayoff::new(PlainVanillaPayoff::new(OptionType::Call, strike)),
                 Shared::clone(&exercise),
