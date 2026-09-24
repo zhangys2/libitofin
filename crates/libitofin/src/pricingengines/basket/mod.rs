@@ -3,6 +3,7 @@
 mod bjerksundstenslandspreadengine;
 mod choibasketengine;
 mod kirkengine;
+mod operatorsplittingspreadengine;
 mod pearsonspreadengine;
 mod singlefactorbsmbasketengine;
 mod stulzengine;
@@ -14,6 +15,10 @@ pub use bjerksundstenslandspreadengine::{
 };
 pub use choibasketengine::ChoiBasketEngine;
 pub use kirkengine::{KirkEngine, kirk_spread_option_value, set_kirk_engine};
+pub use operatorsplittingspreadengine::{
+    OperatorSplittingOrder, OperatorSplittingSpreadEngine, operator_splitting_spread_option_value,
+    set_operator_splitting_engine, set_operator_splitting_engine_with_order,
+};
 pub use pearsonspreadengine::{
     PearsonSpreadEngine, pearson_spread_option_value, pearson_spread_option_value_with_config,
     set_pearson_engine, set_pearson_engine_with_config,
