@@ -256,11 +256,12 @@ impl Calendar {
     pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
         use BusinessDayConvention::*;
         assert!(d != Date::null(), "null date");
-        assert!(!self.is_empty(), "no calendar implementation provided");
 
         if c == Unadjusted {
             return d;
         }
+
+        assert!(!self.is_empty(), "no calendar implementation provided");
 
         let mut d1 = d;
         if c == Following || c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
