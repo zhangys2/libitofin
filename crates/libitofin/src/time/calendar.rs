@@ -256,6 +256,7 @@ impl Calendar {
     pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
         use BusinessDayConvention::*;
         assert!(d != Date::null(), "null date");
+        assert!(!self.is_empty(), "no calendar implementation provided");
 
         if c == Unadjusted {
             return d;
@@ -316,6 +317,7 @@ impl Calendar {
         end_of_month: bool,
     ) -> Date {
         assert!(d != Date::null(), "null date");
+        assert!(!self.is_empty(), "no calendar implementation provided");
 
         if n == 0 {
             return self.adjust(d, c);
@@ -748,5 +750,14 @@ mod tests {
         let weekends = cal();
         assert!(!weekends.is_empty());
         assert_eq!(weekends.name(), "Weekends test");
+    }
+
+    #[test]
+    #[should_panic(expected = "no calendar implementation provided")]
+    fn empty_calendar_adjust_panics() {
+        Calendar::empty().adjust(
+            Date::new(5, Month::January, 2023),
+            BusinessDayConvention::Following,
+        );
     }
 }
