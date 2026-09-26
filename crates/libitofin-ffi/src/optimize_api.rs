@@ -189,10 +189,49 @@ impl Drop for ReleasedConstraints {
     }
 }
 
+struct PointCache {
+    descriptor: usize,
+    points: Vec<(Vec<f64>, Vec<f64>)>,
+}
+
+fn cached_point(cache: &Option<PointCache>, descriptor: usize, x: &[f64]) -> Option<Vec<f64>> {
+    let cache = cache.as_ref()?;
+    if cache.descriptor != descriptor {
+        return None;
+    }
+    cache
+        .points
+        .iter()
+        .find(|(point, _)| point.as_slice() == x)
+        .map(|(_, values)| values.clone())
+}
+
+fn remember_point(cache: &mut Option<PointCache>, descriptor: usize, x: &[f64], values: Vec<f64>) {
+    let cap = x.len().saturating_add(2).max(4);
+    match cache {
+        Some(slot) if slot.descriptor == descriptor => {
+            if slot.points.len() >= cap {
+                slot.points.remove(0);
+            }
+            slot.points.push((x.to_vec(), values));
+        }
+        _ => {
+            *cache = Some(PointCache {
+                descriptor,
+                points: vec![(x.to_vec(), values)],
+            });
+        }
+    }
+}
+
 struct ConstrainedObjective {
     base: Released,
     constraints: ReleasedConstraints,
     components: Vec<(usize, usize)>,
+    /// One vector callback per distinct `(descriptor, x)`, reused across the
+    /// scalar components SLSQP asks for separately.
+    values: Option<PointCache>,
+    jacobian: Option<PointCache>,
 }
 
 impl Objective for ConstrainedObjective {
@@ -224,6 +263,9 @@ impl Objective for ConstrainedObjective {
 
     fn constraint(&mut self, i: usize, x: &[f64]) -> Result<f64, Self::Error> {
         let (descriptor, component) = self.components[i];
+        if let Some(values) = cached_point(&self.values, descriptor, x) {
+            return Ok(values[component]);
+        }
         let constraint = &self.constraints.0[descriptor];
         let mut values = vec![f64::NAN; constraint.dimension];
         let mut error = blank();
@@ -241,7 +283,9 @@ impl Objective for ConstrainedObjective {
             )
         };
         if code == 0 {
-            Ok(values[component])
+            let value = values[component];
+            remember_point(&mut self.values, descriptor, x, values);
+            Ok(value)
         } else {
             Err(CallbackError(message(&error)))
         }
@@ -258,6 +302,11 @@ impl Objective for ConstrainedObjective {
         let Some(jac) = constraint.jac else {
             return Ok(false);
         };
+        if let Some(rows) = cached_point(&self.jacobian, descriptor, x) {
+            let start = component * x.len();
+            out.copy_from_slice(&rows[start..start + x.len()]);
+            return Ok(true);
+        }
         let len = constraint.dimension * x.len();
         let mut rows = vec![f64::NAN; len];
         let mut error = blank();
@@ -274,7 +323,9 @@ impl Objective for ConstrainedObjective {
         if code != 0 {
             return Err(CallbackError(message(&error)));
         }
-        out.copy_from_slice(&rows[component * x.len()..(component + 1) * x.len()]);
+        let start = component * x.len();
+        out.copy_from_slice(&rows[start..start + x.len()]);
+        remember_point(&mut self.jacobian, descriptor, x, rows);
         Ok(true)
     }
 }
@@ -713,6 +764,8 @@ pub unsafe extern "C" fn itofin_optimize_slsqp(
                 base,
                 constraints,
                 components,
+                values: None,
+                jacobian: None,
             };
             let method = Method::Slsqp(SlsqpOptions {
                 ftol: nonzero(options.ftol),
@@ -1046,5 +1099,95 @@ mod tests {
             INVALID_ARGUMENT
         );
         assert_eq!(RELEASES.load(Ordering::SeqCst) - before, 6);
+    }
+
+    #[test]
+    fn vector_constraint_evaluates_each_point_once() {
+        static CALLS: AtomicUsize = AtomicUsize::new(0);
+        static JCALLS: AtomicUsize = AtomicUsize::new(0);
+
+        unsafe extern "C" fn value(
+            _: usize,
+            _: *const f64,
+            _: usize,
+            out: *mut f64,
+            _: *mut ItofinError,
+        ) -> i32 {
+            unsafe { *out = 0.0 };
+            0
+        }
+        unsafe extern "C" fn fun(
+            _: usize,
+            _: *const f64,
+            _: usize,
+            out: *mut f64,
+            n: usize,
+            _: *mut ItofinError,
+        ) -> i32 {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            unsafe {
+                for (i, slot) in std::slice::from_raw_parts_mut(out, n)
+                    .iter_mut()
+                    .enumerate()
+                {
+                    *slot = i as f64 + 1.0;
+                }
+            }
+            0
+        }
+        unsafe extern "C" fn jac(
+            _: usize,
+            _: *const f64,
+            n: usize,
+            out: *mut f64,
+            len: usize,
+            _: *mut ItofinError,
+        ) -> i32 {
+            JCALLS.fetch_add(1, Ordering::SeqCst);
+            unsafe {
+                for (i, slot) in std::slice::from_raw_parts_mut(out, len)
+                    .iter_mut()
+                    .enumerate()
+                {
+                    *slot = (i / n.max(1)) as f64;
+                }
+            }
+            0
+        }
+
+        let mut objective = ConstrainedObjective {
+            base: Released(ItofinObjective {
+                userdata: 0,
+                value: Some(value),
+                callback: None,
+                release: None,
+                gradient: None,
+            }),
+            constraints: ReleasedConstraints(vec![ItofinConstraint {
+                kind: ITOFIN_CONSTRAINT_INEQ,
+                dimension: 2,
+                userdata: 0,
+                fun: Some(fun),
+                jac: Some(jac),
+                release: None,
+            }]),
+            components: vec![(0, 0), (0, 1)],
+            values: None,
+            jacobian: None,
+        };
+        let x = [0.5, -0.25];
+        assert_eq!(Objective::constraint(&mut objective, 0, &x).unwrap(), 1.0);
+        assert_eq!(Objective::constraint(&mut objective, 1, &x).unwrap(), 2.0);
+        let y = [0.6, -0.25];
+        assert_eq!(Objective::constraint(&mut objective, 0, &y).unwrap(), 1.0);
+        assert_eq!(Objective::constraint(&mut objective, 1, &y).unwrap(), 2.0);
+        assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+
+        let mut row = [0.0; 2];
+        assert!(Objective::constraint_jacobian(&mut objective, 0, &x, &mut row).unwrap());
+        assert_eq!(row, [0.0, 0.0]);
+        assert!(Objective::constraint_jacobian(&mut objective, 1, &x, &mut row).unwrap());
+        assert_eq!(row, [1.0, 1.0]);
+        assert_eq!(JCALLS.load(Ordering::SeqCst), 1);
     }
 }

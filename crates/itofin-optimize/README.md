@@ -7,7 +7,7 @@ SciPy-inspired numerical optimization in Rust, over plain `f64` slices.
 A general-purpose `minimize` for Nelder-Mead, BFGS, L-BFGS-B and SLSQP, with an
 `Objective` trait carrying its own error type, explicit budgets, a cancellation
 hook and validated inputs. All four Rust solvers use the single `minimize`
-entry point. L-BFGS-B bindings are tracked in issue #1086.
+entry point. C, Go, and Python expose the same four methods.
 
 ## Independent of libitofin
 

@@ -30,10 +30,12 @@ for concurrency and callback restrictions.
 
 ## Optimization
 
-`itofin.Minimize` runs the finance-independent Nelder-Mead solver from the
+`itofin.Minimize` runs the finance-independent solvers from the
 `itofin-optimize` crate on the calling goroutine, outside any session, so the
 objective may call session methods such as `SimpleQuote.SetValue` and
-`VanillaSwap.NPV`:
+`VanillaSwap.NPV`. `OptimizeMethod` is `NelderMead` (below), `BFGS`,
+`LBFGSB` (box bounds), or `SLSQP` (general constraints); see
+[optimize](../docs/docs/api/optimize.md). The example uses Nelder-Mead:
 
 ```go
 result, err := itofin.Minimize(ctx, func(x []float64) (float64, error) {

@@ -101,6 +101,49 @@ struct PyObjective<'py> {
     jac: Option<Bound<'py, PyAny>>,
     callback: Option<Bound<'py, PyAny>>,
     constraints: PyConstraints<'py>,
+    /// One vector callback per distinct `(descriptor, x)`, reused across the
+    /// scalar components SLSQP asks for separately.
+    values: Option<PyEvalCache<Vec<f64>>>,
+    jacobian: Option<PyEvalCache<Vec<Vec<f64>>>>,
+}
+
+struct PyEvalCache<T> {
+    descriptor: usize,
+    points: Vec<(Vec<f64>, T)>,
+}
+
+fn cached_eval<T: Clone>(
+    cache: &Option<PyEvalCache<T>>,
+    descriptor: usize,
+    x: &[f64],
+) -> Option<T> {
+    let cache = cache.as_ref()?;
+    if cache.descriptor != descriptor {
+        return None;
+    }
+    cache
+        .points
+        .iter()
+        .find(|(point, _)| point.as_slice() == x)
+        .map(|(_, values)| values.clone())
+}
+
+fn remember_eval<T>(cache: &mut Option<PyEvalCache<T>>, descriptor: usize, x: &[f64], values: T) {
+    let cap = x.len().saturating_add(2).max(4);
+    match cache {
+        Some(slot) if slot.descriptor == descriptor => {
+            if slot.points.len() >= cap {
+                slot.points.remove(0);
+            }
+            slot.points.push((x.to_vec(), values));
+        }
+        _ => {
+            *cache = Some(PyEvalCache {
+                descriptor,
+                points: vec![(x.to_vec(), values)],
+            });
+        }
+    }
 }
 
 struct PyConstraints<'py> {
@@ -229,6 +272,9 @@ impl Objective for PyObjective<'_> {
 
     fn constraint(&mut self, i: usize, x: &[f64]) -> PyResult<f64> {
         let (index, row) = self.constraints.components[i];
+        if let Some(values) = cached_eval(&self.values, index, x) {
+            return Ok(values[row]);
+        }
         let descriptor = &self.constraints.descriptors[index];
         let point = PyArray1::from_slice(descriptor.fun.py(), x);
         let values = constraint_values(&descriptor.fun.call1((point,))?)?;
@@ -237,7 +283,9 @@ impl Objective for PyObjective<'_> {
                 "constraint fun changed output dimension",
             ));
         }
-        Ok(values[row])
+        let value = values[row];
+        remember_eval(&mut self.values, index, x, values);
+        Ok(value)
     }
 
     fn constraint_jacobian(&mut self, i: usize, x: &[f64], out: &mut [f64]) -> PyResult<bool> {
@@ -246,15 +294,24 @@ impl Objective for PyObjective<'_> {
         let Some(jac) = &descriptor.jac else {
             return Ok(false);
         };
+        if let Some(rows) = cached_eval(&self.jacobian, index, x) {
+            if rows[row].len() != out.len() {
+                return Err(PyValueError::new_err(
+                    "constraint jac returned the wrong gradient length",
+                ));
+            }
+            out.copy_from_slice(&rows[row]);
+            return Ok(true);
+        }
         let point = PyArray1::from_slice(jac.py(), x);
         let value = jac.call1((point,))?;
-        let values = if let Ok(values) = value.extract::<Vec<f64>>() {
+        let rows = if let Ok(values) = value.extract::<Vec<f64>>() {
             if descriptor.dimension != 1 {
                 return Err(PyValueError::new_err(
                     "constraint jac must return one row per constraint component",
                 ));
             }
-            values
+            vec![values]
         } else {
             let rows: Vec<Vec<f64>> = value.extract()?;
             if rows.len() != descriptor.dimension {
@@ -262,14 +319,15 @@ impl Objective for PyObjective<'_> {
                     "constraint jac returned the wrong row count",
                 ));
             }
-            rows[row].clone()
+            rows
         };
-        if values.len() != out.len() {
+        if rows[row].len() != out.len() {
             return Err(PyValueError::new_err(
                 "constraint jac returned the wrong gradient length",
             ));
         }
-        out.copy_from_slice(&values);
+        out.copy_from_slice(&rows[row]);
+        remember_eval(&mut self.jacobian, index, x, rows);
         Ok(true)
     }
 }
@@ -469,6 +527,8 @@ pub(crate) fn minimize(
         jac,
         callback,
         constraints,
+        values: None,
+        jacobian: None,
     };
     let result: Minimize = match run(&mut objective, &problem, &method, &common) {
         Ok(result) => result,
