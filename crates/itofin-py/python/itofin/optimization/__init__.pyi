@@ -4,9 +4,46 @@
 import builtins
 import typing
 __all__ = [
+    "BoundaryConstraint",
+    "CompositeConstraint",
+    "ConjugateGradient",
     "EndCriteria",
     "LevenbergMarquardt",
+    "NoConstraint",
+    "PositiveConstraint",
+    "Simplex",
+    "SteepestDescent",
 ]
+
+@typing.final
+class BoundaryConstraint:
+    r"""
+    An inclusive lower and upper bound for every parameter.
+    """
+    def __init__(self, low: builtins.float, high: builtins.float) -> None:
+        r"""
+        Build a bound with finite, ordered endpoints.
+        """
+
+@typing.final
+class CompositeConstraint:
+    r"""
+    The intersection of two reusable constraints.
+    """
+    def __init__(self, a: NoConstraint | PositiveConstraint | BoundaryConstraint | CompositeConstraint, b: NoConstraint | PositiveConstraint | BoundaryConstraint | CompositeConstraint) -> None:
+        r"""
+        Copy both children, so they may be released independently.
+        """
+
+@typing.final
+class ConjugateGradient:
+    r"""
+    The conjugate-gradient method for calibration.
+    """
+    def __init__(self) -> None:
+        r"""
+        Build a conjugate-gradient method with the core Armijo line search.
+        """
 
 @typing.final
 class EndCriteria:
@@ -59,4 +96,47 @@ class LevenbergMarquardt:
             use_cost_functions_jacobian (bool): Use the cost function's own jacobian
                 method (a central difference, order 2 but costlier) instead of
                 the built-in forward-difference scheme.
+        """
+
+@typing.final
+class NoConstraint:
+    r"""
+    A constraint that accepts every parameter vector.
+    """
+    def __init__(self) -> None:
+        r"""
+        Build an unconstrained parameter region.
+        """
+
+@typing.final
+class PositiveConstraint:
+    r"""
+    A constraint requiring every parameter to be strictly positive.
+    """
+    def __init__(self) -> None:
+        r"""
+        Require each parameter to be strictly positive.
+        """
+
+@typing.final
+class Simplex:
+    r"""
+    The downhill simplex method for derivative-free calibration.
+    """
+    def __init__(self, lambda_: builtins.float) -> None:
+        r"""
+        Build a simplex with a finite, positive characteristic length.
+
+        Raises:
+            ValueError: If lambda_ is zero, negative or non-finite.
+        """
+
+@typing.final
+class SteepestDescent:
+    r"""
+    The steepest-descent method for calibration.
+    """
+    def __init__(self) -> None:
+        r"""
+        Build a steepest-descent method with the core Armijo line search.
         """

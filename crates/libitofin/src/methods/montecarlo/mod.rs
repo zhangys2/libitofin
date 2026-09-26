@@ -17,6 +17,7 @@ mod path;
 mod pathgen;
 mod pathgenerator;
 mod sample;
+pub mod simulation_kernel;
 
 pub use brownianbridge::BrownianBridge;
 pub use earlyexercisepathpricer::EarlyExercisePathPricer;

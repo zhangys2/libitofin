@@ -73,9 +73,11 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Go SDK: go.md
+  - Finite-difference options: finite-difference.md
   - Joint yield curves: joint-curves.md
   - Municipal BMA swaps: bma.md
   - Random policies: random-policies.md
+  - GBM simulation: simulation.md
   - Cap/floor engines: cap-engines.md
   - Python API:
       - Core: api/core.md
@@ -89,6 +91,7 @@ nav:
       - Pricing engines: api/pricingengines.md
       - Models: api/models.md
       - Optimization: api/optimization.md
+      - Optimize: api/optimize.md
       - Random numbers: api/randomnumbers.md
       - Results: api/results.md
   - Rust API: rust.md
