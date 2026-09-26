@@ -1,18 +1,203 @@
-//! Facades for the calibration machinery: LevenbergMarquardt, EndCriteria and
-//! CalibrationErrorType.
+//! Facades for calibration methods, end criteria and error measures.
 //!
-//! These are the optimizer, stopping rule and error measure shared by the
-//! Heston and Hull-White calibrations (follow-up tickets H2/W2).
+//! Heston and Hull-White share these methods, stopping rules and error measures.
 
 use crate::PyQlError;
+use libitofin::math::optimization::conjugategradient::ConjugateGradient;
+use libitofin::math::optimization::constraint::{
+    BoundaryConstraint, CompositeConstraint, Constraint, NoConstraint, PositiveConstraint,
+};
 use libitofin::math::optimization::endcriteria::EndCriteria;
 use libitofin::math::optimization::levenbergmarquardt::LevenbergMarquardt;
+use libitofin::math::optimization::method::OptimizationMethod;
+use libitofin::math::optimization::simplex::Simplex;
+use libitofin::math::optimization::steepestdescent::SteepestDescent;
 use libitofin::models::CalibrationErrorType;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 #[allow(unused_imports)]
 use pyo3_stub_gen::derive::{
     gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction, gen_stub_pymethods,
 };
+
+#[derive(Clone)]
+enum ConstraintSpec {
+    None,
+    Positive,
+    Boundary(f64, f64),
+    Composite(Box<Self>, Box<Self>),
+}
+
+impl ConstraintSpec {
+    fn build(&self) -> Box<dyn Constraint> {
+        match self {
+            Self::None => Box::new(NoConstraint),
+            Self::Positive => Box::new(PositiveConstraint),
+            Self::Boundary(low, high) => Box::new(BoundaryConstraint::new(*low, *high)),
+            Self::Composite(left, right) => {
+                Box::new(CompositeConstraint::new(left.build(), right.build()))
+            }
+        }
+    }
+}
+
+fn constraint_spec(value: &Bound<'_, PyAny>) -> PyResult<ConstraintSpec> {
+    if value.is_instance_of::<PyNoConstraint>() {
+        return Ok(value.extract::<PyRef<'_, PyNoConstraint>>()?.inner.clone());
+    }
+    if value.is_instance_of::<PyPositiveConstraint>() {
+        return Ok(value
+            .extract::<PyRef<'_, PyPositiveConstraint>>()?
+            .inner
+            .clone());
+    }
+    if let Ok(boundary) = value.extract::<PyRef<'_, PyBoundaryConstraint>>() {
+        return Ok(ConstraintSpec::Boundary(boundary.low, boundary.high));
+    }
+    if let Ok(composite) = value.extract::<PyRef<'_, PyCompositeConstraint>>() {
+        return Ok(composite.inner.clone());
+    }
+    Err(PyTypeError::new_err(
+        "constraint must be NoConstraint, PositiveConstraint, BoundaryConstraint or CompositeConstraint",
+    ))
+}
+
+/// A constraint that accepts every parameter vector.
+#[gen_stub_pyclass]
+#[pyclass(name = "NoConstraint", unsendable, module = "itofin.optimization")]
+pub struct PyNoConstraint {
+    inner: ConstraintSpec,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyNoConstraint {
+    /// Build an unconstrained parameter region.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: ConstraintSpec::None,
+        }
+    }
+}
+
+/// A constraint requiring every parameter to be strictly positive.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "PositiveConstraint",
+    unsendable,
+    module = "itofin.optimization"
+)]
+pub struct PyPositiveConstraint {
+    inner: ConstraintSpec,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyPositiveConstraint {
+    /// Require each parameter to be strictly positive.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: ConstraintSpec::Positive,
+        }
+    }
+}
+
+/// An inclusive lower and upper bound for every parameter.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "BoundaryConstraint",
+    unsendable,
+    module = "itofin.optimization"
+)]
+pub struct PyBoundaryConstraint {
+    low: f64,
+    high: f64,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyBoundaryConstraint {
+    /// Build a bound with finite, ordered endpoints.
+    #[new]
+    fn new(low: f64, high: f64) -> PyResult<Self> {
+        if !low.is_finite() || !high.is_finite() || low > high {
+            return Err(PyValueError::new_err(
+                "constraint bounds must be finite and ordered",
+            ));
+        }
+        Ok(Self { low, high })
+    }
+}
+
+/// The intersection of two reusable constraints.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "CompositeConstraint",
+    unsendable,
+    module = "itofin.optimization"
+)]
+pub struct PyCompositeConstraint {
+    inner: ConstraintSpec,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyCompositeConstraint {
+    /// Copy both children, so they may be released independently.
+    #[new]
+    fn new(
+        #[gen_stub(override_type(
+            type_repr = "NoConstraint | PositiveConstraint | BoundaryConstraint | CompositeConstraint"
+        ))]
+        a: &Bound<'_, PyAny>,
+        #[gen_stub(override_type(
+            type_repr = "NoConstraint | PositiveConstraint | BoundaryConstraint | CompositeConstraint"
+        ))]
+        b: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            inner: ConstraintSpec::Composite(
+                Box::new(constraint_spec(a)?),
+                Box::new(constraint_spec(b)?),
+            ),
+        })
+    }
+}
+
+pub(crate) struct CalibrationOptions {
+    pub constraint: Option<Box<dyn Constraint>>,
+    pub weights: Vec<f64>,
+    pub fix_parameters: Vec<bool>,
+}
+
+pub(crate) fn calibration_options(
+    constraint: Option<&Bound<'_, PyAny>>,
+    weights: Option<Vec<f64>>,
+    fix_parameters: Option<Vec<bool>>,
+    fix_reversion: bool,
+) -> PyResult<CalibrationOptions> {
+    let fix_parameters = fix_parameters.unwrap_or_default();
+    if fix_reversion && !fix_parameters.is_empty() {
+        return Err(PyValueError::new_err(
+            "fix_reversion and fix_parameters cannot both be set",
+        ));
+    }
+    Ok(CalibrationOptions {
+        constraint: constraint
+            .map(constraint_spec)
+            .transpose()?
+            .map(|spec| spec.build()),
+        weights: weights.unwrap_or_default(),
+        fix_parameters: if fix_reversion {
+            vec![true, false]
+        } else {
+            fix_parameters
+        },
+    })
+}
 
 /// The least-squares optimizer used to fit model parameters.
 ///
@@ -49,6 +234,95 @@ impl PyLevenbergMarquardt {
             inner: LevenbergMarquardt::new(epsfcn, xtol, gtol, use_cost_functions_jacobian),
         }
     }
+}
+
+/// The downhill simplex method for derivative-free calibration.
+#[gen_stub_pyclass]
+#[pyclass(name = "Simplex", unsendable, module = "itofin.optimization")]
+pub struct PySimplex {
+    inner: Simplex,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PySimplex {
+    /// Build a simplex with a finite, positive characteristic length.
+    ///
+    /// Raises:
+    ///     ValueError: If lambda_ is zero, negative or non-finite.
+    #[new]
+    #[pyo3(signature = (lambda_))]
+    fn new(lambda_: f64) -> PyResult<Self> {
+        if !lambda_.is_finite() || lambda_ <= 0.0 {
+            return Err(PyValueError::new_err("lambda_ must be finite and positive"));
+        }
+        Ok(Self {
+            inner: Simplex::new(lambda_),
+        })
+    }
+}
+
+/// The conjugate-gradient method for calibration.
+#[gen_stub_pyclass]
+#[pyclass(name = "ConjugateGradient", unsendable, module = "itofin.optimization")]
+pub struct PyConjugateGradient {
+    inner: ConjugateGradient,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyConjugateGradient {
+    /// Build a conjugate-gradient method with the core Armijo line search.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: ConjugateGradient::new(),
+        }
+    }
+}
+
+/// The steepest-descent method for calibration.
+#[gen_stub_pyclass]
+#[pyclass(name = "SteepestDescent", unsendable, module = "itofin.optimization")]
+pub struct PySteepestDescent {
+    inner: SteepestDescent,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PySteepestDescent {
+    /// Build a steepest-descent method with the core Armijo line search.
+    #[new]
+    fn new() -> Self {
+        Self {
+            inner: SteepestDescent::new(),
+        }
+    }
+}
+
+pub(crate) fn with_method<R>(
+    method: &Bound<'_, PyAny>,
+    run: impl FnOnce(&mut dyn OptimizationMethod) -> PyResult<R>,
+) -> PyResult<R> {
+    if method.is_instance_of::<PyLevenbergMarquardt>() {
+        let mut method = method.extract::<PyRefMut<'_, PyLevenbergMarquardt>>()?;
+        return run(method.inner_mut());
+    }
+    if method.is_instance_of::<PySimplex>() {
+        let mut method = method.extract::<PyRefMut<'_, PySimplex>>()?;
+        return run(&mut method.inner);
+    }
+    if method.is_instance_of::<PyConjugateGradient>() {
+        let mut method = method.extract::<PyRefMut<'_, PyConjugateGradient>>()?;
+        return run(&mut method.inner);
+    }
+    if method.is_instance_of::<PySteepestDescent>() {
+        let mut method = method.extract::<PyRefMut<'_, PySteepestDescent>>()?;
+        return run(&mut method.inner);
+    }
+    Err(PyTypeError::new_err(
+        "method must be LevenbergMarquardt, Simplex, ConjugateGradient or SteepestDescent",
+    ))
 }
 
 impl PyLevenbergMarquardt {

@@ -25,6 +25,11 @@ pub enum Termination {
     Cancelled,
     /// A value the method cannot continue from ended the search.
     Nonfinite,
+    /// No step along the search direction satisfied the strong Wolfe
+    /// conditions.
+    LineSearchFailed,
+    /// The linearized constraints admit no step that reduces their violation.
+    Infeasible,
 }
 
 impl Termination {
@@ -44,6 +49,10 @@ impl fmt::Display for Termination {
             Termination::MaxEvaluations => "maximum number of function evaluations reached",
             Termination::Cancelled => "stopped by the callback",
             Termination::Nonfinite => "a nonfinite value ended the search",
+            Termination::LineSearchFailed => {
+                "line search failed: no step satisfies the strong Wolfe conditions"
+            }
+            Termination::Infeasible => "the constraints are infeasible",
         })
     }
 }
@@ -68,6 +77,9 @@ pub struct Minimize {
     pub success: bool,
     /// A human reading of `status`.
     pub message: String,
+    /// The Lagrange multipliers of the general constraints, in constraint
+    /// order, from a method that computes them.
+    pub multipliers: Option<Vec<f64>>,
 }
 
 impl Minimize {
@@ -93,6 +105,15 @@ impl Minimize {
             status,
             success: status.is_success(),
             message: status.to_string(),
+            multipliers: None,
+        }
+    }
+
+    /// Attaches the Lagrange multipliers of the general constraints.
+    pub fn with_multipliers(self, multipliers: Vec<f64>) -> Self {
+        Self {
+            multipliers: Some(multipliers),
+            ..self
         }
     }
 }

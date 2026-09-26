@@ -1,9 +1,8 @@
 //! Cap helpers and concrete Hull-White cap lattice engines.
 use crate::boundary::*;
+use crate::constraint_api::{ItofinCalibrationOptions, read_options};
 use crate::rates_api::{curve, finite};
-use libitofin::math::optimization::{
-    endcriteria::EndCriteria, levenbergmarquardt::LevenbergMarquardt,
-};
+use libitofin::math::optimization::{endcriteria::EndCriteria, method::OptimizationMethod};
 use libitofin::math::timegrid::TimeGrid;
 use libitofin::models::calibrationhelper::{BlackCalibrationHelper, CalibrationHelper};
 use libitofin::models::shortrate::calibrationhelpers::CapHelper;
@@ -190,9 +189,48 @@ pub unsafe extern "C" fn itofin_hullwhite_calibrate_caps(
     error: *mut ItofinError,
 ) -> i32 {
     unsafe {
+        itofin_hullwhite_calibrate_caps_with_options(
+            ctx,
+            model,
+            helpers,
+            helpers_len,
+            method,
+            criteria,
+            steps,
+            fix_reversion,
+            std::ptr::null(),
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+/// Pointers and handles must obey the C caller contract. Option arrays are copied
+/// before calibration and are never retained.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn itofin_hullwhite_calibrate_caps_with_options(
+    ctx: *mut Context,
+    model: u64,
+    helpers: *const u64,
+    helpers_len: usize,
+    method: u64,
+    criteria: u64,
+    steps: usize,
+    fix_reversion: u8,
+    options: *const ItofinCalibrationOptions,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
         with_context(ctx, error, |c| {
             if fix_reversion > 1 {
                 return Err(BindingError::invalid("invalid fix-reversion flag"));
+            }
+            let options = read_options(c, options)?;
+            if fix_reversion != 0 && !options.fix_parameters.is_empty() {
+                return Err(BindingError::invalid(
+                    "fix_reversion and fix_parameters cannot both be set",
+                ));
             }
             let ids = input_slice(helpers, helpers_len)?;
             if ids.is_empty() {
@@ -203,7 +241,7 @@ pub unsafe extern "C" fn itofin_hullwhite_calibrate_caps(
                 .map(|id| c.get::<SharedMut<CapHelper>>(*id))
                 .collect::<BindingResult<Vec<_>>>()?;
             let model = c.get::<SharedMut<HullWhite>>(model)?;
-            let method = c.get::<SharedMut<LevenbergMarquardt>>(method)?;
+            let method = c.get::<SharedMut<dyn OptimizationMethod>>(method)?;
             let criteria = c.get::<EndCriteria>(criteria)?;
             let engine = shared_mut(TreeCapFloorEngine::new(model.clone(), steps)?)
                 as SharedMut<dyn PricingEngine>;
@@ -222,12 +260,12 @@ pub unsafe extern "C" fn itofin_hullwhite_calibrate_caps(
                 &helpers,
                 &mut *method.borrow_mut(),
                 &criteria,
-                None,
-                Vec::new(),
+                options.constraint,
+                options.weights,
                 if fix_reversion != 0 {
                     vec![true, false]
                 } else {
-                    Vec::new()
+                    options.fix_parameters
                 },
             )?;
             Ok(())
