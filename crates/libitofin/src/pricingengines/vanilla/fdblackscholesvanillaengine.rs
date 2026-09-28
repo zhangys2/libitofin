@@ -1389,3 +1389,544 @@ mod test_fd_values {
         }
     }
 }
+
+#[cfg(test)]
+mod test_fd_earliest_exercise_date {
+    //! The `testFdEarliestExerciseDate` oracle of
+    //! `test-suite/americanoption.cpp:2173-2255`: a deep in-the-money put whose
+    //! exercise window is narrowed from the front.
+    //!
+    //! This is the only oracle that drives a non-zero `exercise_start`.
+    //! `testFdValues` opens every window at the reference date, so the
+    //! early-return of `FdmAmericanStepCondition::apply_to`
+    //! (`fdmamericanstepcondition.cpp:37-38`) never fires there and an engine
+    //! ignoring the earliest exercise date would pass it.
+
+    use super::super::AnalyticEuropeanEngine;
+    use super::FdBlackScholesVanillaEngine;
+    use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::instruments::{OneAssetOption, PlainVanillaPayoff};
+    use crate::interestrate::Compounding;
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
+    use crate::option::OptionType::Put;
+    use crate::pricingengine::PricingEngine;
+    use crate::processes::{BlackScholesMertonProcess, GeneralizedBlackScholesProcess};
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
+    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::date::{Date, Month};
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::frequency::Frequency;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+    use crate::types::{Rate, Real, Size, Volatility};
+
+    /// The market of `:2186-2195`.
+    pub(super) const S0: Real = 80.0;
+    pub(super) const STRIKE: Real = 100.0;
+    const SIGMA: Volatility = 0.25;
+    const R: Rate = 0.05;
+    const Q: Rate = 0.0;
+
+    /// The grid of `:2206`.
+    pub(super) const T_GRID: Size = 200;
+    pub(super) const X_GRID: Size = 200;
+
+    pub(super) fn today() -> Date {
+        Date::new(15, Month::January, 2025)
+    }
+
+    fn flat_rate(rate: Rate) -> Handle<dyn YieldTermStructure> {
+        Handle::new(shared(FlatForward::with_rate(
+            today(),
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    }
+
+    pub(super) fn process() -> Shared<GeneralizedBlackScholesProcess> {
+        let spot = Handle::new(shared(SimpleQuote::new(S0)) as Shared<dyn Quote>);
+        let vol = Handle::new(shared(BlackConstantVol::new(
+            today(),
+            None,
+            SIGMA,
+            Actual365Fixed::new(),
+        )) as Shared<dyn BlackVolTermStructure>);
+        shared(BlackScholesMertonProcess::new(
+            spot,
+            flat_rate(Q),
+            flat_rate(R),
+            vol,
+        ))
+    }
+
+    /// The American put over `[earliest, maturity]`, priced by the
+    /// finite-difference engine (`:2203-2208`).
+    fn american_price(
+        settings: &Shared<Settings<Date>>,
+        process: &Shared<GeneralizedBlackScholesProcess>,
+        earliest: Date,
+        maturity: Date,
+    ) -> Real {
+        let exercise = AmericanExercise::over(earliest, maturity).unwrap();
+        let mut option = OneAssetOption::new(
+            shared(PlainVanillaPayoff::new(Put, STRIKE)),
+            shared(exercise) as Shared<dyn Exercise>,
+            Shared::clone(settings),
+        );
+        let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(process),
+            Vec::new(),
+            T_GRID,
+            X_GRID,
+            0,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        option.npv().unwrap()
+    }
+
+    #[test]
+    fn narrowing_the_exercise_window_lowers_the_price_toward_the_european_one() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let process = process();
+        let maturity = today() + Period::new(1, TimeUnit::Years);
+
+        let full = american_price(&settings, &process, today(), maturity);
+        let mid = american_price(
+            &settings,
+            &process,
+            maturity - Period::new(6, TimeUnit::Months),
+            maturity,
+        );
+        let late = american_price(
+            &settings,
+            &process,
+            maturity - Period::new(3, TimeUnit::Months),
+            maturity,
+        );
+
+        let mut european = OneAssetOption::new(
+            shared(PlainVanillaPayoff::new(Put, STRIKE)),
+            shared(EuropeanExercise::new(maturity)) as Shared<dyn Exercise>,
+            Shared::clone(&settings),
+        );
+        let analytic = shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)));
+        european
+            .base_mut()
+            .set_pricing_engine(analytic as SharedMut<dyn PricingEngine>);
+        let euro = european.npv().unwrap();
+
+        println!("testFdEarliestExerciseDate: full {full} 6M {mid} 3M {late} european {euro}");
+
+        assert!(
+            full - euro > 1.0,
+            "the early-exercise premium should be significant: full {full} european {euro}"
+        );
+        assert!(
+            full - late > 0.01,
+            "restricting the exercise window should reduce the price: full {full} late {late}"
+        );
+        assert!(
+            late > euro + 0.01,
+            "the restricted American should exceed the European: late {late} european {euro}"
+        );
+        assert!(
+            mid >= late - 1e-8,
+            "a wider window should give a higher price: 6M {mid} 3M {late}"
+        );
+        assert!(
+            full >= mid - 1e-8,
+            "the full window should give the highest price: full {full} 6M {mid}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_fd_bermudan {
+    //! A degeneracy oracle for the Bermudan branch, not a port: the C++ test
+    //! suite prices no Bermudan option through this engine, so there is no
+    //! upstream number to reproduce and inventing one would pin nothing.
+    //!
+    //! It runs on the deep in-the-money put of
+    //! `test-suite/americanoption.cpp:2186-2195`, whose early-exercise premium
+    //! is around two, and prices every arm through this same engine on the same
+    //! grid so the arms differ only in the exercise.
+
+    use super::FdBlackScholesVanillaEngine;
+    use super::test_fd_earliest_exercise_date::{S0, STRIKE, T_GRID, X_GRID, process, today};
+    use crate::exercise::{AmericanExercise, BermudanExercise, EuropeanExercise, Exercise};
+    use crate::instrument::Instrument;
+    use crate::instruments::{OneAssetOption, PlainVanillaPayoff};
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
+    use crate::option::OptionType::Put;
+    use crate::pricingengine::PricingEngine;
+    use crate::processes::GeneralizedBlackScholesProcess;
+    use crate::settings::Settings;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::time::date::Date;
+    use crate::time::period::Period;
+    use crate::time::timeunit::TimeUnit;
+    use crate::types::Real;
+
+    fn fd_price(
+        settings: &Shared<Settings<Date>>,
+        process: &Shared<GeneralizedBlackScholesProcess>,
+        exercise: Shared<dyn Exercise>,
+    ) -> Real {
+        let mut option = OneAssetOption::new(
+            shared(PlainVanillaPayoff::new(Put, STRIKE)),
+            exercise,
+            Shared::clone(settings),
+        );
+        let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(process),
+            Vec::new(),
+            T_GRID,
+            X_GRID,
+            0,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        option.npv().unwrap()
+    }
+
+    /// The exercise dates `months` after the reference date, the last of which
+    /// is the maturity when it is `12`.
+    fn every(months: &[i32]) -> Shared<dyn Exercise> {
+        let dates = months
+            .iter()
+            .map(|m| today() + Period::new(*m, TimeUnit::Months))
+            .collect();
+        shared(BermudanExercise::new(dates, false).unwrap()) as Shared<dyn Exercise>
+    }
+
+    fn maturity() -> Date {
+        today() + Period::new(1, TimeUnit::Years)
+    }
+
+    fn fixture() -> (
+        Shared<Settings<Date>>,
+        Shared<GeneralizedBlackScholesProcess>,
+    ) {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        (settings, process())
+    }
+
+    #[test]
+    fn binding_market_regressions_cover_european_american_and_quarterly_bermudan() {
+        let (settings, process) = fixture();
+        let (european_theta, bermudan_theta) = if cfg!(target_os = "linux") {
+            (0.377_587_111_592_534_55, 0.385_210_817_371_187)
+        } else {
+            (0.377_587_111_591_224_7, 0.385_210_817_369_876_67)
+        };
+        let rows: [(&str, Shared<dyn Exercise>, [Real; 4]); 3] = [
+            (
+                "European",
+                shared(EuropeanExercise::new(maturity())),
+                [
+                    18.266147644485358,
+                    -0.714_918_249_077_874_9,
+                    0.016_981_361_087_847_3,
+                    european_theta,
+                ],
+            ),
+            (
+                "American",
+                shared(AmericanExercise::over(today(), maturity()).unwrap()),
+                [
+                    20.357667204554883,
+                    -0.859_029_794_934_689_8,
+                    0.026600330114210077,
+                    -0.863_258_093_716_587,
+                ],
+            ),
+            (
+                "Bermudan",
+                every(&[3, 6, 9, 12]),
+                [
+                    19.954434523211695,
+                    -0.817_505_453_287_635_2,
+                    0.019414167279763642,
+                    bermudan_theta,
+                ],
+            ),
+        ];
+
+        for (name, exercise, expected) in rows {
+            let mut option = OneAssetOption::new(
+                shared(PlainVanillaPayoff::new(Put, STRIKE)),
+                exercise,
+                Shared::clone(&settings),
+            );
+            let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
+                Shared::clone(&process),
+                Vec::new(),
+                T_GRID,
+                X_GRID,
+                0,
+                FdmSchemeDesc::douglas(),
+            ));
+            option
+                .base_mut()
+                .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+            let actual = [
+                option.npv().unwrap(),
+                option.delta().unwrap(),
+                option.gamma().unwrap(),
+                option.theta().unwrap(),
+            ];
+            for (field, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+                assert!(
+                    (actual - expected).abs() <= 1.0e-12,
+                    "{name} field {field}: {actual} != {expected}"
+                );
+            }
+        }
+    }
+
+    /// The single-date form, whose one exercise opportunity is the expiry, is
+    /// the European option. It agrees to `3.8e-7`, not to the last bit, and the
+    /// residual is mechanism rather than noise: that lone exercise time reaches
+    /// the solver as a stopping time equal to the rollback's own starting time,
+    /// so the model applies the condition once before it steps
+    /// (`finitedifferencemodel.rs:96-100`), taking `max` against a terminal grid
+    /// that the solver seeded with `avg_inner_value` while the condition reads
+    /// `inner_value`. Where the node value exceeds the cell average the grid is
+    /// lifted, and the measured gap is the sum of those lifts. C++ does the
+    /// identical thing.
+    ///
+    /// This arm pins that the Bermudan branch does not *corrupt* a price it
+    /// should reproduce. It cannot pin that the condition fires, because a
+    /// condition that never fired would pass it just as well - that is
+    /// [`dense_exercise_dates_price_above_the_european_and_under_the_american`].
+    #[test]
+    fn a_single_exercise_date_at_expiry_degenerates_to_the_european_price() {
+        let (settings, process) = fixture();
+
+        let euro = fd_price(
+            &settings,
+            &process,
+            shared(EuropeanExercise::new(maturity())) as Shared<dyn Exercise>,
+        );
+        let bermudan = fd_price(&settings, &process, every(&[12]));
+
+        let error = (bermudan - euro).abs();
+        assert!(
+            error <= 1.0e-5,
+            "a Bermudan exercisable only at expiry should be the European option: \
+             Bermudan {bermudan} european {euro} (absolute error {error})"
+        );
+    }
+
+    /// The load-bearing arm. Twelve monthly exercise opportunities on a put
+    /// this deep in the money capture almost all of an early-exercise premium
+    /// worth about two, so the price sits far above the European one and just
+    /// under the continuously exercisable American one.
+    ///
+    /// A condition that never fired - a wrong exercise-time clock, a dropped
+    /// stopping-time push leaving the solver stepping past every exercise date,
+    /// an inverted comparison - prices the European value and misses the floor
+    /// by two hundred times its slack.
+    #[test]
+    fn dense_exercise_dates_price_above_the_european_and_under_the_american() {
+        let (settings, process) = fixture();
+
+        let euro = fd_price(
+            &settings,
+            &process,
+            shared(EuropeanExercise::new(maturity())) as Shared<dyn Exercise>,
+        );
+        let monthly = fd_price(
+            &settings,
+            &process,
+            every(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        );
+        let american = fd_price(
+            &settings,
+            &process,
+            shared(AmericanExercise::over(today(), maturity()).unwrap()) as Shared<dyn Exercise>,
+        );
+
+        println!("testFdBermudan: S0={S0} european {euro} monthly {monthly} american {american}");
+
+        assert!(
+            monthly > euro + 1.0,
+            "monthly exercise should capture most of the early-exercise premium: \
+             monthly {monthly} european {euro}"
+        );
+        assert!(
+            monthly <= american,
+            "a Bermudan cannot beat the American it is a subset of: \
+             monthly {monthly} american {american}"
+        );
+    }
+
+    /// Adding exercise opportunities cannot make the option worth less. The
+    /// quarterly dates are a subset of the monthly ones, so this compares two
+    /// exercise sets rather than two grids of different fineness.
+    #[test]
+    fn price_is_monotone_in_the_exercise_date_set() {
+        let (settings, process) = fixture();
+
+        let quarterly = fd_price(&settings, &process, every(&[3, 6, 9, 12]));
+        let monthly = fd_price(
+            &settings,
+            &process,
+            every(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+        );
+
+        assert!(
+            monthly >= quarterly - 1.0e-8,
+            "more exercise dates should not lower the price: \
+             quarterly {quarterly} monthly {monthly}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod test_fd_engine_with_non_constant_parameters {
+    //! The `testFdEngineWithNonConstantParameters` oracle of
+    //! `test-suite/europeanoption.cpp:1578-1631`: the only European arm whose
+    //! risk-free curve is not flat, and so the only one that pins the
+    //! per-step forward reads of `set_time` to intervals that telescope to
+    //! the right integrated rate. The flat sweep above cannot: every interval
+    //! of a flat curve returns the same forward. What survives here is a read
+    //! over a fixed short interval, which integrates too little rate over the
+    //! year; a read over the whole life still integrates correctly and this
+    //! oracle does not separate it from the correct one.
+
+    use super::super::AnalyticEuropeanEngine;
+    use super::super::test_market::today;
+    use super::FdBlackScholesVanillaEngine;
+    use crate::exercise::EuropeanExercise;
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::instruments::{EuropeanOption, PlainVanillaPayoff};
+    use crate::interestrate::Compounding;
+    use crate::math::interpolations::flat::BackwardFlat;
+    use crate::methods::finitedifferences::solvers::FdmSchemeDesc;
+    use crate::option::OptionType::Call;
+    use crate::pricingengine::PricingEngine;
+    use crate::processes::GeneralizedBlackScholesProcess;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::settings::Settings;
+    use crate::shared::{Shared, SharedMut, shared, shared_mut};
+    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
+    use crate::termstructures::yields::{FlatForward, ForwardCurve};
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::frequency::Frequency;
+    use crate::types::{Real, Size, Volatility};
+
+    /// `u` and `v` of `cpp:1582-1583`; the strike of `cpp:1610` is the spot.
+    const UNDERLYING: Real = 190.0;
+    const STRIKE: Real = 190.0;
+    const VOLATILITY: Volatility = 0.20;
+
+    /// `timeSteps` and `gridPoints` of `cpp:1617-1618`.
+    const T_GRID: Size = 200;
+    const X_GRID: Size = 201;
+
+    /// `tolerance` of `cpp:1623`, absolute on the price rather than the
+    /// relative measure the sweep uses.
+    const TOLERANCE: Real = 0.01;
+
+    /// The process of `cpp:1602-1605`. C++ names `BlackScholesProcess`, whose
+    /// constructor supplies the dividend yield the generalized process needs
+    /// as a flat zero `FlatForward` on Actual/365 Fixed
+    /// (`ql/processes/blackscholesprocess.cpp:238-239`); with a zero rate the
+    /// day counter is numerically inert.
+    fn process() -> GeneralizedBlackScholesProcess {
+        let day_counter = Actual360::new();
+        let spot = shared(SimpleQuote::new(UNDERLYING)) as Shared<dyn Quote>;
+        let vol = shared(BlackConstantVol::new(
+            today(),
+            None,
+            VOLATILITY,
+            day_counter.clone(),
+        )) as Shared<dyn BlackVolTermStructure>;
+
+        let dates = vec![
+            today(),
+            today() + 90,
+            today() + 180,
+            today() + 270,
+            today() + 360,
+        ];
+        let forwards = vec![0.0, 0.001, 0.002, 0.005, 0.01];
+        let risk_free =
+            shared(ForwardCurve::new(dates, forwards, day_counter.clone(), BackwardFlat).unwrap())
+                as Shared<dyn YieldTermStructure>;
+
+        let dividend = shared(FlatForward::with_rate(
+            today(),
+            0.0,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>;
+
+        GeneralizedBlackScholesProcess::new(
+            Handle::new(spot),
+            Handle::new(dividend),
+            Handle::new(risk_free),
+            Handle::new(vol),
+        )
+    }
+
+    /// The forward the curve carries rises from 0.001 to 0.01 across the
+    /// year, so a `set_time` pinned to a fixed short interval integrates too
+    /// little rate and the price misses by around thirty times the tolerance.
+    #[test]
+    fn fd_engine_matches_the_analytic_engine_under_a_time_varying_rate() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let process = shared(process());
+
+        let payoff = shared(PlainVanillaPayoff::new(Call, STRIKE));
+        let exercise = shared(EuropeanExercise::new(today() + 360));
+        let mut option = EuropeanOption::new(payoff, exercise, Shared::clone(&settings));
+
+        let analytic = shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&process)));
+        option
+            .base_mut()
+            .set_pricing_engine(analytic as SharedMut<dyn PricingEngine>);
+        let expected = option.npv().unwrap();
+
+        let finite_difference = shared_mut(FdBlackScholesVanillaEngine::with_params(
+            Shared::clone(&process),
+            Vec::new(),
+            T_GRID,
+            X_GRID,
+            0,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(finite_difference as SharedMut<dyn PricingEngine>);
+        let calculated = option.npv().unwrap();
+
+        let error = (expected - calculated).abs();
+        assert!(
+            error <= TOLERANCE,
+            "analytic {expected} vs finite difference {calculated} \
+             (absolute error {error} over {TOLERANCE})"
+        );
+    }
+}

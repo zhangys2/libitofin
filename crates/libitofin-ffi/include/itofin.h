@@ -33,6 +33,10 @@ typedef double ItofinReal;
 
 #define ITOFIN_POISONED 6
 
+#define ITOFIN_CONSTRAINT_EQ 0
+
+#define ITOFIN_CONSTRAINT_INEQ 1
+
 /**
  * Opaque thread-confined owner of live native objects. Never copy this value.
  */
@@ -167,6 +171,14 @@ typedef struct ItofinCapHelperConfig {
   double shift;
 } ItofinCapHelperConfig;
 
+typedef struct ItofinCalibrationOptions {
+  uint64_t constraint;
+  const double *weights;
+  size_t weights_len;
+  const uint8_t *fix_parameters;
+  size_t fix_parameters_len;
+} ItofinCalibrationOptions;
+
 /**
  * A zero quote handle selects `rate`; a nonzero settings handle selects moving dates.
  */
@@ -248,6 +260,18 @@ typedef struct ItofinMakeCdsConfig {
   int32_t side;
   int32_t trade_date;
 } ItofinMakeCdsConfig;
+
+/**
+ * Optional fields: time grid=1, equity grid=2, damping steps=4, scheme=8.
+ * Scheme 0 is Douglas and scheme 1 is implicit Euler.
+ */
+typedef struct ItofinFdConfig {
+  uint32_t present;
+  uint64_t t_grid;
+  uint64_t x_grid;
+  uint64_t damping_steps;
+  int32_t scheme;
+} ItofinFdConfig;
 
 typedef struct ItofinSwapHelperConfig {
   uint64_t quote;
@@ -702,6 +726,122 @@ typedef struct SwaptionHelperConfig {
   double nominal;
 } SwaptionHelperConfig;
 
+/**
+ * Borrowed solver state, valid only during an iteration callback.
+ */
+typedef struct ItofinIterationState {
+  const double *x;
+  size_t n;
+  double fun;
+  size_t nit;
+  size_t nfev;
+  size_t njev;
+} ItofinIterationState;
+
+/**
+ * A caller-supplied objective. `value` writes f(x) to its output and returns
+ * zero, or returns nonzero after filling the error. The optional `callback`
+ * runs after every iteration and sets `*stop` to cancel the run; a nonzero
+ * return fails it. `release`, when set, is called exactly once before
+ * either optimizer returns whenever `objective` is non-null. `gradient` is
+ * appended to preserve the original field offsets; Nelder-Mead only reads
+ * the original prefix for compatibility with existing compiled callers.
+ * Callbacks must not unwind.
+ */
+typedef struct ItofinObjective {
+  size_t userdata;
+  int32_t (*value)(size_t, const double*, size_t, double*, struct ItofinError*);
+  int32_t (*callback)(size_t, const struct ItofinIterationState*, bool*, struct ItofinError*);
+  void (*release)(size_t);
+  int32_t (*gradient)(size_t, const double*, size_t, double*, struct ItofinError*);
+} ItofinObjective;
+
+/**
+ * Nelder-Mead options. A zero field keeps the solver default, so a
+ * zero-initialized struct is valid; a zero tolerance is therefore not
+ * expressible here.
+ */
+typedef struct ItofinOptimizeOptions {
+  size_t maxiter;
+  size_t maxfev;
+  double xatol;
+  double fatol;
+  bool adaptive;
+} ItofinOptimizeOptions;
+
+/**
+ * Why a run stopped. Values are fixed and append-only: `8` (infeasible)
+ * is reserved for a constrained solver.
+ */
+typedef int32_t ItofinOptimizeStatus;
+
+/**
+ * Run outcome. The caller sets `x` to a writable buffer of `n` values before
+ * the call; every other field is written by it.
+ */
+typedef struct ItofinOptimizeResult {
+  double *x;
+  double fun;
+  size_t nit;
+  size_t nfev;
+  size_t njev;
+  ItofinOptimizeStatus status;
+  bool success;
+} ItofinOptimizeResult;
+
+/**
+ * BFGS options. Zero values select defaults. `finite_difference` is 0 for
+ * forward and 1 for central differences; any other value is rejected.
+ */
+typedef struct ItofinBfgsOptions {
+  double gtol;
+  double eps;
+  int32_t finite_difference;
+  size_t maxiter;
+} ItofinBfgsOptions;
+
+/**
+ * L-BFGS-B options. Zero values select solver defaults. Bounds are supplied
+ * separately to `itofin_optimize_lbfgsb` as two equally sized arrays.
+ */
+typedef struct ItofinLbfgsbOptions {
+  size_t maxcor;
+  double ftol;
+  double gtol;
+  double eps;
+  size_t maxiter;
+  size_t maxfev;
+} ItofinLbfgsbOptions;
+
+/**
+ * One vector constraint with `dimension` scalar components. `kind` is 0 for
+ * equality (`c(x) = 0`) or 1 for inequality (`c(x) >= 0`). `fun` fills
+ * `dimension` values. Optional `jac` fills a row-major `dimension * n`
+ * Jacobian. A nonzero callback return propagates its `ItofinError` message.
+ * Borrowed input and output buffers are valid only during the callback.
+ * Each supplied descriptor independently owns its `release` callback. It
+ * runs exactly once after the descriptor array is accepted, including for
+ * rejected descriptors and callback errors.
+ * Callbacks must not unwind.
+ */
+typedef struct ItofinConstraint {
+  int32_t kind;
+  size_t dimension;
+  size_t userdata;
+  int32_t (*fun)(size_t, const double*, size_t, double*, size_t, struct ItofinError*);
+  int32_t (*jac)(size_t, const double*, size_t, double*, size_t, struct ItofinError*);
+  void (*release)(size_t);
+} ItofinConstraint;
+
+/**
+ * SLSQP options. Zero fields select solver defaults.
+ */
+typedef struct ItofinSlsqpOptions {
+  double ftol;
+  size_t maxiter;
+  size_t maxfev;
+} ItofinSlsqpOptions;
+
 typedef struct ItofinOvernightFutureConfig {
   uint64_t index;
   int32_t value_date;
@@ -996,6 +1136,24 @@ typedef struct ItofinVolGridConfig {
   int32_t volatility_type;
   int32_t flat_extrapolation;
 } ItofinVolGridConfig;
+
+#define ITOFIN_OPTIMIZE_CONVERGED_XTOL 0
+
+#define ITOFIN_OPTIMIZE_CONVERGED_FTOL 1
+
+#define ITOFIN_OPTIMIZE_CONVERGED_GTOL 2
+
+#define ITOFIN_OPTIMIZE_MAX_ITERATIONS 3
+
+#define ITOFIN_OPTIMIZE_MAX_EVALUATIONS 4
+
+#define ITOFIN_OPTIMIZE_CANCELLED 5
+
+#define ITOFIN_OPTIMIZE_NONFINITE 6
+
+#define ITOFIN_OPTIMIZE_LINE_SEARCH_FAILED 7
+
+#define ITOFIN_OPTIMIZE_INFEASIBLE 8
 
 #ifdef __cplusplus
 extern "C" {
@@ -1382,6 +1540,22 @@ int32_t itofin_hullwhite_calibrate_caps(struct ItofinContext *ctx,
 
 /**
  * # Safety
+ * Pointers and handles must obey the C caller contract. Option arrays are copied
+ * before calibration and are never retained.
+ */
+int32_t itofin_hullwhite_calibrate_caps_with_options(struct ItofinContext *ctx,
+                                                     uint64_t model,
+                                                     const uint64_t *helpers,
+                                                     size_t helpers_len,
+                                                     uint64_t method,
+                                                     uint64_t criteria,
+                                                     size_t steps,
+                                                     uint8_t fix_reversion,
+                                                     const struct ItofinCalibrationOptions *options,
+                                                     struct ItofinError *error);
+
+/**
+ * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
  * belong to the calling thread; serialize calls including destruction.
@@ -1500,6 +1674,42 @@ int32_t itofin_leg_npv(struct ItofinContext *ctx,
                        int32_t npv_date,
                        ItofinReal *out,
                        struct ItofinError *error);
+
+/**
+ * # Safety
+ * Outputs and context must obey the C caller contract.
+ */
+int32_t itofin_no_constraint_new(struct ItofinContext *ctx,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * # Safety
+ * Outputs and context must obey the C caller contract.
+ */
+int32_t itofin_positive_constraint_new(struct ItofinContext *ctx,
+                                       uint64_t *out,
+                                       struct ItofinError *error);
+
+/**
+ * # Safety
+ * Bounds must be finite and ordered. Outputs and context obey the C caller contract.
+ */
+int32_t itofin_boundary_constraint_new(struct ItofinContext *ctx,
+                                       double low,
+                                       double high,
+                                       uint64_t *out,
+                                       struct ItofinError *error);
+
+/**
+ * # Safety
+ * Handles, outputs and context must obey the C caller contract.
+ */
+int32_t itofin_composite_constraint_new(struct ItofinContext *ctx,
+                                        uint64_t left,
+                                        uint64_t right,
+                                        uint64_t *out,
+                                        struct ItofinError *error);
 
 /**
  * # Safety
@@ -1940,6 +2150,19 @@ int32_t itofin_curve_nodes(struct ItofinContext *ctx,
                            struct ItofinError *error);
 
 /**
+ * Construct an FD engine retaining the Black-Scholes process. Attach it to a
+ * vanilla option with `itofin_option_set_engine` kind 2.
+ * # Safety
+ * Outputs must be aligned, live and non-overlapping. Context and handles must
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
+                                           uint64_t process,
+                                           struct ItofinFdConfig cfg,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -2122,6 +2345,21 @@ int32_t itofin_heston_calibrate_engine(struct ItofinContext *ctx,
                                        uint64_t criteria,
                                        const struct ItofinHestonEngineConfig *config,
                                        struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and handles must obey the C caller contract. Option arrays are copied
+ * before calibration and are never retained.
+ */
+int32_t itofin_heston_calibrate_engine_with_options(struct ItofinContext *ctx,
+                                                    uint64_t model,
+                                                    const uint64_t *helpers,
+                                                    size_t helpers_len,
+                                                    uint64_t method,
+                                                    uint64_t criteria,
+                                                    const struct ItofinHestonEngineConfig *config,
+                                                    const struct ItofinCalibrationOptions *options,
+                                                    struct ItofinError *error);
 
 /**
  * COS inspector field: 0-3 cumulants, 4 log forward/spot, 5 characteristic function.
@@ -3704,6 +3942,34 @@ int32_t itofin_levenberg_marquardt_new(struct ItofinContext *ctx,
 
 /**
  * # Safety
+ * Pointers must be aligned, live and valid. Context and handles belong to
+ * the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_simplex_new(struct ItofinContext *ctx,
+                           double lambda,
+                           uint64_t *out,
+                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles belong to
+ * the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_conjugate_gradient_new(struct ItofinContext *ctx,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles belong to
+ * the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_steepest_descent_new(struct ItofinContext *ctx,
+                                    uint64_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
  * belong to the calling thread; serialize calls including destruction.
@@ -3772,6 +4038,116 @@ int32_t itofin_model_calibrate(struct ItofinContext *ctx,
                                struct ItofinError *error);
 
 /**
+ * Calibration with an optional constraint, helper weights, and fixed-parameter mask.
+ * # Safety
+ * Pointers and handles must obey the C caller contract. Option arrays are copied
+ * before calibration and are never retained.
+ */
+int32_t itofin_model_calibrate_with_options(struct ItofinContext *ctx,
+                                            uint64_t model,
+                                            int32_t kind,
+                                            const uint64_t *helpers,
+                                            size_t helpers_len,
+                                            uint64_t method,
+                                            uint64_t criteria,
+                                            size_t integration_order,
+                                            int32_t fix_reversion,
+                                            const struct ItofinCalibrationOptions *options,
+                                            struct ItofinError *error);
+
+/**
+ * Calibration kind 0 is Heston and 1 is Hull-White. Result codes follow
+ * `EndCriteriaType`: None 0, MaxIterations 1, StationaryPoint 2,
+ * StationaryFunctionValue 3, StationaryFunctionAccuracy 4,
+ * ZeroGradientNorm 5, FunctionEpsilonTooSmall 6, Unknown 7.
+ * # Safety
+ * Pointers must be aligned, live and valid. Context and handles belong to
+ * the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_model_end_criteria_type(struct ItofinContext *ctx,
+                                       uint64_t model,
+                                       int32_t kind,
+                                       int32_t *out,
+                                       struct ItofinError *error);
+
+/**
+ * Minimize `objective` from `x0` (length `n`) with Nelder-Mead.
+ *
+ * Returns zero with `out_result` filled when the run reached the solver,
+ * whatever its status. A rejected input returns `ITOFIN_INVALID_ARGUMENT`;
+ * a failing `value` or `callback` returns `ITOFIN_CORE_ERROR` carrying its
+ * message, truncated to 1023 bytes.
+ * # Safety
+ * `objective`, `x0`, `options` and `out_result` must satisfy the C caller
+ * contract, and `out_result->x` must be writable for `n` values.
+ */
+int32_t itofin_optimize_nelder_mead(const struct ItofinObjective *objective,
+                                    const double *x0,
+                                    size_t n,
+                                    const struct ItofinOptimizeOptions *options,
+                                    struct ItofinOptimizeResult *out_result,
+                                    struct ItofinError *error);
+
+/**
+ * Minimize `objective` from `x0` with BFGS. The optional gradient writes `n`
+ * components; without it, the selected finite difference is used.
+ * # Safety
+ * Pointers must satisfy the same contract as `itofin_optimize_nelder_mead`.
+ */
+int32_t itofin_optimize_bfgs(const struct ItofinObjective *objective,
+                             const double *x0,
+                             size_t n,
+                             const struct ItofinBfgsOptions *options,
+                             struct ItofinOptimizeResult *out_result,
+                             struct ItofinError *error);
+
+/**
+ * Minimize with box-constrained L-BFGS-B. `lower` and `upper` each contain
+ * `n` values, with `-INFINITY` or `INFINITY` marking an open lower or upper
+ * side respectively. Both null pointers with zero lengths mean no bounds.
+ * The optional gradient writes `n` components; otherwise bounded finite
+ * differences are used. Zero option fields select solver defaults.
+ * # Safety
+ * `objective`, `x0`, `options` and `out_result` follow the same contract as
+ * `itofin_optimize_bfgs`. Each non-null bound pointer must be readable for
+ * its declared length. `lower_len` and `upper_len` are checked against `n`
+ * before either array is read.
+ */
+int32_t itofin_optimize_lbfgsb(const struct ItofinObjective *objective,
+                               const double *x0,
+                               size_t n,
+                               const double *lower,
+                               size_t lower_len,
+                               const double *upper,
+                               size_t upper_len,
+                               const struct ItofinLbfgsbOptions *options,
+                               struct ItofinOptimizeResult *out_result,
+                               struct ItofinError *error);
+
+/**
+ * Minimize with SLSQP and optional box and vector constraints. Bounds use
+ * the same open-side sentinels and length contract as L-BFGS-B. Each
+ * constraint vector is flattened in descriptor order, then component order.
+ * Constraint callbacks do not contribute to `nfev` or `njev`.
+ * # Safety
+ * Pointers satisfy the `itofin_optimize_lbfgsb` contract. `constraints`
+ * points to `constraint_count` readable descriptors when the count is nonzero.
+ * Every descriptor's callbacks and userdata remain valid until release.
+ */
+int32_t itofin_optimize_slsqp(const struct ItofinObjective *objective,
+                              const double *x0,
+                              size_t n,
+                              const double *lower,
+                              size_t lower_len,
+                              const double *upper,
+                              size_t upper_len,
+                              const struct ItofinConstraint *constraints,
+                              size_t constraint_count,
+                              const struct ItofinSlsqpOptions *options,
+                              struct ItofinOptimizeResult *out_result,
+                              struct ItofinError *error);
+
+/**
  * `american`: 0 European, 1 American; earliest ignored for European exercise.
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
@@ -3818,7 +4194,8 @@ int32_t itofin_option_bermudan_new(struct ItofinContext *ctx,
                                    struct ItofinError *error);
 
 /**
- * Engine kind: 0 analytic European (BSM process), 1 analytic Heston (model), 2 MC engine.
+ * Engine kind: 0 analytic European (BSM process), 1 analytic Heston (model),
+ * 2 preconstructed pricing engine (including MC and FD).
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must

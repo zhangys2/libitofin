@@ -2,7 +2,9 @@
 //! HestonModelHelper.
 
 use crate::PyQlError;
-use crate::calibration::{PyCalibrationErrorType, PyEndCriteria, PyLevenbergMarquardt};
+use crate::calibration::{
+    CalibrationOptions, PyCalibrationErrorType, PyEndCriteria, calibration_options, with_method,
+};
 use crate::heston_engines::PyExponentialFittingControlVariate;
 use crate::settings::PySettings;
 use crate::time::{PyCalendar, PyDate, PyDayCounter, PyPeriod};
@@ -22,6 +24,7 @@ use libitofin::termstructures::yields::FlatForward;
 use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
 use libitofin::time::frequency::Frequency;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 #[allow(unused_imports)]
 use pyo3_stub_gen::derive::{
     gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction, gen_stub_pymethods,
@@ -227,57 +230,79 @@ impl PyHestonModel {
     ///
     /// Args:
     ///     helpers (list[HestonModelHelper]): The calibration instruments to fit; must not be empty.
-    ///     method (LevenbergMarquardt): The optimizer driving the fit.
+    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent): The optimizer driving the fit.
     ///     end_criteria (EndCriteria): The stopping rule handed to the optimizer.
     ///     integration_order (int): The order of the Gauss-Laguerre integration the
     ///         engine uses; at most 192.
+    ///     constraint (Constraint | None): Additional reusable parameter constraint.
+    ///     weights (list[float] | None): One weight per calibration helper.
+    ///     fix_parameters (list[bool] | None): Fixed mask in theta, kappa, sigma,
+    ///         rho, v0 order.
     ///
     /// Raises:
     ///     ItofinError: If integration_order exceeds 192, if helpers is empty,
     ///         or if the optimization itself fails.
+    #[pyo3(signature = (helpers, method, end_criteria, integration_order, *, constraint=None, weights=None, fix_parameters=None))]
+    #[allow(clippy::too_many_arguments)]
     fn calibrate(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
-        method: &mut PyLevenbergMarquardt,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         integration_order: usize,
+        #[gen_stub(override_type(type_repr = "optimization.NoConstraint | optimization.PositiveConstraint | optimization.BoundaryConstraint | optimization.CompositeConstraint | None", imports = ("itofin.optimization")))]
+        constraint: Option<&Bound<'_, PyAny>>,
+        weights: Option<Vec<f64>>,
+        fix_parameters: Option<Vec<bool>>,
     ) -> PyResult<()> {
+        let options = calibration_options(constraint, weights, fix_parameters, false)?;
         let engine = shared_mut(
             AnalyticHestonEngine::new(SharedMut::clone(&self.inner), integration_order)
                 .map_err(PyQlError::from)?,
         ) as SharedMut<dyn PricingEngine>;
-        self.calibrate_engine(helpers, method, end_criteria, engine)
+        self.calibrate_engine(helpers, method, end_criteria, engine, options)
     }
 
     /// Fit with a COS engine, retaining existing analytic calibration defaults.
-    #[pyo3(signature = (helpers, method, end_criteria, l=16.0, n=200))]
+    #[pyo3(signature = (helpers, method, end_criteria, l=16.0, n=200, *, constraint=None, weights=None, fix_parameters=None))]
+    #[allow(clippy::too_many_arguments)]
     fn calibrate_cos(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
-        method: &mut PyLevenbergMarquardt,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         l: f64,
         n: usize,
+        #[gen_stub(override_type(type_repr = "optimization.NoConstraint | optimization.PositiveConstraint | optimization.BoundaryConstraint | optimization.CompositeConstraint | None", imports = ("itofin.optimization")))]
+        constraint: Option<&Bound<'_, PyAny>>,
+        weights: Option<Vec<f64>>,
+        fix_parameters: Option<Vec<bool>>,
     ) -> PyResult<()> {
+        let options = calibration_options(constraint, weights, fix_parameters, false)?;
         let engine = shared_mut(CosHestonEngine::new(self.inner(), l, n).map_err(PyQlError::from)?);
-        self.calibrate_engine(helpers, method, end_criteria, engine)
+        self.calibrate_engine(helpers, method, end_criteria, engine, options)
     }
 
     /// Fit with exponentially fitted quadrature and the selected control variate.
-    #[pyo3(signature = (helpers, method, end_criteria, control_variate=PyExponentialFittingControlVariate::Optimal, scaling=None, alpha=-0.5))]
+    #[pyo3(signature = (helpers, method, end_criteria, control_variate=PyExponentialFittingControlVariate::Optimal, scaling=None, alpha=-0.5, *, constraint=None, weights=None, fix_parameters=None))]
     #[allow(clippy::too_many_arguments)]
     fn calibrate_exponential_fitting(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
-        method: &mut PyLevenbergMarquardt,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         control_variate: PyExponentialFittingControlVariate,
         scaling: Option<f64>,
         alpha: f64,
+        #[gen_stub(override_type(type_repr = "optimization.NoConstraint | optimization.PositiveConstraint | optimization.BoundaryConstraint | optimization.CompositeConstraint | None", imports = ("itofin.optimization")))]
+        constraint: Option<&Bound<'_, PyAny>>,
+        weights: Option<Vec<f64>>,
+        fix_parameters: Option<Vec<bool>>,
     ) -> PyResult<()> {
+        let options = calibration_options(constraint, weights, fix_parameters, false)?;
         let engine = shared_mut(
             ExponentialFittingHestonEngine::new(
                 self.inner(),
@@ -287,7 +312,7 @@ impl PyHestonModel {
             )
             .map_err(PyQlError::from)?,
         );
-        self.calibrate_engine(helpers, method, end_criteria, engine)
+        self.calibrate_engine(helpers, method, end_criteria, engine, options)
     }
 }
 
@@ -295,9 +320,10 @@ impl PyHestonModel {
     fn calibrate_engine(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        method: &mut PyLevenbergMarquardt,
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         engine: SharedMut<dyn PricingEngine>,
+        options: CalibrationOptions,
     ) -> PyResult<()> {
         for helper in &helpers {
             helper
@@ -310,16 +336,19 @@ impl PyHestonModel {
             .iter()
             .map(|helper| SharedMut::clone(&helper.inner) as SharedMut<dyn CalibrationHelper>)
             .collect();
-        calibrate(
-            &self.inner,
-            &dyn_helpers,
-            method.inner_mut(),
-            end_criteria.inner(),
-            None,
-            Vec::new(),
-            Vec::new(),
-        )
-        .map_err(PyQlError::from)?;
+        with_method(method, |method| {
+            calibrate(
+                &self.inner,
+                &dyn_helpers,
+                method,
+                end_criteria.inner(),
+                options.constraint,
+                options.weights,
+                options.fix_parameters,
+            )
+            .map_err(PyQlError::from)?;
+            Ok(())
+        })?;
         Ok(())
     }
     /// A clone of the inner model handle for the engine facade (H2 also calibrates).
@@ -424,5 +453,191 @@ impl PyHestonModelHelper {
             .borrow_mut()
             .calibration_error()
             .map_err(PyQlError::from)?)
+    }
+}
+
+#[cfg(test)]
+mod optimization_parity_tests {
+    use super::*;
+    use crate::calibration::{PyConjugateGradient, PyEndCriteria, PySimplex, PySteepestDescent};
+    use libitofin::math::optimization::conjugategradient::ConjugateGradient;
+    use libitofin::math::optimization::endcriteria::EndCriteria;
+    use libitofin::math::optimization::method::OptimizationMethod;
+    use libitofin::math::optimization::simplex::Simplex;
+    use libitofin::math::optimization::steepestdescent::SteepestDescent;
+    use libitofin::models::CalibrationErrorType;
+    use libitofin::settings::Settings;
+    use libitofin::time::calendars::nullcalendar::NullCalendar;
+    use libitofin::time::date::{Date, Month};
+    use libitofin::time::daycounters::actual360::Actual360;
+    use libitofin::time::period::Period;
+    use libitofin::time::timeunit::TimeUnit;
+    use pyo3::types::PyList;
+
+    #[test]
+    fn python_heston_methods_match_core_in_same_profile() {
+        const STRIKES: [[u64; 3]; 7] = [
+            [0x3fefac53e80821cf, 0x3feec1d93a138c3f, 0x3fedde266b06edcb],
+            [0x3feee6fc4e5c066b, 0x3fedad1ea01315b6, 0x3fec7fb4cb280859],
+            [0x3fedfc74e7ab4083, 0x3fec86124a9aed52, 0x3feb21f1fa31573d],
+            [0x3feb422c40cceb6b, 0x3fe96481fc737590, 0x3fe7a78a19df52fa],
+            [0x3fe8a167781bf00b, 0x3fe6938b2fef7da4, 0x3fe4b18a04b47ab2],
+            [0x3fe632e5c3c88016, 0x3fe4128a7c687e73, 0x3fe22653d92d71bf],
+            [0x3fdd08fc2bc78913, 0x3fd92e6fb34bcd0d, 0x3fd5d6d3fbc52310],
+        ];
+        let maturities = [
+            Period::new(1, TimeUnit::Months),
+            Period::new(2, TimeUnit::Months),
+            Period::new(3, TimeUnit::Months),
+            Period::new(6, TimeUnit::Months),
+            Period::new(9, TimeUnit::Months),
+            Period::new(1, TimeUnit::Years),
+            Period::new(2, TimeUnit::Years),
+        ];
+        let reference = Date::new(15, Month::January, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(reference);
+        let dc = Actual360::new();
+        let flat = |rate| -> Handle<dyn YieldTermStructure> {
+            Handle::new(shared(FlatForward::with_rate(
+                reference,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let risk_free = flat(0.04);
+        let dividend = flat(0.50);
+        let spot = Handle::new(shared(SimpleQuote::new(1.0)) as Shared<dyn Quote>);
+        let process = shared(HestonProcess::new(
+            risk_free.clone(),
+            dividend.clone(),
+            spot,
+            0.01,
+            0.2,
+            0.02,
+            0.3,
+            -0.75,
+        ));
+        let helper = |maturity, strike| {
+            HestonModelHelper::new(
+                maturity,
+                NullCalendar::new(),
+                1.0,
+                strike,
+                Handle::new(shared(SimpleQuote::new(0.1)) as Shared<dyn Quote>),
+                risk_free.clone(),
+                dividend.clone(),
+                CalibrationErrorType::RelativePriceError,
+                settings.clone(),
+            )
+        };
+
+        Python::initialize();
+        Python::attach(|py| {
+            for (name, class, mut core_method) in [
+                (
+                    "simplex",
+                    py.get_type::<PySimplex>(),
+                    Box::new(Simplex::new(0.1)) as Box<dyn OptimizationMethod>,
+                ),
+                (
+                    "conjugate gradient",
+                    py.get_type::<PyConjugateGradient>(),
+                    Box::new(ConjugateGradient::new()),
+                ),
+                (
+                    "steepest descent",
+                    py.get_type::<PySteepestDescent>(),
+                    Box::new(SteepestDescent::new()),
+                ),
+            ] {
+                let python_model = Py::new(
+                    py,
+                    PyHestonModel {
+                        inner: HestonModel::new(process.clone()).unwrap(),
+                    },
+                )
+                .unwrap();
+                let core_model = HestonModel::new(process.clone()).unwrap();
+                let mut python_helpers = Vec::new();
+                let mut core_helpers: Vec<SharedMut<dyn CalibrationHelper>> = Vec::new();
+                let engine = shared_mut(AnalyticHestonEngine::new(core_model.clone(), 96).unwrap())
+                    as SharedMut<dyn PricingEngine>;
+                for (maturity, row) in maturities.into_iter().zip(STRIKES) {
+                    for bits in row {
+                        let strike = f64::from_bits(bits);
+                        python_helpers.push(
+                            Py::new(
+                                py,
+                                PyHestonModelHelper {
+                                    inner: shared_mut(helper(maturity, strike)),
+                                },
+                            )
+                            .unwrap(),
+                        );
+                        let core_helper = shared_mut(helper(maturity, strike));
+                        core_helper
+                            .borrow_mut()
+                            .base_mut()
+                            .set_pricing_engine(engine.clone());
+                        core_helpers.push(core_helper as SharedMut<dyn CalibrationHelper>);
+                    }
+                }
+                let method = if name == "simplex" {
+                    class.call1((0.1,)).unwrap()
+                } else {
+                    class.call0().unwrap()
+                };
+                let criteria = py
+                    .get_type::<PyEndCriteria>()
+                    .call1((400, 40, 1e-8, 1e-8, 1e-8))
+                    .unwrap();
+                python_model
+                    .bind(py)
+                    .call_method1(
+                        "calibrate",
+                        (
+                            PyList::new(py, python_helpers).unwrap(),
+                            method,
+                            criteria,
+                            96,
+                        ),
+                    )
+                    .unwrap();
+                let core_criteria =
+                    EndCriteria::new(400, Some(40), 1e-8, 1e-8, Some(1e-8)).unwrap();
+                calibrate(
+                    &core_model,
+                    &core_helpers,
+                    &mut *core_method,
+                    &core_criteria,
+                    None,
+                    vec![],
+                    vec![],
+                )
+                .unwrap();
+                let core = core_model.borrow();
+                for (field, expected) in [
+                    ("v0", core.v0()),
+                    ("kappa", core.kappa()),
+                    ("theta", core.theta()),
+                    ("sigma", core.sigma()),
+                    ("rho", core.rho()),
+                ] {
+                    let actual: f64 = python_model
+                        .bind(py)
+                        .call_method0(field)
+                        .unwrap()
+                        .extract()
+                        .unwrap();
+                    assert!(
+                        (actual - expected).abs() <= 1e-12,
+                        "{name} {field}: {actual} vs {expected}"
+                    );
+                }
+            }
+        });
     }
 }

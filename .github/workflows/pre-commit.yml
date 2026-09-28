@@ -236,6 +236,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: set up go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: sdk/go/go.mod
+          cache: false
+
       - name: set up python
         uses: actions/setup-python@v5
         with:
@@ -249,7 +255,7 @@ jobs:
           python -m venv .venv
           . .venv/bin/activate
           pip install -r crates/itofin-py/typing-requirements.txt
-          maturin develop -m crates/itofin-py/Cargo.toml
+          maturin develop --release -m crates/itofin-py/Cargo.toml
 
       - name: check the committed stubs and shims match the rust facade
         run: |
@@ -268,9 +274,31 @@ jobs:
           python -m unittest discover -s crates/itofin-py/scripts -p 'test_*.py'
           python crates/itofin-py/scripts/check_typing.py
 
+      - name: build the same-profile Rust FD oracle
+        run: |
+          oracle="$RUNNER_TEMP/fd-binding-oracle.json"
+          cargo run --quiet --release -p libitofin --example fd_binding_oracle > "$oracle"
+          python -m json.tool "$oracle" > /dev/null
+          echo "ITOFIN_FD_ORACLE_JSON=$oracle" >> "$GITHUB_ENV"
+
+      - name: build the same-profile Heston method oracles
+        run: |
+          core_oracle="$RUNNER_TEMP/heston-methods-core-oracle.json"
+          cargo run --quiet --release -p libitofin-ffi --example optimization_methods_oracle > "$core_oracle"
+          python -m json.tool "$core_oracle" > /dev/null
+          echo "ITOFIN_HCAL_METHODS_CORE_ORACLE=$core_oracle" >> "$GITHUB_ENV"
+          cargo build --release -p libitofin-ffi
+          go_oracle="$RUNNER_TEMP/heston-methods-go-oracle.json"
+          cd sdk/go
+          LD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/release" go run ./examples/optimization_methods_oracle > "$go_oracle"
+          python -m json.tool "$go_oracle" > /dev/null
+          echo "ITOFIN_HCAL_METHODS_GO_ORACLE=$go_oracle" >> "$GITHUB_ENV"
+
       - name: run the pytest oracle
         run: |
           . .venv/bin/activate
+          ITOFIN_HCAL_CORE_ORACLE="$(cargo run --quiet --release -p libitofin-ffi --example calibration_constraints_oracle)"
+          export ITOFIN_HCAL_CORE_ORACLE
           pytest crates/itofin-py/tests -v
 
   python-bindings-required:

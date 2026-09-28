@@ -3,7 +3,7 @@
 //! CustomIborIndex subclasses.
 
 use crate::PyQlError;
-use crate::calibration::{PyCalibrationErrorType, PyEndCriteria, PyLevenbergMarquardt};
+use crate::calibration::{PyCalibrationErrorType, PyEndCriteria, calibration_options, with_method};
 use crate::currency::PyCurrency;
 use crate::curve::PyYieldTermStructure;
 use crate::option::PyOptionType;
@@ -23,6 +23,7 @@ use libitofin::shared::{Shared, SharedMut, shared, shared_mut};
 use libitofin::termstructures::volatility::VolatilityType;
 use libitofin::types::Natural;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 #[allow(unused_imports)]
 use pyo3_stub_gen::derive::{
     gen_stub_pyclass, gen_stub_pyclass_enum, gen_stub_pyfunction, gen_stub_pymethods,
@@ -122,21 +123,32 @@ impl PyHullWhite {
     ///
     /// Args:
     ///     helpers (list[SwaptionHelper]): The calibration instruments to fit; must not be empty.
-    ///     method (LevenbergMarquardt): The optimizer driving the fit.
+    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent): The optimizer driving the fit.
     ///     end_criteria (EndCriteria): The stopping rule handed to the optimizer.
     ///     fix_reversion (bool): Pin the mean reversion a and free only sigma; when
     ///         False both parameters are free.
+    ///     constraint (Constraint | None): Additional reusable parameter constraint.
+    ///     weights (list[float] | None): One weight per calibration helper.
+    ///     fix_parameters (list[bool] | None): Fixed mask in a, sigma order;
+    ///         cannot be combined with fix_reversion=True.
     ///
     /// Raises:
     ///     ItofinError: If helpers is empty or the optimization itself fails.
+    #[pyo3(signature = (helpers, method, end_criteria, fix_reversion, *, constraint=None, weights=None, fix_parameters=None))]
+    #[allow(clippy::too_many_arguments)]
     fn calibrate(
         &mut self,
         helpers: Vec<PyRef<PySwaptionHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
-        method: &mut PyLevenbergMarquardt,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         fix_reversion: bool,
+        #[gen_stub(override_type(type_repr = "optimization.NoConstraint | optimization.PositiveConstraint | optimization.BoundaryConstraint | optimization.CompositeConstraint | None", imports = ("itofin.optimization")))]
+        constraint: Option<&Bound<'_, PyAny>>,
+        weights: Option<Vec<f64>>,
+        fix_parameters: Option<Vec<bool>>,
     ) -> PyResult<()> {
+        let options = calibration_options(constraint, weights, fix_parameters, fix_reversion)?;
         let engine = shared_mut(JamshidianSwaptionEngine::new(SharedMut::clone(&self.inner)))
             as SharedMut<dyn PricingEngine>;
         for helper in &helpers {
@@ -150,33 +162,38 @@ impl PyHullWhite {
             .iter()
             .map(|helper| SharedMut::clone(&helper.inner) as SharedMut<dyn CalibrationHelper>)
             .collect();
-        let fix_parameters = if fix_reversion {
-            vec![true, false]
-        } else {
-            Vec::new()
-        };
-        calibrate(
-            &self.inner,
-            &dyn_helpers,
-            method.inner_mut(),
-            end_criteria.inner(),
-            None,
-            Vec::new(),
-            fix_parameters,
-        )
-        .map_err(PyQlError::from)?;
+        with_method(method, |method| {
+            calibrate(
+                &self.inner,
+                &dyn_helpers,
+                method,
+                end_criteria.inner(),
+                options.constraint,
+                options.weights,
+                options.fix_parameters,
+            )
+            .map_err(PyQlError::from)?;
+            Ok(())
+        })?;
         Ok(())
     }
+    #[pyo3(signature = (helpers, method, end_criteria, fix_reversion, time_steps, *, constraint=None, weights=None, fix_parameters=None))]
+    #[allow(clippy::too_many_arguments)]
     fn calibrate_caps(
         &self,
         helpers: Vec<PyRef<crate::caphelper::PyCapHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt", imports = ("itofin.optimization")))]
-        method: &mut PyLevenbergMarquardt,
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         fix_reversion: bool,
         time_steps: usize,
+        #[gen_stub(override_type(type_repr = "optimization.NoConstraint | optimization.PositiveConstraint | optimization.BoundaryConstraint | optimization.CompositeConstraint | None", imports = ("itofin.optimization")))]
+        constraint: Option<&Bound<'_, PyAny>>,
+        weights: Option<Vec<f64>>,
+        fix_parameters: Option<Vec<bool>>,
     ) -> PyResult<()> {
-        self.calibrate_caps_impl(helpers, method, end_criteria, fix_reversion, time_steps)
+        let options = calibration_options(constraint, weights, fix_parameters, fix_reversion)?;
+        self.calibrate_caps_impl(helpers, method, end_criteria, time_steps, options)
     }
 }
 
