@@ -28,26 +28,37 @@
 //! - Lawson, C. L. and Hanson, R. J. (1974), Solving Least Squares Problems,
 //!   Prentice-Hall.
 
+mod bfgs;
 mod counters;
 mod error;
+mod finite_difference;
+mod lbfgsb;
+mod line_search;
+mod lsq;
 mod nelder_mead;
 mod objective;
 mod outcome;
 mod problem;
+mod slsqp;
 
 #[cfg(test)]
 mod tests;
 
 pub use counters::{Counters, Halt};
 pub use error::{InvalidInput, MinimizeError};
-pub use objective::{Flow, IterationState, Objective};
+pub use finite_difference::FiniteDifference;
+pub use objective::{ConstraintKind, Flow, IterationState, Objective};
 pub use outcome::{Converged, Minimize, Termination};
-pub use problem::{Bounds, Common, Method, NelderMeadOptions, Problem};
+pub use problem::{
+    BfgsOptions, Bounds, Common, LbfgsbOptions, Method, NelderMeadOptions, Norm, Problem,
+    SlsqpOptions,
+};
 
 /// Minimizes `objective` from `problem.x0` with the chosen `method`.
 ///
 /// Validation runs first and in a fixed order: the problem, then the shared
-/// options, then the method against the problem. A run that reaches a solver
+/// options, then the method against the problem, then the method against the
+/// constraints the objective declares. A run that reaches a solver
 /// always returns `Ok`, carrying the best point found and the
 /// [`Termination`] that ended it; only a rejected input or a failing objective
 /// is an `Err`.
@@ -56,8 +67,8 @@ pub use problem::{Bounds, Common, Method, NelderMeadOptions, Problem};
 ///
 /// [`MinimizeError::InvalidInput`] when the problem, the budgets, the
 /// tolerances or the method combination is rejected, and
-/// [`MinimizeError::Objective`] when the objective or its callback fails,
-/// carrying that error by value.
+/// [`MinimizeError::Objective`] when the objective, a constraint or the
+/// callback fails, carrying that error by value.
 ///
 /// # Examples
 ///
@@ -86,7 +97,17 @@ pub fn minimize<O: Objective>(
     problem.validate()?;
     common.validate()?;
     method.validate(problem)?;
+    if objective.constraint_count() > 0 && !matches!(method, Method::Slsqp(_)) {
+        return Err(InvalidInput::Unsupported {
+            method: method.name(),
+            option: "constraints",
+        }
+        .into());
+    }
     match method {
         Method::NelderMead(options) => nelder_mead::minimize(objective, problem, options, common),
+        Method::Bfgs(options) => bfgs::minimize(objective, problem, options, common),
+        Method::Lbfgsb(options) => lbfgsb::minimize(objective, problem, options, common),
+        Method::Slsqp(options) => slsqp::minimize(objective, problem, options, common),
     }
 }
