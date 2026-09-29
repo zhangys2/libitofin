@@ -18,6 +18,7 @@ mod credit;
 mod creditdensity;
 mod creditengine;
 mod credithelpers;
+mod cubicsmile;
 mod currency;
 mod curve;
 mod fdengine;
@@ -74,6 +75,7 @@ use creditengine::{
     PyAccrualBias, PyForwardsInCouponPeriod, PyIsdaCdsEngine, PyMidPointCdsEngine, PyNumericalFix,
 };
 use credithelpers::{PyDefaultProbabilityHelper, PySpreadCdsHelper, PyUpfrontCdsHelper};
+use cubicsmile::PyCubicSmileSection;
 use currency::PyCurrency;
 use curve::{
     PyDiscountCurve, PyFlatForward, PyForwardCurve, PyPiecewiseConvexMonotoneForward,
@@ -255,6 +257,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyInterpolatedSwaptionVolatilityCube>()?;
     termstructures.add_class::<PySabrSwaptionVolatilityCube>()?;
     termstructures.add_class::<PySabrSmileSection>()?;
+    termstructures.add_class::<PyCubicSmileSection>()?;
     termstructures.add_class::<PyOptionletVolatilityStructure>()?;
     termstructures.add_class::<PyConstantOptionletVolatility>()?;
     termstructures.add_class::<PyCapFloorTermVolSurface>()?;

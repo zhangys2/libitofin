@@ -21,6 +21,7 @@ __all__ = [
     "ConstantOptionletVolatility",
     "ConstantSwaptionVolatility",
     "ConstantYoYOptionletVolatility",
+    "CubicSmileSection",
     "DefaultProbabilityHelper",
     "DefaultProbabilityTermStructure",
     "DepositRateHelper",
@@ -885,6 +886,96 @@ class ConstantYoYOptionletVolatility:
 
         Raises:
             ItofinError: On the same conditions volatility() reports.
+        """
+
+@typing.final
+class CubicSmileSection:
+    r"""
+    A natural cubic interpolation of one expiry's mid implied volatilities.
+
+    Source strikes are mapped to signed standard-deviation log-moneyness using
+    the supplied forward, expiry time, and fixed ATM volatility. The default
+    sample grid is `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`.
+    """
+    @property
+    def sampled_mid_ivs(self) -> builtins.list[typing.Optional[builtins.float]]:
+        r"""
+        Volatilities sampled on `std_dev_points`; unavailable wings are None.
+        """
+    @property
+    def std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Evaluation grid used by `sampled_mid_ivs`, in caller-specified order.
+        """
+    @property
+    def node_std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Standard-deviation coordinates of the sorted source observations.
+        """
+    @property
+    def node_mid_ivs(self) -> builtins.list[builtins.float]:
+        r"""
+        Mid-IV observations paired with `node_std_dev_points`.
+        """
+    @property
+    def forward(self) -> builtins.float:
+        r"""
+        Forward/ATM level used to standardize strikes.
+        """
+    @property
+    def atm_vol(self) -> builtins.float:
+        r"""
+        Fixed ATM volatility used to standardize strikes.
+        """
+    @property
+    def exercise_time(self) -> builtins.float:
+        r"""
+        Expiry time in years.
+        """
+    @property
+    def min_strike(self) -> builtins.float:
+        r"""
+        Lowest observed strike.
+        """
+    @property
+    def max_strike(self) -> builtins.float:
+        r"""
+        Highest observed strike.
+        """
+    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, extrapolate: builtins.bool = False) -> None:
+        r"""
+        Fit a natural cubic smile through paired strike/mid-IV observations.
+
+        Args:
+            strikes (list[float]): Positive strikes, in any order.
+            mid_ivs (list[float]): Annualized decimal Black mid implied
+                volatilities paired with `strikes`. Duplicate strikes must be
+                consolidated by the caller.
+            forward (float): Positive expiry forward used as the ATM level.
+            exercise_time (float): Positive expiry time in years.
+            atm_vol (float): Positive annualized ATM volatility used to scale
+                log-moneyness into standard-deviation units.
+            std_dev_points (list[float] | None): Evaluation points for the
+                sampled curve. Defaults to `[-3, -1.5, -1, -0.6, 0, 0.6, 1,
+                1.5, 3]`; these are sample points, not spline knots.
+            extrapolate (bool): Extend the end cubic segments for out-of-range
+                queries and samples. Defaults to False.
+
+        Raises:
+            ItofinError: If inputs are invalid or source points are duplicated.
+                Direct out-of-domain queries also fail unless extrapolation is enabled.
+        """
+    def volatility(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a strike.
+        """
+    def volatility_at_std_dev(self, point: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a signed standard-deviation point.
+        """
+    def strike_at_std_dev(self, point: builtins.float) -> builtins.float:
+        r"""
+        Map a signed standard-deviation point back to its strike.
         """
 
 class DefaultProbabilityHelper:
