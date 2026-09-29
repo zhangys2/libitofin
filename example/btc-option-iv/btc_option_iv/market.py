@@ -8,12 +8,13 @@ forward ``F``, and ``R = ln(F/X)/T``:
 
 That premium is Black-76 in USD present value:
 
-    black_price = coin_premium * index
-    discount = index / forward
-    forward = dated-future mark price
+    black_price = coin_premium * index_price
+    discount = exp(-interest_rate * expiry)
+    forward = option ticker underlying_price
 
-``discount * forward`` equals the index, which is the cash-and-carry identity
-with no BTC yield. Year fractions are Actual/365 Fixed measured from the quote
+When the ticker omits its model inputs, the separate index and dated-future
+feeds are used as a fallback, with ``discount = index / forward``. Year fractions
+are Actual/365 Fixed measured from the quote
 timestamp to the exchange expiry timestamp, including the intraday fraction.
 The exchange ``mark_iv`` is never an input to the solver.
 """
@@ -23,7 +24,7 @@ from __future__ import annotations
 # standard library
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 
 # itofin library
@@ -36,7 +37,6 @@ PRICE_UNIT = "USD present value"
 FORWARD_SOURCE_MARK = "Deribit dated future mark_price"
 FORWARD_SOURCE_MID = "Deribit dated future mid"
 TIME_BASIS = "Actual/365 Fixed"
-CONVERSION = "black_price = coin_premium * index; discount = index / forward"
 STALE_AFTER_MS = 5_000
 _MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000
 _MIN_TIMESTAMP_MS = 1_000_000_000_000
@@ -91,7 +91,7 @@ class FutureContract:
 
 @dataclass(frozen=True)
 class OptionQuote:
-    """A ticker update. Exchange mark IV is intentionally absent."""
+    """A ticker update. Market inputs are retained; exchange IV is intentionally absent."""
 
     instrument_name: str
     timestamp_ms: int
@@ -99,6 +99,10 @@ class OptionQuote:
     ask_price: float | None
     bid_amount: float | None
     ask_amount: float | None
+    index_price: float | None = None
+    underlying_price: float | None = None
+    interest_rate: float | None = None
+    underlying_index: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,8 +153,12 @@ class MarketBook:
     futures: dict[str, FutureState] = field(default_factory=dict)
 
     def note_index(self, quote: IndexQuote) -> None:
-        """Record a positive finite index."""
-        if math.isfinite(quote.price) and quote.price > 0.0:
+        """Record a positive finite index, ignoring out-of-order updates."""
+        if (
+            math.isfinite(quote.price)
+            and quote.price > 0.0
+            and (self.index_timestamp_ms is None or quote.timestamp_ms > self.index_timestamp_ms)
+        ):
             self.index_price = quote.price
             self.index_timestamp_ms = quote.timestamp_ms
 
@@ -160,7 +168,9 @@ class MarketBook:
         if resolved is None:
             return
         price, source = resolved
-        self.futures[quote.instrument_name] = FutureState(price, quote.timestamp_ms, source)
+        previous = self.futures.get(quote.instrument_name)
+        if previous is None or quote.timestamp_ms > previous.timestamp_ms:
+            self.futures[quote.instrument_name] = FutureState(price, quote.timestamp_ms, source)
 
     def forward_data(self, instrument: Instrument) -> ForwardData:
         """Forward for this option's dated future, never the option ticker."""
@@ -184,7 +194,7 @@ class MarketBook:
 
 @dataclass(frozen=True)
 class NormalizedQuote:
-    """Black-76 inputs in USD present value for one two-sided quote."""
+    """Black-76 inputs in USD present value for the available quote sides."""
 
     instrument_name: str
     timestamp_ms: int
@@ -194,11 +204,11 @@ class NormalizedQuote:
     forward: float
     discount: float
     index: float
-    bid_premium_btc: float
-    ask_premium_btc: float
-    bid_black_price: float
-    ask_black_price: float
-    mid_black_price: float
+    bid_premium_btc: float | None
+    ask_premium_btc: float | None
+    bid_black_price: float | None
+    ask_black_price: float | None
+    mid_black_price: float | None
     price_unit: str
     forward_source: str
     time_basis: str
@@ -207,26 +217,27 @@ class NormalizedQuote:
 
 @dataclass(frozen=True)
 class IvRow:
-    """Bid, ask, and mid implied vols for one quote."""
+    """Available bid/ask/mid implied vols and side-level rejection details."""
 
     timestamp_ms: int
     instrument_name: str
     option_type: str
     strike: float
     expiry: float
-    bid_iv: float
-    ask_iv: float
-    mid_iv: float
+    bid_iv: float | None
+    ask_iv: float | None
+    mid_iv: float | None
     index: float
     forward: float
     discount: float
-    bid_premium_btc: float
-    ask_premium_btc: float
+    bid_premium_btc: float | None
+    ask_premium_btc: float | None
     model: str
     price_unit: str
     forward_source: str
     time_basis: str
     conversion: str
+    side_rejections: tuple[tuple[str, Rejection], ...]
 
 
 def year_fraction_actual_365_fixed(quote_timestamp_ms: int, expiration_timestamp_ms: int) -> float:
@@ -244,13 +255,6 @@ def future_name_for(instrument_name: str) -> str | None:
     if match is None:
         return None
     return f"BTC-{match.group(1)}"
-
-
-def black_inputs_from_coin_premium(
-    coin_premium: float, index: float, forward: float
-) -> tuple[float, float]:
-    """Return ``(black_price, discount)`` for a BTC premium."""
-    return coin_premium * index, index / forward
 
 
 def forward_from_future_quote(quote: FutureQuote) -> tuple[float, str] | None:
@@ -316,26 +320,15 @@ def parse_future_instruments(payload: dict, *, now_ms: int) -> list[FutureContra
     return futures
 
 
-def options_with_listed_futures(
+def attach_listed_futures(
     options: list[Instrument], futures: list[FutureContract]
-) -> tuple[list[Instrument], list[Rejection]]:
-    """Keep options whose dated future is present in the futures universe."""
+) -> list[Instrument]:
+    """Attach matching dated futures for fallback; keep options with ticker forwards too."""
     listed = {item.instrument_name for item in futures}
-    kept: list[Instrument] = []
-    rejections: list[Rejection] = []
-    for option in options:
-        if option.future_name not in listed:
-            rejections.append(
-                Rejection(
-                    option.instrument_name,
-                    MISSING_FORWARD,
-                    f"no listed dated future {option.future_name}",
-                    None,
-                )
-            )
-            continue
-        kept.append(option)
-    return kept, rejections
+    return [
+        option if option.future_name in listed else replace(option, future_name=None)
+        for option in options
+    ]
 
 
 def parse_subscription_message(
@@ -379,30 +372,57 @@ def normalize_deribit_quote(
         return _reject(name, EXPIRED, "quote is at or after expiration", timestamp)
     if _stale(timestamp, as_of_ms, stale_after_ms):
         return _reject(name, STALE, "option quote is older than the stale window", timestamp)
-    if forward_data.index is None or forward_data.index_timestamp_ms is None:
+    index = event.index_price if event.index_price is not None else forward_data.index
+    index_timestamp = (
+        timestamp if event.index_price is not None else forward_data.index_timestamp_ms
+    )
+    if index is None or index_timestamp is None:
         return _reject(name, MISSING_INDEX, "BTC index has not been received", timestamp)
-    if not math.isfinite(forward_data.index) or forward_data.index <= 0.0:
+    if not math.isfinite(index) or index <= 0.0:
         return _reject(name, INVALID_INDEX, "BTC index must be positive", timestamp)
-    if _stale(forward_data.index_timestamp_ms, as_of_ms, stale_after_ms):
+    if index_timestamp != timestamp and _stale(index_timestamp, as_of_ms, stale_after_ms):
         return _reject(name, STALE, "BTC index is older than the stale window", timestamp)
-    if forward_data.forward is None or forward_data.forward_timestamp_ms is None:
-        return _reject(name, MISSING_FORWARD, "dated future forward has not been received", timestamp)
-    if not math.isfinite(forward_data.forward) or forward_data.forward <= 0.0:
-        return _reject(name, INVALID_FORWARD, "dated future forward must be positive", timestamp)
-    if _stale(forward_data.forward_timestamp_ms, as_of_ms, stale_after_ms):
-        return _reject(name, STALE, "dated future quote is older than the stale window", timestamp)
+
+    forward = event.underlying_price if event.underlying_price is not None else forward_data.forward
+    forward_timestamp = (
+        timestamp if event.underlying_price is not None else forward_data.forward_timestamp_ms
+    )
+    if forward is None or forward_timestamp is None:
+        return _reject(name, MISSING_FORWARD, "expiry forward has not been received", timestamp)
+    if not math.isfinite(forward) or forward <= 0.0:
+        return _reject(name, INVALID_FORWARD, "expiry forward must be positive", timestamp)
+    if forward_timestamp != timestamp and _stale(forward_timestamp, as_of_ms, stale_after_ms):
+        return _reject(name, STALE, "expiry forward is older than the stale window", timestamp)
+
+    if event.interest_rate is not None:
+        if not math.isfinite(event.interest_rate):
+            return _reject(name, "invalid_interest_rate", "interest rate must be finite", timestamp)
+        try:
+            discount = math.exp(-event.interest_rate * expiry)
+        except OverflowError:
+            return _reject(name, "invalid_discount", "discount factor overflowed", timestamp)
+        conversion = f"black_price = coin_premium * index; discount = exp(-{event.interest_rate} * expiry)"
+    else:
+        discount = index / forward
+        conversion = "black_price = coin_premium * index; discount = index / forward"
+    if not math.isfinite(discount) or discount <= 0.0:
+        return _reject(name, "invalid_discount", "discount factor must be positive and finite", timestamp)
 
     bid = _live_side(event.bid_price, event.bid_amount)
     ask = _live_side(event.ask_price, event.ask_amount)
-    if bid is None or ask is None:
-        return _reject(name, MISSING_SIDE, "bid and ask must both be positive", timestamp)
-    if bid > ask:
+    if bid is None and ask is None:
+        return _reject(name, MISSING_SIDE, "both bid and ask are missing or non-positive", timestamp)
+    if bid is not None and ask is not None and bid > ask:
         return _reject(name, CROSSED, "bid price is above the ask price", timestamp)
 
-    bid_black, discount = black_inputs_from_coin_premium(bid, forward_data.index, forward_data.forward)
-    ask_black, _discount = black_inputs_from_coin_premium(ask, forward_data.index, forward_data.forward)
-    mid_black, _discount = black_inputs_from_coin_premium(
-        (bid + ask) / 2.0, forward_data.index, forward_data.forward
+    bid_black = bid * index if bid is not None else None
+    ask_black = ask * index if ask is not None else None
+    mid = (bid + ask) / 2.0 if bid is not None and ask is not None else None
+    mid_black = mid * index if mid is not None else None
+    forward_source = (
+        f"Deribit option ticker underlying_price ({event.underlying_index or 'unspecified'})"
+        if event.underlying_price is not None
+        else forward_data.source
     )
     return NormalizedQuote(
         instrument_name=name,
@@ -410,18 +430,18 @@ def normalize_deribit_quote(
         option_type=instrument.option_type,
         strike=instrument.strike,
         expiry=expiry,
-        forward=forward_data.forward,
+        forward=forward,
         discount=discount,
-        index=forward_data.index,
+        index=index,
         bid_premium_btc=bid,
         ask_premium_btc=ask,
         bid_black_price=bid_black,
         ask_black_price=ask_black,
         mid_black_price=mid_black,
         price_unit=PRICE_UNIT,
-        forward_source=forward_data.source,
+        forward_source=forward_source,
         time_basis=TIME_BASIS,
-        conversion=CONVERSION,
+        conversion=conversion,
     )
 
 
@@ -434,13 +454,21 @@ def solve_quote_iv(normalized_quote: NormalizedQuote, side: str) -> float | Reje
     }
     if side not in prices:
         raise ValueError(f"side must be bid, ask, or mid, got {side!r}")
+    price = prices[side]
+    if price is None:
+        return _reject(
+            normalized_quote.instrument_name,
+            MISSING_SIDE,
+            f"{side} premium is unavailable",
+            normalized_quote.timestamp_ms,
+        )
     try:
         return black_formula_implied_volatility(
             _option_type(normalized_quote.option_type),
             strike=normalized_quote.strike,
             forward=normalized_quote.forward,
             expiry=normalized_quote.expiry,
-            black_price=prices[side],
+            black_price=price,
             discount=normalized_quote.discount,
         )
     except ItofinError as exc:
@@ -472,12 +500,20 @@ def evaluate_quote(
     )
     if isinstance(normalized, Rejection):
         return normalized
-    ivs: dict[str, float] = {}
+    ivs: dict[str, float | None] = {}
+    side_rejections: list[tuple[str, Rejection]] = []
     for side in ("bid", "ask", "mid"):
         solved = solve_quote_iv(normalized, side)
         if isinstance(solved, Rejection):
-            return solved
-        ivs[side] = solved
+            side_rejections.append((side, solved))
+        else:
+            ivs[side] = solved
+    if not ivs:
+        failed = "; ".join(f"{side}: {rejection.detail}" for side, rejection in side_rejections)
+        first = side_rejections[0][1]
+        return _reject(normalized.instrument_name, first.reason, failed, normalized.timestamp_ms)
+    for side in ("bid", "ask", "mid"):
+        ivs.setdefault(side, None)
     return IvRow(
         timestamp_ms=normalized.timestamp_ms,
         instrument_name=normalized.instrument_name,
@@ -496,7 +532,8 @@ def evaluate_quote(
         price_unit=PRICE_UNIT,
         forward_source=normalized.forward_source,
         time_basis=TIME_BASIS,
-        conversion=CONVERSION,
+        conversion=normalized.conversion,
+        side_rejections=tuple(side_rejections),
     )
 
 
@@ -511,13 +548,28 @@ def format_iv_row(row: IvRow) -> str:
     return (
         f"{format_timestamp(row.timestamp_ms)} {row.instrument_name} "
         f"option_type={row.option_type} strike={row.strike:.2f} expiry={row.expiry:.8f} "
-        f"bid_iv={row.bid_iv:.6f} ask_iv={row.ask_iv:.6f} mid_iv={row.mid_iv:.6f} "
+        f"bid_iv={_format_iv(row.bid_iv)} ask_iv={_format_iv(row.ask_iv)} "
+        f"mid_iv={_format_iv(row.mid_iv)} "
         f"index={row.index:.2f} forward={row.forward:.2f} discount={row.discount:.8f} "
-        f"bid_btc={row.bid_premium_btc:.8f} ask_btc={row.ask_premium_btc:.8f} "
+        f"bid_btc={_format_number(row.bid_premium_btc)} "
+        f"ask_btc={_format_number(row.ask_premium_btc)} "
         f"model={row.model} price_unit={row.price_unit!r} "
         f"forward_source={row.forward_source!r} time_basis={row.time_basis!r} "
-        f"conversion={row.conversion!r}"
+        f"conversion={row.conversion!r} "
+        f"side_rejections={_format_side_rejections(row.side_rejections)!r}"
     )
+
+
+def _format_iv(value: float | None) -> str:
+    return f"{value:.6f}" if value is not None else "NA"
+
+
+def _format_number(value: float | None) -> str:
+    return f"{value:.8f}" if value is not None else "NA"
+
+
+def _format_side_rejections(rejections: tuple[tuple[str, Rejection], ...]) -> str:
+    return "; ".join(f"{side}:{rejection.reason}={rejection.detail}" for side, rejection in rejections)
 
 
 def format_rejection(rejection: Rejection) -> str:
@@ -582,6 +634,12 @@ def _parse_option_ticker(name: str, data: dict) -> OptionQuote | None:
         _optional_float(data, "best_ask_price"),
         _optional_float(data, "best_bid_amount"),
         _optional_float(data, "best_ask_amount"),
+        index_price=_optional_float(data, "index_price"),
+        underlying_price=_optional_float(data, "underlying_price"),
+        interest_rate=_optional_float(data, "interest_rate"),
+        underlying_index=(
+            data.get("underlying_index") if isinstance(data.get("underlying_index"), str) else None
+        ),
     )
 
 
@@ -657,4 +715,4 @@ def _option_type(name: str) -> OptionType:
 
 def _is_no_arbitrage(message: str) -> bool:
     text = message.lower()
-    return "complementary" in text or "no solution" in text or "non-negative" in text
+    return "complementary" in text or "no solution" in text

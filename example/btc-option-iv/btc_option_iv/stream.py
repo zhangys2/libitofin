@@ -15,6 +15,8 @@ import urllib.request
 from collections.abc import AsyncIterator
 
 from btc_option_iv.market import (
+    MISSING_FORWARD,
+    MISSING_INDEX,
     STALE_AFTER_MS,
     FutureQuote,
     IndexQuote,
@@ -22,10 +24,10 @@ from btc_option_iv.market import (
     MarketBook,
     OptionQuote,
     Rejection,
+    attach_listed_futures,
     evaluate_quote,
     format_iv_row,
     format_rejection,
-    options_with_listed_futures,
     parse_future_instruments,
     parse_option_instruments,
     parse_subscription_message,
@@ -47,12 +49,11 @@ _CHUNK = 100
 def fetch_active_btc_options(
     now_ms: int | None = None,
 ) -> tuple[list[Instrument], list[Rejection]]:
-    """Load active inverse BTC options that have a listed dated future."""
+    """Load active inverse BTC options, attaching listed dated futures as fallback."""
     now = int(time.time() * 1000) if now_ms is None else now_ms
     options, rejections = parse_option_instruments(_get_json(_OPTIONS_URL), now_ms=now)
     futures = parse_future_instruments(_get_json(_FUTURES_URL), now_ms=now)
-    kept, missing = options_with_listed_futures(options, futures)
-    return kept, rejections + missing
+    return attach_listed_futures(options, futures), rejections
 
 
 async def subscribe_btc_option_market_data(
@@ -106,6 +107,7 @@ async def run_live_btc_iv_stream(
     max_rows: int | None = None,
 ) -> None:
     """Print timestamped bid/ask/mid IV rows until interrupted or ``max_rows`` is reached."""
+    websockets = _require_websockets()
     sink = sys.stdout if output is None else output
     emitted = 0
     backoff = 1.0
@@ -115,37 +117,80 @@ async def run_live_btc_iv_stream(
             for rejection in rejections:
                 print(format_rejection(rejection), file=sys.stderr)
             by_name = {item.instrument_name: item for item in instruments}
+            by_future: dict[str, list[str]] = {}
+            for instrument in instruments:
+                if instrument.future_name is not None:
+                    by_future.setdefault(instrument.future_name, []).append(instrument.instrument_name)
             book = MarketBook()
+            latest_options: dict[str, OptionQuote] = {}
+            processed: dict[str, tuple[OptionQuote, int | None, int | None]] = {}
             async for event in subscribe_btc_option_market_data(
                 instruments, refresh_seconds=refresh_seconds
             ):
                 if isinstance(event, IndexQuote):
                     book.note_index(event)
-                    continue
-                if isinstance(event, FutureQuote):
+                    candidates = [
+                        name for name, quote in latest_options.items() if quote.index_price is None
+                    ]
+                elif isinstance(event, FutureQuote):
                     book.note_future(event)
-                    continue
-                instrument = by_name.get(event.instrument_name)
-                if instrument is None:
-                    continue
-                outcome = evaluate_quote(
-                    event,
-                    instrument,
-                    book.forward_data(instrument),
-                    as_of_ms=int(time.time() * 1000),
-                    stale_after_ms=stale_after_ms,
-                )
-                if isinstance(outcome, Rejection):
-                    print(format_rejection(outcome), file=sys.stderr)
-                    continue
-                print(format_iv_row(outcome), file=sink, flush=True)
-                emitted += 1
-                if max_rows is not None and emitted >= max_rows:
-                    return
+                    candidates = [
+                        name
+                        for name in by_future.get(event.instrument_name, [])
+                        if latest_options.get(name) is not None
+                        and latest_options[name].underlying_price is None
+                    ]
+                else:
+                    previous = latest_options.get(event.instrument_name)
+                    if previous is None or event.timestamp_ms >= previous.timestamp_ms:
+                        latest_options[event.instrument_name] = event
+                    candidates = [event.instrument_name]
+
+                for name in candidates:
+                    quote = latest_options.get(name)
+                    instrument = by_name.get(name)
+                    if quote is None or instrument is None:
+                        continue
+                    forwards = book.forward_data(instrument)
+                    signature = (
+                        quote,
+                        quote.timestamp_ms if quote.index_price is not None else forwards.index_timestamp_ms,
+                        quote.timestamp_ms
+                        if quote.underlying_price is not None
+                        else forwards.forward_timestamp_ms,
+                    )
+                    if processed.get(name) == signature:
+                        continue
+                    outcome = evaluate_quote(
+                        quote,
+                        instrument,
+                        forwards,
+                        as_of_ms=int(time.time() * 1000),
+                        stale_after_ms=stale_after_ms,
+                    )
+                    if isinstance(outcome, Rejection) and outcome.reason in (
+                        MISSING_INDEX,
+                        MISSING_FORWARD,
+                    ):
+                        # Hold the latest option ticker until its reference data arrives.
+                        continue
+                    processed[name] = signature
+                    if isinstance(outcome, Rejection):
+                        print(format_rejection(outcome), file=sys.stderr)
+                        continue
+                    print(format_iv_row(outcome), file=sink, flush=True)
+                    emitted += 1
+                    if max_rows is not None and emitted >= max_rows:
+                        return
             backoff = 1.0
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
+        except (
+            OSError,
+            TimeoutError,
+            websockets.exceptions.WebSocketException,
+            json.JSONDecodeError,
+        ) as exc:
             print(f"RECONNECT {type(exc).__name__}: {exc}", file=sys.stderr)
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2.0, 30.0)
@@ -170,6 +215,17 @@ def main(argv: list[str] | None = None) -> None:
         )
     except KeyboardInterrupt:
         return
+
+
+def _require_websockets():
+    """Fail once with installation guidance instead of retrying a missing dependency."""
+    try:
+        import websockets
+    except ImportError as exc:
+        raise RuntimeError(
+            "websockets is not installed; run `uv sync --group dev` in example/btc-option-iv"
+        ) from exc
+    return websockets
 
 
 def _get_json(url: str) -> dict:

@@ -681,8 +681,9 @@ def black_formula_implied_std_dev(option_type: instruments.OptionType, strike: b
         float: The implied total standard deviation.
 
     Raises:
-        ItofinError: If an input is rejected by the core, or the solver does
-            not converge. Failures are not reported as NaN or a clamped value.
+        ItofinError: If an input is rejected by the core, `max_iterations` is
+            not a positive 32-bit count, or the solver does not converge.
+            Failures are not reported as NaN or a clamped value.
     """
 
 def black_formula_implied_volatility(option_type: instruments.OptionType, strike: builtins.float, forward: builtins.float, expiry: builtins.float, black_price: builtins.float, discount: builtins.float = 1.0, displacement: builtins.float = 0.0, accuracy: builtins.float = 1e-08, max_iterations: builtins.int = 100) -> builtins.float:

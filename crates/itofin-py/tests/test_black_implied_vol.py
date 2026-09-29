@@ -109,6 +109,10 @@ def test_omitted_guess_matches_explicit_seed_path():
         lambda: black_formula_implied_std_dev(OptionType.Call, math.nan, 100.0, 1.0),
         lambda: black_formula_implied_std_dev(OptionType.Call, 100.0, math.inf, 1.0),
         lambda: black_formula_implied_std_dev(OptionType.Call, 100.0, 100.0, 1.0, guess=-1.0),
+        lambda: black_formula_implied_std_dev(OptionType.Call, 100.0, 100.0, 1.0, max_iterations=-1),
+        lambda: black_formula_implied_std_dev(
+            OptionType.Call, 100.0, 100.0, 1.0, max_iterations=2**32
+        ),
         # Deep in-the-money call priced at zero: put-call parity has no solution.
         lambda: black_formula_implied_std_dev(OptionType.Call, 80.0, 100.0, 0.0),
     ],

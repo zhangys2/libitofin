@@ -12,8 +12,9 @@
       "best_ask_amount": 2.0,
       "mark_iv": 99.0,
       "mark_price": 0.045,
-      "index_price": 99999.0,
-      "underlying_price": 1.0
+      "index_price": 100000.0,
+      "underlying_price": 101250.0,
+      "underlying_index": "BTC-27DEC24"
     }
   }
 }

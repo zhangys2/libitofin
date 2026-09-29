@@ -35,8 +35,9 @@ use pyo3_stub_gen::derive::gen_stub_pyfunction;
 ///     float: The implied total standard deviation.
 ///
 /// Raises:
-///     ItofinError: If an input is rejected by the core, or the solver does
-///         not converge. Failures are not reported as NaN or a clamped value.
+///     ItofinError: If an input is rejected by the core, `max_iterations` is
+///         not a positive 32-bit count, or the solver does not converge.
+///         Failures are not reported as NaN or a clamped value.
 #[allow(clippy::too_many_arguments)]
 #[gen_stub_pyfunction(module = "itofin.pricingengines")]
 #[pyfunction]
@@ -60,8 +61,9 @@ pub(crate) fn black_formula_implied_std_dev(
     displacement: f64,
     guess: Option<f64>,
     accuracy: f64,
-    max_iterations: u32,
+    max_iterations: i64,
 ) -> PyResult<f64> {
+    let max_iterations = checked_max_iterations(max_iterations)?;
     Ok(core_implied_std_dev(
         option_type.inner(),
         strike,
@@ -138,16 +140,6 @@ pub(crate) fn black_formula_implied_volatility(
             "accuracy ({accuracy}) must be positive and finite"
         )));
     }
-    if max_iterations <= 0 {
-        return Err(crate::ItofinError::new_err(format!(
-            "max_iterations ({max_iterations}) must be positive"
-        )));
-    }
-    let max_iterations = u32::try_from(max_iterations).map_err(|_| {
-        crate::ItofinError::new_err(format!(
-            "max_iterations ({max_iterations}) must fit in a 32-bit unsigned integer"
-        ))
-    })?;
     let std_dev = black_formula_implied_std_dev(
         option_type,
         strike,
@@ -160,4 +152,17 @@ pub(crate) fn black_formula_implied_volatility(
         max_iterations,
     )?;
     Ok(std_dev / expiry.sqrt())
+}
+
+fn checked_max_iterations(max_iterations: i64) -> PyResult<u32> {
+    if max_iterations <= 0 {
+        return Err(crate::ItofinError::new_err(format!(
+            "max_iterations ({max_iterations}) must be positive"
+        )));
+    }
+    u32::try_from(max_iterations).map_err(|_| {
+        crate::ItofinError::new_err(format!(
+            "max_iterations ({max_iterations}) must fit in a 32-bit unsigned integer"
+        ))
+    })
 }

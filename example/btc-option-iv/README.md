@@ -6,28 +6,33 @@ and does not need an API key.
 
 ## Quote conversion
 
-Deribit quotes these options in BTC. Implied volatility uses the expiry
-forward, not the spot index. The conversion below matches Deribit's published
-inverse Black-Scholes formula (`R = ln(forward / index) / expiry`):
+Deribit quotes these inverse options in BTC. When present, the option ticker's
+own `index_price`, `underlying_price`, and `interest_rate` are used together;
+they are the synchronized model inputs for that contract. The conversion
+matches Deribit's inverse Black-Scholes formula:
 
-- `black_price = coin_premium * index` (USD present value)
-- `discount = index / forward`
-- `forward` is the dated future's `mark_price` (or the bid/ask mid when the
-  mark is missing)
-- year fraction is Actual/365 Fixed from the quote timestamp to the exchange
-  expiry timestamp, including hours and seconds
+- `black_price = coin_premium * index_price` (USD present value)
+- `discount = exp(-interest_rate * expiry)`
+- `forward = underlying_price` (the option's expiry underlying)
+- If the option ticker omits those fields, use the separate BTC index and
+  matching dated-future ticker as a fallback, with `discount = index / forward`.
+- Year fraction is Actual/365 Fixed from the quote timestamp to the exchange
+  expiry timestamp, including hours and seconds.
 
-Bid, ask, and mid premiums are inverted separately. The exchange `mark_iv` is
-not passed to the solver. Calculated IVs can be compared with Deribit's
-published IV as a diagnostic; do not replace the calculated value with it.
+Bid, ask, and mid premiums are inverted separately. If one side has no valid
+Black IV, the other sides are still emitted and the failed side is annotated;
+when an option ticker arrives before fallback reference data, it is held until
+the references arrive. The exchange `mark_iv` is not passed to the solver.
+Calculated IVs can be compared with Deribit's published IV as a diagnostic;
+do not replace the calculated value with it.
 
 ## Run
 
-From a virtualenv that already has the local `itofin` extension installed
+From the repo root, with the local `itofin` extension installed
 (`maturin develop -m crates/itofin-py/Cargo.toml`):
 
 ```bash
-python -m btc_option_iv --max-rows 20
+PYTHONPATH=example/btc-option-iv python -m btc_option_iv --max-rows 20
 ```
 
 Or, from this directory, let uv build the binding and the example:
