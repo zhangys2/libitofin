@@ -47,27 +47,6 @@ Each accepted row is labeled with the model (`Black-76`), price unit
 printed to stderr with a reason. A live run is a manual smoke test, not a CI
 check.
 
-## Live marimo surface
-
-The notebook is [`live_vol_surface.py`](live_vol_surface.py): edit it in a
-regular Python editor or open it in marimo's web editor. Install the optional
-tools and launch from this directory:
-
-```bash
-uv sync --group dev --group notebook
-uv run --group dev --group notebook marimo edit live_vol_surface.py --host 127.0.0.1 --port 8888 --headless
-```
-
-For a VPS, keep the server on localhost and open its printed URL through an SSH
-tunnel (for port 8888: `ssh -N -L 8888:127.0.0.1:8888 <your-vps-login>`).
-Switch **Connect to live Deribit quotes** on to start the public feed. The app
-updates an interactive Plotly surface from fresh mid-IVs and a searchable
-DataFrame with the 100 most recently updated option quotes, BTC bid/ask
-premiums, amounts, reference prices, and solved bid/mid/ask IVs. Switch the
-feed off to stop it. The surface shows observed points until there is enough
-data to interpolate; interpolation is for visualization only, not an
-arbitrage-free fit.
-
 ## Offline tests
 
 ```bash

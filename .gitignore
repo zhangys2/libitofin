@@ -82,9 +82,8 @@ docs/source/*.rst
 # PyBuilder
 target/
 
-# Notebook/editor runtime files
+# Jupyter Notebook
 .ipynb_checkpoints
-__marimo__/
 
 # pyenv
 .python-version
