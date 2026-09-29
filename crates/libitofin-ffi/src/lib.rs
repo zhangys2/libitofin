@@ -24,6 +24,7 @@ pub mod constraint_api;
 pub mod credit_api;
 pub mod credit_helpers_api;
 pub mod credit_instruments_api;
+pub mod cubicsmile_api;
 pub mod curves_api;
 pub mod fd_engine_api;
 pub mod helpers_api;

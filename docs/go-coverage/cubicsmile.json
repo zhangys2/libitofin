@@ -1,0 +1,148 @@
+{
+  "entries": [
+    {
+      "c": "itofin_cubic_smile_new",
+      "go": "Session.CubicSmileSection",
+      "python": "itofin.termstructures.CubicSmileSection.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Volatility",
+      "python": "itofin.termstructures.CubicSmileSection.volatility",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Variance",
+      "python": "itofin.termstructures.CubicSmileSection.variance",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.VolatilityAtStdDev",
+      "python": "itofin.termstructures.CubicSmileSection.volatility_at_std_dev",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.StrikeAtStdDev",
+      "python": "itofin.termstructures.CubicSmileSection.strike_at_std_dev",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Forward",
+      "python": "itofin.termstructures.CubicSmileSection.forward",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.AtmVol",
+      "python": "itofin.termstructures.CubicSmileSection.atm_vol",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.ExerciseTime",
+      "python": "itofin.termstructures.CubicSmileSection.exercise_time",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.MinStrike",
+      "python": "itofin.termstructures.CubicSmileSection.min_strike",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.MaxStrike",
+      "python": "itofin.termstructures.CubicSmileSection.max_strike",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.StdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeStdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.node_std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.node_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeResiduals",
+      "python": "itofin.termstructures.CubicSmileSection.node_residuals",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.SegmentCoefficients",
+      "python": "itofin.termstructures.CubicSmileSection.segment_coefficients",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.SampledMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.sampled_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    }
+  ]
+}
