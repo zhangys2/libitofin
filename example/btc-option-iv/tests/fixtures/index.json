@@ -4,9 +4,9 @@
   "params": {
     "channel": "deribit_price_index.btc_usd",
     "data": {
-      "timestamp": 1700000000000,
+      "index_name": "btc_usd",
       "price": 100000.0,
-      "index_name": "btc_usd"
+      "timestamp": 1700000000000
     }
   }
 }
