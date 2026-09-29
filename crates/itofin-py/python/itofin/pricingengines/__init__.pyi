@@ -4,6 +4,7 @@
 import builtins
 import itofin
 from itofin import indexes
+from itofin import instruments
 from itofin import models
 from itofin import processes
 from itofin import quotes
@@ -34,6 +35,8 @@ __all__ = [
     "TreeCapFloorEngine",
     "TreeSwaptionEngine",
     "YoYInflationCapFloorEngine",
+    "black_formula_implied_std_dev",
+    "black_formula_implied_volatility",
 ]
 
 @typing.final
@@ -683,3 +686,67 @@ class NumericalFix:
     def __new__(cls, _unconstructible: typing.NoReturn) -> NumericalFix: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+def black_formula_implied_std_dev(option_type: instruments.OptionType, strike: builtins.float, forward: builtins.float, black_price: builtins.float, discount: builtins.float = 1.0, displacement: builtins.float = 0.0, guess: typing.Optional[builtins.float] = None, accuracy: builtins.float = 1e-08, max_iterations: builtins.int = 100) -> builtins.float:
+    r"""
+    Total Black standard deviation implied by an option price.
+
+    Binds the core `black_formula_implied_std_dev` solver. The result is
+    `volatility * sqrt(expiry)`, not an annualized volatility. `guess=None`
+    selects the core's Corrado-Miller approximation as the starting point.
+
+    Args:
+        option_type (OptionType): Call or put.
+        strike (float): Strike in the same currency as `forward`.
+        forward (float): Forward price of the underlying.
+        black_price (float): Discounted Black premium in that same currency.
+            The binding does not convert exchange quote units.
+        discount (float): Positive discount factor applied to the undiscounted
+            Black value. Defaults to 1.
+        displacement (float): Non-negative lognormal shift applied to both
+            strike and forward. Defaults to 0.
+        guess (float | None): Initial total standard deviation. None uses the
+            core approximation.
+        accuracy (float): Solver tolerance on the total standard deviation.
+            Defaults to 1e-8.
+        max_iterations (int): Maximum solver iterations. Defaults to 100.
+
+    Returns:
+        float: The implied total standard deviation.
+
+    Raises:
+        ItofinError: If an input is rejected by the core, `max_iterations` is
+            not a positive 32-bit count, or the solver does not converge.
+            Failures are not reported as NaN or a clamped value.
+    """
+
+def black_formula_implied_volatility(option_type: instruments.OptionType, strike: builtins.float, forward: builtins.float, expiry: builtins.float, black_price: builtins.float, discount: builtins.float = 1.0, displacement: builtins.float = 0.0, accuracy: builtins.float = 1e-08, max_iterations: builtins.int = 100) -> builtins.float:
+    r"""
+    Annualized Black volatility implied by an option price.
+
+    Calls `black_formula_implied_std_dev` with the core approximation seed
+    and returns `std_dev / sqrt(expiry)`. The result is a decimal volatility
+    (`0.65`, not `65`). `expiry` is a positive year fraction.
+
+    Args:
+        option_type (OptionType): Call or put.
+        strike (float): Strike in the same currency as `forward`.
+        forward (float): Forward price of the underlying.
+        expiry (float): Time to expiry as a positive year fraction.
+        black_price (float): Discounted Black premium in that same currency.
+            The binding does not convert exchange quote units.
+        discount (float): Positive discount factor. Defaults to 1.
+        displacement (float): Non-negative lognormal shift. Defaults to 0.
+        accuracy (float): Solver tolerance on the total standard deviation.
+            Defaults to 1e-8.
+        max_iterations (int): Maximum solver iterations. Must be positive.
+            Defaults to 100.
+
+    Returns:
+        float: Annualized implied volatility as a decimal.
+
+    Raises:
+        ItofinError: If `expiry` is not a positive finite year fraction, the
+            solver settings are invalid, a core input check fails, or the
+            solver does not converge.
+    """

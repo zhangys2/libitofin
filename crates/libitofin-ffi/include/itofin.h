@@ -1160,6 +1160,44 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. `guess` may be null. Any context
+ * and its handles must belong to the calling thread; serialize calls including
+ * destruction. See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_formula_implied_std_dev(int32_t option_type_code,
+                                             double strike,
+                                             double forward,
+                                             double black_price,
+                                             double discount,
+                                             double displacement,
+                                             const double *guess,
+                                             double accuracy,
+                                             int64_t max_iterations,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_formula_implied_volatility(int32_t option_type_code,
+                                                double strike,
+                                                double forward,
+                                                double expiry,
+                                                double black_price,
+                                                double discount,
+                                                double displacement,
+                                                double accuracy,
+                                                int64_t max_iterations,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
  * Construct a retained BMA index; zero forwarding creates an empty forecast handle.
  * # Safety
  * Follow the crate-level pointer and thread contract.
