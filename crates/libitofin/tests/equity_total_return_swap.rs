@@ -448,6 +448,15 @@ fn test_fair_margin() {
         1.0,
         2,
     );
+    check_fair_margin_calculation(
+        SwapType::Payer,
+        Date::new(5, Month::January, 2023),
+        Date::new(5, Month::April, 2023),
+        true,
+        0.0,
+        0.0,
+        0,
+    );
 }
 
 #[test]

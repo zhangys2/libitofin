@@ -250,18 +250,38 @@ impl Calendar {
 
     /// Rolls `d` to the nearest business day per the given convention.
     ///
+    /// An empty calendar accepts only [`BusinessDayConvention::Unadjusted`].
+    /// [`try_adjust`](Self::try_adjust) reports any other convention as an error.
+    /// This method panics with that same message so existing `Date`-returning
+    /// callers keep their type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `d` is the null date, on an unknown convention, or when the
+    /// calendar is empty and `c` is not `Unadjusted`.
+    pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
+        self.try_adjust(d, c)
+            .unwrap_or_else(|err| panic!("{}", err.message()))
+    }
+
+    /// [`adjust`](Self::adjust) as a [`QlResult`].
+    ///
     /// # Panics
     ///
     /// Panics if `d` is the null date, or on an unknown convention.
-    pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
+    ///
+    /// # Errors
+    ///
+    /// Errors when the calendar is empty and `c` is not `Unadjusted`.
+    pub fn try_adjust(&self, d: Date, c: BusinessDayConvention) -> crate::errors::QlResult<Date> {
         use BusinessDayConvention::*;
         assert!(d != Date::null(), "null date");
 
         if c == Unadjusted {
-            return d;
+            return Ok(d);
         }
 
-        assert!(!self.is_empty(), "no calendar implementation provided");
+        crate::require!(!self.is_empty(), "no calendar implementation provided");
 
         let mut d1 = d;
         if c == Following || c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
@@ -270,31 +290,31 @@ impl Calendar {
             }
             if c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
                 if d1.month() != d.month() {
-                    return self.adjust(d, Preceding);
+                    return self.try_adjust(d, Preceding);
                 }
                 if c == HalfMonthModifiedFollowing
                     && d.day_of_month() <= 15
                     && d1.day_of_month() > 15
                 {
-                    return self.adjust(d, Preceding);
+                    return self.try_adjust(d, Preceding);
                 }
             }
-            d1
+            Ok(d1)
         } else if c == Preceding || c == ModifiedPreceding {
             while self.is_holiday(d1) {
                 d1 -= 1;
             }
             if c == ModifiedPreceding && d1.month() != d.month() {
-                return self.adjust(d, Following);
+                return self.try_adjust(d, Following);
             }
-            d1
+            Ok(d1)
         } else if c == Nearest {
             let mut d2 = d;
             while self.is_holiday(d1) && self.is_holiday(d2) {
                 d1 += 1;
                 d2 -= 1;
             }
-            if self.is_holiday(d1) { d2 } else { d1 }
+            Ok(if self.is_holiday(d1) { d2 } else { d1 })
         } else {
             panic!("unknown business-day convention");
         }
@@ -754,11 +774,22 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "no calendar implementation provided")]
-    fn empty_calendar_adjust_panics() {
-        Calendar::empty().adjust(
-            Date::new(5, Month::January, 2023),
-            BusinessDayConvention::Following,
+    fn empty_calendar_adjust_is_an_error() {
+        let err = Calendar::empty()
+            .try_adjust(
+                Date::new(5, Month::January, 2023),
+                BusinessDayConvention::Following,
+            )
+            .expect_err("empty calendar must not roll a business day");
+        assert!(err.message().contains("no calendar implementation provided"));
+        assert_eq!(
+            Calendar::empty()
+                .try_adjust(
+                    Date::new(5, Month::January, 2023),
+                    BusinessDayConvention::Unadjusted,
+                )
+                .unwrap(),
+            Date::new(5, Month::January, 2023)
         );
     }
 }

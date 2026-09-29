@@ -43,9 +43,9 @@
 //! Zero and indexed-coupon modes, digital and CMS coupons and the overnight-
 //! indexed leg. Their builder methods are omitted entirely rather than accepted
 //! and ignored. A zero gearing, which the template collapses to a
-//! `FixedRateCoupon`, is likewise not special-cased: the port's [`IborCoupon`]
-//! rejects it, so `with_gearing(0.0)` surfaces that error rather than a silent
-//! fixed coupon.
+//! `FixedRateCoupon`, is applied by [`IborLeg::build`]. [`IborLeg::coupons`]
+//! still returns [`IborCoupon`] values, so it rejects a zero gearing instead of
+//! changing that return type.
 //!
 //! Caps and floors (`withCaps`/`withFloors`) are ported: they yield
 //! [`CappedFlooredCoupon`](crate::cashflows::CappedFlooredCoupon)s over the
@@ -315,6 +315,11 @@ impl IborLeg {
                     self.ex_coupon_end_of_month,
                 )
             });
+            let gearing = broadcast(&self.gearings, i, 1.0);
+            require!(
+                gearing != 0.0,
+                "zero gearing collapses to a fixed coupon; use build()"
+            );
             let fixing_days = if self.fixing_days.is_empty() {
                 None
             } else {
@@ -327,7 +332,7 @@ impl IborLeg {
                 end,
                 fixing_days,
                 self.index.clone(),
-                broadcast(&self.gearings, i, 1.0),
+                gearing,
                 broadcast(&self.spreads, i, 0.0),
                 Some(reference_start),
                 Some(reference_end),
@@ -658,6 +663,43 @@ mod tests {
         for (u, p) in unset.iter().zip(pinned.iter()) {
             assert_eq!(u.fixing_date(), p.fixing_date());
         }
+    }
+
+    #[test]
+    fn zero_gearing_build_matches_a_fixed_coupon() {
+        let index = euribor3m();
+        let schedule = monthly_schedule();
+        let spread = 0.0125;
+        let leg = IborLeg::new(schedule.clone(), index.clone())
+            .with_notional(100.0)
+            .with_gearing(0.0)
+            .with_spread(spread)
+            .build()
+            .unwrap();
+        assert!(
+            IborLeg::new(schedule.clone(), index.clone())
+                .with_notional(100.0)
+                .with_gearing(0.0)
+                .coupons()
+                .is_err()
+        );
+        let start = schedule.date(0);
+        let end = schedule.date(1);
+        let expected = FixedRateCoupon::from_rate(
+            leg[0].date(),
+            100.0,
+            spread,
+            index.day_counter().clone(),
+            start,
+            end,
+            Some(start),
+            Some(end),
+            None,
+        );
+        assert!(
+            (CashFlow::amount(&*leg[0]).unwrap() - CashFlow::amount(&expected).unwrap()).abs()
+                < 1e-10
+        );
     }
 
     /// `testExCouponDates`, `l2`: an ibor leg with no ex-coupon period gives every
