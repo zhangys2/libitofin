@@ -2076,6 +2076,54 @@ int32_t itofin_cds_results(struct ItofinContext *ctx,
 
 /**
  * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ * A null `std_dev_points` pointer with `n_points == 0` selects the default grid.
+ */
+int32_t itofin_cubic_smile_new(struct ItofinContext *ctx,
+                               const double *strikes,
+                               size_t n_strikes,
+                               const double *mid_ivs,
+                               size_t n_ivs,
+                               double forward,
+                               double exercise_time,
+                               double atm_vol,
+                               const double *std_dev_points,
+                               size_t n_points,
+                               uint8_t extrapolate,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
+ * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_cubic_smile_query(struct ItofinContext *ctx,
+                                 uint64_t id,
+                                 int32_t kind,
+                                 double x,
+                                 double *out,
+                                 struct ItofinError *error);
+
+/**
+ * Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs.
+ * A null `out` reports the required length. For series 3, `valid` receives 1
+ * when the sample is inside the domain.
+ * # Safety
+ * Follow the crate C caller contract; `out` and `valid` must hold `capacity` slots.
+ */
+int32_t itofin_cubic_smile_series(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  int32_t kind,
+                                  double *out,
+                                  uint8_t *valid,
+                                  size_t capacity,
+                                  size_t *out_len,
+                                  struct ItofinError *error);
+
+/**
+ * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
  * belong to the calling thread; serialize calls including destruction.
