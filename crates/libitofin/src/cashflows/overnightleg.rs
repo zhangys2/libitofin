@@ -58,15 +58,17 @@
 //! knobs, telescopic value dates, rounding precision, the last-recent-period knob
 //! and explicit payment dates. Their builder methods are omitted entirely rather
 //! than accepted and ignored, since [`OvernightIndexedCoupon`] does not accept the
-//! corresponding constructor arguments. A zero gearing, which C++ collapses to a
-//! `FixedRateCoupon`, is likewise not special-cased: the port's coupon rejects it,
-//! so `with_gearing(0.0)` surfaces that error rather than a silent fixed coupon.
+//! corresponding constructor arguments. [`OvernightLeg::build`] collapses a zero
+//! gearing to a [`FixedRateCoupon`], matching `FloatingLeg`. [`OvernightLeg::coupons`]
+//! still returns overnight coupons, so it rejects a zero gearing.
 
 use crate::cashflow::{CashFlow, Leg};
+use crate::cashflows::fixedratecoupon::FixedRateCoupon;
 use crate::cashflows::overnightindexedcoupon::OvernightIndexedCoupon;
 use crate::cashflows::rateaveraging::RateAveraging;
 use crate::errors::QlResult;
 use crate::indexes::iborindex::OvernightIndex;
+use crate::indexes::interestrateindex::InterestRateIndex;
 use crate::require;
 use crate::shared::{Shared, shared};
 use crate::time::businessdayconvention::BusinessDayConvention;
@@ -291,11 +293,64 @@ impl OvernightLeg {
     ///
     /// As [`coupons`](Self::coupons).
     pub fn build(&self) -> QlResult<Leg> {
-        Ok(self
-            .coupons()?
-            .into_iter()
-            .map(|coupon| coupon as Shared<dyn CashFlow>)
-            .collect())
+        let periods = self.schedule.len().saturating_sub(1);
+        let zero_gearing = (0..periods).any(|i| broadcast(&self.gearings, i, 1.0) == 0.0);
+        if !zero_gearing {
+            return Ok(self
+                .coupons()?
+                .into_iter()
+                .map(|coupon| coupon as Shared<dyn CashFlow>)
+                .collect());
+        }
+        require!(!self.notionals.is_empty(), "no notional given");
+        require!(periods >= 1, "schedule spans no period");
+        let mut leg: Leg = Vec::with_capacity(periods);
+        for i in 0..periods {
+            let start = self.schedule.date(i);
+            let end = self.schedule.date(i + 1);
+            let payment_date = self.payment_calendar.advance(
+                end,
+                self.payment_lag,
+                TimeUnit::Days,
+                self.payment_adjustment,
+                false,
+            );
+            let gearing = broadcast(&self.gearings, i, 1.0);
+            if gearing == 0.0 {
+                let day_counter = self
+                    .payment_day_counter
+                    .clone()
+                    .unwrap_or_else(|| self.index.day_counter().clone());
+                leg.push(shared(FixedRateCoupon::from_rate(
+                    payment_date,
+                    broadcast(&self.notionals, i, 1.0),
+                    broadcast(&self.spreads, i, 0.0),
+                    day_counter,
+                    start,
+                    end,
+                    Some(start),
+                    Some(end),
+                    None,
+                )));
+            } else {
+                leg.push(shared(OvernightIndexedCoupon::new(
+                    payment_date,
+                    broadcast(&self.notionals, i, 1.0),
+                    start,
+                    end,
+                    self.index.clone(),
+                    gearing,
+                    broadcast(&self.spreads, i, 0.0),
+                    Some(start),
+                    Some(end),
+                    self.payment_day_counter.clone(),
+                    self.averaging_method,
+                    self.compound_spread_daily,
+                    None,
+                )?));
+            }
+        }
+        Ok(leg)
     }
 }
 
@@ -479,6 +534,19 @@ mod tests {
                 .build()
                 .is_err()
         );
-        assert!(base_leg(schedule, sofr).with_gearing(0.0).build().is_err());
+        let built = base_leg(schedule.clone(), sofr.clone())
+            .with_gearing(0.0)
+            .build()
+            .unwrap();
+        assert!(
+            base_leg(schedule, sofr)
+                .with_gearing(0.0)
+                .coupons()
+                .is_err()
+        );
+        assert_eq!(built.len(), 4);
+        for flow in built {
+            assert_eq!(crate::cashflow::CashFlow::amount(&*flow).unwrap(), 0.0);
+        }
     }
 }
