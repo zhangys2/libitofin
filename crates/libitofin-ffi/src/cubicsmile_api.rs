@@ -47,7 +47,7 @@ pub unsafe extern "C" fn itofin_cubic_smile_new(
 }
 
 /// Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
-/// 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike.
+/// 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance.
 /// # Safety
 /// Follow the crate C caller contract.
 #[unsafe(no_mangle)]
@@ -72,6 +72,7 @@ pub unsafe extern "C" fn itofin_cubic_smile_query(
                 5 => smile.exercise_time(),
                 6 => smile.min_strike(),
                 7 => smile.max_strike(),
+                8 => smile.variance(x)?,
                 _ => return Err(BindingError::invalid("unknown cubic smile query")),
             };
             output(out, value)
@@ -79,7 +80,8 @@ pub unsafe extern "C" fn itofin_cubic_smile_query(
     }
 }
 
-/// Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs.
+/// Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs,
+/// 4 node residuals, 5 segment coefficients flattened as (a, b, c) triples.
 /// A null `out` reports the required length. For series 3, `valid` receives 1
 /// when the sample is inside the domain.
 /// # Safety
@@ -104,11 +106,23 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
             } else {
                 None
             };
+            let residuals = if kind == 4 {
+                Some(smile.node_residuals()?)
+            } else {
+                None
+            };
+            let coefficients = if kind == 5 {
+                Some(smile.segment_coefficients())
+            } else {
+                None
+            };
             let length = match kind {
                 0 => smile.std_dev_points().len(),
                 1 => smile.node_std_dev_points().len(),
                 2 => smile.node_mid_ivs().len(),
                 3 => sampled.as_ref().map(|v| v.len()).unwrap_or(0),
+                4 => residuals.as_ref().map(|v| v.len()).unwrap_or(0),
+                5 => coefficients.as_ref().map(|v| v.len() * 3).unwrap_or(0),
                 _ => return Err(BindingError::invalid("unknown cubic smile series")),
             };
             *out_len = length;
@@ -123,6 +137,14 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
                 0 => dest.copy_from_slice(smile.std_dev_points()),
                 1 => dest.copy_from_slice(smile.node_std_dev_points()),
                 2 => dest.copy_from_slice(smile.node_mid_ivs()),
+                4 => dest.copy_from_slice(&residuals.unwrap()),
+                5 => {
+                    for (i, [a, b, c]) in coefficients.unwrap().into_iter().enumerate() {
+                        dest[3 * i] = a;
+                        dest[3 * i + 1] = b;
+                        dest[3 * i + 2] = c;
+                    }
+                }
                 3 => {
                     check_ptr(valid)?;
                     let flags = std::slice::from_raw_parts_mut(valid, length);

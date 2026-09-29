@@ -76,6 +76,20 @@ impl PyCubicSmileSection {
         Ok(self.inner.volatility(strike).map_err(PyQlError::from)?)
     }
 
+    /// Return the Black variance at a strike.
+    ///
+    /// Args:
+    ///     strike (float): The strike the variance is read at.
+    ///
+    /// Returns:
+    ///     float: The squared volatility times the exercise time.
+    ///
+    /// Raises:
+    ///     ItofinError: On the same conditions volatility() reports.
+    fn variance(&self, strike: f64) -> PyResult<f64> {
+        Ok(self.inner.variance(strike).map_err(PyQlError::from)?)
+    }
+
     /// Return the fitted volatility at a signed standard-deviation point.
     fn volatility_at_std_dev(&self, point: f64) -> PyResult<f64> {
         Ok(self
@@ -114,6 +128,28 @@ impl PyCubicSmileSection {
     #[getter]
     fn node_mid_ivs(&self) -> Vec<f64> {
         self.inner.node_mid_ivs().to_vec()
+    }
+
+    /// Per-segment `[a, b, c]` coefficients in the local polynomial basis.
+    ///
+    /// Entry `i` applies on `[x_i, x_{i+1}]`:
+    /// `sigma(x) = sigma_i + a*dx + b*dx**2 + c*dx**3`, where `dx = x - x_i`.
+    #[getter]
+    fn segment_coefficients(&self) -> Vec<(f64, f64, f64)> {
+        self.inner
+            .segment_coefficients()
+            .into_iter()
+            .map(|[a, b, c]| (a, b, c))
+            .collect()
+    }
+
+    /// Fitted-minus-observed mid-IV residuals at the source nodes.
+    ///
+    /// The spline interpolates its observations, so these should be zero up to
+    /// floating-point rounding; they do not represent quote uncertainty.
+    #[getter]
+    fn node_residuals(&self) -> PyResult<Vec<f64>> {
+        Ok(self.inner.node_residuals().map_err(PyQlError::from)?)
     }
 
     /// Forward/ATM level used to standardize strikes.

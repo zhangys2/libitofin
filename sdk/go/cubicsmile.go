@@ -54,6 +54,11 @@ func (v *CubicSmileSection) Volatility(strike float64) (float64, error) {
 	return v.query(0, strike)
 }
 
+// Variance is the Black variance at a strike.
+func (v *CubicSmileSection) Variance(strike float64) (float64, error) {
+	return v.query(8, strike)
+}
+
 // VolatilityAtStdDev is the fitted mid IV at a signed standard-deviation point.
 func (v *CubicSmileSection) VolatilityAtStdDev(point float64) (float64, error) {
 	return v.query(1, point)
@@ -134,4 +139,23 @@ func (v *CubicSmileSection) NodeMidIVs() ([]float64, error) {
 // SampledMidIVs evaluates the report grid. The bool is false outside the observed domain.
 func (v *CubicSmileSection) SampledMidIVs() ([]float64, []bool, error) {
 	return v.series(3)
+}
+
+// NodeResiduals are fitted minus observed mid-IV at each source node.
+func (v *CubicSmileSection) NodeResiduals() ([]float64, error) {
+	values, _, err := v.series(4)
+	return values, err
+}
+
+// SegmentCoefficients are the cubic (a, b, c) terms on each adjacent node pair.
+func (v *CubicSmileSection) SegmentCoefficients() ([][3]float64, error) {
+	flat, _, err := v.series(5)
+	if err != nil {
+		return nil, err
+	}
+	coeffs := make([][3]float64, len(flat)/3)
+	for i := range coeffs {
+		coeffs[i] = [3]float64{flat[3*i], flat[3*i+1], flat[3*i+2]}
+	}
+	return coeffs, nil
 }

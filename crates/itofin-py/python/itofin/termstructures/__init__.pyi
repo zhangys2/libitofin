@@ -918,6 +918,22 @@ class CubicSmileSection:
         Mid-IV observations paired with `node_std_dev_points`.
         """
     @property
+    def segment_coefficients(self) -> builtins.list[tuple[builtins.float, builtins.float, builtins.float]]:
+        r"""
+        Per-segment `[a, b, c]` coefficients in the local polynomial basis.
+
+        Entry `i` applies on `[x_i, x_{i+1}]`:
+        `sigma(x) = sigma_i + a*dx + b*dx**2 + c*dx**3`, where `dx = x - x_i`.
+        """
+    @property
+    def node_residuals(self) -> builtins.list[builtins.float]:
+        r"""
+        Fitted-minus-observed mid-IV residuals at the source nodes.
+
+        The spline interpolates its observations, so these should be zero up to
+        floating-point rounding; they do not represent quote uncertainty.
+        """
+    @property
     def forward(self) -> builtins.float:
         r"""
         Forward/ATM level used to standardize strikes.
@@ -968,6 +984,19 @@ class CubicSmileSection:
     def volatility(self, strike: builtins.float) -> builtins.float:
         r"""
         Return the fitted volatility at a strike.
+        """
+    def variance(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the Black variance at a strike.
+
+        Args:
+            strike (float): The strike the variance is read at.
+
+        Returns:
+            float: The squared volatility times the exercise time.
+
+        Raises:
+            ItofinError: On the same conditions volatility() reports.
         """
     def volatility_at_std_dev(self, point: builtins.float) -> builtins.float:
         r"""

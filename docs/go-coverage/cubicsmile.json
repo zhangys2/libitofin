@@ -20,6 +20,15 @@
     },
     {
       "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Variance",
+      "python": "itofin.termstructures.CubicSmileSection.variance",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
       "go": "CubicSmileSection.VolatilityAtStdDev",
       "python": "itofin.termstructures.CubicSmileSection.volatility_at_std_dev",
       "status": "implemented",
@@ -103,6 +112,24 @@
       "c": "itofin_cubic_smile_series",
       "go": "CubicSmileSection.NodeMidIVs",
       "python": "itofin.termstructures.CubicSmileSection.node_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeResiduals",
+      "python": "itofin.termstructures.CubicSmileSection.node_residuals",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.SegmentCoefficients",
+      "python": "itofin.termstructures.CubicSmileSection.segment_coefficients",
       "status": "implemented",
       "tests": [
         "TestCubicSmileMidIV"

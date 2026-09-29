@@ -2095,7 +2095,7 @@ int32_t itofin_cubic_smile_new(struct ItofinContext *ctx,
 
 /**
  * Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
- * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike.
+ * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance.
  * # Safety
  * Follow the crate C caller contract.
  */
@@ -2107,7 +2107,8 @@ int32_t itofin_cubic_smile_query(struct ItofinContext *ctx,
                                  struct ItofinError *error);
 
 /**
- * Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs.
+ * Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs,
+ * 4 node residuals, 5 segment coefficients flattened as (a, b, c) triples.
  * A null `out` reports the required length. For series 3, `valid` receives 1
  * when the sample is inside the domain.
  * # Safety

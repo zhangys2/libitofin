@@ -18,6 +18,13 @@ btc-option-iv = "btc_option_iv.stream:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+notebook = [
+    "marimo>=0.13",
+    "numpy>=1.21",
+    "pandas>=2.2",
+    "plotly>=6.0",
+    "scipy>=1.12",
+]
 
 [tool.uv.sources]
 itofin = { path = "../../crates/itofin-py", editable = true }

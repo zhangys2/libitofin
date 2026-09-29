@@ -34,6 +34,11 @@ def test_default_sample_grid_and_source_nodes_are_exposed_sorted():
     assert smile.std_dev_points == _DEFAULT_POINTS
     assert smile.node_std_dev_points == pytest.approx([-2, -1, 0, 1, 2])
     assert smile.node_mid_ivs == pytest.approx([0.26, 0.28, 0.30, 0.32, 0.34])
+    assert smile.forward == _FORWARD
+    assert smile.exercise_time == _EXPIRY
+    assert smile.atm_vol == _ATM_VOL
+    assert len(smile.segment_coefficients) == len(smile.node_mid_ivs) - 1
+    assert smile.node_residuals == pytest.approx([0.0] * len(smile.node_mid_ivs), abs=1e-14)
     assert len(smile.sampled_mid_ivs) == len(_DEFAULT_POINTS)
     assert smile.sampled_mid_ivs[0] is None
     assert smile.sampled_mid_ivs[4] == pytest.approx(0.30)
@@ -46,6 +51,7 @@ def test_standard_deviation_and_strike_queries_recover_linear_curve():
     expected = 0.30 + 0.02 * point
     assert smile.volatility_at_std_dev(point) == pytest.approx(expected, abs=1e-13)
     assert smile.volatility(_strike(point)) == pytest.approx(expected, abs=1e-12)
+    assert smile.variance(_strike(point)) == pytest.approx(expected * expected * _EXPIRY, abs=1e-12)
     assert smile.strike_at_std_dev(point) == pytest.approx(_strike(point), rel=1e-14)
     assert smile.forward == _FORWARD
     assert smile.atm_vol == _ATM_VOL

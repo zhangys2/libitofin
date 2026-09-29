@@ -10,6 +10,7 @@
 //! consolidate duplicate strikes, or enforce static arbitrage.
 
 use crate::errors::QlResult;
+use crate::math::comparison::close_enough;
 use crate::math::interpolations::Interpolation;
 use crate::math::interpolations::cubic::{CubicDerivativeApprox, CubicInterpolation};
 use crate::termstructures::volatility::VolatilityType;
@@ -232,6 +233,26 @@ impl CubicSmileSection {
         &self.node_mid_ivs
     }
 
+    /// Piecewise polynomial `[a, b, c]` coefficients for each adjacent node pair.
+    ///
+    /// Entry `i` applies on `[x_i, x_{i+1}]` using
+    /// `sigma(x) = sigma_i + a * (x - x_i) + b * (x - x_i)^2 + c * (x - x_i)^3`.
+    pub fn segment_coefficients(&self) -> Vec<[Real; 3]> {
+        self.interpolation.segment_coefficients()
+    }
+
+    /// Fitted minus observed mid-IV at each source node, in node order.
+    ///
+    /// This is an interpolating spline, so residuals are zero up to floating-point
+    /// rounding. It is not a statistical estimate of quote uncertainty.
+    pub fn node_residuals(&self) -> QlResult<Vec<Real>> {
+        self.node_std_dev_points
+            .iter()
+            .zip(&self.node_mid_ivs)
+            .map(|(&point, &observed)| Ok(self.volatility_at_std_dev(point)? - observed))
+            .collect()
+    }
+
     /// Forward used as the smile's ATM level.
     pub fn forward(&self) -> Rate {
         self.forward
@@ -266,13 +287,40 @@ impl CubicSmileSection {
                 .max(1.0)
     }
 
+    /// Snap a query that round-trips to an observed end strike.
+    ///
+    /// `K = F * exp(x * scale)` then `x' = ln(K/F) / scale` is not exact. At a
+    /// small ATM volatility the residual can exceed a few ulps in x-space, so
+    /// the comparison is made on the strikes.
+    fn snapped_endpoint(&self, point: Real) -> Option<Real> {
+        let strike = (self.forward.ln() + point * self.scale()).exp();
+        if !strike.is_finite() || strike <= 0.0 {
+            return None;
+        }
+        let x_min = self.interpolation.x_min();
+        let x_max = self.interpolation.x_max();
+        if point <= x_min && close_enough(strike, self.min_strike) {
+            Some(x_min)
+        } else if point >= x_max && close_enough(strike, self.max_strike) {
+            Some(x_max)
+        } else {
+            None
+        }
+    }
+
     fn is_in_or_near_range(&self, point: Real) -> bool {
+        if self.snapped_endpoint(point).is_some() {
+            return true;
+        }
         let tolerance = self.endpoint_tolerance();
         point >= self.interpolation.x_min() - tolerance
             && point <= self.interpolation.x_max() + tolerance
     }
 
     fn snap_to_domain_boundary(&self, point: Real) -> Real {
+        if let Some(endpoint) = self.snapped_endpoint(point) {
+            return endpoint;
+        }
         let tolerance = self.endpoint_tolerance();
         if point < self.interpolation.x_min() && self.interpolation.x_min() - point <= tolerance {
             self.interpolation.x_min()
@@ -340,10 +388,27 @@ mod tests {
     fn default_sample_grid_matches_requested_standard_deviation_points() {
         let curve = smile(&[-3.0, -2.0, 0.0, 2.0, 3.0], &[0.8, 0.6, 0.5, 0.6, 0.8]);
         assert_eq!(curve.std_dev_points(), &DEFAULT_STD_DEV_POINTS);
-        assert_eq!(
-            curve.sampled_mid_ivs().unwrap().len(),
-            DEFAULT_STD_DEV_POINTS.len()
-        );
+        let sampled = curve.sampled_mid_ivs().unwrap();
+        assert_eq!(sampled.len(), DEFAULT_STD_DEV_POINTS.len());
+        assert_eq!(sampled[0], Some(0.8));
+        assert_eq!(sampled[sampled.len() - 1], Some(0.8));
+    }
+
+    #[test]
+    fn low_atm_vol_recovers_default_grid_wings() {
+        let atm_vol = 0.05;
+        let scale = atm_vol * EXPIRY.sqrt();
+        let points = DEFAULT_STD_DEV_POINTS;
+        let vols: Vec<_> = points.iter().map(|x| 0.40 + 0.02 * x.abs()).collect();
+        let strikes: Vec<_> = points.iter().map(|x| FORWARD * (x * scale).exp()).collect();
+        let curve = CubicSmileSection::new(strikes.clone(), vols.clone(), FORWARD, EXPIRY, atm_vol)
+            .unwrap();
+        let sampled = curve.sampled_mid_ivs().unwrap();
+        assert_eq!(sampled.first().copied(), Some(Some(vols[0])));
+        assert_eq!(sampled.last().copied(), Some(Some(*vols.last().unwrap())));
+        assert!((curve.volatility_at_std_dev(-3.0).unwrap() - vols[0]).abs() < 1e-12);
+        assert!((curve.volatility_at_std_dev(3.0).unwrap() - vols[8]).abs() < 1e-12);
+        assert!((curve.volatility(strikes[0]).unwrap() - vols[0]).abs() < 1e-12);
     }
 
     #[test]
@@ -370,6 +435,31 @@ mod tests {
         );
         assert!((curve.strike_at_std_dev(query).unwrap() - strike_at(query)).abs() < 1e-10);
         assert_eq!(curve.atm_level(), Some(FORWARD));
+    }
+
+    #[test]
+    fn exposes_segment_coefficients_and_zero_node_residuals() {
+        let points = [-2.0, -1.0, 0.0, 1.0, 2.0];
+        let vols = [0.24, 0.22, 0.20, 0.23, 0.27];
+        let curve = smile(&points, &vols);
+        let xs = curve.node_std_dev_points();
+        let ys = curve.node_mid_ivs();
+        let coefficients = curve.segment_coefficients();
+
+        assert_eq!(coefficients.len(), xs.len() - 1);
+        for (i, [a, b, c]) in coefficients.iter().copied().enumerate() {
+            let dx = (xs[i + 1] - xs[i]) * 0.37;
+            let x = xs[i] + dx;
+            let reconstructed = ys[i] + a * dx + b * dx * dx + c * dx * dx * dx;
+            assert!((curve.volatility_at_std_dev(x).unwrap() - reconstructed).abs() < 1e-14);
+        }
+        assert!(
+            curve
+                .node_residuals()
+                .unwrap()
+                .iter()
+                .all(|error| error.abs() < 1e-14)
+        );
     }
 
     #[test]
