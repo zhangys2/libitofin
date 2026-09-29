@@ -299,7 +299,7 @@ jobs:
           . .venv/bin/activate
           ITOFIN_HCAL_CORE_ORACLE="$(cargo run --quiet --release -p libitofin-ffi --example calibration_constraints_oracle)"
           export ITOFIN_HCAL_CORE_ORACLE
-          pytest crates/itofin-py/tests -v
+          pytest crates/itofin-py/tests example/btc-option-iv/tests -v
 
   python-bindings-required:
     # Exact name branch protection expects (lowercase; not the matrix

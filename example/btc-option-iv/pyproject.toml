@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "btc-option-iv"
+version = "0.1.0"
+description = "Live Deribit BTC option bid/ask/mid Black implied volatility using itofin."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "itofin",
+    "websockets>=12,<16",
+]
+
+[project.scripts]
+btc-option-iv = "btc_option_iv.stream:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv.sources]
+itofin = { path = "../../crates/itofin-py", editable = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["btc_option_iv"]

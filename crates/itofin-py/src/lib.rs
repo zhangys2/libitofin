@@ -5,6 +5,7 @@
 //! Python-visible ItofinError exception. The pricing facades land in follow-up
 //! tickets (#485-#487).
 
+mod blackformula;
 mod bma;
 mod bootstrap;
 mod calibration;
@@ -382,6 +383,14 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<heston_engines::PyExponentialFittingControlVariate>()?;
     pricingengines.add_class::<PyMCEuropeanHestonEngine>()?;
     pricingengines.add_class::<PyMCAmericanEngine>()?;
+    pricingengines.add_function(wrap_pyfunction!(
+        blackformula::black_formula_implied_std_dev,
+        &pricingengines
+    )?)?;
+    pricingengines.add_function(wrap_pyfunction!(
+        blackformula::black_formula_implied_volatility,
+        &pricingengines
+    )?)?;
 
     let optimization = PyModule::new(py, "optimization")?;
     optimization.add_class::<PyLevenbergMarquardt>()?;
