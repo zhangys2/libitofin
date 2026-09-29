@@ -221,6 +221,17 @@ impl CubicInterpolation {
         self.allow_extrapolation
     }
 
+    /// Return each segment's `[a, b, c]` coefficients in
+    /// `p_i(x) = y_i + a_i * (x - x_i) + b_i * (x - x_i)^2 + c_i * (x - x_i)^3`.
+    ///
+    /// The returned vector follows segment order; entry `i` applies on
+    /// `[x[i], x[i + 1]]` using the nodes supplied at construction.
+    pub fn segment_coefficients(&self) -> Vec<[Real; 3]> {
+        (0..self.a.len())
+            .map(|i| [self.a[i], self.b[i], self.c[i]])
+            .collect()
+    }
+
     /// Rebuilds the interpolation with the given spline boundary conditions,
     /// preserving the derivative scheme and extrapolation setting. The boundary
     /// conditions only affect the `Spline` scheme; for the local schemes they
