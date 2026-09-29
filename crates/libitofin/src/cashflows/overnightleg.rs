@@ -538,7 +538,12 @@ mod tests {
             .with_gearing(0.0)
             .build()
             .unwrap();
-        assert!(base_leg(schedule, sofr).with_gearing(0.0).coupons().is_err());
+        assert!(
+            base_leg(schedule, sofr)
+                .with_gearing(0.0)
+                .coupons()
+                .is_err()
+        );
         assert_eq!(built.len(), 4);
         for flow in built {
             assert_eq!(crate::cashflow::CashFlow::amount(&*flow).unwrap(), 0.0);

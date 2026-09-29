@@ -781,7 +781,10 @@ mod tests {
                 BusinessDayConvention::Following,
             )
             .expect_err("empty calendar must not roll a business day");
-        assert!(err.message().contains("no calendar implementation provided"));
+        assert!(
+            err.message()
+                .contains("no calendar implementation provided")
+        );
         assert_eq!(
             Calendar::empty()
                 .try_adjust(
