@@ -14,25 +14,42 @@ provides the exported types and methods.
 
 Use Go 1.27.1, a C compiler, and the native package from the **same release** as
 the Go module. `go get` downloads Go source; it does not install native headers
-or libraries. Published native packages support Linux amd64 (Ubuntu 24.04,
-glibc 2.39 or compatible newer systems) and macOS arm64 (macOS 14 or newer).
+or libraries. Published native packages support Linux amd64 and arm64 (Ubuntu
+24.04, glibc 2.39 or compatible newer systems), macOS arm64 (macOS 14 or newer),
+and macOS amd64 (Intel, macOS 15 or newer).
+The Linux arm64 and macOS amd64 packages are published from the release after
+v0.27.0; earlier releases ship only Linux amd64 and macOS arm64.
 
-The following commands pin the v0.26.0 release. With the GitHub CLI
+The following commands pin the v0.29.0 release. With the GitHub CLI
 installed, run them in your application's module directory. For a new project,
 first run `go mod init example.com/pricing`.
 
 === "macOS arm64"
 
     ```sh
-    version=0.26.0
+    version=0.29.0
     platform=darwin-arm64
+    ```
+
+=== "macOS amd64"
+
+    ```sh
+    version=0.29.0
+    platform=darwin-amd64
     ```
 
 === "Linux amd64"
 
     ```sh
-    version=0.26.0
+    version=0.29.0
     platform=linux-amd64
+    ```
+
+=== "Linux arm64"
+
+    ```sh
+    version=0.29.0
+    platform=linux-arm64
     ```
 
 Download, verify, and extract the native package:
@@ -120,6 +137,37 @@ go run ./examples/portfolio
 
 The [European option walkthrough](getting-started.md#price-a-european-option)
 uses the same inputs as Python and returns NPV `2.1333684449`.
+
+## Finite-difference vanilla options
+
+Current source builds can price European, American and Bermudan vanilla options
+with a Black-Scholes process. Once `session`, `process` and `option` belong to
+the same session, construct an engine and price in one operation:
+
+```go
+timeSteps, priceNodes := uint(200), uint(200)
+engine, err := session.NewFdBlackScholesVanillaEngine(process, itofin.FdConfig{
+    TGrid: &timeSteps, XGrid: &priceNodes,
+})
+if err != nil { return err }
+value, err := option.PriceFd(engine)
+if err != nil { return err }
+delta, err := option.Delta()
+if err != nil { return err }
+gamma, err := option.Gamma()
+if err != nil { return err }
+theta, err := option.Theta()
+if err != nil { return err }
+fmt.Println(value, delta, gamma, theta)
+```
+
+`FdConfig{}` selects a 100 by 100 grid, zero damping steps and Douglas
+rollback. `FdImplicitEuler` is the other supported scheme; set it through
+`Scheme: &scheme`. Grid and damping values are optional pointers, so an explicit
+zero time grid or undersized equity grid is rejected instead of silently
+becoming a default. The engine retains its process, and the option retains an
+attached engine. Cash dividends, quanto and local-volatility settings are not
+part of this binding.
 
 ## Portfolio simulation
 

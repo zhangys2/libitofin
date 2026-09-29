@@ -20,6 +20,7 @@ mod creditengine;
 mod credithelpers;
 mod currency;
 mod curve;
+mod fdengine;
 mod fra;
 mod helpers;
 mod heston;
@@ -32,6 +33,7 @@ mod makeswaption;
 mod market;
 mod mcengine;
 mod ois;
+mod optimize;
 mod option;
 mod optionletvol;
 mod overnightfuture;
@@ -39,6 +41,7 @@ mod poissonrng;
 mod randomnumbers;
 mod results;
 mod settings;
+mod simulation;
 mod smilesection;
 mod swap;
 mod swapindex;
@@ -49,7 +52,11 @@ mod time;
 mod treeswaption;
 mod vol;
 
-use calibration::{PyCalibrationErrorType, PyEndCriteria, PyLevenbergMarquardt};
+use calibration::{
+    PyBoundaryConstraint, PyCalibrationErrorType, PyCompositeConstraint, PyConjugateGradient,
+    PyEndCriteria, PyLevenbergMarquardt, PyNoConstraint, PyPositiveConstraint, PySimplex,
+    PySteepestDescent,
+};
 use capfloor::{PyCapFloor, PyCapFloorType};
 use capfloorengine::{PyBachelierCapFloorEngine, PyBlackCapFloorEngine};
 use capfloortermvol::{PyCapFloorTermVolCurve, PyCapFloorTermVolSurface};
@@ -147,6 +154,7 @@ Every fallible core call surfaces as this exception, whose message is the
 located form "file:line: message"."#
 );
 pyo3_stub_gen::module_variable!("itofin", "__version__", String);
+pyo3_stub_gen::module_variable!("itofin", "DEFAULT_MAX_OUTPUT_VALUES", usize);
 
 /// Newtype bridging QlError to Err across the crate boundary.
 ///
@@ -169,7 +177,7 @@ impl From<PyQlError> for PyErr {
     }
 }
 
-/// Registers the twelve `ql/`-faithful submodules on `itofin`.
+/// Registers the twelve `ql/`-faithful submodules and `optimize` on `itofin`.
 ///
 /// Nested native modules give attribute access (`itofin.time.Date`) but do not
 /// form a Python package, so `import itofin.time` / `from itofin.time import
@@ -181,7 +189,13 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
 
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add(
+        "DEFAULT_MAX_OUTPUT_VALUES",
+        simulation::DEFAULT_MAX_OUTPUT_VALUES,
+    )?;
     m.add("ItofinError", py.get_type::<ItofinError>())?;
+    m.add_function(wrap_pyfunction!(simulation::gaussian_draws, m)?)?;
+    m.add_function(wrap_pyfunction!(simulation::simulate_gbm, m)?)?;
     m.add_class::<PySettings>()?;
 
     let time = PyModule::new(py, "time")?;
@@ -360,6 +374,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<PyForwardsInCouponPeriod>()?;
     pricingengines.add_class::<PyDiscountingSwapEngine>()?;
     pricingengines.add_class::<PyYoYInflationCapFloorEngine>()?;
+    pricingengines.add_class::<fdengine::PyFdScheme>()?;
+    pricingengines.add_class::<fdengine::PyFdBlackScholesVanillaEngine>()?;
     pricingengines.add_class::<PyMCEuropeanEngine>()?;
     pricingengines.add_class::<PyQMCEuropeanEngine>()?;
     pricingengines.add_class::<heston_engines::PyCosHestonEngine>()?;
@@ -378,7 +394,19 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let optimization = PyModule::new(py, "optimization")?;
     optimization.add_class::<PyLevenbergMarquardt>()?;
+    optimization.add_class::<PySimplex>()?;
+    optimization.add_class::<PyConjugateGradient>()?;
+    optimization.add_class::<PySteepestDescent>()?;
     optimization.add_class::<PyEndCriteria>()?;
+    optimization.add_class::<PyNoConstraint>()?;
+    optimization.add_class::<PyPositiveConstraint>()?;
+    optimization.add_class::<PyBoundaryConstraint>()?;
+    optimization.add_class::<PyCompositeConstraint>()?;
+
+    let optimize = PyModule::new(py, "optimize")?;
+    optimize.add_function(wrap_pyfunction!(optimize::minimize, &optimize)?)?;
+    optimize.add_class::<optimize::PyOptimizeResult>()?;
+    optimize.add_class::<optimize::PyStatus>()?;
 
     let randomnumbers = PyModule::new(py, "randomnumbers")?;
     randomnumbers.add_class::<poissonrng::PyPoissonRandomGenerator>()?;
@@ -406,6 +434,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ("models", &models),
         ("pricingengines", &pricingengines),
         ("optimization", &optimization),
+        ("optimize", &optimize),
         ("randomnumbers", &randomnumbers),
         ("results", &results),
     ];

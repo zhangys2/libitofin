@@ -1,8 +1,7 @@
 //! Alternative Heston engines and additive calibration entrypoints.
 use crate::boundary::*;
-use libitofin::math::optimization::{
-    endcriteria::EndCriteria, levenbergmarquardt::LevenbergMarquardt,
-};
+use crate::constraint_api::{ItofinCalibrationOptions, read_options};
+use libitofin::math::optimization::{endcriteria::EndCriteria, method::OptimizationMethod};
 use libitofin::models::calibrationhelper::{BlackCalibrationHelper, CalibrationHelper};
 use libitofin::models::equity::HestonModelHelper;
 use libitofin::models::{HestonModel, calibrate};
@@ -106,8 +105,40 @@ pub unsafe extern "C" fn itofin_heston_calibrate_engine(
     error: *mut ItofinError,
 ) -> i32 {
     unsafe {
+        itofin_heston_calibrate_engine_with_options(
+            ctx,
+            model,
+            helpers,
+            helpers_len,
+            method,
+            criteria,
+            config,
+            std::ptr::null(),
+            error,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+/// # Safety
+/// Pointers and handles must obey the C caller contract. Option arrays are copied
+/// before calibration and are never retained.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn itofin_heston_calibrate_engine_with_options(
+    ctx: *mut Context,
+    model: u64,
+    helpers: *const u64,
+    helpers_len: usize,
+    method: u64,
+    criteria: u64,
+    config: *const ItofinHestonEngineConfig,
+    options: *const ItofinCalibrationOptions,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
         with_context(ctx, error, |c| {
             check_ptr(config)?;
+            let options = read_options(c, options)?;
             let ids = input_slice(helpers, helpers_len)?;
             if ids.is_empty() {
                 return Err(BindingError::invalid(
@@ -115,7 +146,7 @@ pub unsafe extern "C" fn itofin_heston_calibrate_engine(
                 ));
             }
             let model = c.get::<SharedMut<HestonModel>>(model)?;
-            let method = c.get::<SharedMut<LevenbergMarquardt>>(method)?;
+            let method = c.get::<SharedMut<dyn OptimizationMethod>>(method)?;
             let criteria = c.get::<EndCriteria>(criteria)?;
             let helpers = ids
                 .iter()
@@ -137,9 +168,9 @@ pub unsafe extern "C" fn itofin_heston_calibrate_engine(
                 &helpers,
                 &mut *method.borrow_mut(),
                 &criteria,
-                None,
-                vec![],
-                vec![],
+                options.constraint,
+                options.weights,
+                options.fix_parameters,
             )?;
             Ok(())
         })
