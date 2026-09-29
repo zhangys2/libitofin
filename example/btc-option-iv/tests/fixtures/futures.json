@@ -1,0 +1,19 @@
+{
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "instrument_name": "BTC-27DEC24",
+      "kind": "future",
+      "expiration_timestamp": 1735286400000,
+      "settlement_currency": "BTC",
+      "is_active": true
+    },
+    {
+      "instrument_name": "BTC-PERPETUAL",
+      "kind": "future",
+      "expiration_timestamp": 32503680000000,
+      "settlement_currency": "BTC",
+      "is_active": true
+    }
+  ]
+}
