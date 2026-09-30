@@ -108,6 +108,10 @@ class PublicationTests(unittest.TestCase):
             self.mutations.append(("upload", path.name))
             if not self.drop_uploads:
                 self.assets[path.name] = path.read_bytes()
+        elif action == "delete-asset":
+            name = args[4]
+            self.mutations.append(("delete-asset", name))
+            self.assets.pop(name, None)
         elif action == "edit":
             notes = Path(args[args.index("--notes-file") + 1]).read_text()
             self.assertTrue(notes.startswith("Core release notes."))
@@ -315,6 +319,8 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(result["optional"]["windows-amd64"]["status"], "skipped")
         self.assertIn(f"sdk/go/v{VERSION}", self.references)
         self.assertNotIn("Windows amd64", self.body)
+        self.assertNotIn(old.name, self.assets)
+        self.assertNotIn(old.name + ".sha256", self.assets)
 
     def test_remote_only_optional_pair_is_verified(self):
         remote = self.root / "remote"
@@ -380,16 +386,8 @@ class PublicationTests(unittest.TestCase):
         self.assets[path.name + ".sha256"] = b"invalid checksum"
         self.publish()
         self.assertNotIn("Windows amd64", self.body)
-
-
-class WorkflowPlatformTests(unittest.TestCase):
-    def test_workflow_matrices_match_required_platforms(self):
-        root = Path(__file__).resolve().parents[1]
-        for workflow in WORKFLOWS:
-            with self.subTest(workflow=workflow):
-                text = (root / workflow).read_text()
-                platforms = re.findall(r"^\s+platform:\s+(\S+)\s*$", text, re.MULTILINE)
-                self.assertEqual(sorted(platforms), sorted(PLATFORMS))
+        self.assertNotIn(path.name, self.assets)
+        self.assertNotIn(path.name + ".sha256", self.assets)
 
 
 class WorkflowPlatformTests(unittest.TestCase):

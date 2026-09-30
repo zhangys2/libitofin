@@ -2375,6 +2375,8 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
 
 /**
  * Fit a stationary GARCH(1,1) model to a return series and forecast one variance.
+ * `out_omega` is the variance intercept. Filter and forecast want the long-run
+ * variance `omega / (1 - alpha - beta)`, not this intercept.
  * # Safety
  * `returns` holds `len` doubles. All output pointers hold one double and
  * follow the crate-level non-overlap contract.
@@ -2391,6 +2393,7 @@ int32_t itofin_garch11_fit(const ItofinReal *returns,
 /**
  * Filter returns into conditional volatility and forecast the next variance.
  * The first output slot is a zero warmup placeholder; `first_valid` is one.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
  * # Safety
  * `returns` holds `len` doubles and `out` holds `capacity` doubles. All
  * pointers follow the crate-level non-overlap contract.
@@ -2408,6 +2411,7 @@ int32_t itofin_garch11_filter(const ItofinReal *returns,
 
 /**
  * Forecast one variance from the latest return and current variance.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
  * # Safety
  * `out_variance` is writable and follows the crate-level pointer contract.
  */

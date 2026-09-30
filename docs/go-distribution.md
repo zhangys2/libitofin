@@ -130,10 +130,17 @@ application or establish a production latency budget.
 
 ## Release process
 
-The main `semantic-release.yml` workflow publishes one LibItoFin release at
-`vVERSION`. Rust and Python package versions remain unprefixed. The release tag,
-committed workspace version, and every local Cargo.lock package must agree;
-publication jobs validate those files instead of rewriting them after tagging.
+This fork does not publish through `semantic-release.yml`. Create the core
+GitHub release at `vVERSION` first. Rust and Python package versions remain
+unprefixed. The release tag, committed workspace version, and every local
+Cargo.lock package must agree; publication validates those files and does not
+rewrite them after tagging.
+
+Then dispatch `go-release.yml` with that existing tag:
+
+```sh
+gh workflow run go-release.yml --ref vVERSION -f release_tag=vVERSION
+```
 
 Go publication builds and validates Linux amd64, Linux arm64, macOS amd64, and
 macOS arm64 packages from that exact tag, each on a native GitHub-hosted runner.
@@ -146,26 +153,22 @@ create another release page. Go documents the prefix in
 Windows amd64 GNU builds separately. A validated Windows archive and checksum
 are attached to the same release when available; a Windows build failure does
 not block the four required packages or the Go tag. Release notes list Windows
-only when both assets are verified.
+only when both assets are verified. A failed Windows check removes that
+archive and checksum so a leftover file is not treated as a published package.
 
 After publication, each available platform installs the uploaded assets and
 fetches the Go module through the public module proxy into a fresh cache,
 without local replacements. The check verifies module/native versions, source
 revision, checksums, runtime linking, and the portfolio/session fixture.
 
-First dispatch the main release workflow with `prompt=true`, `dry_run=true` to
-check the next version and notes. Dispatch with `dry_run=false` to publish.
-During the one-time prefix migration, `v0.21.0` aliases the existing `0.21.0`
-commit; the original tag and release remain unchanged.
-
-For recovery, dispatch `go-release.yml` with an existing coordinated core
-`release_tag`. For the legacy v0.22.0 release, select its original workflow with
-`gh workflow run go-release.yml --ref v0.22.0 -f release_tag=v0.22.0`; the current
-workflow targets `sdk/go`. Runs for that tag are serialized. Existing native
-archives are downloaded and verified, then preserved even if a rebuild differs
-byte-for-byte. An interrupted archive-only upload can have its checksum repaired;
-conflicting Go tags, invalid archives, or mismatched checksums fail without an
-overwrite. The workflow never creates a second Go-specific release.
+Reruns of `go-release.yml` for the same `release_tag` are serialized. Existing
+native archives are downloaded and verified, then preserved even if a rebuild
+differs byte-for-byte. An interrupted archive-only upload can have its checksum
+repaired; conflicting Go tags, invalid required archives, or mismatched
+checksums fail without an overwrite. The workflow never creates a second
+Go-specific release. For the legacy v0.22.0 release, select its original
+workflow with `gh workflow run go-release.yml --ref v0.22.0 -f release_tag=v0.22.0`;
+the current workflow targets `sdk/go`.
 
 PRs call `go-package.yml` and include all four platforms in `workflow-success`.
 The macOS amd64 leg runs on the `macos-15-intel` image. All four platforms are
