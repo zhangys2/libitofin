@@ -15,7 +15,7 @@ prioritized work to GitHub issues after the prioritization lens.
 Inventories merged 2026-09-19 from Wayfinder research tickets
 [oracle case inventory](../.wayfinder/tickets/oracle-case-inventory.md) and
 [surface module inventory](../.wayfinder/tickets/surface-module-inventory.md);
-reclassified 2026-09-26 against `main` after the upstream sync through benbenbang `v0.29.0`. Optimizer methods, calibration constraints, and GBM simulation stay out of this register (math / bindings). The new finite-difference oracles are in [`oracle-coverage.md`](oracle-coverage.md); no rates or equity row reached `full`.
+reclassified 2026-09-26 against `main` after the upstream sync through benbenbang `v0.29.0`, and again on 2026-09-30 after the sync that added chart indicators, GARCH(1,1) filter/fit, OHLC volatility estimators, and batch risk statistics (fork workspace stays `0.29.0`). Optimizer methods were not extended. Those additions, plus calibration constraints and GBM simulation, stay out of this register (math / bindings). The finite-difference oracles are in [`oracle-coverage.md`](oracle-coverage.md); no rates or equity row reached `full`.
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|
@@ -69,7 +69,7 @@ reclassified 2026-09-26 against `main` after the upstream sync through benbenban
 | Equity | Sticky ratchet | `StickyRatchet` | `stickyratchet.cpp` | false | none | |
 | Equity | Merton jump-diffusion engine | jump engines | `jumpdiffusion.cpp` | true | partial | `Merton76Process` + `JumpDiffusionEngine` Haug p.9 NPV subset @ 1e-2; greeks / full 135-row table deferred. Bates separate |
 | Equity | Variance gamma | `VarianceGamma*` | `variancegamma.cpp` | false | none | |
-| Equity | GJR-GARCH | `GJRGARCHModel` + engines | `gjrgarch.cpp` | false | none | |
+| Equity | GJR-GARCH | `GJRGARCHModel` + engines | `gjrgarch.cpp` | false | none | GARCH(1,1) filter/fit is present; `GJRGARCHModel` and its engines are not |
 | Equity | Piecewise time-dependent Heston | `PiecewiseTimeDependentHestonModel` | `hestonmodel.cpp` | false | none | |
 | Equity | Analytic American approximations | Barone-Adesi–Whaley, Bjerksund–Stensland, Ju, QD+ | `americanoption.cpp` | true | partial | `BaroneAdesiWhaleyApproximationEngine` Haug p.24 NPV @ 3e-3 + `BjerksundStenslandApproximationEngine` Haug/VBA/R values @ 5e-5, European greeks equivalence @ 1000*EPSILON, single-greeks pin, & mixed-DC American greeks vs FD + `JuQuadraticApproximationEngine` Ju (1999) 47-row table @ 1e-3 & delta/gamma vs FD; QD+ deferred |
 | Equity | FD CEV / CIR / SABR / Bates vanilla | `FdCev*`, `FdCir*`, `FdSabr*`, `FdBates*` | matching suites | false | none | |

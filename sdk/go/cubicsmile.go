@@ -9,9 +9,15 @@ import "unsafe"
 // CubicSmileSection is one expiry's mid-IV smile on standardized log-moneyness.
 type CubicSmileSection struct{ object }
 
-// CubicSmileSection fits a natural cubic through paired strike and mid-IV observations.
-// A nil stdDevPoints slice selects the default report grid.
+// CubicSmileSection fits fixed knots using mean squared IV error plus a 0.01
+// integrated-curvature penalty. A nil stdDevPoints slice selects the default nine knots.
 func (s *Session) CubicSmileSection(strikes, midIVs []float64, forward, exerciseTime, atmVol float64, stdDevPoints []float64, extrapolate bool) (*CubicSmileSection, error) {
+	return s.CubicSmileSectionWithSmoothing(strikes, midIVs, forward, exerciseTime, atmVol, stdDevPoints, extrapolate, 0.01)
+}
+
+// CubicSmileSectionWithSmoothing sets an explicit nonnegative curvature penalty.
+// Positive smoothing permits two distinct in-range quotes; zero requires full quote rank.
+func (s *Session) CubicSmileSectionWithSmoothing(strikes, midIVs []float64, forward, exerciseTime, atmVol float64, stdDevPoints []float64, extrapolate bool, smoothing float64) (*CubicSmileSection, error) {
 	if len(strikes) == 0 || len(midIVs) == 0 {
 		return nil, errNilArgument("strikes and mid IVs")
 	}
@@ -26,12 +32,12 @@ func (s *Session) CubicSmileSection(strikes, midIVs []float64, forward, exercise
 		if len(stdDevPoints) > 0 {
 			points = (*C.double)(unsafe.Pointer(&stdDevPoints[0]))
 		}
-		return ffiError(C.itofin_cubic_smile_new(
+		return ffiError(C.itofin_cubic_smile_new_with_smoothing(
 			s.ctx,
 			(*C.double)(unsafe.Pointer(&strikes[0])), C.size_t(len(strikes)),
 			(*C.double)(unsafe.Pointer(&midIVs[0])), C.size_t(len(midIVs)),
 			C.double(forward), C.double(exerciseTime), C.double(atmVol),
-			points, C.size_t(len(stdDevPoints)), ex, &id, &e,
+			points, C.size_t(len(stdDevPoints)), ex, C.double(smoothing), &id, &e,
 		), &e)
 	})
 	if err != nil {
@@ -78,10 +84,13 @@ func (v *CubicSmileSection) AtmVol() (float64, error) { return v.query(4, 0) }
 // ExerciseTime is the expiry year fraction.
 func (v *CubicSmileSection) ExerciseTime() (float64, error) { return v.query(5, 0) }
 
-// MinStrike is the lowest source strike.
+// Smoothing is the integrated squared-curvature penalty weight.
+func (v *CubicSmileSection) Smoothing() (float64, error) { return v.query(9, 0) }
+
+// MinStrike is the strike at the lower knot-domain boundary.
 func (v *CubicSmileSection) MinStrike() (float64, error) { return v.query(6, 0) }
 
-// MaxStrike is the highest source strike.
+// MaxStrike is the strike at the upper knot-domain boundary.
 func (v *CubicSmileSection) MaxStrike() (float64, error) { return v.query(7, 0) }
 
 func (v *CubicSmileSection) series(kind int32) ([]float64, []bool, error) {
@@ -118,36 +127,60 @@ func (v *CubicSmileSection) series(kind int32) ([]float64, []bool, error) {
 	return values, present, nil
 }
 
-// StdDevPoints is the configured evaluation grid.
+// StdDevPoints are the configured spline knots.
 func (v *CubicSmileSection) StdDevPoints() ([]float64, error) {
 	values, _, err := v.series(0)
 	return values, err
 }
 
-// NodeStdDevPoints are the sorted source coordinates.
+// NodeStdDevPoints are the fixed spline-knot coordinates.
 func (v *CubicSmileSection) NodeStdDevPoints() ([]float64, error) {
 	values, _, err := v.series(1)
 	return values, err
 }
 
-// NodeMidIVs are the source mid volatilities paired with NodeStdDevPoints.
+// NodeMidIVs are fitted knot IVs paired with NodeStdDevPoints.
 func (v *CubicSmileSection) NodeMidIVs() ([]float64, error) {
 	values, _, err := v.series(2)
 	return values, err
 }
 
-// SampledMidIVs evaluates the report grid. The bool is false outside the observed domain.
+// SampledMidIVs returns fitted IVs at knots. The bool is false outside the knot domain.
 func (v *CubicSmileSection) SampledMidIVs() ([]float64, []bool, error) {
 	return v.series(3)
 }
 
-// NodeResiduals are fitted minus observed mid-IV at each source node.
+// NodeResiduals are fitted minus fitted knot IVs, expected to be zero up to rounding.
 func (v *CubicSmileSection) NodeResiduals() ([]float64, error) {
 	values, _, err := v.series(4)
 	return values, err
 }
 
-// SegmentCoefficients are the cubic (a, b, c) terms on each adjacent node pair.
+// ObservedStrikes are sorted source market strikes, including out-of-range quotes.
+func (v *CubicSmileSection) ObservedStrikes() ([]float64, error) {
+	values, _, err := v.series(6)
+	return values, err
+}
+
+// ObservedStdDevPoints are standardized coordinates of source market quotes.
+func (v *CubicSmileSection) ObservedStdDevPoints() ([]float64, error) {
+	values, _, err := v.series(7)
+	return values, err
+}
+
+// ObservedMidIVs are source IVs paired with ObservedStrikes.
+func (v *CubicSmileSection) ObservedMidIVs() ([]float64, error) {
+	values, _, err := v.series(8)
+	return values, err
+}
+
+// ObservationResiduals returns fitted-minus-observed IV and validity flags.
+// A false flag marks a quote outside the knot range, excluded from the fit.
+func (v *CubicSmileSection) ObservationResiduals() ([]float64, []bool, error) {
+	return v.series(9)
+}
+
+// SegmentCoefficients are the cubic (a, b, c) terms on each adjacent knot pair.
 func (v *CubicSmileSection) SegmentCoefficients() ([][3]float64, error) {
 	flat, _, err := v.series(5)
 	if err != nil {

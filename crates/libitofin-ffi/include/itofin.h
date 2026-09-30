@@ -2094,8 +2094,30 @@ int32_t itofin_cubic_smile_new(struct ItofinContext *ctx,
                                struct ItofinError *error);
 
 /**
+ * Fit fixed knots with an explicit nonnegative curvature penalty weight.
+ * Zero smoothing requests the unregularized fit and requires full quote rank.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_cubic_smile_new_with_smoothing(struct ItofinContext *ctx,
+                                              const double *strikes,
+                                              size_t n_strikes,
+                                              const double *mid_ivs,
+                                              size_t n_ivs,
+                                              double forward,
+                                              double exercise_time,
+                                              double atm_vol,
+                                              const double *std_dev_points,
+                                              size_t n_points,
+                                              uint8_t extrapolate,
+                                              double smoothing,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
  * Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
- * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance.
+ * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance,
+ * 9 smoothing weight.
  * # Safety
  * Follow the crate C caller contract.
  */
@@ -2107,10 +2129,11 @@ int32_t itofin_cubic_smile_query(struct ItofinContext *ctx,
                                  struct ItofinError *error);
 
 /**
- * Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs,
- * 4 node residuals, 5 segment coefficients flattened as (a, b, c) triples.
- * A null `out` reports the required length. For series 3, `valid` receives 1
- * when the sample is inside the domain.
+ * Series: 0 knot points, 1 knot points, 2 fitted knot IVs, 3 sampled knot IVs,
+ * 4 fitted-minus-knot residuals, 5 segment coefficients flattened as (a, b, c)
+ * triples; 6 observed strikes, 7 observed coordinates, 8 observed IVs,
+ * 9 observation residuals. A null `out` reports the required length. For
+ * series 3 and 9, `valid` receives 1 for entries inside the knot domain.
  * # Safety
  * Follow the crate C caller contract; `out` and `valid` must hold `capacity` slots.
  */
