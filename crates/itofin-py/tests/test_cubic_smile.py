@@ -89,7 +89,7 @@ def test_seven_quotes_fit_the_same_nine_knots_with_smoothing():
     assert smile.node_std_dev_points == _DEFAULT_POINTS
     assert len(smile.segment_coefficients) == 8
     assert len(smile.observed_strikes) == 7
-    assert all(math.isfinite(v) for v in smile.sampled_mid_ivs)
+    assert all(v is not None and math.isfinite(v) for v in smile.sampled_mid_ivs)
     assert all(r is not None for r in smile.observation_residuals)
     with pytest.raises(ItofinError, match="at least 9 in-range observations"):
         CubicSmileSection(
