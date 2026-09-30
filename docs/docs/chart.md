@@ -1,0 +1,362 @@
+# Chart indicators
+
+## Dated OHLC prices
+
+Use `interval_prices` to validate OHLC bars and return them in date order.
+Duplicate dates keep the last input bar. Prices must be finite, with open and
+close inside the low-to-high range; negative prices are valid.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+    from itofin.time import Date
+
+    dates = [Date(2, 1, 2024), Date(1, 1, 2024)]
+    bars = chart.interval_prices(dates, [11, 10], [12, 11], [9, 8], [10, 9])
+    assert bars[0].date == dates[1]
+    assert bars[0].close == 9
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    // dates is a []itofin.Date in input order.
+    bars, err := itofin.IntervalPrices(dates,
+        []float64{11, 10}, []float64{12, 11},
+        []float64{9, 8}, []float64{10, 9})
+    if err != nil { panic(err) }
+    // bars[0] is the earliest date.
+    ```
+
+The five input arrays must have equal lengths. The output contains one bar per
+distinct date and leaves the input arrays unchanged.
+
+## Close-price volatility
+
+The simple local estimator uses the absolute log return between consecutive
+positive closes, divided by the square root of the interval's year fraction.
+The first bar is warmup. Pass one fraction per close for varying intervals;
+the fraction at index zero is unused. The constant-fraction helper applies one
+positive year fraction to every interval.
+
+The constant estimator uses the **previous** `window` valid volatility values,
+excluding the current value. It follows QuantLib's formula
+`sqrt(sum(u²)/window - sum(u)²/(window*(window+1)))`, not a rolling standard
+deviation. The output retains the input's alignment and warmup slots.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    close = [100.0, 110.0, 99.0]
+    local = chart.simple_local_volatility_constant_fraction(close, 1 / 252)
+    constant = chart.constant_volatility(local, window=1)
+    assert local.to_list()[0] is None
+    assert constant.first_valid == 2
+    assert abs(constant.to_list()[2] - 1.0698541148988145) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    close := []float64{100, 110, 99}
+    local, err := itofin.SimpleLocalVolatilityConstantFraction(close, 1.0/252)
+    if err != nil { panic(err) }
+    constant, err := itofin.ConstantVolatility(local, 1)
+    if err != nil { panic(err) }
+    _ = constant.NullableValues()
+    ```
+
+## Pointwise OHLC volatility
+
+`ohlc_point_volatility` returns four annualized QuantLib estimators for each
+bar: `simple_sigma`, `parkinson_sigma`, `garman_klass_sigma4`, and
+`garman_klass_sigma5`. Simple Sigma uses the current close/open return, unlike
+the consecutive-close estimator above. All four series start at index zero;
+there is no warmup bar. Supply one positive year fraction per bar, or use the
+constant-fraction helper. OHLC prices must be positive and finite, with open
+and close inside the low-to-high range. Input order is preserved.
+
+With `u = ln(high/open)`, `d = ln(low/open)`, and `c = ln(close/open)`, the four
+point variances are `c²`, `(u-d)²/(4 ln 2)`,
+`0.511(u-d)² - 0.019(c(u+d)-2ud) - 0.383c²`, and
+`0.5(u-d)² - (2 ln 2-1)c²`. Each reported volatility is
+`sqrt(abs(point variance)/year fraction)`.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    estimates = chart.ohlc_point_volatility_constant_fraction(
+        open=[100.0], high=[110.0], low=[90.0], close=[105.0],
+        year_fraction=1 / 252,
+    )
+    assert estimates.parkinson_sigma.first_valid == 0
+    assert abs(estimates.parkinson_sigma.values[0] - 1.9131168640323526) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    estimates, err := itofin.OHLCPointVolatilityConstantFraction(
+        []float64{100}, []float64{110}, []float64{90}, []float64{105}, 1.0/252,
+    )
+    if err != nil { panic(err) }
+    _ = estimates.ParkinsonSigma.NullableValues()
+    ```
+
+## Overnight OHLC volatility
+
+`ohlc_overnight_volatility` returns annualized Garman-Klass Sigma1, Sigma3,
+and Sigma6 estimates. Each result combines the current bar with the previous
+bar's close, so index zero is a missing prefix and `first_valid` is one for a
+nonempty series. Indexed year fractions belong to the interval ending at each
+bar; the fraction at index zero is unused. The constant-fraction helper uses
+one positive year fraction for every interval.
+
+Let `g = ln(open[i]/close[i-1])`, `f` be the overnight fraction with `0 < f < 1`,
+and `p` be the current bar's Simple, Parkinson, or Sigma4 point variance from
+above. The corresponding coefficients `a` are `0.5`, `0.17`, and `0.012`.
+Each estimate is `sqrt((a*g²/f + (1-a)*p/(1-f))/year_fraction[i])`.
+An invalid or negative combined variance returns an error; unlike the
+pointwise estimators, the overnight formula does not take its absolute value.
+All OHLC prices must be positive and finite, with open and close inside the
+low-to-high range.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    estimates = chart.ohlc_overnight_volatility_constant_fraction(
+        open=[100.0, 110.0], high=[100.0, 120.0],
+        low=[100.0, 105.0], close=[100.0, 115.0],
+        year_fraction=1 / 252, overnight_fraction=0.25,
+    )
+    assert estimates.garman_klass_sigma1.first_valid == 1
+    assert abs(estimates.garman_klass_sigma1.values[1] - 2.2159224836472786) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    estimates, err := itofin.OHLCOvernightVolatilityConstantFraction(
+        []float64{100, 110}, []float64{100, 120},
+        []float64{100, 105}, []float64{100, 115}, 1.0/252, 0.25,
+    )
+    if err != nil { panic(err) }
+    _ = estimates.GarmanKlassSigma1.NullableValues()
+    ```
+
+## Fixed-parameter GARCH(1,1)
+
+`garch11_filter` consumes **returns**, not prices. Given `alpha`, `beta`, and
+`long_run_variance`, it uses `omega = (1-alpha-beta)*long_run_variance` and
+`next_variance = omega + alpha*return² + beta*current_variance`. The last
+parameter is a variance, despite QuantLib's historical `ltVol` name. Returns
+and conditional volatility use the same units; the API does not annualize or
+fit parameters.
+
+The first return seeds variance as its square. Conditional volatility at index
+`i >= 1` uses returns through index `i-1`; index zero is a zero placeholder and
+`first_valid` is one. `next_variance` uses the final return and is the forecast
+for the step after the input series. A single return has no valid conditional
+volatility yet, but still produces a forecast. Use `garch11_forecast` to advance
+the recurrence separately. Parameters must be finite and nonnegative, with
+`alpha+beta < 1`; returns and all intermediate variances must be finite.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    result = chart.garch11_filter([0.1] * 10, 0.2, 0.3, 0.4)
+    assert result.conditional_volatility.first_valid == 1
+    assert abs(result.conditional_volatility.values[1] - 0.452769) < 1e-6
+    assert abs(result.next_variance**0.5 - 0.537187) < 1e-6
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    returns := []float64{0.1, 0.1, 0.1}
+    result, err := itofin.Garch11Filter(returns, 0.2, 0.3, 0.4)
+    if err != nil { panic(err) }
+    _ = result.ConditionalVolatility.NullableValues()
+    _ = result.NextVariance
+    ```
+
+## Fitted GARCH(1,1)
+
+`garch11_fit` estimates stationary GARCH parameters from returns. It reports
+`alpha`, `beta`, the intercept `omega`, QuantLib's mean Gaussian log likelihood
+without the constant `log(2π)`, and the next conditional variance. Unlike the
+fixed-parameter API, `omega` is an intercept; its implied long-run variance is
+`omega / (1-alpha-beta)`.
+
+The likelihood recurrence starts with zero previous variance and squared
+return, as in QuantLib. The returned forecast uses the fitted parameters with
+the filtering convention above, seeded by the first squared return. Fitting
+requires 4 to 100,000 finite returns with nonzero variation in squared returns;
+invalid or non-convergent fits raise an error. The upper bound keeps the
+autocovariance calculation bounded.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    returns = [0.2, -0.3, 0.1, 0.5, -0.4, 0.25, -0.1, 0.3]
+    fitted = chart.garch11_fit(returns)
+    filtered = chart.garch11_filter(
+        returns, fitted.alpha, fitted.beta,
+        fitted.omega / (1 - fitted.alpha - fitted.beta),
+    )
+    assert abs(fitted.next_variance - filtered.next_variance) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    returns := []float64{0.2, -0.3, 0.1, 0.5, -0.4, 0.25, -0.1, 0.3}
+    fitted, err := itofin.Garch11Fit(returns)
+    if err != nil { panic(err) }
+    longRunVariance := fitted.Omega / (1 - fitted.Alpha - fitted.Beta)
+    _ = longRunVariance
+    _ = fitted.NextVariance
+    ```
+
+## Indicator series
+
+Chart calculations use one Rust implementation for Python and Go. Every result
+has one value per input bar. `first_valid` marks the first usable result;
+earlier zeroes are warmup placeholders. Use Python's `to_list()` or Go's
+`NullableValues()` when a chart or JSON payload needs `null` for those bars.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    close = [1.0, 2.0, 3.0, 4.0]
+    average = chart.sma(close, 3)
+    assert average.first_valid == 2
+    assert average.to_list() == [None, None, 2.0, 3.0]
+    assert average.values.tolist() == [0.0, 0.0, 2.0, 3.0]
+
+    bars = chart.volume_bars(
+        open=[1.0, 2.0], high=[3.0, 3.0], low=[0.0, 0.0],
+        close=[2.0, 1.0], volume=[10.0, 11.0],
+    )
+    assert bars.direction.tolist() == [1, -1]
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    average, err := itofin.SMA([]float64{1, 2, 3, 4}, 3)
+    if err != nil { panic(err) }
+    // average.FirstValid == 2
+    // average.NullableValues() has nil in the first two slots.
+
+    bars, err := itofin.ChartVolumeBars(
+        []float64{1, 2}, []float64{3, 3}, []float64{0, 0},
+        []float64{2, 1}, []float64{10, 11},
+    )
+    if err != nil { panic(err) }
+    // bars.Direction == []int8{1, -1}
+    ```
+
+`sma`/`SMA` takes the trailing arithmetic mean. `ema`/`EMA` seeds from the
+first period-bar SMA, then applies weight `2/(period+1)`. Both require a
+positive period. Short inputs return an aligned series with no valid values.
+OHLCV arrays must have equal lengths and finite values, high and low must
+contain both open and close, and volume must be nonnegative. Volume direction
+compares each close with its open: `-1` down, `0` flat, `1` up. Chart colors
+remain the caller's choice.
+
+## Bollinger Bands and RSI
+
+Bollinger Bands use a trailing population standard deviation. The default is
+20 closes with a multiplier of 2; the middle, upper, and lower series all
+become valid at index `period - 1`. Wilder RSI uses 14 price changes by default,
+so its first valid index is `period`. A flat window returns 50, a gain-only
+window 100, and a loss-only window 0.
+
+=== "Python"
+
+    ```python
+    close = [100.0] * 34
+    bands = chart.bollinger_bands(close, period=20, multiplier=2.0)
+    strength = chart.rsi(close, period=14)
+    upper_for_json = bands.upper.to_list()
+    ```
+
+=== "Go"
+
+    ```go
+    close := make([]float64, 34)
+    bands, err := itofin.DefaultBollingerBands(close)
+    if err != nil { panic(err) }
+    strength, err := itofin.DefaultRSI(close)
+    if err != nil { panic(err) }
+    _ = bands.Upper.NullableValues()
+    _ = strength.NullableValues()
+    ```
+
+Python functions accept explicit periods and also provide these defaults. Go
+offers `ChartBollingerBands` and `RSI` for explicit parameters, alongside the
+default helpers.
+
+## Taiwan KD and MACD
+
+Taiwan KD uses a nine-bar highest-high/lowest-low RSV by default. A flat range
+sets RSV to 50. K and D each use recursive smoothing with periods of three and
+start from 50; all three series first become valid at index `period - 1`.
+MACD defaults to fast/slow/signal periods of `(12, 26, 9)`. The price EMAs and
+signal EMA each start from a simple average. The line first becomes valid at
+index 25, and signal and histogram at index 33 with these defaults.
+
+=== "Python"
+
+    ```python
+    close = [100.0] * 34
+    oscillator = chart.kd(close, close, close)
+    momentum = chart.macd(close)
+    assert oscillator.k.to_list()[8] == 50.0
+    assert momentum.signal.first_valid == 33
+    ```
+
+=== "Go"
+
+    ```go
+    close := make([]float64, 34)
+    oscillator, err := itofin.DefaultKD(close, close, close)
+    if err != nil { panic(err) }
+    momentum, err := itofin.DefaultMACD(close)
+    if err != nil { panic(err) }
+    _ = oscillator.K.NullableValues()
+    _ = momentum.Histogram.NullableValues()
+    ```
+
+Both bindings also accept explicit periods through Python keyword arguments
+or Go's `ChartKD` and `ChartMACD` functions.
+
+::: itofin.chart

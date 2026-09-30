@@ -26,6 +26,7 @@ pub mod option;
 pub mod patterns;
 pub mod payoff;
 pub mod position;
+pub mod prices;
 pub mod pricingengine;
 pub mod pricingengines;
 pub mod processes;

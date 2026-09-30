@@ -6,6 +6,7 @@ import numpy
 import numpy.typing
 import typing
 from . import cashflows
+from . import chart
 from . import indexes
 from . import instruments
 from . import models
@@ -16,6 +17,7 @@ from . import processes
 from . import quotes
 from . import randomnumbers
 from . import results
+from . import statistics
 from . import termstructures
 from . import time
 __all__ = [
@@ -23,6 +25,7 @@ __all__ = [
     "ItofinError",
     "Settings",
     "cashflows",
+    "chart",
     "gaussian_draws",
     "indexes",
     "instruments",
@@ -35,6 +38,7 @@ __all__ = [
     "randomnumbers",
     "results",
     "simulate_gbm",
+    "statistics",
     "termstructures",
     "time",
 ]
