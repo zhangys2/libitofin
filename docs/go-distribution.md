@@ -4,8 +4,9 @@ The external Go module uses a matching native C ABI package. The Go module does
 not bundle native binaries or headers. Go 1.27.1, cgo, and a C compiler are
 required. Native releases target Linux amd64 and Linux arm64 (Ubuntu 24.04,
 glibc 2.39 or a compatible newer system), macOS arm64 (macOS 14 or newer), and
-macOS amd64 (Intel, macOS 15 or newer). Windows, Linux musl, and other
-architectures are not release targets yet.
+macOS amd64 (Intel, macOS 15 or newer). Windows amd64 GNU is an optional
+target: use it only when that release includes its native archive and checksum.
+Linux musl and other architectures are not release targets yet.
 
 ## Build a native package
 
@@ -23,7 +24,9 @@ contains `include/itofin.h`, the shared library under `lib/`, `LICENSE`, a
 and `SHA256SUMS`. The package and ABI versions are checked by loading the built
 library and reading its exported identity functions.
 It regenerates and verifies the header before building. It does not package
-the Python extension or promise static linking support.
+the Python extension or promise static linking support. The Windows package
+also includes the GNU import library `libitofin_ffi.dll.a` next to
+`itofin_ffi.dll`.
 
 The Go source and native package must come from the same revision. ABI version
 checks reject incompatible ABI generations; they do not detect every mismatch
@@ -35,7 +38,8 @@ The module is `github.com/benbenbang/libitofin/sdk/go`. Choose a release with
 a matching `sdk/go/vVERSION` tag and native assets. Set `version` to that
 release number without `v`,
 and `platform` to `darwin-arm64`, `darwin-amd64`, `linux-amd64`, or
-`linux-arm64`. Download the archive and
+`linux-arm64`. Use `windows-amd64` only if both optional assets are present.
+Download the archive and
 checksum from the main LibItoFin release:
 
 ```sh
@@ -51,6 +55,22 @@ export CGO_ENABLED=1
 export CGO_CFLAGS="\"-I$ITOFIN_NATIVE/include\""
 export CGO_LDFLAGS="\"-L$ITOFIN_NATIVE/lib\" -litofin_ffi \"-Wl,-rpath,$ITOFIN_NATIVE/lib\""
 ```
+
+On Windows amd64 GNU, set `platform=windows-amd64` before downloading in Git
+Bash with a MinGW-w64 GCC on `PATH`. Use `sha256sum -c` for both checksum files
+and replace the cgo setup above with:
+
+```sh
+export ITOFIN_NATIVE="$PWD/itofin-native-$version-windows-amd64"
+native_windows=$(cygpath -m "$ITOFIN_NATIVE")
+export CC=gcc CGO_ENABLED=1
+export CGO_CFLAGS="\"-I$native_windows/include\""
+export CGO_LDFLAGS="\"-L$native_windows/lib\" -litofin_ffi"
+export PATH="$ITOFIN_NATIVE/lib:$PATH"
+```
+
+Keep the DLL on `PATH` when running the application. The Windows package uses
+the GNU toolchain and does not provide an MSVC import library.
 
 For a published coordinated release, run these commands in your application's module:
 
@@ -110,10 +130,17 @@ application or establish a production latency budget.
 
 ## Release process
 
-The main `semantic-release.yml` workflow publishes one LibItoFin release at
-`vVERSION`. Rust and Python package versions remain unprefixed. The release tag,
-committed workspace version, and every local Cargo.lock package must agree;
-publication jobs validate those files instead of rewriting them after tagging.
+This fork does not publish through `semantic-release.yml`. Create the core
+GitHub release at `vVERSION` first. Rust and Python package versions remain
+unprefixed. The release tag, committed workspace version, and every local
+Cargo.lock package must agree; publication validates those files and does not
+rewrite them after tagging.
+
+Then dispatch `go-release.yml` with that existing tag:
+
+```sh
+gh workflow run go-release.yml --ref vVERSION -f release_tag=vVERSION
+```
 
 Go publication builds and validates Linux amd64, Linux arm64, macOS amd64, and
 macOS arm64 packages from that exact tag, each on a native GitHub-hosted runner.
@@ -123,29 +150,31 @@ is visible under GitHub Tags and resolves the nested Go module; it does not
 create another release page. Go documents the prefix in
 [Mapping versions to commits](https://go.dev/ref/mod#vcs-version).
 
-After publication, every platform installs the uploaded assets and fetches the Go
-module through the public module proxy into a fresh cache, without local
-replacements. The check verifies module/native versions, source revision,
-checksums, runtime linking, and the portfolio/session acceptance fixture.
+Windows amd64 GNU builds separately. A validated Windows archive and checksum
+are attached to the same release when available; a Windows build failure does
+not block the four required packages or the Go tag. Release notes list Windows
+only when both assets are verified. A failed Windows check removes that
+archive and checksum so a leftover file is not treated as a published package.
 
-First dispatch the main release workflow with `prompt=true`, `dry_run=true` to
-check the next version and notes. Dispatch with `dry_run=false` to publish.
-During the one-time prefix migration, `v0.21.0` aliases the existing `0.21.0`
-commit; the original tag and release remain unchanged.
+After publication, each available platform installs the uploaded assets and
+fetches the Go module through the public module proxy into a fresh cache,
+without local replacements. The check verifies module/native versions, source
+revision, checksums, runtime linking, and the portfolio/session fixture.
 
-For recovery, dispatch `go-release.yml` with an existing coordinated core
-`release_tag`. For the legacy v0.22.0 release, select its original workflow with
-`gh workflow run go-release.yml --ref v0.22.0 -f release_tag=v0.22.0`; the current
-workflow targets `sdk/go`. Runs for that tag are serialized. Existing native
-archives are downloaded and verified, then preserved even if a rebuild differs
-byte-for-byte. An interrupted archive-only upload can have its checksum repaired;
-conflicting Go tags, invalid archives, or mismatched checksums fail without an
-overwrite. The workflow never creates a second Go-specific release.
+Reruns of `go-release.yml` for the same `release_tag` are serialized. Existing
+native archives are downloaded and verified, then preserved even if a rebuild
+differs byte-for-byte. An interrupted archive-only upload can have its checksum
+repaired; conflicting Go tags, invalid required archives, or mismatched
+checksums fail without an overwrite. The workflow never creates a second
+Go-specific release. For the legacy v0.22.0 release, select its original
+workflow with `gh workflow run go-release.yml --ref v0.22.0 -f release_tag=v0.22.0`;
+the current workflow targets `sdk/go`.
 
 PRs call `go-package.yml` and include all four platforms in `workflow-success`.
 The macOS amd64 leg runs on the `macos-15-intel` image. All four platforms are
 required, so retiring that image blocks releases until the leg moves to another
-Intel image or becomes optional.
+Intel image or becomes optional. The Windows job is optional and records its
+build outcome in the job summary.
 PR validation does not publish tags or assets. Native Linux compatibility must
 be checked on deployment targets; these are not manylinux or musl packages.
 Private application migration and production budgets remain consumer work.

@@ -14,6 +14,11 @@ mod capfloorengine;
 mod capfloortermvol;
 mod caphelper;
 mod cashflows;
+mod chart;
+mod chart_garch;
+mod chart_ohlc_overnight;
+mod chart_ohlc_volatility;
+mod chart_prices;
 mod credit;
 mod creditdensity;
 mod creditengine;
@@ -44,6 +49,7 @@ mod results;
 mod settings;
 mod simulation;
 mod smilesection;
+mod statistics;
 mod swap;
 mod swapindex;
 mod swaption;
@@ -426,6 +432,65 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let results = PyModule::new(py, "results")?;
     results.add_class::<Results>()?;
 
+    let statistics = PyModule::new(py, "statistics")?;
+    statistics.add_function(wrap_pyfunction!(statistics::mean, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::variance, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        statistics::standard_deviation,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::percentile, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::value_at_risk, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        statistics::expected_shortfall,
+        &statistics
+    )?)?;
+
+    let chart = PyModule::new(py, "chart")?;
+    chart.add_class::<chart::PyChartSeries>()?;
+    chart.add_class::<chart_garch::PyGarch11Result>()?;
+    chart.add_class::<chart_garch::PyGarch11FitResult>()?;
+    chart.add_class::<chart::PyVolumeBars>()?;
+    chart.add_class::<chart::PyBollingerBands>()?;
+    chart.add_class::<chart::PyKd>()?;
+    chart.add_class::<chart::PyMacd>()?;
+    chart.add_class::<chart_ohlc_overnight::PyOhlcOvernightEstimates>()?;
+    chart.add_class::<chart_ohlc_volatility::PyOhlcPointEstimates>()?;
+    chart.add_class::<chart_prices::PyDatedIntervalPrice>()?;
+    chart.add_function(wrap_pyfunction!(chart::sma, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::ema, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::volume_bars, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::bollinger_bands, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::rsi, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::kd, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::macd, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::simple_local_volatility, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(
+        chart::simple_local_volatility_constant_fraction,
+        &chart
+    )?)?;
+    chart.add_function(wrap_pyfunction!(chart::constant_volatility, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart_garch::garch11_filter, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart_garch::garch11_forecast, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart_garch::garch11_fit, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(
+        chart_ohlc_overnight::ohlc_overnight_volatility,
+        &chart
+    )?)?;
+    chart.add_function(wrap_pyfunction!(
+        chart_ohlc_overnight::ohlc_overnight_volatility_constant_fraction,
+        &chart
+    )?)?;
+    chart.add_function(wrap_pyfunction!(
+        chart_ohlc_volatility::ohlc_point_volatility,
+        &chart
+    )?)?;
+    chart.add_function(wrap_pyfunction!(
+        chart_ohlc_volatility::ohlc_point_volatility_constant_fraction,
+        &chart
+    )?)?;
+    chart.add_function(wrap_pyfunction!(chart_prices::interval_prices, &chart)?)?;
+
     let submodules = [
         ("time", &time),
         ("quotes", &quotes),
@@ -440,6 +505,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
         ("optimize", &optimize),
         ("randomnumbers", &randomnumbers),
         ("results", &results),
+        ("statistics", &statistics),
+        ("chart", &chart),
     ];
 
     let sys_modules = PyModule::import(py, "sys")?.getattr("modules")?;
