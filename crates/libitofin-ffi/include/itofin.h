@@ -864,6 +864,17 @@ typedef struct ItofinSofrFutureHelperConfig {
   int32_t custom_date;
 } ItofinSofrFutureHelperConfig;
 
+/**
+ * One dated OHLC observation. Dates are QuantLib-compatible serial numbers.
+ */
+typedef struct ItofinDatedIntervalPrice {
+  int32_t date;
+  ItofinReal open;
+  ItofinReal high;
+  ItofinReal low;
+  ItofinReal close;
+} ItofinDatedIntervalPrice;
+
 typedef struct ItofinVanillaSwapConfig {
   int32_t swap_type;
   ItofinReal nominal;
@@ -1427,6 +1438,119 @@ int32_t itofin_context_free(struct ItofinContext *ctx, struct ItofinError *error
 int32_t itofin_handle_release(struct ItofinContext *ctx,
                               uint64_t handle,
                               struct ItofinError *error);
+
+/**
+ * Compute an input-aligned simple moving average. Prefix values before
+ * `first_valid` are zero placeholders, not observations.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds `capacity`
+ * doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_sma(const ItofinReal *close,
+                         size_t len,
+                         size_t period,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         struct ItofinError *error);
+
+/**
+ * Compute an input-aligned exponential moving average seeded by SMA.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds `capacity`
+ * doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_ema(const ItofinReal *close,
+                         size_t len,
+                         size_t period,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         struct ItofinError *error);
+
+/**
+ * Compute population-standard-deviation Bollinger bands. Output is channel
+ * major: middle, upper, then lower, with `len` values per channel.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds
+ * `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_bollinger(const ItofinReal *close,
+                               size_t len,
+                               size_t period,
+                               ItofinReal multiplier,
+                               ItofinReal *out,
+                               size_t capacity,
+                               size_t *first_valid,
+                               struct ItofinError *error);
+
+/**
+ * Compute Wilder RSI from closing prices, aligned to input bars.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds
+ * `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_rsi(const ItofinReal *close,
+                         size_t len,
+                         size_t period,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         struct ItofinError *error);
+
+/**
+ * Compute Taiwan KD. Output is channel major: RSV, K, then D, with `len`
+ * values per channel. All channels share the returned first-valid index.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds
+ * `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_kd(const ItofinReal *high,
+                        const ItofinReal *low,
+                        const ItofinReal *close,
+                        size_t len,
+                        size_t period,
+                        size_t k_smooth,
+                        size_t d_smooth,
+                        ItofinReal *out,
+                        size_t capacity,
+                        size_t *first_valid,
+                        struct ItofinError *error);
+
+/**
+ * Compute SMA-seeded MACD. Output is channel major: line, signal, then
+ * histogram. `first_valid` receives three corresponding size_t indices.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `out` holds
+ * `capacity` doubles and `first_valid` holds `first_valid_capacity` size_t.
+ */
+int32_t itofin_chart_macd(const ItofinReal *close,
+                          size_t len,
+                          size_t fast_period,
+                          size_t slow_period,
+                          size_t signal_period,
+                          ItofinReal *out,
+                          size_t capacity,
+                          size_t *first_valid,
+                          size_t first_valid_capacity,
+                          struct ItofinError *error);
+
+/**
+ * Copy volume and classify close relative to open as -1, 0, or 1.
+ * # Safety
+ * Each input has `len` doubles. `out_volume` and `out_direction` each hold
+ * `capacity` entries and obey the crate-level non-overlap contract.
+ */
+int32_t itofin_chart_volume_bars(const ItofinReal *open,
+                                 const ItofinReal *high,
+                                 const ItofinReal *low,
+                                 const ItofinReal *close,
+                                 const ItofinReal *volume,
+                                 size_t len,
+                                 ItofinReal *out_volume,
+                                 int8_t *out_direction,
+                                 size_t capacity,
+                                 struct ItofinError *error);
 
 /**
  * Generate `count` standard normal values with a deterministic nonzero seed.
@@ -2248,6 +2372,56 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
                                            struct ItofinFdConfig cfg,
                                            uint64_t *out,
                                            struct ItofinError *error);
+
+/**
+ * Fit a stationary GARCH(1,1) model to a return series and forecast one variance.
+ * `out_omega` is the variance intercept. Filter and forecast want the long-run
+ * variance `omega / (1 - alpha - beta)`, not this intercept.
+ * # Safety
+ * `returns` holds `len` doubles. All output pointers hold one double and
+ * follow the crate-level non-overlap contract.
+ */
+int32_t itofin_garch11_fit(const ItofinReal *returns,
+                           size_t len,
+                           ItofinReal *out_alpha,
+                           ItofinReal *out_beta,
+                           ItofinReal *out_omega,
+                           ItofinReal *out_log_likelihood,
+                           ItofinReal *out_next_variance,
+                           struct ItofinError *error);
+
+/**
+ * Filter returns into conditional volatility and forecast the next variance.
+ * The first output slot is a zero warmup placeholder; `first_valid` is one.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
+ * # Safety
+ * `returns` holds `len` doubles and `out` holds `capacity` doubles. All
+ * pointers follow the crate-level non-overlap contract.
+ */
+int32_t itofin_garch11_filter(const ItofinReal *returns,
+                              size_t len,
+                              ItofinReal alpha,
+                              ItofinReal beta,
+                              ItofinReal long_run_variance,
+                              ItofinReal *out,
+                              size_t capacity,
+                              size_t *first_valid,
+                              ItofinReal *next_variance,
+                              struct ItofinError *error);
+
+/**
+ * Forecast one variance from the latest return and current variance.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
+ * # Safety
+ * `out_variance` is writable and follows the crate-level pointer contract.
+ */
+int32_t itofin_garch11_forecast(ItofinReal last_return,
+                                ItofinReal current_variance,
+                                ItofinReal alpha,
+                                ItofinReal beta,
+                                ItofinReal long_run_variance,
+                                ItofinReal *out_variance,
+                                struct ItofinError *error);
 
 /**
  * # Safety
@@ -4445,6 +4619,21 @@ int32_t itofin_poisson_rng_draw(struct ItofinContext *ctx,
                                 struct ItofinError *error);
 
 /**
+ * Validate dated OHLC prices, sort by date, and keep the last input for a
+ * repeated date. `capacity` must hold at least `len` rows. Neither output is
+ * changed on error.
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. `input` holds `len`
+ * rows, `out` holds `capacity` rows, and `out_len` holds one size_t.
+ */
+int32_t itofin_interval_prices_normalize(const struct ItofinDatedIntervalPrice *input,
+                                         size_t len,
+                                         struct ItofinDatedIntervalPrice *out,
+                                         size_t capacity,
+                                         size_t *out_len,
+                                         struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -5083,6 +5272,31 @@ int32_t itofin_sabr_smile_query(struct ItofinContext *ctx,
                                 struct ItofinError *error);
 
 /**
+ * Evaluate one weighted batch statistic into caller-owned storage.
+ *
+ * `measure` selects mean (0), sample variance (1), standard deviation (2),
+ * percentile (3), value at risk (4), or expected shortfall (5). `probability`
+ * is used for percentile and risk measures only. Null `weights` with zero
+ * `weights_len` selects unit weights. Inputs are signed observations; VaR and
+ * expected shortfall return nonnegative loss magnitudes. On error, `out` is
+ * unchanged.
+ *
+ * # Safety
+ *
+ * `values` holds `values_len` readable doubles. If supplied, `weights` holds
+ * `weights_len` readable doubles. `out` holds one writable double. All
+ * pointers follow the crate-level alignment and non-overlap contract.
+ */
+int32_t itofin_statistics_evaluate(const ItofinReal *values,
+                                   size_t values_len,
+                                   const ItofinReal *weights,
+                                   size_t weights_len,
+                                   int32_t measure,
+                                   ItofinReal probability,
+                                   ItofinReal *out,
+                                   struct ItofinError *error);
+
+/**
  * # Safety
  * Follow the crate C caller contract; arrays must have their stated lengths.
  */
@@ -5537,6 +5751,127 @@ int32_t itofin_black_vol_control(struct ItofinContext *ctx,
                                  int32_t action,
                                  int32_t *out,
                                  struct ItofinError *error);
+
+/**
+ * Estimate annualized local volatility from closes and per-bar year fractions.
+ * The fraction at index zero is unused. `first_valid` is one when closes are
+ * present; earlier output slots are zero warmup placeholders.
+ * # Safety
+ * `close` and `year_fractions` hold `len` doubles; output pointers follow the
+ * crate-level non-overlap contract.
+ */
+int32_t itofin_volatility_simple_local(const ItofinReal *close,
+                                       const ItofinReal *year_fractions,
+                                       size_t len,
+                                       ItofinReal *out,
+                                       size_t capacity,
+                                       size_t *first_valid,
+                                       struct ItofinError *error);
+
+/**
+ * Estimate local volatility using a single year fraction for every interval.
+ * # Safety
+ * `close` holds `len` doubles; output pointers follow the crate-level
+ * non-overlap contract.
+ */
+int32_t itofin_volatility_simple_local_constant_fraction(const ItofinReal *close,
+                                                         size_t len,
+                                                         ItofinReal year_fraction,
+                                                         ItofinReal *out,
+                                                         size_t capacity,
+                                                         size_t *first_valid,
+                                                         struct ItofinError *error);
+
+/**
+ * Compose a volatility series from the preceding `window` valid inputs.
+ * `input_first_valid` identifies the first real input; earlier values are
+ * warmup placeholders and never enter a window.
+ * # Safety
+ * `values` holds `len` doubles; output pointers follow the crate-level
+ * non-overlap contract.
+ */
+int32_t itofin_volatility_constant(const ItofinReal *values,
+                                   size_t len,
+                                   size_t input_first_valid,
+                                   size_t window,
+                                   ItofinReal *out,
+                                   size_t capacity,
+                                   size_t *first_valid,
+                                   struct ItofinError *error);
+
+/**
+ * Compute SimpleSigma, ParkinsonSigma, Sigma4 and Sigma5 in channel-major
+ * order using one positive year fraction per bar. Every bar is valid.
+ * # Safety
+ * Inputs hold `len` doubles; `out` holds `capacity` doubles and `first_valid`
+ * one size_t. Follow the crate-level pointer/non-overlap contract.
+ */
+int32_t itofin_volatility_ohlc_point(const ItofinReal *open,
+                                     const ItofinReal *high,
+                                     const ItofinReal *low,
+                                     const ItofinReal *close,
+                                     const ItofinReal *year_fractions,
+                                     size_t len,
+                                     ItofinReal *out,
+                                     size_t capacity,
+                                     size_t *first_valid,
+                                     struct ItofinError *error);
+
+/**
+ * Compute SimpleSigma, ParkinsonSigma, Sigma4 and Sigma5 in channel-major
+ * order using one positive year fraction for every bar. Every bar is valid.
+ * # Safety
+ * Inputs hold `len` doubles; `out` holds `capacity` doubles and `first_valid`
+ * one size_t. Follow the crate-level pointer/non-overlap contract.
+ */
+int32_t itofin_volatility_ohlc_point_constant_fraction(const ItofinReal *open,
+                                                       const ItofinReal *high,
+                                                       const ItofinReal *low,
+                                                       const ItofinReal *close,
+                                                       size_t len,
+                                                       ItofinReal year_fraction,
+                                                       ItofinReal *out,
+                                                       size_t capacity,
+                                                       size_t *first_valid,
+                                                       struct ItofinError *error);
+
+/**
+ * Compute Sigma1, Sigma3, and Sigma6 using each interval's year fraction.
+ * Index zero is a missing-prefix placeholder and its year fraction is unused.
+ * # Safety
+ * Inputs hold `len` doubles; `out` holds `capacity` doubles and `first_valid`
+ * one size_t. Follow the crate-level pointer/non-overlap contract.
+ */
+int32_t itofin_volatility_ohlc_overnight(const ItofinReal *open,
+                                         const ItofinReal *high,
+                                         const ItofinReal *low,
+                                         const ItofinReal *close,
+                                         const ItofinReal *year_fractions,
+                                         size_t len,
+                                         ItofinReal overnight_fraction,
+                                         ItofinReal *out,
+                                         size_t capacity,
+                                         size_t *first_valid,
+                                         struct ItofinError *error);
+
+/**
+ * Compute Sigma1, Sigma3, and Sigma6 with one common year fraction.
+ * Index zero is a missing-prefix placeholder.
+ * # Safety
+ * Inputs hold `len` doubles; `out` holds `capacity` doubles and `first_valid`
+ * one size_t. Follow the crate-level pointer/non-overlap contract.
+ */
+int32_t itofin_volatility_ohlc_overnight_constant_fraction(const ItofinReal *open,
+                                                           const ItofinReal *high,
+                                                           const ItofinReal *low,
+                                                           const ItofinReal *close,
+                                                           size_t len,
+                                                           ItofinReal year_fraction,
+                                                           ItofinReal overnight_fraction,
+                                                           ItofinReal *out,
+                                                           size_t capacity,
+                                                           size_t *first_valid,
+                                                           struct ItofinError *error);
 
 /**
  * Kind: 0 interpolated, 1 SABR. Both returned handles must be released.
