@@ -54,11 +54,27 @@ static BASIS: LazyLock<Vec<CubicInterpolation>> = LazyLock::new(|| {
         .collect()
 });
 
+/// Maximum boundary snapping tolerance for knot-domain standardized coordinate queries.
+const KNOT_DOMAIN_TOLERANCE: Real = 16.0 * Real::EPSILON * 3.0;
+
+#[inline]
+fn snap_to_knot_domain(x: Real) -> Real {
+    if x < -3.0 && -3.0 - x <= KNOT_DOMAIN_TOLERANCE {
+        -3.0
+    } else if x > 3.0 && x - 3.0 <= KNOT_DOMAIN_TOLERANCE {
+        3.0
+    } else {
+        x
+    }
+}
+
 /// Evaluates the 9 cardinal natural cubic basis splines at standardized coordinate `x`.
 pub fn basis_vector(x: Real) -> QlResult<[Real; N_KNOTS]> {
+    require!(x.is_finite(), "basis queries must be finite");
+    let x = snap_to_knot_domain(x);
     require!(
-        x.is_finite() && (-3.0..=3.0).contains(&x),
-        "basis queries must be finite and inside the knot domain"
+        (-3.0..=3.0).contains(&x),
+        "basis query ({x}) is outside the knot domain [-3.0, 3.0]"
     );
     let mut h = [0.0; N_KNOTS];
     for j in 0..N_KNOTS {
@@ -69,9 +85,11 @@ pub fn basis_vector(x: Real) -> QlResult<[Real; N_KNOTS]> {
 
 /// Evaluates the first derivatives of the 9 cardinal natural cubic basis splines at `x`.
 pub fn basis_derivative(x: Real) -> QlResult<[Real; N_KNOTS]> {
+    require!(x.is_finite(), "basis queries must be finite");
+    let x = snap_to_knot_domain(x);
     require!(
-        x.is_finite() && (-3.0..=3.0).contains(&x),
-        "basis queries must be finite and inside the knot domain"
+        (-3.0..=3.0).contains(&x),
+        "basis query ({x}) is outside the knot domain [-3.0, 3.0]"
     );
     let mut d = [0.0; N_KNOTS];
     for j in 0..N_KNOTS {
@@ -807,6 +825,7 @@ impl KalmanSmileSection {
         spread: Real,
     ) -> QlResult<UpdateStatus> {
         let x = self.context.coordinate(strike)?;
+        let x = snap_to_knot_domain(x);
         if !(-3.0..=3.0).contains(&x) {
             return Ok(UpdateStatus::OutOfDomain);
         }
@@ -869,6 +888,7 @@ impl KalmanSmileSection {
 
         for i in 0..n {
             let x = self.context.coordinate(strikes[i])?;
+            let x = snap_to_knot_domain(x);
             if !(-3.0..=3.0).contains(&x) {
                 statuses.push(UpdateStatus::OutOfDomain);
                 continue;
@@ -934,10 +954,18 @@ impl KalmanSmileSection {
     }
 
     /// Evaluates the volatility at standardized coordinate point.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` if `point` is non-finite or outside the smile domain `[-3.0, 3.0]`.
     pub fn volatility_at_std_dev(&self, point: Real) -> QlResult<Volatility> {
         require!(point.is_finite(), "standard-deviation point must be finite");
-        let clamped = point.clamp(-3.0, 3.0);
-        let h = basis_vector(clamped)?;
+        let point = snap_to_knot_domain(point);
+        require!(
+            (-3.0..=3.0).contains(&point),
+            "standard-deviation point ({point}) is outside the smile domain [-3.0, 3.0]"
+        );
+        let h = basis_vector(point)?;
         let mut vol = 0.0;
         for j in 0..N_KNOTS {
             vol += h[j] * self.mean[j];
@@ -1163,6 +1191,17 @@ mod tests {
         // SmileSection trait query
         let query_vol = filter.volatility(test_strike).unwrap();
         assert!(query_vol > 0.0);
+
+        // Boundary queries at min_strike and max_strike must succeed
+        assert!(filter.volatility(filter.min_strike()).is_ok());
+        assert!(filter.volatility(filter.max_strike()).is_ok());
+
+        // Out of domain queries must fail consistently
+        assert!(filter.volatility(ood_strike).is_err());
+        assert!(filter.volatility(ctx.strike(-3.5)).is_err());
+        assert!(filter.volatility_at_std_dev(3.5).is_err());
+        assert!(filter.volatility_at_std_dev(-3.5).is_err());
+        assert!(filter.volatility_at_std_dev(f64::NAN).is_err());
 
         // Conversion to static CubicSmileSection
         let cubic = filter.to_cubic_smile_section().unwrap();
