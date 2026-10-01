@@ -2271,6 +2271,69 @@ int32_t itofin_cubic_smile_series(struct ItofinContext *ctx,
                                   struct ItofinError *error);
 
 /**
+ * Fit a total variance cubic smile with Roger Lee wing asymptotics.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_total_variance_cubic_smile_new(struct ItofinContext *ctx,
+                                              const double *strikes,
+                                              size_t n_strikes,
+                                              const double *mid_ivs,
+                                              size_t n_ivs,
+                                              double forward,
+                                              double exercise_time,
+                                              double atm_vol,
+                                              double smoothing,
+                                              uint8_t arbitrage_repair,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Query a total variance cubic smile:
+ * 0 volatility(strike), 1 variance(strike), 2 total_variance(k),
+ * 3 total_variance_derivative(k), 4 total_variance_second_derivative(k),
+ * 5 durrleman_density(k), 6 forward, 7 atm_vol, 8 exercise_time,
+ * 9 smoothing, 10 min_strike, 11 max_strike, 12 right_wing_slope, 13 left_wing_slope.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_total_variance_cubic_smile_query(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                int32_t kind,
+                                                double x,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
+ * Check butterfly arbitrage report on a total variance cubic smile.
+ * # Safety
+ * Follow the crate C caller contract; out pointers must be valid.
+ */
+int32_t itofin_total_variance_cubic_smile_check_arbitrage(struct ItofinContext *ctx,
+                                                          uint64_t id,
+                                                          double *out_min_density,
+                                                          double *out_argmin_k,
+                                                          uint8_t *out_has_arbitrage,
+                                                          double *out_final_smoothing,
+                                                          uint32_t *out_ramp_iterations,
+                                                          double *out_tolerance,
+                                                          size_t *out_points_checked,
+                                                          struct ItofinError *error);
+
+/**
+ * Series: 0 knots_k, 1 fitted_total_variances. A null `out` reports the required length.
+ * # Safety
+ * Follow the crate C caller contract; `out` must hold `capacity` slots.
+ */
+int32_t itofin_total_variance_cubic_smile_series(struct ItofinContext *ctx,
+                                                 uint64_t id,
+                                                 int32_t kind,
+                                                 double *out,
+                                                 size_t capacity,
+                                                 size_t *out_len,
+                                                 struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must

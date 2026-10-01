@@ -2,7 +2,8 @@
 
 use crate::PyQlError;
 use libitofin::termstructures::volatility::{
-    CubicSmileSection, DEFAULT_STD_DEV_POINTS, SmileSection,
+    ArbitrageFallbackPolicy, ButterflyArbitrageReport, CubicSmileSection, DEFAULT_STD_DEV_POINTS,
+    RogerLeeWingConfig, SmileSection, TotalVarianceCubicSmileSection,
 };
 use pyo3::prelude::*;
 #[allow(unused_imports)]
@@ -222,5 +223,217 @@ impl PyCubicSmileSection {
     #[getter]
     fn max_strike(&self) -> f64 {
         self.inner.max_strike()
+    }
+}
+
+/// Diagnostic report for butterfly arbitrage verification across a smile section.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "ButterflyArbitrageReport",
+    unsendable,
+    module = "itofin.termstructures"
+)]
+pub struct PyButterflyArbitrageReport {
+    inner: ButterflyArbitrageReport,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyButterflyArbitrageReport {
+    /// Global minimum of the Durrleman density function g(k).
+    #[getter]
+    fn min_density(&self) -> f64 {
+        self.inner.min_density
+    }
+
+    /// Log-moneyness coordinate k where min_density occurs.
+    #[getter]
+    fn argmin_k(&self) -> f64 {
+        self.inner.argmin_k
+    }
+
+    /// Whether butterfly arbitrage was detected: min_density < -tolerance.
+    #[getter]
+    fn has_arbitrage(&self) -> bool {
+        self.inner.has_arbitrage
+    }
+
+    /// Numerical tolerance threshold applied (default 1e-8).
+    #[getter]
+    fn tolerance(&self) -> f64 {
+        self.inner.tolerance
+    }
+
+    /// Total evaluation points checked (knots + interior + wings).
+    #[getter]
+    fn points_checked(&self) -> usize {
+        self.inner.points_checked
+    }
+
+    /// Number of regularization ramp iterations executed.
+    #[getter]
+    fn ramp_iterations(&self) -> usize {
+        self.inner.ramp_iterations
+    }
+
+    /// Final smoothing parameter lambda used for the fit.
+    #[getter]
+    fn final_smoothing(&self) -> f64 {
+        self.inner.final_smoothing
+    }
+}
+
+/// Total implied variance cubic smile with Roger Lee wing asymptotics.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "TotalVarianceCubicSmileSection",
+    unsendable,
+    module = "itofin.termstructures"
+)]
+pub struct PyTotalVarianceCubicSmileSection {
+    inner: TotalVarianceCubicSmileSection,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyTotalVarianceCubicSmileSection {
+    /// Fit a total variance cubic smile to paired strike/mid-IV observations.
+    #[new]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (strikes, mid_ivs, forward, exercise_time, atm_vol, std_dev_points=None, smoothing=0.01, arbitrage_repair=true))]
+    fn new(
+        strikes: Vec<f64>,
+        mid_ivs: Vec<f64>,
+        forward: f64,
+        exercise_time: f64,
+        atm_vol: f64,
+        std_dev_points: Option<Vec<f64>>,
+        smoothing: f64,
+        arbitrage_repair: bool,
+    ) -> PyResult<Self> {
+        let inner = TotalVarianceCubicSmileSection::with_options(
+            strikes,
+            mid_ivs,
+            forward,
+            exercise_time,
+            atm_vol,
+            std_dev_points.unwrap_or_else(|| DEFAULT_STD_DEV_POINTS.to_vec()),
+            smoothing,
+            RogerLeeWingConfig::default(),
+            arbitrage_repair,
+            ArbitrageFallbackPolicy::default(),
+        )
+        .map_err(PyQlError::from)?;
+        Ok(Self { inner })
+    }
+
+    /// Return the fitted volatility at a strike.
+    fn volatility(&self, strike: f64) -> PyResult<f64> {
+        Ok(self.inner.volatility(strike).map_err(PyQlError::from)?)
+    }
+
+    /// Return the Black variance at a strike.
+    fn variance(&self, strike: f64) -> PyResult<f64> {
+        Ok(self.inner.variance(strike).map_err(PyQlError::from)?)
+    }
+
+    /// Return total variance w(k) at log-moneyness k = ln(K/F).
+    fn total_variance(&self, log_moneyness: f64) -> PyResult<f64> {
+        Ok(self
+            .inner
+            .total_variance_at_log_moneyness(log_moneyness)
+            .map_err(PyQlError::from)?)
+    }
+
+    /// Return first derivative w'(k) = dw/dk at log-moneyness k.
+    fn total_variance_derivative(&self, log_moneyness: f64) -> PyResult<f64> {
+        Ok(self
+            .inner
+            .total_variance_derivative(log_moneyness)
+            .map_err(PyQlError::from)?)
+    }
+
+    /// Return second derivative w''(k) = d^2w/dk^2 at log-moneyness k.
+    fn total_variance_second_derivative(&self, log_moneyness: f64) -> PyResult<f64> {
+        Ok(self
+            .inner
+            .total_variance_second_derivative(log_moneyness)
+            .map_err(PyQlError::from)?)
+    }
+
+    /// Return Durrleman risk-neutral density g(k) at log-moneyness k.
+    fn durrleman_density(&self, log_moneyness: f64) -> PyResult<f64> {
+        Ok(self
+            .inner
+            .durrleman_density(log_moneyness)
+            .map_err(PyQlError::from)?)
+    }
+
+    /// Return the butterfly arbitrage verification report.
+    #[getter]
+    fn butterfly_report(&self) -> PyButterflyArbitrageReport {
+        PyButterflyArbitrageReport {
+            inner: *self.inner.butterfly_report(),
+        }
+    }
+
+    /// Forward price.
+    #[getter]
+    fn forward(&self) -> f64 {
+        self.inner.forward()
+    }
+
+    /// ATM volatility.
+    #[getter]
+    fn atm_vol(&self) -> f64 {
+        self.inner.atm_vol()
+    }
+
+    /// Expiry time in years.
+    #[getter]
+    fn exercise_time(&self) -> f64 {
+        self.inner.exercise_time()
+    }
+
+    /// Smoothing parameter lambda.
+    #[getter]
+    fn smoothing(&self) -> f64 {
+        self.inner.smoothing()
+    }
+
+    /// Minimum knot strike.
+    #[getter]
+    fn min_strike(&self) -> f64 {
+        self.inner.min_strike()
+    }
+
+    /// Maximum knot strike.
+    #[getter]
+    fn max_strike(&self) -> f64 {
+        self.inner.max_strike()
+    }
+
+    /// Knots in log-moneyness coordinates.
+    #[getter]
+    fn knots_k(&self) -> Vec<f64> {
+        self.inner.knots_k().to_vec()
+    }
+
+    /// Fitted total variance ordinates at knots.
+    #[getter]
+    fn fitted_total_variances(&self) -> Vec<f64> {
+        self.inner.fitted_total_variances().to_vec()
+    }
+
+    /// Right wing asymptotic slope beta_R.
+    #[getter]
+    fn right_wing_slope(&self) -> f64 {
+        self.inner.right_wing().asymptotic_slope()
+    }
+
+    /// Left wing asymptotic slope beta_L.
+    #[getter]
+    fn left_wing_slope(&self) -> f64 {
+        self.inner.left_wing().asymptotic_slope()
     }
 }
