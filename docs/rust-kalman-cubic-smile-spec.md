@@ -26,7 +26,7 @@ Porting this filter to native Rust in `libitofin` provides significant latency a
 | **Batch update ($m = 15$)** | **196.6 µs** | **1.0 – 2.5 µs** | **~80× – 200×** |
 | **Peak throughput (single core)** | ~5,800 updates / sec | **> 12,000,000 updates / sec** | **~2,000×** |
 | **Heap allocations per update** | Multiple array objects / slices | **0 bytes** (100% stack allocated) | **$\infty$** (allocation-free) |
-| **State memory footprint** | Several KB (Python objects) | **648 bytes** ($9 + 81$ `f64`s) | **Fits entirely in L1 cache** |
+| **State memory footprint** | Several KB (Python objects) | **720 bytes** ($9 + 81$ `f64`s) | **Fits entirely in L1 cache** |
 
 #### Root Causes of the Speedup:
 1. **Zero Allocations & Cache Locality:** A 9-element mean vector and a $9 \times 9$ covariance matrix require only 720 bytes total. All operations run directly on stack arrays (`[f64; 9]` and `[[f64; 9]; 9]`).

@@ -43,7 +43,9 @@ class LiveFeedController:
 
     def _publish_snapshot(self, latest_options, instruments, rows, book, status):
         now_ms, now = int(time.time() * 1000), time.monotonic()
-        self.filters.tick(now_ms=now_ms, now=now)
+        running = self.task is not None and not self.task.done()
+        if running:
+            self.filters.tick(now_ms=now_ms, now=now)
         self.snapshot = {
             "status": status,
             "latest_options": dict(latest_options),
@@ -57,7 +59,7 @@ class LiveFeedController:
             "kalman_views": self.filters.snapshots(now=now),
             "filter_config": self.filters.config,
             "published_ms": now_ms,
-            "feed_running": self.task is not None and not self.task.done(),
+            "feed_running": running,
         }
         self.publish(self.snapshot)
 
@@ -68,7 +70,11 @@ class LiveFeedController:
         )
 
     def configure(self, config: FilterConfig):
-        self.filters.configure(config, now=time.monotonic())
+        running = self.task is not None and not self.task.done()
+        if running:
+            self.filters.configure(config, now=time.monotonic())
+        else:
+            self.filters.config = config
         self._republish()
 
     def reset_filters(self):

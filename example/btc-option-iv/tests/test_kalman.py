@@ -458,3 +458,16 @@ def test_pending_clock_skewed_version_is_consumed_once_when_usable():
     assert manager.snapshots(now=0.15)[EXPIRY_MS].updates == before.updates + 1
     manager.ingest(row, instrument, now_ms=NOW_MS + 200, now=0.2)
     assert manager.snapshots(now=0.2)[EXPIRY_MS].updates == before.updates + 1
+
+
+def test_timer_tick_does_not_bootstrap_without_events():
+    manager = FilterManager()
+    row, instrument = quote(0.0, iv=0.30, timestamp=NOW_MS + 500)
+    manager.ingest(row, instrument, now_ms=NOW_MS, now=0)
+    state = manager._filters[EXPIRY_MS]
+    assert state.mean is None
+
+    # Timer tick when quote is within time window must NOT bootstrap
+    manager.tick(now_ms=NOW_MS + 600, now=0.6)
+    assert state.mean is None
+    assert row.instrument_name not in state.seen

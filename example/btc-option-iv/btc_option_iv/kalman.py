@@ -474,7 +474,8 @@ class FilterManager:
         if state.last_accepted is not None and now - state.last_accepted >= 60:
             self._reset(state, "long feed gap")
         if state.mean is None:
-            self._bootstrap(state, now)
+            if measurements:
+                self._bootstrap(state, now)
             return
         dt = now - state.clock
         changed = (

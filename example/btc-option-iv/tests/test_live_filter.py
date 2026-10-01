@@ -128,3 +128,26 @@ def test_stale_snapshot_still_plots_last_observed_support():
     assert figure.data[0].name == "Kalman filtered smile"
     assert min(figure.data[0].x) >= -1.4 - 1e-12
     assert max(figure.data[0].x) <= 1.4 + 1e-12
+
+
+def test_configure_while_paused_does_not_reset_filter_on_long_pause(monkeypatch):
+    from btc_option_iv.kalman import FilterConfig
+    from test_kalman import warm
+
+    published = []
+    controller = live.LiveFeedController(published.append)
+    warm(controller.filters)
+    assert EXPIRY_MS in controller.filters.snapshots(now=1)
+
+    controller.snapshot = {
+        **controller.snapshot,
+        "feed_running": False,
+    }
+    # Advance time by 120s during pause
+    monkeypatch.setattr(live.time, "monotonic", lambda: 121.0)
+    controller.configure(FilterConfig(process_iv_rate=0.20))
+
+    # View must be preserved without triggering 60-second gap reset
+    views = published[-1]["kalman_views"]
+    assert EXPIRY_MS in views
+    assert views[EXPIRY_MS].updates >= 1

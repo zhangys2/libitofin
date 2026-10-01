@@ -13,16 +13,15 @@ use crate::math::comparison::close_enough;
 use crate::math::interpolations::Interpolation;
 use crate::math::interpolations::cubic::{CubicDerivativeApprox, CubicInterpolation};
 use crate::math::matrix::Matrix;
-use crate::math::matrixutilities::symmetricschurdecomposition::SymmetricSchurDecomposition;
 use crate::termstructures::volatility::VolatilityType;
 use crate::termstructures::volatility::cubicsmile::{CubicSmileSection, DEFAULT_STD_DEV_POINTS};
 use crate::termstructures::volatility::smilesection::{SmileSection, SmileSectionBase};
 use crate::time::daycounters::actual365fixed::Actual365Fixed;
-use crate::types::{Rate, Real, Time, Volatility};
+use crate::types::{Rate, Real, Size, Time, Volatility};
 use crate::{fail, require};
 
 /// Number of fixed knots in the standardized coordinate system.
-pub const N_KNOTS: usize = 9;
+pub const N_KNOTS: Size = 9;
 
 /// Default natural-cubic knot locations in signed standard-deviation units.
 pub const KNOTS: [Real; N_KNOTS] = DEFAULT_STD_DEV_POINTS;
@@ -220,6 +219,10 @@ impl SmileContext {
 }
 
 /// Validates symmetry, finiteness, and positive semi-definiteness of the filter state.
+///
+/// Positive semi-definiteness is verified in stack-only operations using a
+/// regularized Cholesky factorization ($P + \epsilon I = L L^T$), avoiding heap
+/// allocations and Jacobi sweep panics on streaming hot paths.
 pub fn validate_state(
     mean: &[Real; N_KNOTS],
     covariance: &[[Real; N_KNOTS]; N_KNOTS],
@@ -246,18 +249,28 @@ pub fn validate_state(
             );
         }
     }
-    let mut mat = Matrix::with_size(N_KNOTS, N_KNOTS);
+    let mut l = [[0.0; N_KNOTS]; N_KNOTS];
     for i in 0..N_KNOTS {
-        for j in 0..N_KNOTS {
-            mat[(i, j)] = covariance[i][j];
+        for j in i..N_KNOTS {
+            let mut sum = covariance[i][j];
+            if i == j {
+                sum += tolerance;
+            }
+            for k in 0..i {
+                sum -= l[i][k] * l[j][k];
+            }
+            if i == j {
+                if sum < 0.0 || !sum.is_finite() {
+                    fail!("covariance is not positive semidefinite");
+                }
+                l[i][i] = sum.sqrt();
+            } else if l[i][i] > 0.0 {
+                l[j][i] = sum / l[i][i];
+            } else {
+                l[j][i] = 0.0;
+            }
         }
     }
-    let decomp = SymmetricSchurDecomposition::new(&mat);
-    let min_eig = decomp.eigenvalues()[N_KNOTS - 1];
-    require!(
-        min_eig >= -tolerance,
-        "covariance is not positive semidefinite"
-    );
     Ok(())
 }
 
@@ -728,6 +741,7 @@ impl KalmanSmileSection {
     ) -> QlResult<Self> {
         config.validate()?;
         validate_state(&mean, &covariance)?;
+        let context = SmileContext::new(context.forward, context.exercise_time, context.atm_vol)?;
 
         let min_strike = context.strike(KNOTS[0]);
         let max_strike = context.strike(KNOTS[N_KNOTS - 1]);
@@ -1277,5 +1291,48 @@ mod tests {
             );
         }
         assert!((c_tr[0][0] - 0.0022143486).abs() < 1e-9);
+    }
+
+    #[test]
+    fn from_state_rejects_unvalidated_context() {
+        let mean = [0.5; N_KNOTS];
+        let mut cov = [[0.0; N_KNOTS]; N_KNOTS];
+        for i in 0..N_KNOTS {
+            cov[i][i] = 0.01;
+        }
+        let config = FilterConfig::default();
+
+        // Invalid forward (0.0 / negative / NaN)
+        let bad_ctx = SmileContext {
+            forward: 0.0,
+            exercise_time: 0.25,
+            atm_vol: 0.5,
+        };
+        assert!(KalmanSmileSection::from_state(mean, cov, bad_ctx, config).is_err());
+
+        // Invalid exercise time
+        let bad_ctx2 = SmileContext {
+            forward: 100.0,
+            exercise_time: -0.1,
+            atm_vol: 0.5,
+        };
+        assert!(KalmanSmileSection::from_state(mean, cov, bad_ctx2, config).is_err());
+    }
+
+    #[test]
+    fn validate_state_rejects_non_psd_fallibly() {
+        let mean = [0.5; N_KNOTS];
+        let mut cov = [[0.0; N_KNOTS]; N_KNOTS];
+        cov[0][0] = -0.1; // Negative variance
+        assert!(validate_state(&mean, &cov).is_err());
+
+        // Valid diagonal but negative eigenvalue off-diagonal
+        let mut cov2 = [[0.0; N_KNOTS]; N_KNOTS];
+        for i in 0..N_KNOTS {
+            cov2[i][i] = 1.0;
+        }
+        cov2[0][1] = 2.0;
+        cov2[1][0] = 2.0;
+        assert!(validate_state(&mean, &cov2).is_err());
     }
 }
