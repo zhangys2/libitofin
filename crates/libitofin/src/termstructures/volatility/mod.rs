@@ -46,6 +46,7 @@ mod sabr;
 mod sabrsmilesection;
 mod smilesection;
 mod swaption;
+mod total_variance_cubic_smile;
 mod volatilitytype;
 
 pub use abcd::{AbcdFunction, AbcdSquared};
@@ -85,6 +86,10 @@ pub use swaption::{
     ConstantSwaptionVolatility, InterpolatedSwaptionVolatilityCube, SabrSwaptionVolatilityCube,
     SwaptionCubeSmileSection, SwaptionVolatilityCube, SwaptionVolatilityDiscrete,
     SwaptionVolatilityMatrix, SwaptionVolatilityStructure,
+};
+pub use total_variance_cubic_smile::{
+    ArbitrageFallbackPolicy, ButterflyArbitrageReport, RogerLeeWing, RogerLeeWingConfig,
+    TotalVarianceCubicSmileSection, WingExtrapolationMode,
 };
 pub use volatilitytype::VolatilityType;
 

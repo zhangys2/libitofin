@@ -2,7 +2,8 @@
 use crate::boundary::*;
 use libitofin::shared::{Shared, shared};
 use libitofin::termstructures::volatility::{
-    CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS, SmileSection,
+    ArbitrageFallbackPolicy, CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS,
+    RogerLeeWingConfig, SmileSection, TotalVarianceCubicSmileSection,
 };
 
 /// # Safety
@@ -221,6 +222,119 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
     }
 }
 
+/// Fit a total variance cubic smile with Roger Lee wing asymptotics.
+/// # Safety
+/// Follow the crate C caller contract; arrays must have their stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_total_variance_cubic_smile_new(
+    ctx: *mut Context,
+    strikes: *const f64,
+    n_strikes: usize,
+    mid_ivs: *const f64,
+    n_ivs: usize,
+    forward: f64,
+    exercise_time: f64,
+    atm_vol: f64,
+    smoothing: f64,
+    arbitrage_repair: u8,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let strikes = input_slice(strikes, n_strikes)?.to_vec();
+            let mid_ivs = input_slice(mid_ivs, n_ivs)?.to_vec();
+            let smile = TotalVarianceCubicSmileSection::with_options(
+                strikes,
+                mid_ivs,
+                forward,
+                exercise_time,
+                atm_vol,
+                DEFAULT_STD_DEV_POINTS.to_vec(),
+                smoothing,
+                RogerLeeWingConfig::default(),
+                arbitrage_repair != 0,
+                ArbitrageFallbackPolicy::default(),
+            )?;
+            output(out, c.insert(shared(smile))?)
+        })
+    }
+}
+
+/// Query a total variance cubic smile:
+/// 0 volatility(strike), 1 variance(strike), 2 total_variance(k),
+/// 3 total_variance_derivative(k), 4 total_variance_second_derivative(k),
+/// 5 durrleman_density(k), 6 forward, 7 atm_vol, 8 exercise_time,
+/// 9 smoothing, 10 min_strike, 11 max_strike, 12 right_wing_slope, 13 left_wing_slope.
+/// # Safety
+/// Follow the crate C caller contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_total_variance_cubic_smile_query(
+    ctx: *mut Context,
+    id: u64,
+    kind: i32,
+    x: f64,
+    out: *mut f64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let smile = c.get::<Shared<TotalVarianceCubicSmileSection>>(id)?;
+            let value = match kind {
+                0 => smile.volatility(x)?,
+                1 => smile.variance(x)?,
+                2 => smile.total_variance_at_log_moneyness(x)?,
+                3 => smile.total_variance_derivative(x)?,
+                4 => smile.total_variance_second_derivative(x)?,
+                5 => smile.durrleman_density(x)?,
+                6 => smile.forward(),
+                7 => smile.atm_vol(),
+                8 => smile.exercise_time(),
+                9 => smile.smoothing(),
+                10 => smile.min_strike(),
+                11 => smile.max_strike(),
+                12 => smile.right_wing().asymptotic_slope(),
+                13 => smile.left_wing().asymptotic_slope(),
+                _ => {
+                    return Err(BindingError::invalid(
+                        "unknown total variance cubic smile query",
+                    ));
+                }
+            };
+            output(out, value)
+        })
+    }
+}
+
+/// Check butterfly arbitrage report on a total variance cubic smile.
+/// # Safety
+/// Follow the crate C caller contract; out pointers must be valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
+    ctx: *mut Context,
+    id: u64,
+    out_min_density: *mut f64,
+    out_argmin_k: *mut f64,
+    out_has_arbitrage: *mut u8,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out_min_density)?;
+            check_ptr(out_argmin_k)?;
+            check_ptr(out_has_arbitrage)?;
+            let smile = c.get::<Shared<TotalVarianceCubicSmileSection>>(id)?;
+            let report = smile.butterfly_report();
+            *out_min_density = report.min_density;
+            *out_argmin_k = report.argmin_k;
+            *out_has_arbitrage = if report.has_arbitrage { 1 } else { 0 };
+            Ok(())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +432,71 @@ mod tests {
                 0
             );
             assert_eq!(lambda, 0.05);
+
+            // Test total variance cubic smile C-FFI
+            let mut tv_handle = 0;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_new(
+                    &mut ctx,
+                    strikes.as_ptr(),
+                    7,
+                    ivs.as_ptr(),
+                    7,
+                    100.0,
+                    1.0,
+                    0.2,
+                    0.01,
+                    1,
+                    &mut tv_handle,
+                    null_mut(),
+                ),
+                0
+            );
+
+            let mut vol_atm = 0.0;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_query(
+                    &mut ctx,
+                    tv_handle,
+                    0,
+                    100.0,
+                    &mut vol_atm,
+                    null_mut()
+                ),
+                0
+            );
+            assert!((vol_atm - 0.30).abs() < 0.01);
+
+            let mut tv_atm = 0.0;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_query(
+                    &mut ctx,
+                    tv_handle,
+                    2,
+                    0.0,
+                    &mut tv_atm,
+                    null_mut()
+                ),
+                0
+            );
+            assert!((tv_atm - vol_atm * vol_atm).abs() < 1e-6);
+
+            let mut min_d = 0.0;
+            let mut arg_k = 0.0;
+            let mut has_arb = 1;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_check_arbitrage(
+                    &mut ctx,
+                    tv_handle,
+                    &mut min_d,
+                    &mut arg_k,
+                    &mut has_arb,
+                    null_mut(),
+                ),
+                0
+            );
+            assert_eq!(has_arb, 0);
+            assert!(min_d >= 0.0);
         }
     }
 }
