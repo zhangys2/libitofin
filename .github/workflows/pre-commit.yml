@@ -294,6 +294,11 @@ jobs:
           python -m json.tool "$go_oracle" > /dev/null
           echo "ITOFIN_HCAL_METHODS_GO_ORACLE=$go_oracle" >> "$GITHUB_ENV"
 
+      - name: install example notebook dependencies
+        run: |
+          . .venv/bin/activate
+          pip install "./example/btc-option-iv[notebook]"
+
       - name: run the pytest oracle
         run: |
           . .venv/bin/activate

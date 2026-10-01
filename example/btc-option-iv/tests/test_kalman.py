@@ -5,9 +5,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-
-np = pytest.importorskip("numpy")
-pytest.importorskip("scipy")
+import numpy as np
+import scipy
 
 from btc_option_iv.kalman import (
     KNOTS,

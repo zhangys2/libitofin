@@ -67,7 +67,7 @@ def _execute_cell(cell, namespace):
 
 
 def _selector_render_loop(snapshot):
-    mo = pytest.importorskip("marimo")
+    import marimo as mo
     cells = [
         n for n in ast.parse(_APP.read_text()).body if isinstance(n, ast.FunctionDef)
     ]
@@ -129,10 +129,10 @@ def test_selected_expiry_survives_quote_refresh_and_catalog_changes():
 
 
 def _modules():
-    pytest.importorskip("numpy")
-    pytest.importorskip("pandas")
-    pytest.importorskip("scipy")
-    pytest.importorskip("plotly")
+    import numpy as np
+    import pandas as pd
+    import scipy
+    import plotly
     from btc_option_iv.kalman import FilterManager
     from btc_option_iv.views import make_smile_figure, make_smile_reader
 

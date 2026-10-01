@@ -6,9 +6,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-
-pytest.importorskip("scipy")
-pytest.importorskip("numpy")
+import numpy as np
+import scipy
 
 from btc_option_iv import live
 from btc_option_iv.market import IndexQuote, Instrument, OptionQuote
