@@ -2316,7 +2316,22 @@ int32_t itofin_total_variance_cubic_smile_check_arbitrage(struct ItofinContext *
                                                           uint8_t *out_has_arbitrage,
                                                           double *out_final_smoothing,
                                                           uint32_t *out_ramp_iterations,
+                                                          double *out_tolerance,
+                                                          size_t *out_points_checked,
                                                           struct ItofinError *error);
+
+/**
+ * Series: 0 knots_k, 1 fitted_total_variances. A null `out` reports the required length.
+ * # Safety
+ * Follow the crate C caller contract; `out` must hold `capacity` slots.
+ */
+int32_t itofin_total_variance_cubic_smile_series(struct ItofinContext *ctx,
+                                                 uint64_t id,
+                                                 int32_t kind,
+                                                 double *out,
+                                                 size_t capacity,
+                                                 size_t *out_len,
+                                                 struct ItofinError *error);
 
 /**
  * # Safety

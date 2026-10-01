@@ -68,9 +68,25 @@ func TestTotalVarianceCubicSmileSection(t *testing.T) {
 	if report.FinalSmoothing <= 0.0 {
 		t.Fatalf("expected positive FinalSmoothing, got %v", report.FinalSmoothing)
 	}
+	if report.Tolerance <= 0.0 {
+		t.Fatalf("expected positive Tolerance, got %v", report.Tolerance)
+	}
+	if report.PointsChecked <= 0 {
+		t.Fatalf("expected positive PointsChecked, got %v", report.PointsChecked)
+	}
 	smoothing, err := smile.Smoothing()
 	if err != nil || smoothing != report.FinalSmoothing {
 		t.Fatalf("expected Smoothing %v to match FinalSmoothing %v, err: %v", smoothing, report.FinalSmoothing, err)
+	}
+
+	// Knots and fitted total variances series
+	knots, err := smile.KnotsK()
+	if err != nil || len(knots) == 0 {
+		t.Fatalf("expected non-empty knots, got %v (err: %v)", knots, err)
+	}
+	fTV, err := smile.FittedTotalVariances()
+	if err != nil || len(fTV) != len(knots) {
+		t.Fatalf("expected fitted total variances matching knots len %v, got %v (err: %v)", len(knots), len(fTV), err)
 	}
 
 	// Strike domain checks

@@ -195,6 +195,236 @@
       "tests": [
         "TestCubicSmileMidIV"
       ]
+    },
+    {
+      "c": [
+        "itofin_total_variance_cubic_smile_new"
+      ],
+      "go": [
+        "Session.TotalVarianceCubicSmileSection",
+        "Session.TotalVarianceCubicSmileSectionWithOptions"
+      ],
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Volatility",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.volatility",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Variance",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.variance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVariance",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVarianceDerivative",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance_derivative",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVarianceSecondDerivative",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance_second_derivative",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.DurrlemanDensity",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.durrleman_density",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Forward",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.forward",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.ATMVol",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.atm_vol",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.ExerciseTime",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.exercise_time",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Smoothing",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.MinStrike",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.min_strike",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.MaxStrike",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.max_strike",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_series",
+      "go": "TotalVarianceCubicSmileSection.KnotsK",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.knots_k",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_series",
+      "go": "TotalVarianceCubicSmileSection.FittedTotalVariances",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.fitted_total_variances",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.RightWingSlope",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.right_wing_slope",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.LeftWingSlope",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.left_wing_slope",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "TotalVarianceCubicSmileSection.ButterflyReport",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.butterfly_report",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.MinDensity",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.min_density",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.ArgminK",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.argmin_k",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.HasArbitrage",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.has_arbitrage",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.Tolerance",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.tolerance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.PointsChecked",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.points_checked",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.RampIterations",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.ramp_iterations",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.FinalSmoothing",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.final_smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
     }
   ]
 }

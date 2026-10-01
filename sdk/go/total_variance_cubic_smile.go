@@ -11,6 +11,8 @@ type ButterflyArbitrageReport struct {
 	MinDensity     float64
 	ArgminK        float64
 	HasArbitrage   bool
+	Tolerance      float64
+	PointsChecked  int
 	FinalSmoothing float64
 	RampIterations int
 }
@@ -128,15 +130,53 @@ func (v *TotalVarianceCubicSmileSection) LeftWingSlope() (float64, error) {
 	return v.query(13, 0)
 }
 
+// KnotsK returns the knot points in log-moneyness coordinates.
+func (v *TotalVarianceCubicSmileSection) KnotsK() ([]float64, error) {
+	return v.series(0)
+}
+
+// FittedTotalVariances returns the fitted total variances at knots.
+func (v *TotalVarianceCubicSmileSection) FittedTotalVariances() ([]float64, error) {
+	return v.series(1)
+}
+
+func (v *TotalVarianceCubicSmileSection) series(kind int32) ([]float64, error) {
+	var length C.size_t
+	err := v.session.invoke(func() error {
+		var e C.ItofinError
+		return ffiError(C.itofin_total_variance_cubic_smile_series(
+			v.session.ctx, C.uint64_t(v.id), C.int32_t(kind), nil, 0, &length, &e,
+		), &e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]float64, int(length))
+	if len(out) == 0 {
+		return out, nil
+	}
+	err = v.session.invoke(func() error {
+		var e C.ItofinError
+		return ffiError(C.itofin_total_variance_cubic_smile_series(
+			v.session.ctx, C.uint64_t(v.id), C.int32_t(kind), (*C.double)(unsafe.Pointer(&out[0])), length, &length, &e,
+		), &e)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ButterflyReport checks for butterfly arbitrage across the smile.
 func (v *TotalVarianceCubicSmileSection) ButterflyReport() (*ButterflyArbitrageReport, error) {
-	var minD, argK, finalSmoothing C.double
+	var minD, argK, finalSmoothing, tol C.double
 	var hasArb C.uint8_t
 	var rampIterations C.uint32_t
+	var pointsChecked C.size_t
 	err := v.session.invoke(func() error {
 		var e C.ItofinError
 		return ffiError(C.itofin_total_variance_cubic_smile_check_arbitrage(
-			v.session.ctx, C.uint64_t(v.id), &minD, &argK, &hasArb, &finalSmoothing, &rampIterations, &e,
+			v.session.ctx, C.uint64_t(v.id), &minD, &argK, &hasArb, &finalSmoothing, &rampIterations, &tol, &pointsChecked, &e,
 		), &e)
 	})
 	if err != nil {
@@ -146,6 +186,8 @@ func (v *TotalVarianceCubicSmileSection) ButterflyReport() (*ButterflyArbitrageR
 		MinDensity:     float64(minD),
 		ArgminK:        float64(argK),
 		HasArbitrage:   hasArb != 0,
+		Tolerance:      float64(tol),
+		PointsChecked:  int(pointsChecked),
 		FinalSmoothing: float64(finalSmoothing),
 		RampIterations: int(rampIterations),
 	}, nil

@@ -322,6 +322,8 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
     out_has_arbitrage: *mut u8,
     out_final_smoothing: *mut f64,
     out_ramp_iterations: *mut u32,
+    out_tolerance: *mut f64,
+    out_points_checked: *mut usize,
     error: *mut ItofinError,
 ) -> i32 {
     unsafe {
@@ -335,6 +337,12 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
             if !out_ramp_iterations.is_null() {
                 check_ptr(out_ramp_iterations)?;
             }
+            if !out_tolerance.is_null() {
+                check_ptr(out_tolerance)?;
+            }
+            if !out_points_checked.is_null() {
+                check_ptr(out_points_checked)?;
+            }
             let smile = c.get::<Shared<TotalVarianceCubicSmileSection>>(id)?;
             let report = smile.butterfly_report();
             *out_min_density = report.min_density;
@@ -345,6 +353,58 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
             }
             if !out_ramp_iterations.is_null() {
                 *out_ramp_iterations = report.ramp_iterations as u32;
+            }
+            if !out_tolerance.is_null() {
+                *out_tolerance = report.tolerance;
+            }
+            if !out_points_checked.is_null() {
+                *out_points_checked = report.points_checked;
+            }
+            Ok(())
+        })
+    }
+}
+
+/// Series: 0 knots_k, 1 fitted_total_variances. A null `out` reports the required length.
+/// # Safety
+/// Follow the crate C caller contract; `out` must hold `capacity` slots.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_total_variance_cubic_smile_series(
+    ctx: *mut Context,
+    id: u64,
+    kind: i32,
+    out: *mut f64,
+    capacity: usize,
+    out_len: *mut usize,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out_len)?;
+            let smile = c.get::<Shared<TotalVarianceCubicSmileSection>>(id)?;
+            let length = match kind {
+                0 => smile.knots_k().len(),
+                1 => smile.fitted_total_variances().len(),
+                _ => {
+                    return Err(BindingError::invalid(
+                        "unknown total variance cubic smile series",
+                    ));
+                }
+            };
+            *out_len = length;
+            if out.is_null() {
+                return Ok(());
+            }
+            if capacity < length {
+                return Err(BindingError::invalid(
+                    "total variance cubic smile buffer is too small",
+                ));
+            }
+            let dest = std::slice::from_raw_parts_mut(out, length);
+            match kind {
+                0 => dest.copy_from_slice(smile.knots_k()),
+                1 => dest.copy_from_slice(smile.fitted_total_variances()),
+                _ => unreachable!(),
             }
             Ok(())
         })
@@ -502,6 +562,8 @@ mod tests {
             let mut has_arb = 1;
             let mut final_lambda = 0.0;
             let mut ramp_iters = 99;
+            let mut tol = 0.0;
+            let mut pts_checked = 0usize;
             assert_eq!(
                 itofin_total_variance_cubic_smile_check_arbitrage(
                     &mut ctx,
@@ -511,6 +573,8 @@ mod tests {
                     &mut has_arb,
                     &mut final_lambda,
                     &mut ramp_iters,
+                    &mut tol,
+                    &mut pts_checked,
                     null_mut(),
                 ),
                 0
@@ -519,6 +583,8 @@ mod tests {
             assert!(min_d >= 0.0);
             assert_eq!(final_lambda, 0.01);
             assert_eq!(ramp_iters, 0);
+            assert!(tol > 0.0);
+            assert!(pts_checked > 0);
 
             let mut query_lambda = 0.0;
             assert_eq!(
@@ -533,6 +599,62 @@ mod tests {
                 0
             );
             assert_eq!(query_lambda, 0.01);
+
+            let mut knots_len = 0usize;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_series(
+                    &mut ctx,
+                    tv_handle,
+                    0,
+                    null_mut(),
+                    0,
+                    &mut knots_len,
+                    null_mut(),
+                ),
+                0
+            );
+            assert!(knots_len > 0);
+            let mut knots = vec![0.0; knots_len];
+            assert_eq!(
+                itofin_total_variance_cubic_smile_series(
+                    &mut ctx,
+                    tv_handle,
+                    0,
+                    knots.as_mut_ptr(),
+                    knots_len,
+                    &mut knots_len,
+                    null_mut(),
+                ),
+                0
+            );
+
+            let mut tv_len = 0usize;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_series(
+                    &mut ctx,
+                    tv_handle,
+                    1,
+                    null_mut(),
+                    0,
+                    &mut tv_len,
+                    null_mut(),
+                ),
+                0
+            );
+            assert_eq!(tv_len, knots_len);
+            let mut f_tv = vec![0.0; tv_len];
+            assert_eq!(
+                itofin_total_variance_cubic_smile_series(
+                    &mut ctx,
+                    tv_handle,
+                    1,
+                    f_tv.as_mut_ptr(),
+                    tv_len,
+                    &mut tv_len,
+                    null_mut(),
+                ),
+                0
+            );
         }
     }
 }
