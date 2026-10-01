@@ -1332,27 +1332,43 @@ mod tests {
         // Call-wing-only quotes
         let x_points: [Real; 5] = [0.0, 0.6, 1.0, 1.5, 2.5];
         let mid_ivs = vec![0.20, 0.24, 0.28, 0.34, 0.45];
-        let strikes: Vec<Real> = x_points.iter().map(|&x| forward * (x * scale).exp()).collect();
+        let strikes: Vec<Real> = x_points
+            .iter()
+            .map(|&x| forward * (x * scale).exp())
+            .collect();
 
-        let section = TotalVarianceCubicSmileSection::new(
-            strikes,
-            mid_ivs,
-            forward,
-            expiry,
-            atm_vol,
-        )
-        .expect("Call-wing smile should fit successfully");
+        let section =
+            TotalVarianceCubicSmileSection::new(strikes, mid_ivs, forward, expiry, atm_vol)
+                .expect("Call-wing smile should fit successfully");
 
         // Check deep OTM put strikes where w dipped negative previously
         for strike in [10.0, 25.0, 50.0, 75.0, 90.0, 100.0, 120.0, 150.0, 200.0] {
             let var = section.variance(strike).expect("Variance should succeed");
-            assert!(var >= 0.0, "Variance at {strike} must be nonnegative, got {var}");
-            let vol = section.volatility(strike).expect("Volatility should succeed");
-            assert!(vol >= 0.0 && vol.is_finite(), "Volatility at {strike} must be finite, got {vol}");
-            let call_price = section.option_price(strike, OptionType::Call, 1.0).expect("Call price should succeed");
-            assert!(call_price.is_finite() && !call_price.is_nan(), "Call price must not be NaN at {strike}");
-            let put_price = section.option_price(strike, OptionType::Put, 1.0).expect("Put price should succeed");
-            assert!(put_price.is_finite() && !put_price.is_nan(), "Put price must not be NaN at {strike}");
+            assert!(
+                var >= 0.0,
+                "Variance at {strike} must be nonnegative, got {var}"
+            );
+            let vol = section
+                .volatility(strike)
+                .expect("Volatility should succeed");
+            assert!(
+                vol >= 0.0 && vol.is_finite(),
+                "Volatility at {strike} must be finite, got {vol}"
+            );
+            let call_price = section
+                .option_price(strike, OptionType::Call, 1.0)
+                .expect("Call price should succeed");
+            assert!(
+                call_price.is_finite() && !call_price.is_nan(),
+                "Call price must not be NaN at {strike}"
+            );
+            let put_price = section
+                .option_price(strike, OptionType::Put, 1.0)
+                .expect("Put price should succeed");
+            assert!(
+                put_price.is_finite() && !put_price.is_nan(),
+                "Put price must not be NaN at {strike}"
+            );
         }
     }
 
@@ -1383,8 +1399,13 @@ mod tests {
             "AffineFallback must eliminate butterfly arbitrage, report: {:?}",
             section.butterfly_report()
         );
-        let d2 = section.total_variance_second_derivative(0.0).expect("Second derivative");
-        assert!(d2.abs() < 1e-6, "Affine line should have zero second derivative, got {d2}");
+        let d2 = section
+            .total_variance_second_derivative(0.0)
+            .expect("Second derivative");
+        assert!(
+            d2.abs() < 1e-6,
+            "Affine line should have zero second derivative, got {d2}"
+        );
     }
 
     #[test]
@@ -1407,7 +1428,11 @@ mod tests {
         assert!(section.variance(f64::NAN).is_err());
         assert!(section.total_variance_at_log_moneyness(f64::NAN).is_err());
         assert!(section.total_variance_derivative(f64::NAN).is_err());
-        assert!(section.total_variance_second_derivative(f64::INFINITY).is_err());
+        assert!(
+            section
+                .total_variance_second_derivative(f64::INFINITY)
+                .is_err()
+        );
         assert!(section.durrleman_density(f64::NAN).is_err());
     }
 
@@ -1425,7 +1450,10 @@ mod tests {
             atm_vol,
         );
         match err_zero {
-            Err(e) => assert!(e.to_string().contains("positive"), "Expected error about positive mid_iv"),
+            Err(e) => assert!(
+                e.to_string().contains("positive"),
+                "Expected error about positive mid_iv"
+            ),
             Ok(_) => panic!("Expected error for zero mid_iv"),
         }
 
@@ -1437,7 +1465,10 @@ mod tests {
             atm_vol,
         );
         match err_tiny {
-            Err(e) => assert!(e.to_string().contains("too small"), "Expected error about too small mid_iv"),
+            Err(e) => assert!(
+                e.to_string().contains("too small"),
+                "Expected error about too small mid_iv"
+            ),
             Ok(_) => panic!("Expected error for tiny mid_iv"),
         }
     }
@@ -1464,7 +1495,10 @@ mod tests {
         )
         .expect("Fit should succeed");
 
-        assert_eq!(section.smoothing(), section.butterfly_report().final_smoothing);
+        assert_eq!(
+            section.smoothing(),
+            section.butterfly_report().final_smoothing
+        );
         assert_eq!(section.requested_smoothing(), 1e-5);
     }
 
@@ -1473,9 +1507,15 @@ mod tests {
         assert!(RogerLeeWingConfig::new(3.0, WingExtrapolationMode::AutoSmooth, None).is_err());
         assert!(RogerLeeWingConfig::new(-0.1, WingExtrapolationMode::AutoSmooth, None).is_err());
         assert!(RogerLeeWingConfig::new(0.0, WingExtrapolationMode::AutoSmooth, None).is_err());
-        assert!(RogerLeeWingConfig::new(f64::NAN, WingExtrapolationMode::AutoSmooth, None).is_err());
-        assert!(RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(-0.5)).is_err());
-        assert!(RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(0.0)).is_err());
+        assert!(
+            RogerLeeWingConfig::new(f64::NAN, WingExtrapolationMode::AutoSmooth, None).is_err()
+        );
+        assert!(
+            RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(-0.5)).is_err()
+        );
+        assert!(
+            RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(0.0)).is_err()
+        );
 
         // Defensive check: direct RogerLeeWing construction with out-of-range epsilon does NOT panic
         let bad_config = RogerLeeWingConfig {
