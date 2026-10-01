@@ -891,31 +891,52 @@ class ConstantYoYOptionletVolatility:
 @typing.final
 class CubicSmileSection:
     r"""
-    A natural cubic interpolation of one expiry's mid implied volatilities.
+    A curvature-regularized natural cubic fit of one expiry's mid implied volatilities.
 
     Source strikes are mapped to signed standard-deviation log-moneyness using
     the supplied forward, expiry time, and fixed ATM volatility. The default
-    sample grid is `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`.
+    nine spline knots are `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`.
     """
     @property
     def sampled_mid_ivs(self) -> builtins.list[typing.Optional[builtins.float]]:
         r"""
-        Volatilities sampled on `std_dev_points`; unavailable wings are None.
+        Fitted volatilities at each configured knot location.
         """
     @property
     def std_dev_points(self) -> builtins.list[builtins.float]:
         r"""
-        Evaluation grid used by `sampled_mid_ivs`, in caller-specified order.
+        Fixed spline knots, sorted in increasing order.
         """
     @property
     def node_std_dev_points(self) -> builtins.list[builtins.float]:
         r"""
-        Standard-deviation coordinates of the sorted source observations.
+        Fixed knot coordinates used by the fitted spline.
         """
     @property
     def node_mid_ivs(self) -> builtins.list[builtins.float]:
         r"""
-        Mid-IV observations paired with `node_std_dev_points`.
+        Fitted IV ordinates paired with `node_std_dev_points`.
+        """
+    @property
+    def observed_strikes(self) -> builtins.list[builtins.float]:
+        r"""
+        Sorted source market strikes.
+        """
+    @property
+    def observed_std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Standard-deviation coordinates of source market observations.
+        """
+    @property
+    def observed_mid_ivs(self) -> builtins.list[builtins.float]:
+        r"""
+        Source mid-IVs paired with `observed_strikes`.
+        """
+    @property
+    def observation_residuals(self) -> builtins.list[typing.Optional[builtins.float]]:
+        r"""
+        Fitted-minus-observed IVs at source observations. Entries outside the
+        fixed knot range are `None` because those observations are not fitted.
         """
     @property
     def segment_coefficients(self) -> builtins.list[tuple[builtins.float, builtins.float, builtins.float]]:
@@ -928,10 +949,10 @@ class CubicSmileSection:
     @property
     def node_residuals(self) -> builtins.list[builtins.float]:
         r"""
-        Fitted-minus-observed mid-IV residuals at the source nodes.
+        Fitted-minus-ordinate residuals at the fixed knot locations.
 
-        The spline interpolates its observations, so these should be zero up to
-        floating-point rounding; they do not represent quote uncertainty.
+        These are zero up to floating-point rounding. Use `observation_residuals`
+        to inspect fit errors against source market quotes.
         """
     @property
     def forward(self) -> builtins.float:
@@ -944,6 +965,11 @@ class CubicSmileSection:
         Fixed ATM volatility used to standardize strikes.
         """
     @property
+    def smoothing(self) -> builtins.float:
+        r"""
+        Nonnegative curvature penalty weight; zero disables regularization.
+        """
+    @property
     def exercise_time(self) -> builtins.float:
         r"""
         Expiry time in years.
@@ -951,16 +977,16 @@ class CubicSmileSection:
     @property
     def min_strike(self) -> builtins.float:
         r"""
-        Lowest observed strike.
+        Strike mapped from the lower fitted knot-domain boundary.
         """
     @property
     def max_strike(self) -> builtins.float:
         r"""
-        Highest observed strike.
+        Strike mapped from the upper fitted knot-domain boundary.
         """
-    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, extrapolate: builtins.bool = False) -> None:
+    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, extrapolate: builtins.bool = False, smoothing: builtins.float = 0.01) -> None:
         r"""
-        Fit a natural cubic smile through paired strike/mid-IV observations.
+        Fit a natural cubic smile to paired strike/mid-IV observations.
 
         Args:
             strikes (list[float]): Positive strikes, in any order.
@@ -971,15 +997,21 @@ class CubicSmileSection:
             exercise_time (float): Positive expiry time in years.
             atm_vol (float): Positive annualized ATM volatility used to scale
                 log-moneyness into standard-deviation units.
-            std_dev_points (list[float] | None): Evaluation points for the
-                sampled curve. Defaults to `[-3, -1.5, -1, -0.6, 0, 0.6, 1,
-                1.5, 3]`; these are sample points, not spline knots.
+            std_dev_points (list[float] | None): Fixed spline-knot locations.
+                Defaults to `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`;
+                input locations are sorted before fitting.
             extrapolate (bool): Extend the end cubic segments for out-of-range
                 queries and samples. Defaults to False.
+            smoothing (float): Nonnegative weight on integrated squared curvature.
+                Defaults to 0.01. The data term is mean squared IV error. Positive
+                smoothing needs at least two distinct in-range observations;
+                zero disables regularization and requires full observation rank.
+                Unsampled wings are model-dependent, not measured quote IVs.
 
         Raises:
-            ItofinError: If inputs are invalid or source points are duplicated.
-                Direct out-of-domain queries also fail unless extrapolation is enabled.
+            ItofinError: If inputs are invalid, source points are duplicated,
+                or the in-range data and penalty do not determine a full-rank fit.
+                Direct out-of-domain queries fail unless extrapolation is enabled.
         """
     def volatility(self, strike: builtins.float) -> builtins.float:
         r"""

@@ -36,6 +36,7 @@ mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
 mod interpolatedsmilesection;
+mod kalman_smile;
 mod localconstantvol;
 mod localvolcurve;
 mod localvolsurface;
@@ -52,7 +53,7 @@ pub use blackconstantvol::BlackConstantVol;
 pub use blackvariancecurve::{BlackVarianceCurve, BlackVolTimeExtrapolation};
 pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolCurve, CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
-pub use cubicsmile::{CubicSmileSection, DEFAULT_STD_DEV_POINTS};
+pub use cubicsmile::{CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
 pub use inflation::{
@@ -63,6 +64,11 @@ pub use inflation::{
     YoYOptionletVolatilitySurface, YoYOptionletVolatilitySurfaceBase,
 };
 pub use interpolatedsmilesection::InterpolatedSmileSection;
+pub use kalman_smile::{
+    FilterConfig, KalmanSmileSection, MAX_END_SLOPE, MAX_OVERHANG, N_KNOTS, SmileContext,
+    UpdateResult, UpdateStatus, basis_derivative, basis_vector, kalman_update_batch,
+    kalman_update_scalar, process_covariance, transport,
+};
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;
 pub use localvolsurface::LocalVolSurface;

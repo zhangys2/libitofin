@@ -1,8 +1,60 @@
 {
   "entries": [
     {
-      "c": "itofin_cubic_smile_new",
-      "go": "Session.CubicSmileSection",
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Smoothing",
+      "python": "itofin.termstructures.CubicSmileSection.smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileSparseSmoothing",
+        "sparse_default_fit_and_explicit_smoothing_cross_c_boundary"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedStrikes",
+      "python": "itofin.termstructures.CubicSmileSection.observed_strikes",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedStdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.observed_std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.observed_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservationResiduals",
+      "python": "itofin.termstructures.CubicSmileSection.observation_residuals",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": [
+        "itofin_cubic_smile_new",
+        "itofin_cubic_smile_new_with_smoothing"
+      ],
+      "go": [
+        "Session.CubicSmileSection",
+        "Session.CubicSmileSectionWithSmoothing"
+      ],
       "python": "itofin.termstructures.CubicSmileSection.__init__",
       "status": "implemented",
       "tests": [

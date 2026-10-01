@@ -1,7 +1,9 @@
 //! C ABI for the one-expiry cubic mid-IV smile.
 use crate::boundary::*;
 use libitofin::shared::{Shared, shared};
-use libitofin::termstructures::volatility::{CubicSmileSection, SmileSection};
+use libitofin::termstructures::volatility::{
+    CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS, SmileSection,
+};
 
 /// # Safety
 /// Follow the crate C caller contract; arrays must have their stated lengths.
@@ -23,23 +25,65 @@ pub unsafe extern "C" fn itofin_cubic_smile_new(
     error: *mut ItofinError,
 ) -> i32 {
     unsafe {
+        itofin_cubic_smile_new_with_smoothing(
+            ctx,
+            strikes,
+            n_strikes,
+            mid_ivs,
+            n_ivs,
+            forward,
+            exercise_time,
+            atm_vol,
+            std_dev_points,
+            n_points,
+            extrapolate,
+            DEFAULT_SMILE_SMOOTHING,
+            out,
+            error,
+        )
+    }
+}
+
+/// Fit fixed knots with an explicit nonnegative curvature penalty weight.
+/// Zero smoothing requests the unregularized fit and requires full quote rank.
+/// # Safety
+/// Follow the crate C caller contract; arrays must have their stated lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn itofin_cubic_smile_new_with_smoothing(
+    ctx: *mut Context,
+    strikes: *const f64,
+    n_strikes: usize,
+    mid_ivs: *const f64,
+    n_ivs: usize,
+    forward: f64,
+    exercise_time: f64,
+    atm_vol: f64,
+    std_dev_points: *const f64,
+    n_points: usize,
+    extrapolate: u8,
+    smoothing: f64,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
         with_context(ctx, error, |c| {
             check_ptr(out)?;
             let strikes = input_slice(strikes, n_strikes)?.to_vec();
             let mid_ivs = input_slice(mid_ivs, n_ivs)?.to_vec();
-            let mut smile = if n_points == 0 {
-                CubicSmileSection::new(strikes, mid_ivs, forward, exercise_time, atm_vol)?
+            let points = if n_points == 0 {
+                DEFAULT_STD_DEV_POINTS.to_vec()
             } else {
-                let points = input_slice(std_dev_points, n_points)?.to_vec();
-                CubicSmileSection::with_std_dev_points(
-                    strikes,
-                    mid_ivs,
-                    forward,
-                    exercise_time,
-                    atm_vol,
-                    points,
-                )?
+                input_slice(std_dev_points, n_points)?.to_vec()
             };
+            let mut smile = CubicSmileSection::with_smoothing(
+                strikes,
+                mid_ivs,
+                forward,
+                exercise_time,
+                atm_vol,
+                points,
+                smoothing,
+            )?;
             smile = smile.with_extrapolation(extrapolate != 0);
             output(out, c.insert(shared(smile))?)
         })
@@ -47,7 +91,8 @@ pub unsafe extern "C" fn itofin_cubic_smile_new(
 }
 
 /// Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
-/// 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance.
+/// 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance,
+/// 9 smoothing weight.
 /// # Safety
 /// Follow the crate C caller contract.
 #[unsafe(no_mangle)]
@@ -73,6 +118,7 @@ pub unsafe extern "C" fn itofin_cubic_smile_query(
                 6 => smile.min_strike(),
                 7 => smile.max_strike(),
                 8 => smile.variance(x)?,
+                9 => smile.smoothing(),
                 _ => return Err(BindingError::invalid("unknown cubic smile query")),
             };
             output(out, value)
@@ -80,10 +126,11 @@ pub unsafe extern "C" fn itofin_cubic_smile_query(
     }
 }
 
-/// Series: 0 sample points, 1 node points, 2 node IVs, 3 sampled IVs,
-/// 4 node residuals, 5 segment coefficients flattened as (a, b, c) triples.
-/// A null `out` reports the required length. For series 3, `valid` receives 1
-/// when the sample is inside the domain.
+/// Series: 0 knot points, 1 knot points, 2 fitted knot IVs, 3 sampled knot IVs,
+/// 4 fitted-minus-knot residuals, 5 segment coefficients flattened as (a, b, c)
+/// triples; 6 observed strikes, 7 observed coordinates, 8 observed IVs,
+/// 9 observation residuals. A null `out` reports the required length. For
+/// series 3 and 9, `valid` receives 1 for entries inside the knot domain.
 /// # Safety
 /// Follow the crate C caller contract; `out` and `valid` must hold `capacity` slots.
 #[unsafe(no_mangle)]
@@ -101,10 +148,10 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
         with_context(ctx, error, |c| {
             check_ptr(out_len)?;
             let smile = c.get::<Shared<CubicSmileSection>>(id)?;
-            let sampled = if kind == 3 {
-                Some(smile.sampled_mid_ivs()?)
-            } else {
-                None
+            let sampled = match kind {
+                3 => Some(smile.sampled_mid_ivs()?),
+                9 => Some(smile.observation_residuals()?),
+                _ => None,
             };
             let residuals = if kind == 4 {
                 Some(smile.node_residuals()?)
@@ -120,9 +167,12 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
                 0 => smile.std_dev_points().len(),
                 1 => smile.node_std_dev_points().len(),
                 2 => smile.node_mid_ivs().len(),
-                3 => sampled.as_ref().map(|v| v.len()).unwrap_or(0),
+                3 | 9 => sampled.as_ref().map(|v| v.len()).unwrap_or(0),
                 4 => residuals.as_ref().map(|v| v.len()).unwrap_or(0),
                 5 => coefficients.as_ref().map(|v| v.len() * 3).unwrap_or(0),
+                6 => smile.observed_strikes().len(),
+                7 => smile.observed_std_dev_points().len(),
+                8 => smile.observed_mid_ivs().len(),
                 _ => return Err(BindingError::invalid("unknown cubic smile series")),
             };
             *out_len = length;
@@ -138,6 +188,9 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
                 1 => dest.copy_from_slice(smile.node_std_dev_points()),
                 2 => dest.copy_from_slice(smile.node_mid_ivs()),
                 4 => dest.copy_from_slice(&residuals.unwrap()),
+                6 => dest.copy_from_slice(smile.observed_strikes()),
+                7 => dest.copy_from_slice(smile.observed_std_dev_points()),
+                8 => dest.copy_from_slice(smile.observed_mid_ivs()),
                 5 => {
                     for (i, [a, b, c]) in coefficients.unwrap().into_iter().enumerate() {
                         dest[3 * i] = a;
@@ -145,7 +198,7 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
                         dest[3 * i + 2] = c;
                     }
                 }
-                3 => {
+                3 | 9 => {
                     check_ptr(valid)?;
                     let flags = std::slice::from_raw_parts_mut(valid, length);
                     for (i, value) in sampled.unwrap().into_iter().enumerate() {
@@ -165,5 +218,106 @@ pub unsafe extern "C" fn itofin_cubic_smile_series(
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ptr::{null, null_mut};
+
+    #[test]
+    fn sparse_default_fit_and_explicit_smoothing_cross_c_boundary() {
+        let mut ctx = Context::new();
+        let xs: [f64; 7] = [-1.4, -1.0, -0.6, 0.0, 0.6, 1.0, 1.4];
+        let strikes: Vec<_> = xs.iter().map(|x| 100.0 * (x * 0.2).exp()).collect();
+        let ivs: Vec<_> = xs.iter().map(|x| 0.3 + 0.02 * x * x).collect();
+        let mut handle = 0;
+        unsafe {
+            assert_eq!(
+                itofin_cubic_smile_new(
+                    &mut ctx,
+                    strikes.as_ptr(),
+                    7,
+                    ivs.as_ptr(),
+                    7,
+                    100.0,
+                    1.0,
+                    0.2,
+                    null(),
+                    0,
+                    0,
+                    &mut handle,
+                    null_mut(),
+                ),
+                0
+            );
+            let mut lambda = -1.0;
+            assert_eq!(
+                itofin_cubic_smile_query(&mut ctx, handle, 9, 0.0, &mut lambda, null_mut()),
+                0
+            );
+            assert_eq!(lambda, DEFAULT_SMILE_SMOOTHING);
+            let mut len = 0;
+            assert_eq!(
+                itofin_cubic_smile_series(
+                    &mut ctx,
+                    handle,
+                    1,
+                    null_mut(),
+                    null_mut(),
+                    0,
+                    &mut len,
+                    null_mut()
+                ),
+                0
+            );
+            assert_eq!(len, 9);
+            let mut output = 123;
+            assert_ne!(
+                itofin_cubic_smile_new_with_smoothing(
+                    &mut ctx,
+                    strikes.as_ptr(),
+                    7,
+                    ivs.as_ptr(),
+                    7,
+                    100.0,
+                    1.0,
+                    0.2,
+                    null(),
+                    0,
+                    0,
+                    0.0,
+                    &mut output,
+                    null_mut(),
+                ),
+                0
+            );
+            assert_eq!(output, 123);
+            assert_eq!(
+                itofin_cubic_smile_new_with_smoothing(
+                    &mut ctx,
+                    strikes.as_ptr(),
+                    7,
+                    ivs.as_ptr(),
+                    7,
+                    100.0,
+                    1.0,
+                    0.2,
+                    null(),
+                    0,
+                    0,
+                    0.05,
+                    &mut output,
+                    null_mut(),
+                ),
+                0
+            );
+            assert_eq!(
+                itofin_cubic_smile_query(&mut ctx, output, 9, 0.0, &mut lambda, null_mut()),
+                0
+            );
+            assert_eq!(lambda, 0.05);
+        }
     }
 }
