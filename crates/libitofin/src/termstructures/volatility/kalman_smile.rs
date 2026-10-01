@@ -596,6 +596,8 @@ pub fn transport(
     new_ctx: &SmileContext,
 ) -> QlResult<TransportResult> {
     validate_state(mean, covariance)?;
+    let old_ctx = SmileContext::new(old_ctx.forward, old_ctx.exercise_time, old_ctx.atm_vol)?;
+    let new_ctx = SmileContext::new(new_ctx.forward, new_ctx.exercise_time, new_ctx.atm_vol)?;
     if old_ctx == new_ctx {
         let mut id = [[0.0; N_KNOTS]; N_KNOTS];
         for i in 0..N_KNOTS {
@@ -1356,6 +1358,32 @@ mod tests {
             atm_vol: 0.5,
         };
         assert!(KalmanSmileSection::from_state(mean, cov, bad_ctx2, config).is_err());
+    }
+
+    #[test]
+    fn transport_rejects_unvalidated_contexts() {
+        let mean = [0.5; N_KNOTS];
+        let mut cov = [[0.0; N_KNOTS]; N_KNOTS];
+        for i in 0..N_KNOTS {
+            cov[i][i] = 0.01;
+        }
+
+        // Equal invalid contexts must not bypass validation via identity check
+        let bad_ctx = SmileContext {
+            forward: 0.0,
+            exercise_time: 0.25,
+            atm_vol: 0.5,
+        };
+        assert!(transport(&mean, &cov, &bad_ctx, &bad_ctx).is_err());
+
+        // Zero expiry or ATM vol must fail
+        let valid_ctx = SmileContext::new(100_000.0, 30.0 / 365.0, 0.6).unwrap();
+        let zero_expiry_ctx = SmileContext {
+            forward: 100_000.0,
+            exercise_time: 0.0,
+            atm_vol: 0.6,
+        };
+        assert!(transport(&mean, &cov, &valid_ctx, &zero_expiry_ctx).is_err());
     }
 
     #[test]

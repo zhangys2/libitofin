@@ -42,10 +42,10 @@ Porting this filter to native Rust in `libitofin` provides significant latency a
 The implementation lives in `crates/libitofin/src/termstructures/volatility/kalman_smile.rs` and implements the `SmileSection` trait.
 
 ```rust
-use crate::types::{Rate, Real, Time, Volatility};
+use crate::types::{Rate, Real, Size, Time, Volatility};
 use crate::errors::QlResult;
 
-pub const N_KNOTS: usize = 9;
+pub const N_KNOTS: Size = 9;
 pub const KNOTS: [Real; N_KNOTS] = [-3.0, -1.5, -1.0, -0.6, 0.0, 0.6, 1.0, 1.5, 3.0];
 pub const MAX_OVERHANG: Real = 0.25;
 pub const MAX_END_SLOPE: Real = 0.10;

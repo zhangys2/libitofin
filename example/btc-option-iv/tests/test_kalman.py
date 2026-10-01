@@ -247,7 +247,10 @@ def test_independent_expiries_snapshots_controls_and_retirement():
     manager.retire({other}, now_ms=NOW_MS)
     assert set(manager.snapshots(now=2)) == {other}
     manager.reset_all(now_ms=NOW_MS + 2000, now=2)
-    assert manager.snapshots(now=2)[other].reset_reason == "manual reset"
+    reset_snap = manager.snapshots(now=2)[other]
+    assert reset_snap.reset_reason == "manual reset"
+    assert reset_snap.knot_ivs is not None
+    assert reset_snap.status == "tracking"
 
 
 def test_gaps_grow_uncertainty_mark_stale_and_require_fresh_bootstrap():

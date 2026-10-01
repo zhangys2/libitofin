@@ -629,7 +629,7 @@ class FilterManager:
     def reset_all(self, *, now_ms, now):
         for expiry, state in self._filters.items():
             self._reset(state, "manual reset")
-            self._refresh(expiry, now_ms=now_ms, now=now, measurements=False)
+            self._refresh(expiry, now_ms=now_ms, now=now, measurements=True)
 
     def retire(self, active_expiries, *, now_ms):
         keep = {e for e in active_expiries if e > now_ms}
