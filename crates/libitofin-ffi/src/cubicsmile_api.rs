@@ -297,6 +297,8 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_query(
                 11 => smile.max_strike(),
                 12 => smile.right_wing().asymptotic_slope(),
                 13 => smile.left_wing().asymptotic_slope(),
+                14 => smile.butterfly_report().ramp_iterations as f64,
+                15 => smile.requested_smoothing(),
                 _ => {
                     return Err(BindingError::invalid(
                         "unknown total variance cubic smile query",
@@ -318,6 +320,8 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
     out_min_density: *mut f64,
     out_argmin_k: *mut f64,
     out_has_arbitrage: *mut u8,
+    out_final_smoothing: *mut f64,
+    out_ramp_iterations: *mut u32,
     error: *mut ItofinError,
 ) -> i32 {
     unsafe {
@@ -325,11 +329,23 @@ pub unsafe extern "C" fn itofin_total_variance_cubic_smile_check_arbitrage(
             check_ptr(out_min_density)?;
             check_ptr(out_argmin_k)?;
             check_ptr(out_has_arbitrage)?;
+            if !out_final_smoothing.is_null() {
+                check_ptr(out_final_smoothing)?;
+            }
+            if !out_ramp_iterations.is_null() {
+                check_ptr(out_ramp_iterations)?;
+            }
             let smile = c.get::<Shared<TotalVarianceCubicSmileSection>>(id)?;
             let report = smile.butterfly_report();
             *out_min_density = report.min_density;
             *out_argmin_k = report.argmin_k;
             *out_has_arbitrage = if report.has_arbitrage { 1 } else { 0 };
+            if !out_final_smoothing.is_null() {
+                *out_final_smoothing = report.final_smoothing;
+            }
+            if !out_ramp_iterations.is_null() {
+                *out_ramp_iterations = report.ramp_iterations as u32;
+            }
             Ok(())
         })
     }
@@ -484,6 +500,8 @@ mod tests {
             let mut min_d = 0.0;
             let mut arg_k = 0.0;
             let mut has_arb = 1;
+            let mut final_lambda = 0.0;
+            let mut ramp_iters = 99;
             assert_eq!(
                 itofin_total_variance_cubic_smile_check_arbitrage(
                     &mut ctx,
@@ -491,12 +509,30 @@ mod tests {
                     &mut min_d,
                     &mut arg_k,
                     &mut has_arb,
+                    &mut final_lambda,
+                    &mut ramp_iters,
                     null_mut(),
                 ),
                 0
             );
             assert_eq!(has_arb, 0);
             assert!(min_d >= 0.0);
+            assert_eq!(final_lambda, 0.01);
+            assert_eq!(ramp_iters, 0);
+
+            let mut query_lambda = 0.0;
+            assert_eq!(
+                itofin_total_variance_cubic_smile_query(
+                    &mut ctx,
+                    tv_handle,
+                    9,
+                    0.0,
+                    &mut query_lambda,
+                    null_mut(),
+                ),
+                0
+            );
+            assert_eq!(query_lambda, 0.01);
         }
     }
 }

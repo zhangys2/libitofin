@@ -65,4 +65,19 @@ func TestTotalVarianceCubicSmileSection(t *testing.T) {
 	if report.HasArbitrage {
 		t.Fatalf("expected no arbitrage, got report: %+v", report)
 	}
+	if report.FinalSmoothing <= 0.0 {
+		t.Fatalf("expected positive FinalSmoothing, got %v", report.FinalSmoothing)
+	}
+	smoothing, err := smile.Smoothing()
+	if err != nil || smoothing != report.FinalSmoothing {
+		t.Fatalf("expected Smoothing %v to match FinalSmoothing %v, err: %v", smoothing, report.FinalSmoothing, err)
+	}
+
+	// Strike domain checks
+	if _, err := smile.Volatility(0.0); err == nil {
+		t.Fatalf("expected error for strike 0.0")
+	}
+	if _, err := smile.Variance(-10.0); err == nil {
+		t.Fatalf("expected error for strike -10.0")
+	}
 }

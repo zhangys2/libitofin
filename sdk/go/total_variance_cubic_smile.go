@@ -8,9 +8,11 @@ import "unsafe"
 
 // ButterflyArbitrageReport holds diagnostics on risk-neutral density non-negativity.
 type ButterflyArbitrageReport struct {
-	MinDensity   float64
-	ArgminK      float64
-	HasArbitrage bool
+	MinDensity     float64
+	ArgminK        float64
+	HasArbitrage   bool
+	FinalSmoothing float64
+	RampIterations int
 }
 
 // TotalVarianceCubicSmileSection is a one-expiry cubic smile in total variance space with Roger Lee wing asymptotics.
@@ -76,7 +78,7 @@ func (v *TotalVarianceCubicSmileSection) TotalVarianceDerivative(logMoneyness fl
 	return v.query(3, logMoneyness)
 }
 
-// TotalVarianceSecondDerivative returns second derivative w''(k) = d^2w/dk^2.
+// TotalVarianceSecondDerivative returns second derivative w”(k) = d^2w/dk^2.
 func (v *TotalVarianceCubicSmileSection) TotalVarianceSecondDerivative(logMoneyness float64) (float64, error) {
 	return v.query(4, logMoneyness)
 }
@@ -128,20 +130,23 @@ func (v *TotalVarianceCubicSmileSection) LeftWingSlope() (float64, error) {
 
 // ButterflyReport checks for butterfly arbitrage across the smile.
 func (v *TotalVarianceCubicSmileSection) ButterflyReport() (*ButterflyArbitrageReport, error) {
-	var minD, argK C.double
+	var minD, argK, finalSmoothing C.double
 	var hasArb C.uint8_t
+	var rampIterations C.uint32_t
 	err := v.session.invoke(func() error {
 		var e C.ItofinError
 		return ffiError(C.itofin_total_variance_cubic_smile_check_arbitrage(
-			v.session.ctx, C.uint64_t(v.id), &minD, &argK, &hasArb, &e,
+			v.session.ctx, C.uint64_t(v.id), &minD, &argK, &hasArb, &finalSmoothing, &rampIterations, &e,
 		), &e)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &ButterflyArbitrageReport{
-		MinDensity:   float64(minD),
-		ArgminK:      float64(argK),
-		HasArbitrage: hasArb != 0,
+		MinDensity:     float64(minD),
+		ArgminK:        float64(argK),
+		HasArbitrage:   hasArb != 0,
+		FinalSmoothing: float64(finalSmoothing),
+		RampIterations: int(rampIterations),
 	}, nil
 }

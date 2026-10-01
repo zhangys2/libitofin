@@ -107,3 +107,20 @@ def test_invalid_arguments_raise_itofin_error():
 
     with pytest.raises(ItofinError):
         TotalVarianceCubicSmileSection([90.0, 100.0], [0.2, 0.2], 0.0, _EXPIRY, _ATM_VOL)
+
+    # Zero mid IV
+    with pytest.raises(ItofinError):
+        TotalVarianceCubicSmileSection([90.0, 100.0], [0.0, 0.2], _FORWARD, _EXPIRY, _ATM_VOL)
+
+    smile = _sample_smile()
+    with pytest.raises(ItofinError):
+        smile.volatility(0.0)
+
+    with pytest.raises(ItofinError):
+        smile.volatility(-10.0)
+
+    with pytest.raises(ItofinError):
+        smile.variance(0.0)
+
+    with pytest.raises(ItofinError):
+        smile.variance(-5.0)

@@ -16,6 +16,7 @@ __all__ = [
     "BlackVolTermStructure",
     "BlackVolTimeExtrapolation",
     "BondPriceType",
+    "ButterflyArbitrageReport",
     "CapFloorTermVolCurve",
     "CapFloorTermVolSurface",
     "ConstantOptionletVolatility",
@@ -73,6 +74,7 @@ __all__ = [
     "SwapRateHelper",
     "SwaptionVolatilityMatrix",
     "SwaptionVolatilityStructure",
+    "TotalVarianceCubicSmileSection",
     "UpfrontCdsHelper",
     "VolatilityType",
     "YearOnYearInflationSwapHelper",
@@ -316,6 +318,47 @@ class BlackVolTermStructure:
     def disable_extrapolation(self) -> None:
         r"""
         Forbid extrapolation past the maximum date and time.
+        """
+
+@typing.final
+class ButterflyArbitrageReport:
+    r"""
+    Diagnostic report for butterfly arbitrage verification across a smile section.
+    """
+    @property
+    def min_density(self) -> builtins.float:
+        r"""
+        Global minimum of the Durrleman density function g(k).
+        """
+    @property
+    def argmin_k(self) -> builtins.float:
+        r"""
+        Log-moneyness coordinate k where min_density occurs.
+        """
+    @property
+    def has_arbitrage(self) -> builtins.bool:
+        r"""
+        Whether butterfly arbitrage was detected: min_density < -tolerance.
+        """
+    @property
+    def tolerance(self) -> builtins.float:
+        r"""
+        Numerical tolerance threshold applied (default 1e-8).
+        """
+    @property
+    def points_checked(self) -> builtins.int:
+        r"""
+        Total evaluation points checked (knots + interior + wings).
+        """
+    @property
+    def ramp_iterations(self) -> builtins.int:
+        r"""
+        Number of regularization ramp iterations executed.
+        """
+    @property
+    def final_smoothing(self) -> builtins.float:
+        r"""
+        Final smoothing parameter lambda used for the fit.
         """
 
 @typing.final
@@ -3615,6 +3658,95 @@ class SwaptionVolatilityStructure:
         Raises:
             ItofinError: On a moving surface whose Settings has no evaluation
                 date set.
+        """
+
+@typing.final
+class TotalVarianceCubicSmileSection:
+    r"""
+    Total implied variance cubic smile with Roger Lee wing asymptotics.
+    """
+    @property
+    def butterfly_report(self) -> ButterflyArbitrageReport:
+        r"""
+        Return the butterfly arbitrage verification report.
+        """
+    @property
+    def forward(self) -> builtins.float:
+        r"""
+        Forward price.
+        """
+    @property
+    def atm_vol(self) -> builtins.float:
+        r"""
+        ATM volatility.
+        """
+    @property
+    def exercise_time(self) -> builtins.float:
+        r"""
+        Expiry time in years.
+        """
+    @property
+    def smoothing(self) -> builtins.float:
+        r"""
+        Smoothing parameter lambda.
+        """
+    @property
+    def min_strike(self) -> builtins.float:
+        r"""
+        Minimum knot strike.
+        """
+    @property
+    def max_strike(self) -> builtins.float:
+        r"""
+        Maximum knot strike.
+        """
+    @property
+    def knots_k(self) -> builtins.list[builtins.float]:
+        r"""
+        Knots in log-moneyness coordinates.
+        """
+    @property
+    def fitted_total_variances(self) -> builtins.list[builtins.float]:
+        r"""
+        Fitted total variance ordinates at knots.
+        """
+    @property
+    def right_wing_slope(self) -> builtins.float:
+        r"""
+        Right wing asymptotic slope beta_R.
+        """
+    @property
+    def left_wing_slope(self) -> builtins.float:
+        r"""
+        Left wing asymptotic slope beta_L.
+        """
+    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, smoothing: builtins.float = 0.01, arbitrage_repair: builtins.bool = True) -> None:
+        r"""
+        Fit a total variance cubic smile to paired strike/mid-IV observations.
+        """
+    def volatility(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a strike.
+        """
+    def variance(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the Black variance at a strike.
+        """
+    def total_variance(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return total variance w(k) at log-moneyness k = ln(K/F).
+        """
+    def total_variance_derivative(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return first derivative w'(k) = dw/dk at log-moneyness k.
+        """
+    def total_variance_second_derivative(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return second derivative w''(k) = d^2w/dk^2 at log-moneyness k.
+        """
+    def durrleman_density(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return Durrleman risk-neutral density g(k) at log-moneyness k.
         """
 
 @typing.final

@@ -39,6 +39,37 @@ pub struct RogerLeeWingConfig {
     pub transition_width: Option<Real>,
 }
 
+impl RogerLeeWingConfig {
+    pub fn new(
+        epsilon: Real,
+        mode: WingExtrapolationMode,
+        transition_width: Option<Real>,
+    ) -> QlResult<Self> {
+        let config = Self {
+            epsilon,
+            mode,
+            transition_width,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> QlResult<()> {
+        require!(
+            self.epsilon.is_finite() && self.epsilon > 0.0 && self.epsilon < 2.0,
+            "Roger Lee epsilon must be finite and in (0, 2), got {}",
+            self.epsilon
+        );
+        if let Some(w) = self.transition_width {
+            require!(
+                w.is_finite() && w > 0.0,
+                "Roger Lee transition width must be positive and finite, got {w}"
+            );
+        }
+        Ok(())
+    }
+}
+
 impl Default for RogerLeeWingConfig {
     fn default() -> Self {
         Self {
@@ -68,24 +99,37 @@ impl RogerLeeWing {
         config: &RogerLeeWingConfig,
         default_delta_k: Real,
     ) -> Self {
-        let max_slope = 2.0 - config.epsilon;
+        let max_slope = if config.epsilon.is_finite() && config.epsilon < 2.0 {
+            (2.0 - config.epsilon).max(0.0)
+        } else {
+            0.0
+        };
         let beta = match config.mode {
             WingExtrapolationMode::Flat => 0.0,
             WingExtrapolationMode::AutoSmooth | WingExtrapolationMode::ClampedLinear => {
-                w_prime_max.clamp(0.0, max_slope)
+                if max_slope > 0.0 {
+                    w_prime_max.clamp(0.0, max_slope)
+                } else {
+                    0.0
+                }
             }
         };
         let needs_bridge =
             config.mode == WingExtrapolationMode::AutoSmooth && (w_prime_max - beta).abs() > 1e-12;
         let transition_width = if needs_bridge {
-            config.transition_width.unwrap_or(default_delta_k).max(1e-4)
+            let mut width = config.transition_width.unwrap_or(default_delta_k).max(1e-4);
+            if w_prime_max < 0.0 && w_max > 0.0 {
+                let max_safe_width = 1.8 * w_max / (-w_prime_max);
+                width = width.min(max_safe_width).max(1e-4);
+            }
+            width
         } else {
             0.0
         };
 
         Self {
             boundary_k: k_max,
-            boundary_w: w_max,
+            boundary_w: w_max.max(0.0),
             boundary_slope: w_prime_max,
             asymptotic_slope: beta,
             transition_width,
@@ -100,24 +144,37 @@ impl RogerLeeWing {
         config: &RogerLeeWingConfig,
         default_delta_k: Real,
     ) -> Self {
-        let min_slope = -2.0 + config.epsilon;
+        let min_slope = if config.epsilon.is_finite() && config.epsilon < 2.0 {
+            (-2.0 + config.epsilon).min(0.0)
+        } else {
+            0.0
+        };
         let beta = match config.mode {
             WingExtrapolationMode::Flat => 0.0,
             WingExtrapolationMode::AutoSmooth | WingExtrapolationMode::ClampedLinear => {
-                w_prime_min.clamp(min_slope, 0.0)
+                if min_slope < 0.0 {
+                    w_prime_min.clamp(min_slope, 0.0)
+                } else {
+                    0.0
+                }
             }
         };
         let needs_bridge =
             config.mode == WingExtrapolationMode::AutoSmooth && (w_prime_min - beta).abs() > 1e-12;
         let transition_width = if needs_bridge {
-            config.transition_width.unwrap_or(default_delta_k).max(1e-4)
+            let mut width = config.transition_width.unwrap_or(default_delta_k).max(1e-4);
+            if w_prime_min > 0.0 && w_min > 0.0 {
+                let max_safe_width = 1.8 * w_min / w_prime_min;
+                width = width.min(max_safe_width).max(1e-4);
+            }
+            width
         } else {
             0.0
         };
 
         Self {
             boundary_k: k_min,
-            boundary_w: w_min,
+            boundary_w: w_min.max(0.0),
             boundary_slope: w_prime_min,
             asymptotic_slope: beta,
             transition_width,
@@ -131,25 +188,26 @@ impl RogerLeeWing {
         let wpb = self.boundary_slope;
         let beta = self.asymptotic_slope;
 
-        if dk <= 0.0 {
-            return wb + beta * (k - self.boundary_k);
-        }
-
-        let (dist, sign) = if self.is_right_wing {
-            (k - self.boundary_k, 1.0)
+        let w = if dk <= 0.0 {
+            wb + beta * (k - self.boundary_k)
         } else {
-            (self.boundary_k - k, -1.0)
+            let (dist, sign) = if self.is_right_wing {
+                (k - self.boundary_k, 1.0)
+            } else {
+                (self.boundary_k - k, -1.0)
+            };
+
+            let u = dist / dk;
+            if u <= 1.0 {
+                let poly = wpb * u + (beta - wpb) * (u * u * u - 0.5 * u * u * u * u);
+                wb + sign * dk * poly
+            } else {
+                let w1 = wb + sign * dk * 0.5 * (wpb + beta);
+                let k1 = self.boundary_k + sign * dk;
+                w1 + beta * (k - k1)
+            }
         };
-
-        let u = dist / dk;
-        if u <= 1.0 {
-            let poly = wpb * u + (beta - wpb) * (u * u * u - 0.5 * u * u * u * u);
-            wb + sign * dk * poly
-        } else {
-            let w1 = wb + sign * dk * 0.5 * (wpb + beta);
-            let k1 = self.boundary_k + sign * dk;
-            w1 + beta * (k - k1)
-        }
+        w.max(0.0)
     }
 
     pub fn derivative(&self, k: Real) -> Real {
@@ -280,6 +338,7 @@ pub struct TotalVarianceCubicSmileSection {
     forward: Rate,
     exercise_time: Time,
     atm_vol: Volatility,
+    requested_smoothing: Real,
     smoothing: Real,
     std_dev_points: Vec<Real>,
     knots_k: Vec<Real>,
@@ -356,6 +415,7 @@ impl TotalVarianceCubicSmileSection {
         arbitrage_repair: bool,
         fallback_policy: ArbitrageFallbackPolicy,
     ) -> QlResult<Self> {
+        wing_config.validate()?;
         require!(
             strikes.len() == mid_ivs.len(),
             "strikes and mid_ivs must have equal length ({} vs {})",
@@ -424,11 +484,15 @@ impl TotalVarianceCubicSmileSection {
         for (strike, mid_iv) in strikes.into_iter().zip(mid_ivs) {
             require!(
                 strike.is_finite() && strike > 0.0,
-                "strikes must be finite and positive"
+                "strikes must be finite and positive, got {strike}"
             );
             require!(
-                mid_iv.is_finite() && mid_iv >= 0.0,
-                "mid_ivs must be finite and nonnegative"
+                mid_iv.is_finite() && mid_iv > 0.0,
+                "mid_ivs must be finite and positive, got {mid_iv}"
+            );
+            require!(
+                2.0 * mid_iv * exercise_time > 1e-12,
+                "mid_iv {mid_iv} with exercise_time {exercise_time} is too small"
             );
             let k = (strike / forward).ln();
             require!(k.is_finite(), "log-moneyness coordinate must be finite");
@@ -482,7 +546,7 @@ impl TotalVarianceCubicSmileSection {
             // Effective curvature penalty: lambda_eff = lambda * atm_vol / (4 * sqrt(T))
             let lambda_eff = current_smoothing * atm_vol / (4.0 * exercise_time.sqrt());
 
-            let fitted_w = fit_knot_ordinates_total_variance(
+            let mut fitted_w = fit_knot_ordinates_total_variance(
                 &knots_k,
                 &in_range_k,
                 &in_range_ivs,
@@ -490,7 +554,7 @@ impl TotalVarianceCubicSmileSection {
                 lambda_eff,
             )?;
 
-            let interpolation = CubicInterpolation::new(
+            let mut interpolation = CubicInterpolation::new(
                 knots_k.clone(),
                 fitted_w.clone(),
                 CubicDerivativeApprox::Spline,
@@ -499,14 +563,14 @@ impl TotalVarianceCubicSmileSection {
             let w_prime_min = interpolation.derivative(k_min)?;
             let w_prime_max = interpolation.derivative(k_max)?;
 
-            let left_wing = RogerLeeWing::new_left(
+            let mut left_wing = RogerLeeWing::new_left(
                 k_min,
                 fitted_w[0],
                 w_prime_min,
                 &wing_config,
                 default_delta_k,
             );
-            let right_wing = RogerLeeWing::new_right(
+            let mut right_wing = RogerLeeWing::new_right(
                 k_max,
                 fitted_w[fitted_w.len() - 1],
                 w_prime_max,
@@ -536,8 +600,63 @@ impl TotalVarianceCubicSmileSection {
                             );
                         }
                         ArbitrageFallbackPolicy::AffineFallback => {
-                            // Affine line fit w(k) = w0 + beta * k with slope clamped to Roger Lee bounds
-                            // Handled cleanly by smoothing -> very large
+                            // Least-squares fit w(k) = w0 + beta * k on in-range observations
+                            let n = in_range_k.len() as Real;
+                            let in_range_w: Vec<Real> = in_range_ivs
+                                .iter()
+                                .map(|&iv| iv * iv * exercise_time)
+                                .collect();
+                            let mean_k = in_range_k.iter().sum::<Real>() / n;
+                            let mean_w = in_range_w.iter().sum::<Real>() / n;
+                            let mut cov_kw = 0.0;
+                            let mut var_k = 0.0;
+                            for (&ki, &wi) in in_range_k.iter().zip(&in_range_w) {
+                                cov_kw += (ki - mean_k) * (wi - mean_w);
+                                var_k += (ki - mean_k) * (ki - mean_k);
+                            }
+                            let raw_beta = if var_k > 1e-14 { cov_kw / var_k } else { 0.0 };
+                            let beta_min = -2.0 + wing_config.epsilon;
+                            let beta_max = 2.0 - wing_config.epsilon;
+                            let beta = raw_beta.clamp(beta_min, beta_max);
+                            let mut w0 = mean_w - beta * mean_k;
+                            for &kj in &knots_k {
+                                let val = w0 + beta * kj;
+                                if val < 0.0 {
+                                    w0 -= val;
+                                }
+                            }
+                            fitted_w = knots_k
+                                .iter()
+                                .map(|&kj| (w0 + beta * kj).max(0.0))
+                                .collect();
+                            interpolation = CubicInterpolation::new(
+                                knots_k.clone(),
+                                fitted_w.clone(),
+                                CubicDerivativeApprox::Spline,
+                            )?;
+                            left_wing = RogerLeeWing::new_left(
+                                k_min,
+                                fitted_w[0],
+                                beta,
+                                &wing_config,
+                                default_delta_k,
+                            );
+                            right_wing = RogerLeeWing::new_right(
+                                k_max,
+                                fitted_w[fitted_w.len() - 1],
+                                beta,
+                                &wing_config,
+                                default_delta_k,
+                            );
+                            report = check_butterfly_arbitrage_internal(
+                                &interpolation,
+                                &knots_k,
+                                &left_wing,
+                                &right_wing,
+                                DEFAULT_BUTTERFLY_TOLERANCE,
+                            );
+                            report.ramp_iterations = ramp_iterations;
+                            report.final_smoothing = current_smoothing;
                         }
                     }
                 }
@@ -555,7 +674,8 @@ impl TotalVarianceCubicSmileSection {
                     forward,
                     exercise_time,
                     atm_vol,
-                    smoothing,
+                    requested_smoothing: smoothing,
+                    smoothing: current_smoothing,
                     std_dev_points,
                     knots_k,
                     fitted_w,
@@ -582,18 +702,21 @@ impl TotalVarianceCubicSmileSection {
     }
 
     pub fn total_variance_at_log_moneyness(&self, k: Real) -> QlResult<Real> {
+        require!(k.is_finite(), "log-moneyness must be finite, got {k}");
         let k_min = self.knots_k[0];
         let k_max = self.knots_k[self.knots_k.len() - 1];
-        if k < k_min {
-            Ok(self.left_wing.total_variance(k))
+        let w = if k < k_min {
+            self.left_wing.total_variance(k)
         } else if k > k_max {
-            Ok(self.right_wing.total_variance(k))
+            self.right_wing.total_variance(k)
         } else {
-            self.interpolation.value(k)
-        }
+            self.interpolation.value(k)?
+        };
+        Ok(w.max(0.0))
     }
 
     pub fn total_variance_derivative(&self, k: Real) -> QlResult<Real> {
+        require!(k.is_finite(), "log-moneyness must be finite, got {k}");
         let k_min = self.knots_k[0];
         let k_max = self.knots_k[self.knots_k.len() - 1];
         if k < k_min {
@@ -606,6 +729,7 @@ impl TotalVarianceCubicSmileSection {
     }
 
     pub fn total_variance_second_derivative(&self, k: Real) -> QlResult<Real> {
+        require!(k.is_finite(), "log-moneyness must be finite, got {k}");
         let k_min = self.knots_k[0];
         let k_max = self.knots_k[self.knots_k.len() - 1];
         if k < k_min {
@@ -618,6 +742,7 @@ impl TotalVarianceCubicSmileSection {
     }
 
     pub fn durrleman_density(&self, k: Real) -> QlResult<Real> {
+        require!(k.is_finite(), "log-moneyness must be finite, got {k}");
         let w = self.total_variance_at_log_moneyness(k)?;
         if w <= 0.0 {
             return Ok(-1.0);
@@ -662,6 +787,10 @@ impl TotalVarianceCubicSmileSection {
         self.smoothing
     }
 
+    pub fn requested_smoothing(&self) -> Real {
+        self.requested_smoothing
+    }
+
     pub fn std_dev_points(&self) -> &[Real] {
         &self.std_dev_points
     }
@@ -701,12 +830,20 @@ impl SmileSection for TotalVarianceCubicSmileSection {
     }
 
     fn volatility_impl(&self, strike: Rate) -> QlResult<Volatility> {
+        require!(
+            strike.is_finite() && strike > 0.0,
+            "strike must be positive and finite, got {strike}"
+        );
         let k = (strike / self.forward).ln();
         let w = self.total_variance_at_log_moneyness(k)?;
         Ok((w.max(0.0) / self.exercise_time).sqrt())
     }
 
     fn variance(&self, strike: Rate) -> QlResult<Real> {
+        require!(
+            strike.is_finite() && strike > 0.0,
+            "strike must be positive and finite, got {strike}"
+        );
         let k = (strike / self.forward).ln();
         self.total_variance_at_log_moneyness(k)
     }
@@ -1182,5 +1319,173 @@ mod tests {
         assert_eq!(wing.asymptotic_slope, 0.0);
         assert_eq!(wing.derivative(10.0), 0.0);
         assert_eq!(wing.second_derivative(10.0), 0.0);
+    }
+
+    #[test]
+    fn test_call_wing_only_quotes_variance_non_negative_and_option_price_no_nan() {
+        use crate::option::OptionType;
+        let forward: Real = 100.0;
+        let expiry: Real = 0.5;
+        let atm_vol: Real = 0.20;
+        let scale: Real = atm_vol * expiry.sqrt();
+
+        // Call-wing-only quotes
+        let x_points: [Real; 5] = [0.0, 0.6, 1.0, 1.5, 2.5];
+        let mid_ivs = vec![0.20, 0.24, 0.28, 0.34, 0.45];
+        let strikes: Vec<Real> = x_points.iter().map(|&x| forward * (x * scale).exp()).collect();
+
+        let section = TotalVarianceCubicSmileSection::new(
+            strikes,
+            mid_ivs,
+            forward,
+            expiry,
+            atm_vol,
+        )
+        .expect("Call-wing smile should fit successfully");
+
+        // Check deep OTM put strikes where w dipped negative previously
+        for strike in [10.0, 25.0, 50.0, 75.0, 90.0, 100.0, 120.0, 150.0, 200.0] {
+            let var = section.variance(strike).expect("Variance should succeed");
+            assert!(var >= 0.0, "Variance at {strike} must be nonnegative, got {var}");
+            let vol = section.volatility(strike).expect("Volatility should succeed");
+            assert!(vol >= 0.0 && vol.is_finite(), "Volatility at {strike} must be finite, got {vol}");
+            let call_price = section.option_price(strike, OptionType::Call, 1.0).expect("Call price should succeed");
+            assert!(call_price.is_finite() && !call_price.is_nan(), "Call price must not be NaN at {strike}");
+            let put_price = section.option_price(strike, OptionType::Put, 1.0).expect("Put price should succeed");
+            assert!(put_price.is_finite() && !put_price.is_nan(), "Put price must not be NaN at {strike}");
+        }
+    }
+
+    #[test]
+    fn test_affine_fallback_eliminates_arbitrage() {
+        let forward = 100.0;
+        let expiry = 1.0;
+        let atm_vol = 0.30;
+        let strikes = vec![85.0, 92.0, 96.0, 100.0, 104.0, 108.0, 115.0];
+        let ivs = vec![0.55, 0.42, 0.28, 0.29, 0.32, 0.45, 0.58];
+
+        let section = TotalVarianceCubicSmileSection::with_options(
+            strikes,
+            ivs,
+            forward,
+            expiry,
+            atm_vol,
+            DEFAULT_STD_DEV_POINTS.to_vec(),
+            1e-5,
+            RogerLeeWingConfig::default(),
+            true,
+            ArbitrageFallbackPolicy::AffineFallback,
+        )
+        .expect("AffineFallback fit should succeed");
+
+        assert!(
+            !section.butterfly_report().has_arbitrage,
+            "AffineFallback must eliminate butterfly arbitrage, report: {:?}",
+            section.butterfly_report()
+        );
+        let d2 = section.total_variance_second_derivative(0.0).expect("Second derivative");
+        assert!(d2.abs() < 1e-6, "Affine line should have zero second derivative, got {d2}");
+    }
+
+    #[test]
+    fn test_strike_and_log_moneyness_domain_checks() {
+        let forward = 100.0;
+        let expiry = 1.0;
+        let atm_vol = 0.20;
+        let strikes = vec![90.0, 100.0, 110.0];
+        let ivs = vec![0.22, 0.20, 0.22];
+
+        let section = TotalVarianceCubicSmileSection::new(strikes, ivs, forward, expiry, atm_vol)
+            .expect("Fit should succeed");
+
+        assert!(section.volatility(0.0).is_err());
+        assert!(section.volatility(-10.0).is_err());
+        assert!(section.volatility(f64::NAN).is_err());
+        assert!(section.volatility(f64::INFINITY).is_err());
+        assert!(section.variance(0.0).is_err());
+        assert!(section.variance(-5.0).is_err());
+        assert!(section.variance(f64::NAN).is_err());
+        assert!(section.total_variance_at_log_moneyness(f64::NAN).is_err());
+        assert!(section.total_variance_derivative(f64::NAN).is_err());
+        assert!(section.total_variance_second_derivative(f64::INFINITY).is_err());
+        assert!(section.durrleman_density(f64::NAN).is_err());
+    }
+
+    #[test]
+    fn test_zero_and_tiny_mid_iv_rejected() {
+        let forward = 100.0;
+        let expiry = 1.0;
+        let atm_vol = 0.20;
+
+        let err_zero = TotalVarianceCubicSmileSection::new(
+            vec![90.0, 100.0, 110.0],
+            vec![0.0, 0.20, 0.22],
+            forward,
+            expiry,
+            atm_vol,
+        );
+        match err_zero {
+            Err(e) => assert!(e.to_string().contains("positive"), "Expected error about positive mid_iv"),
+            Ok(_) => panic!("Expected error for zero mid_iv"),
+        }
+
+        let err_tiny = TotalVarianceCubicSmileSection::new(
+            vec![90.0, 100.0, 110.0],
+            vec![1e-16, 0.20, 0.22],
+            forward,
+            expiry,
+            atm_vol,
+        );
+        match err_tiny {
+            Err(e) => assert!(e.to_string().contains("too small"), "Expected error about too small mid_iv"),
+            Ok(_) => panic!("Expected error for tiny mid_iv"),
+        }
+    }
+
+    #[test]
+    fn test_repaired_section_smoothing_matches_report() {
+        let forward = 100.0;
+        let expiry = 1.0;
+        let atm_vol = 0.30;
+        let strikes = vec![85.0, 92.0, 96.0, 100.0, 104.0, 108.0, 115.0];
+        let ivs = vec![0.55, 0.42, 0.28, 0.29, 0.32, 0.45, 0.58];
+
+        let section = TotalVarianceCubicSmileSection::with_options(
+            strikes,
+            ivs,
+            forward,
+            expiry,
+            atm_vol,
+            DEFAULT_STD_DEV_POINTS.to_vec(),
+            1e-5,
+            RogerLeeWingConfig::default(),
+            true,
+            ArbitrageFallbackPolicy::AllowWithReport,
+        )
+        .expect("Fit should succeed");
+
+        assert_eq!(section.smoothing(), section.butterfly_report().final_smoothing);
+        assert_eq!(section.requested_smoothing(), 1e-5);
+    }
+
+    #[test]
+    fn test_bad_roger_lee_config_rejected() {
+        assert!(RogerLeeWingConfig::new(3.0, WingExtrapolationMode::AutoSmooth, None).is_err());
+        assert!(RogerLeeWingConfig::new(-0.1, WingExtrapolationMode::AutoSmooth, None).is_err());
+        assert!(RogerLeeWingConfig::new(0.0, WingExtrapolationMode::AutoSmooth, None).is_err());
+        assert!(RogerLeeWingConfig::new(f64::NAN, WingExtrapolationMode::AutoSmooth, None).is_err());
+        assert!(RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(-0.5)).is_err());
+        assert!(RogerLeeWingConfig::new(1e-4, WingExtrapolationMode::AutoSmooth, Some(0.0)).is_err());
+
+        // Defensive check: direct RogerLeeWing construction with out-of-range epsilon does NOT panic
+        let bad_config = RogerLeeWingConfig {
+            epsilon: 3.0,
+            mode: WingExtrapolationMode::AutoSmooth,
+            transition_width: None,
+        };
+        let right_wing = RogerLeeWing::new_right(0.5, 0.05, 2.5, &bad_config, 0.2);
+        assert_eq!(right_wing.asymptotic_slope, 0.0);
+        let left_wing = RogerLeeWing::new_left(-0.5, 0.05, -2.5, &bad_config, 0.2);
+        assert_eq!(left_wing.asymptotic_slope, 0.0);
     }
 }

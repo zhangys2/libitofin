@@ -2314,6 +2314,8 @@ int32_t itofin_total_variance_cubic_smile_check_arbitrage(struct ItofinContext *
                                                           double *out_min_density,
                                                           double *out_argmin_k,
                                                           uint8_t *out_has_arbitrage,
+                                                          double *out_final_smoothing,
+                                                          uint32_t *out_ramp_iterations,
                                                           struct ItofinError *error);
 
 /**
