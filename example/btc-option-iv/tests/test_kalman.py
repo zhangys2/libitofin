@@ -400,7 +400,7 @@ def test_skew_shift_replay_is_finite_without_claiming_a_level_reset():
     assert any(d.status == "gated" for d in view.diagnostics) or view.resets > 0
 
 
-def test_reference_only_forward_and_time_transport_preserves_a_strike_space_line():
+def test_reference_only_forward_and_time_transport_preserves_the_total_variance_reference():
     manager = FilterManager(FilterConfig(process_iv_rate=0))
     originals = [quote(x, iv=0.3 + 0.02 * x) for x in [-1, 0]]
     for row, instrument in originals:

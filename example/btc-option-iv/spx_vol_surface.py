@@ -16,6 +16,7 @@ def _():
     import pandas as pd
     from btc_option_iv.kalman import FilterConfig
     from btc_option_iv.live import LiveFeedController
+    from btc_option_iv.reference import butterfly_markdown
     from btc_option_iv.views import (
         make_quotes_dataframe,
         make_smile_figure,
@@ -29,6 +30,7 @@ def _():
         FilterConfig,
         LiveFeedController,
         SpxFeedController,
+        butterfly_markdown,
         make_quotes_dataframe,
         make_smile_figure,
         make_smile_reader,
@@ -370,6 +372,7 @@ def _(
     btc_error,
     btc_expiry_selector,
     btc_snapshot,
+    butterfly_markdown,
     make_quotes_dataframe,
     make_smile_figure,
     make_spx_smile_figure,
@@ -390,11 +393,11 @@ def _(
         spx_status_md = mo.md(f"**SPX Status:** {spx_snapshot.get('status', 'Waiting for SPX data...')}")
     else:
         view = spx_analysis["view"]
-        butterfly_md = ""
-        if spx_analysis.get("butterfly_report"):
-            rep = spx_analysis["butterfly_report"]
-            status_emoji = "⚠️ Arbitrage Detected" if rep.has_arbitrage else "✅ Arbitrage-Free"
-            butterfly_md = f"**Durrleman Butterfly Arbitrage:** {status_emoji} · **Min Density $g(k)$:** `{rep.min_density:.4f}` · **Final $\\lambda$:** `{rep.final_smoothing}` (ramps: `{rep.ramp_iterations}`)<br>"
+        butterfly_md = butterfly_markdown(
+            spx_analysis.get("butterfly_report"), label="Durrleman Butterfly Arbitrage"
+        )
+        if butterfly_md:
+            butterfly_md += "<br>"
 
         hours = spx_analysis["time_to_close_hours"]
         h_int = int(hours)
@@ -486,11 +489,9 @@ def _(
         _age = btc_analysis["last_accepted_age"]
         _age_text = f"{_age:.1f}s" if _age is not None else "not initialized"
 
-        _butterfly_text = ""
-        if btc_analysis.get("butterfly_report"):
-            _rep = btc_analysis["butterfly_report"]
-            _arb_status = "⚠️ Arbitrage detected" if _rep.has_arbitrage else "✅ Arbitrage-free"
-            _butterfly_text = f"<br>**Total variance smile:** {_arb_status} (min g(k) = {_rep.min_density:.4f}, final $\\lambda$ = {_rep.final_smoothing}, ramps = {_rep.ramp_iterations})"
+        _butterfly_text = butterfly_markdown(btc_analysis.get("butterfly_report"))
+        if _butterfly_text:
+            _butterfly_text = "<br>" + _butterfly_text
 
         btc_smile_md = mo.md(
             textwrap.dedent(f"""
@@ -554,11 +555,6 @@ def _(
         )
 
     final_layout
-    return
-
-
-@app.cell
-def _():
     return
 
 

@@ -10,7 +10,8 @@ import plotly.graph_objects as go
 from scipy.interpolate import griddata
 from scipy.spatial import QhullError
 
-from .kalman import KNOTS, basis_matrix
+from .kalman import KNOTS
+from .reference import butterfly_report, reference_vol
 
 MAX_QUOTE_AGE_SECONDS = 10.0
 QUOTE_TABLE_LIMIT = 100
@@ -205,15 +206,7 @@ def make_smile_reader(snapshot: dict, expiry_timestamp_ms: int | None, *, now_ms
         x = float(context.coordinates([o.strike])[0])
         in_range = -3 <= x <= 3
         filtered = float(view.volatility([x], display=False)[0]) if in_range else None
-        if in_range:
-            if getattr(view, "reference_section", None) is not None:
-                reference = view.reference_section.volatility(o.strike)
-            elif view.reference_ivs is not None:
-                reference = max(0.0, float((basis_matrix([x]) @ view.reference_ivs)[0]))
-            else:
-                reference = None
-        else:
-            reference = None
+        reference = reference_vol(view, o.strike) if in_range else None
         observation_rows.append(
             {
                 "instrument": o.instrument,
@@ -245,13 +238,7 @@ def make_smile_reader(snapshot: dict, expiry_timestamp_ms: int | None, *, now_ms
         if not live
         else ("stale" if age is not None and age >= 10 else view.status)
     )
-    ref_sec = getattr(view, "reference_section", None)
-    butterfly_report = None
-    if ref_sec is not None:
-        try:
-            butterfly_report = ref_sec.butterfly_report
-        except Exception:
-            pass
+    ref_sec = view.reference_section
     return {
         "view": view,
         "expiry_timestamp_ms": expiry_timestamp_ms,
@@ -259,7 +246,7 @@ def make_smile_reader(snapshot: dict, expiry_timestamp_ms: int | None, *, now_ms
         "exercise_time": context.exercise_time,
         "atm_vol": context.atm_vol,
         "smoothing": ref_sec.smoothing if ref_sec is not None else 0.01,
-        "butterfly_report": butterfly_report,
+        "butterfly_report": butterfly_report(view),
         "reference_section": ref_sec,
         "filter_status": status,
         "last_accepted_age": age,
@@ -288,27 +275,16 @@ def make_smile_figure(analysis: dict | None, error: str | None = None):
         plot_max = min(3.0, float(support.max())) if len(support) else -1.0
         if plot_min <= plot_max:
             x = np.linspace(plot_min, plot_max, 200)
-            ref_sec = getattr(view, "reference_section", None)
-            if ref_sec is not None:
-                strikes = [
-                    math.exp(math.log(view.context.forward) + xi * view.context.scale)
-                    for xi in x
-                ]
-                ref_y = [ref_sec.volatility(k) for k in strikes]
+            ref_strikes = [
+                math.exp(math.log(view.context.forward) + xi * view.context.scale)
+                for xi in x
+            ]
+            ref_y = [reference_vol(view, k) for k in ref_strikes]
+            if all(v is not None for v in ref_y):
                 figure.add_trace(
                     go.Scatter(
                         x=x,
                         y=ref_y,
-                        mode="lines",
-                        line={"dash": "dash"},
-                        name="current regularized fit",
-                    )
-                )
-            elif view.reference_ivs is not None:
-                figure.add_trace(
-                    go.Scatter(
-                        x=x,
-                        y=np.maximum(basis_matrix(x) @ view.reference_ivs, 0),
                         mode="lines",
                         line={"dash": "dash"},
                         name="current regularized fit",

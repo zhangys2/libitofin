@@ -7,7 +7,8 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
-from btc_option_iv.kalman import KNOTS, SmileSnapshot, basis_matrix
+from btc_option_iv.kalman import KNOTS, SmileSnapshot
+from btc_option_iv.reference import butterfly_report, reference_vol
 
 
 def make_spx_smile_reader(snapshot: dict):
@@ -25,14 +26,6 @@ def make_spx_smile_reader(snapshot: dict):
     spot = snapshot.get("spot_price", context.forward)
     hours_left = snapshot.get("time_to_close_hours", 0.0)
 
-    ref_sec = getattr(view, "reference_section", None)
-    butterfly_report = None
-    if ref_sec is not None:
-        try:
-            butterfly_report = ref_sec.butterfly_report
-        except Exception:
-            pass
-
     latest_quotes = snapshot.get("latest_quotes", {})
 
     observation_rows = []
@@ -43,12 +36,7 @@ def make_spx_smile_reader(snapshot: dict):
         in_range = -3.0 <= x <= 3.0
         filtered_iv = float(view.volatility([x], display=False)[0]) if in_range else None
 
-        if in_range and ref_sec is not None:
-            reference_iv = ref_sec.volatility(o.strike)
-        elif in_range and view.reference_ivs is not None:
-            reference_iv = float((basis_matrix([x]) @ view.reference_ivs)[0])
-        else:
-            reference_iv = None
+        reference_iv = reference_vol(view, o.strike) if in_range else None
 
         diag = diagnostics_by_inst.get(o.instrument)
         quote = latest_quotes.get(o.instrument)
@@ -97,9 +85,7 @@ def make_spx_smile_reader(snapshot: dict):
     ]
     knot_rows = []
     for i, (x, strike) in enumerate(zip(KNOTS, knot_strikes)):
-        ref_k_iv = ref_sec.volatility(strike) if ref_sec else (
-            view.reference_ivs[i] if view.reference_ivs else None
-        )
+        ref_k_iv = reference_vol(view, strike)
         knot_rows.append(
             {
                 "knot_index": i + 1,
@@ -120,7 +106,7 @@ def make_spx_smile_reader(snapshot: dict):
         "exercise_time": context.exercise_time,
         "time_to_close_hours": hours_left,
         "atm_vol": context.atm_vol,
-        "butterfly_report": butterfly_report,
+        "butterfly_report": butterfly_report(view),
         "observations": observations_df,
         "knots": knots_df,
         "coefficients": pd.DataFrame.from_records(
@@ -157,7 +143,6 @@ def make_spx_smile_figure(analysis: dict | None, error: str | None = None):
     view: SmileSnapshot = analysis["view"]
     context = view.context
     spot = analysis["spot_price"]
-    ref_sec = getattr(view, "reference_section", None)
 
     # Determine plot strike range: from lowest observation to highest observation
     strikes_obs = np.asarray([o.strike for o in view.observations])
@@ -171,8 +156,9 @@ def make_spx_smile_figure(analysis: dict | None, error: str | None = None):
     x_dense = context.coordinates(k_dense)
 
     # 1. Reference Total Variance Cubic Smile (dashed line)
-    if ref_sec is not None:
-        ref_vols = [ref_sec.volatility(k) * 100 for k in k_dense]
+    ref_vols = [reference_vol(view, k) for k in k_dense]
+    if all(v is not None for v in ref_vols):
+        ref_vols = [v * 100 for v in ref_vols]
         figure.add_trace(
             go.Scatter(
                 x=k_dense,

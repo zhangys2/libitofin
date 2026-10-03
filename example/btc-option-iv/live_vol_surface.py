@@ -16,6 +16,7 @@ def _():
     import pandas as pd
     from btc_option_iv.kalman import FilterConfig
     from btc_option_iv.live import LiveFeedController
+    from btc_option_iv.reference import butterfly_markdown
     from btc_option_iv.views import (
         make_quotes_dataframe,
         make_smile_figure,
@@ -26,6 +27,7 @@ def _():
     return (
         FilterConfig,
         LiveFeedController,
+        butterfly_markdown,
         make_quotes_dataframe,
         make_smile_figure,
         make_smile_reader,
@@ -208,7 +210,7 @@ def _(make_smile_reader, market_snapshot, selected_expiry_ms):
 
 
 @app.cell
-def _(mo, smile_analysis, smile_error, textwrap, time):
+def _(butterfly_markdown, mo, smile_analysis, smile_error, textwrap, time):
     if smile_analysis is None:
         summary_output = mo.md(f"### Selected-expiry Kalman smile\n\n{smile_error}")
     else:
@@ -225,15 +227,9 @@ def _(mo, smile_analysis, smile_error, textwrap, time):
                 f"Current reference fit unavailable: {_view.reference_error}"
             )
         _warning_text = " · ".join(_warnings) or "None"
-        _butterfly_text = ""
-        if smile_analysis.get("butterfly_report"):
-            _rep = smile_analysis["butterfly_report"]
-            _arb_status = (
-                "⚠️ Arbitrage detected"
-                if _rep.has_arbitrage
-                else "✅ Arbitrage-free"
-            )
-            _butterfly_text = f"<br>**Total variance smile:** {_arb_status} (min g(k) = {_rep.min_density:.4f}, final λ = {_rep.final_smoothing}, ramps = {_rep.ramp_iterations})"
+        _butterfly_text = butterfly_markdown(smile_analysis.get("butterfly_report"))
+        if _butterfly_text:
+            _butterfly_text = "<br>" + _butterfly_text
         summary_output = mo.md(
             textwrap.dedent(f"""
             ### Selected-expiry cubic smile reader — Kalman prototype

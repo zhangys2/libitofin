@@ -73,6 +73,21 @@ def _implied_vol(opt_type, strike, forward, expiry, price) -> float | None:
     return iv if math.isfinite(iv) and iv > 0 else None
 
 
+def select_spxw_chain(chains):
+    """SPXW chain on SMART (else any SPXW chain); never the monthly SPX chain."""
+    spxw = [c for c in chains if c.tradingClass == "SPXW"]
+    return next((c for c in spxw if c.exchange == "SMART"), spxw[0] if spxw else None)
+
+
+def select_live_expiry(expirations, now_ms: int) -> tuple[str, int] | None:
+    """Earliest expiration whose 4:00 PM ET close is still in the future."""
+    for expiry_str in sorted(expirations):
+        expiry_ms = compute_0dte_expiry_ms(expiry_str)
+        if expiry_ms > now_ms:
+            return expiry_str, expiry_ms
+    return None
+
+
 def compute_0dte_expiry_ms(expiry_str: str) -> int:
     """Calculate 4:00 PM US Eastern Time market close timestamp for the contract date."""
     dt = datetime.strptime(expiry_str, "%Y%m%d")
@@ -208,17 +223,14 @@ class SpxFeedController:
 
             # Request SPX Option Parameters
             chains = await ib.reqSecDefOptParamsAsync("SPX", "", "IND", spx.conId)
-            # Prefer SPXW (weekly/daily) contracts
-            chain = next(
-                (c for c in chains if c.tradingClass == "SPXW" and c.exchange == "SMART"),
-                chains[0] if chains else None,
-            )
+            chain = select_spxw_chain(chains)
             if not chain:
                 raise RuntimeError("No SPXW option chains found from IBKR")
 
-            expirations = sorted(chain.expirations)
-            expiry_str = expirations[0]  # Nearest 0DTE expiration
-            expiry_ms = compute_0dte_expiry_ms(expiry_str)
+            live_expiry = select_live_expiry(chain.expirations, int(time.time() * 1000))
+            if live_expiry is None:
+                raise RuntimeError("No unexpired SPXW expirations (market closed?)")
+            expiry_str, expiry_ms = live_expiry
 
             # Select strikes around spot
             strikes = [
@@ -297,6 +309,8 @@ class SpxFeedController:
                                 mid_iv=mid_iv,
                                 bid_iv=bid_iv,
                                 ask_iv=ask_iv,
+                                # Spot stands in for the forward: with discount=1
+                                # the carry error is negligible over <= 6.5h.
                                 forward=spot,
                                 expiry=t_years,
                                 bid_premium_btc=t.bid,

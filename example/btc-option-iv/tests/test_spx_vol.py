@@ -22,7 +22,10 @@ from spx_option_iv.feed import (
     _finite_positive,
     _implied_vol,
     compute_0dte_expiry_ms,
+    select_live_expiry,
+    select_spxw_chain,
 )
+from btc_option_iv.reference import butterfly_markdown, butterfly_report, reference_vol
 from spx_option_iv.views import make_spx_smile_figure, make_spx_smile_reader
 
 
@@ -183,3 +186,57 @@ def test_feed_errors_instead_of_using_nan_spot(monkeypatch):
     assert "No SPX spot price" in controller.snapshot["status"]
     assert controller.snapshot["connected"] is False
     assert controller.snapshot["feed_running"] is False
+
+
+def _chain(trading_class, exchange):
+    return SimpleNamespace(tradingClass=trading_class, exchange=exchange)
+
+
+def test_select_spxw_chain_never_falls_back_to_monthly_spx():
+    monthly, smart, other = (
+        _chain("SPX", "SMART"),
+        _chain("SPXW", "SMART"),
+        _chain("SPXW", "CBOE"),
+    )
+    assert select_spxw_chain([monthly, other, smart]) is smart
+    assert select_spxw_chain([monthly, other]) is other
+    assert select_spxw_chain([monthly]) is None
+    assert select_spxw_chain([]) is None
+
+
+def test_select_live_expiry_skips_expired_dates():
+    close = compute_0dte_expiry_ms("20261002")
+    assert select_live_expiry(["20261005", "20261002", "20261001"], close - 1) == (
+        "20261002",
+        close,
+    )
+    # After today's close the expired date is skipped.
+    assert select_live_expiry(["20261005", "20261002"], close + 1) == (
+        "20261005",
+        compute_0dte_expiry_ms("20261005"),
+    )
+    assert select_live_expiry(["20261002"], close + 1) is None
+
+
+class _RaisingSection:
+    @property
+    def butterfly_report(self):
+        raise ValueError("boom")
+
+    def volatility(self, strike):
+        raise ValueError("boom")
+
+
+def test_reference_helpers_degrade_to_none_on_errors():
+    missing = SimpleNamespace(reference_section=None)
+    broken = SimpleNamespace(reference_section=_RaisingSection())
+    for view in (missing, broken):
+        assert reference_vol(view, 7700.0) is None
+        assert butterfly_report(view) is None
+    assert butterfly_markdown(None) == ""
+    report = SimpleNamespace(
+        has_arbitrage=False, min_density=0.25, final_smoothing=0.01, ramp_iterations=0
+    )
+    assert "Arbitrage-free" in butterfly_markdown(report)
+    report.has_arbitrage = True
+    assert "Arbitrage detected" in butterfly_markdown(report, label="X").split(":")[1]
