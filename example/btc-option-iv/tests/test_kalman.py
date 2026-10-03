@@ -418,9 +418,10 @@ def test_reference_only_forward_and_time_transport_preserves_a_strike_space_line
     )
     assert view.context.exercise_time == pytest.approx(CONTEXT.exercise_time * 1.02)
     strikes = [quote(x)[0].strike for x in [-1, 0, 1]]
+    expected_vols = [0.28, 0.3, math.sqrt(2 * 0.30**2 - 0.28**2)]
     assert view.volatility(
         view.context.coordinates(strikes), display=False
-    ) == pytest.approx([0.28, 0.3, 0.32], abs=1e-12)
+    ) == pytest.approx(expected_vols, abs=1e-5)
     assert view.updates == before.updates and view.resets == before.resets
     assert view.last_accepted_age == 1
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 from itofin import ItofinError
-from itofin.termstructures import CubicSmileSection
+from itofin.termstructures import TotalVarianceCubicSmileSection
 from scipy.interpolate import CubicSpline
 from scipy.linalg import cho_factor, cho_solve
 
@@ -259,6 +259,9 @@ class SmileSnapshot:
     updates: int
     warnings: tuple[str, ...]
     observed_support: tuple[float, float] | None = None
+    reference_section: TotalVarianceCubicSmileSection | None = field(
+        default=None, compare=False
+    )
 
     @property
     def segment_coefficients(self):
@@ -310,17 +313,18 @@ def _context(observations):
 
 
 def _reference(context, observations):
-    smile = CubicSmileSection(
+    smile = TotalVarianceCubicSmileSection(
         [o.strike for o in observations],
         [o.mid_iv for o in observations],
         context.forward,
         context.exercise_time,
         context.atm_vol,
     )
-    values = tuple(smile.node_mid_ivs)
+    strikes = [math.exp(math.log(context.forward) + x * context.scale) for x in KNOTS]
+    values = tuple(smile.volatility(k) for k in strikes)
     if len(values) != 9 or not all(math.isfinite(v) for v in values):
         raise ValueError("invalid regularized-fit ordinates")
-    return values
+    return values, smile
 
 
 class FilterManager:
@@ -446,7 +450,8 @@ class FilterManager:
         ]
         try:
             context = _context(usable)
-            values = np.asarray(_reference(context, usable))
+            values, _ = _reference(context, usable)
+            values = np.asarray(values)
             covariance = _IDENTITY * 0.05**2
             _validate_state(values, covariance)
             used = [o for o in usable if -3 <= context.coordinates([o.strike])[0] <= 3]
@@ -652,12 +657,14 @@ class FilterManager:
                 else ("stale" if age >= 10 else "tracking")
             )
             warnings = [state.warning] if state.warning else []
-            reference, reference_error = None, None
+            reference, reference_section, reference_error = None, None, None
             if state.mean is not None:
                 # Include raw/gated quotes in the reference comparison, not in
                 # the trusted metadata calculation for the filtered context.
                 try:
-                    reference = _reference(state.context, state.observations)
+                    reference, reference_section = _reference(
+                        state.context, state.observations
+                    )
                 except (ValueError, OverflowError, ItofinError) as exc:
                     reference_error = str(exc)
                 spline = CubicSpline(KNOTS, state.mean, bc_type="natural")
@@ -690,5 +697,6 @@ class FilterManager:
                 state.updates,
                 tuple(warnings),
                 state.support,
+                reference_section,
             )
         return result

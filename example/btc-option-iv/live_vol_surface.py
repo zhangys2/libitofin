@@ -225,6 +225,15 @@ def _(mo, smile_analysis, smile_error, textwrap, time):
                 f"Current reference fit unavailable: {_view.reference_error}"
             )
         _warning_text = " · ".join(_warnings) or "None"
+        _butterfly_text = ""
+        if smile_analysis.get("butterfly_report"):
+            _rep = smile_analysis["butterfly_report"]
+            _arb_status = (
+                "⚠️ Arbitrage detected"
+                if _rep.has_arbitrage
+                else "✅ Arbitrage-free"
+            )
+            _butterfly_text = f"<br>**Total variance smile:** {_arb_status} (min g(k) = {_rep.min_density:.4f}, final λ = {_rep.final_smoothing}, ramps = {_rep.ramp_iterations})"
         summary_output = mo.md(
             textwrap.dedent(f"""
             ### Selected-expiry cubic smile reader — Kalman prototype
@@ -234,16 +243,16 @@ def _(mo, smile_analysis, smile_error, textwrap, time):
             **Forward:** {smile_analysis["forward"]:,.2f} USD · **Expiry:** {smile_analysis["exercise_time"]:.8f} years<br>
             **ATM normalization IV:** {smile_analysis["atm_vol"]:.2%}<br>
             **Accepted measurement updates:** {_view.updates} · **Resets:** {_view.resets} · **Last reset:** {_view.reset_reason}<br>
-            **Warnings:** {_warning_text}
+            **Warnings:** {_warning_text}{_butterfly_text}
 
             Both curves use the same nine fixed knots. The dashed curve is the
-            current regularized fit (λ=0.01); the solid curve filters raw mid IVs
+            total variance cubic smile with Roger Lee wing asymptotics and Durrleman
+            butterfly arbitrage verification; the solid curve filters raw mid IVs
             with inverse bid–ask IV-spread precision. Curvature regularization is
             used for bootstrap/reference, not repeatedly imposed on the filter.
             Coefficients and knot values below describe the **unclipped filtered**
             natural cubic. Negative plotted IVs are floored for display only.
-            Sparse regions are model-dependent; covariance is not calibrated
-            confidence, and neither curve is arbitrage-free.
+            Sparse regions are model-dependent; covariance is not calibrated confidence.
         """)
         )
     summary_output
