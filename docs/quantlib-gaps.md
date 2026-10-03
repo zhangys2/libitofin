@@ -15,7 +15,7 @@ prioritized work to GitHub issues after the prioritization lens.
 Inventories merged 2026-09-19 from Wayfinder research tickets
 [oracle case inventory](../.wayfinder/tickets/oracle-case-inventory.md) and
 [surface module inventory](../.wayfinder/tickets/surface-module-inventory.md);
-reclassified 2026-09-26 against `main` after the upstream sync through benbenbang `v0.29.0`, and again on 2026-09-30 after the sync that added chart indicators, GARCH(1,1) filter/fit, OHLC volatility estimators, and batch risk statistics (fork workspace stays `0.29.0`). Optimizer methods were not extended. Those additions, plus calibration constraints and GBM simulation, stay out of this register (math / bindings). The finite-difference oracles are in [`oracle-coverage.md`](oracle-coverage.md); no rates or equity row reached `full`.
+reclassified 2026-09-26 against `main` after the upstream sync through benbenbang `v0.29.0`, and again on 2026-09-30 after the sync that added chart indicators, GARCH(1,1) filter/fit, OHLC volatility estimators, and batch risk statistics. The 2026-10-03 sync takes upstream through `v0.32.0`. This fork tracks that upstream version and does not publish it. Optimizer methods were not extended. Those additions, plus calibration constraints and GBM simulation, stay out of this register (math / bindings). The finite-difference oracles are in [`oracle-coverage.md`](oracle-coverage.md); no rates or equity row reached `full`.
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|

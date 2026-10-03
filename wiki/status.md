@@ -53,7 +53,7 @@ those unrelated engines were added. Table provenance and reproduction are in
 
 ## Bates analytic pricing
 
-Unreleased [#1163](https://github.com/benbenbang/libitofin/issues/1163) adds
+v0.32.0 [#1163](https://github.com/benbenbang/libitofin/issues/1163) adds
 constant-intensity lognormal jumps to Heston with a live eight-parameter Bates
 model in Rust, Python, C and Go. The retained engine supports European
 plain-vanilla NPV and existing Heston calibration helpers; zero intensity
@@ -63,7 +63,7 @@ See [parameters, limits and runnable examples](../docs/docs/bates.md).
 
 ## GJR-GARCH process and paths
 
-Unreleased [#1164](https://github.com/benbenbang/libitofin/issues/1164) adds a
+v0.32.0 [#1164](https://github.com/benbenbang/libitofin/issues/1164) adds a
 live two-factor GJR-GARCH process and seeded full/terminal spot/variance paths
 in Rust, Python, C and Go. Daily inputs are explicitly annualized; Partial
 Truncation, Full Truncation and Reflection preserve QuantLib's raw variance
