@@ -1,58 +1,67 @@
-//! Merton-76 jump-diffusion engine for European vanilla options.
+//! Merton's European plain-vanilla Poisson mixture.
 //!
-//! Port of `ql/pricingengines/vanilla/jumpdiffusionengine.{hpp,cpp}`: Poisson
-//! mixture of Black–Scholes prices with jump-adjusted rate and vol. NPV only
-//! this slice (greeks / `testGreeks` deferred). Convergence uses the value
-//! addendum; QL also folds δ/γ/θ/ν/ρ/divρ into `lastContribution`. Shifted
-//! `FlatForward` uses the risk-free day counter (QL uses the vol day counter).
+//! Conditional Black prices use QuantLib's adjusted intensity and theta
+//! correction. The evaluation budget is a hard bound, unlike the upstream
+//! loop, which can overrun it before reaching the Poisson mode. Logarithmic
+//! weights retain QuantLib's factorial convention and avoid losing the distribution
+//! when its zero-count mass underflows. Asset- and strike-weighted tail bounds
+//! prevent zero early conditional payoffs from falsely proving convergence.
 
-use super::AnalyticEuropeanEngine;
+use std::any::Any;
+
 use crate::errors::QlResult;
-use crate::fail;
-use crate::handle::RelinkableHandle;
-use crate::instruments::{OneAssetOptionEngine, OneAssetOptionResults, OptionArguments};
-use crate::interestrate::Compounding;
-use crate::math::distributions::poisson::PoissonDistribution;
+use crate::exercise::ExerciseType;
+use crate::instruments::{
+    Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
+    PlainVanillaPayoff, StrikedTypePayoff,
+};
+use crate::math::gammafunction::log_gamma;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
-use crate::processes::{GeneralizedBlackScholesProcess, Merton76Process};
-use crate::require;
-use crate::shared::{Shared, shared};
-use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-use crate::termstructures::yields::FlatForward;
-use crate::termstructures::yieldtermstructure::YieldTermStructure;
-use crate::time::frequency::Frequency;
-use crate::types::{Real, Size};
+use crate::pricingengines::BlackCalculator;
+use crate::processes::Merton76Process;
+use crate::shared::Shared;
+use crate::types::Real;
+use crate::{fail, require};
 
-/// Jump-diffusion engine (`jumpdiffusionengine.hpp`).
+/// European plain-vanilla jump-diffusion engine with live market inputs.
 pub struct JumpDiffusionEngine {
     base: OneAssetOptionEngine,
     process: Shared<Merton76Process>,
     relative_accuracy: Real,
-    max_iterations: Size,
+    max_iterations: usize,
 }
 
 impl JumpDiffusionEngine {
-    /// `JumpDiffusionEngine(process)` with QL defaults `1e-4` / `100`.
-    pub fn new(process: Shared<Merton76Process>) -> Self {
-        Self::with_parameters(process, 1e-4, 100)
-    }
-
-    /// `JumpDiffusionEngine(process, relativeAccuracy, maxIterations)`.
-    pub fn with_parameters(
+    /// Builds an engine; at most `max_iterations` conditional prices are evaluated.
+    ///
+    /// # Errors
+    /// Requires a finite positive tolerance and a budget in `1..=100_000`.
+    /// Current process parameters are validated again at each calculation.
+    pub fn new(
         process: Shared<Merton76Process>,
         relative_accuracy: Real,
-        max_iterations: Size,
-    ) -> Self {
+        max_iterations: usize,
+    ) -> QlResult<Self> {
+        require!(
+            relative_accuracy.is_finite() && relative_accuracy > 0.0,
+            "relative accuracy must be finite and positive"
+        );
+        require!(
+            (1..=100_000).contains(&max_iterations),
+            "max iterations must be between 1 and 100000"
+        );
+        process.x0()?;
+        process.jump_parameters()?;
         let base =
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
         base.register_with(process.observable());
-        Self {
+        Ok(Self {
             base,
             process,
             relative_accuracy,
             max_iterations,
-        }
+        })
     }
 }
 
@@ -66,202 +75,226 @@ impl PricingEngine for JumpDiffusionEngine {
     fn arguments_mut(&mut self) -> &mut dyn Arguments {
         self.base.arguments_mut()
     }
-
     fn results(&self) -> &dyn Results {
         self.base.results()
     }
-
     fn reset(&mut self) {
         self.base.reset();
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        let (payoff, exercise) = {
-            let arguments = self.base.arguments();
-            let Some(payoff) = arguments.payoff.clone() else {
-                fail!("no payoff given");
-            };
-            let Some(exercise) = arguments.exercise.clone() else {
-                fail!("no exercise given");
-            };
-            (payoff, exercise)
+        let arguments = self.base.arguments();
+        let Some(exercise) = &arguments.exercise else {
+            fail!("no exercise given");
         };
-        let last = exercise.last_date();
-        let process = &*self.process;
-
-        let jump_vol = process.log_jump_volatility().current_link()?.value()?;
-        let jump_square_vol = jump_vol * jump_vol;
-        let mu_plus_half_square_vol =
-            process.log_mean_jump().current_link()?.value()? + 0.5 * jump_square_vol;
-        let k = mu_plus_half_square_vol.exp() - 1.0;
-        let intensity = process.jump_intensity().current_link()?.value()?;
-        let lambda = (k + 1.0) * intensity;
-
-        let black_vol = process.black_volatility().current_link()?;
-        let variance = black_vol.black_variance_date(last, payoff.strike(), false)?;
-        let voldc = black_vol.require_day_counter()?;
-        let volcal = black_vol.calendar();
-        let vol_ref = black_vol.reference_date()?;
-        let t = voldc.year_fraction(vol_ref, last);
-        let risk_free = process.risk_free_rate().current_link()?;
-        let rfdc = risk_free.require_day_counter()?;
-        let rate_ref = risk_free.reference_date()?;
-        let t_rate = rfdc.year_fraction(rate_ref, last);
-        let risk_free_rate = -risk_free.discount_date(last, false)?.ln() / t_rate;
-
-        let poisson = PoissonDistribution::new(lambda * t)?;
-        let rf_link = RelinkableHandle::new(Shared::clone(&risk_free));
-        let vol_link = RelinkableHandle::new(Shared::clone(&black_vol));
-        let bs = shared(GeneralizedBlackScholesProcess::new(
-            process.state_variable(),
-            process.dividend_yield(),
-            rf_link.handle(),
-            vol_link.handle(),
-        ));
-        let mut base_engine = AnalyticEuropeanEngine::new(Shared::clone(&bs));
-
-        let mut value = 0.0;
-        let mut last_contribution = 1.0;
-        let mut i: Size = 0;
-        let min_terms = (lambda * t) as Size;
-        while (last_contribution > self.relative_accuracy && i < self.max_iterations)
-            || i < min_terms
-        {
-            let v = ((variance + i as Real * jump_square_vol) / t).sqrt();
-            let r = risk_free_rate - intensity * k + (i as Real) * mu_plus_half_square_vol / t;
-            rf_link.link_to(shared(FlatForward::with_rate(
-                rate_ref,
-                r,
-                rfdc.clone(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            )) as Shared<dyn YieldTermStructure>);
-            vol_link.link_to(shared(BlackConstantVol::new(
-                vol_ref,
-                volcal.clone(),
-                v,
-                voldc.clone(),
-            )) as Shared<dyn BlackVolTermStructure>);
-            let term = {
-                let results = base_engine
-                    .calculate_from_arguments(Shared::clone(&payoff), Shared::clone(&exercise))?;
-                let Some(term) = results.instrument.value else {
-                    fail!("inner European engine returned no NPV");
-                };
-                term
+        require!(
+            exercise.exercise_type() == ExerciseType::European,
+            "JumpDiffusionEngine requires European exercise"
+        );
+        let Some(payoff) = &arguments.payoff else {
+            fail!("no payoff given");
+        };
+        let Some(payoff) = (&**payoff as &dyn Any).downcast_ref::<PlainVanillaPayoff>() else {
+            fail!("JumpDiffusionEngine requires plain-vanilla payoff");
+        };
+        let maturity = exercise.last_date();
+        let spot = self.process.x0()?;
+        let (intensity, jump_variance, jump_exponent, compensation, lambda) =
+            self.process.jump_parameters()?;
+        let vol = self.process.black_volatility().current_link()?;
+        let risk_free = self.process.risk_free_rate().current_link()?;
+        let dividend = self.process.dividend_yield().current_link()?;
+        let current_vol = vol.black_vol_date(maturity, payoff.strike(), false)?;
+        require!(
+            current_vol.is_finite() && current_vol >= 0.0,
+            "Black volatility must be finite and non-negative"
+        );
+        let variance = vol.black_variance_date(maturity, payoff.strike(), false)?;
+        let t = vol.time_from_reference(maturity)?;
+        require!(
+            variance.is_finite() && variance >= 0.0,
+            "Black variance must be finite and non-negative"
+        );
+        require!(
+            t.is_finite() && t > 0.0,
+            "volatility time to maturity must be finite and positive"
+        );
+        let discount = risk_free.discount_date(maturity, false)?;
+        let dividend_discount = dividend.discount_date(maturity, false)?;
+        require!(
+            discount.is_finite()
+                && discount > 0.0
+                && dividend_discount.is_finite()
+                && dividend_discount > 0.0,
+            "market discounts must be finite and positive"
+        );
+        let vol_dc = vol.require_day_counter()?;
+        let u = vol_dc.year_fraction(risk_free.reference_date()?, maturity);
+        let dividend_time = dividend
+            .require_day_counter()?
+            .year_fraction(dividend.reference_date()?, maturity);
+        require!(
+            u.is_finite() && u > 0.0 && dividend_time.is_finite() && dividend_time >= 0.0,
+            "conditional pricing clocks must be finite and positive"
+        );
+        let rate = -discount.ln() / t;
+        let diffusion_vol = (variance / t).sqrt();
+        let poisson_mean = lambda * t;
+        require!(
+            intensity == 0.0 || poisson_mean > 0.0,
+            "adjusted Poisson mean is not representable"
+        );
+        require!(
+            poisson_mean.is_finite() && poisson_mean < self.max_iterations as Real,
+            "Poisson mode exceeds max iterations"
+        );
+        let log_mean = if poisson_mean > 0.0 {
+            poisson_mean.ln()
+        } else {
+            0.0
+        };
+        let strike_mean = if poisson_mean > 0.0 {
+            (log_mean - jump_exponent * u / t).exp()
+        } else {
+            0.0
+        };
+        require!(
+            strike_mean.is_finite() && strike_mean < self.max_iterations as Real,
+            "strike-weighted Poisson mode exceeds max iterations"
+        );
+        let mut factorial: Real = 1.0;
+        let mut previous_weight = 0.0;
+        let mut sums = [0.0; 7];
+        let mut converged = false;
+        let mut evaluations = 0;
+        for i in 0..self.max_iterations {
+            let n = i as Real;
+            let log_factorial = if i <= 27 {
+                if i > 0 {
+                    factorial *= n;
+                }
+                factorial.ln()
+            } else {
+                log_gamma(n + 1.0)?
             };
-            let weight = poisson.pmf(i as u64);
-            value += weight * term;
-            last_contribution = (term
-                / if value.abs() > Real::EPSILON {
-                    value
-                } else {
-                    1.0
+            let log_weight = n * log_mean - log_factorial - poisson_mean;
+            let weight = log_weight.exp();
+            let conditional_vol = ((variance + n * jump_variance) / t).sqrt();
+            let conditional_rate = rate - compensation + n * jump_exponent / t;
+            let conditional_discount = (-conditional_rate * u).exp();
+            let forward = spot * dividend_discount / conditional_discount;
+            let black = BlackCalculator::with_payoff(
+                payoff,
+                forward,
+                conditional_vol * u.sqrt(),
+                conditional_discount,
+            )?;
+            let value = black.value();
+            let delta = black.delta(spot)?;
+            let zero_strike = payoff.strike() == 0.0;
+            let gamma = if zero_strike { 0.0 } else { black.gamma(spot)? };
+            let base_vega = if zero_strike { 0.0 } else { black.vega(u)? };
+            let rho = black.rho(u)?;
+            let dividend_rho = black.dividend_rho(dividend_time)?;
+            let theta = -(conditional_discount.ln() * value
+                + (forward / spot).ln() * spot * delta
+                + 0.5 * conditional_vol * conditional_vol * u * spot * spot * gamma)
+                / u;
+            let vega = if conditional_vol > 0.0 {
+                diffusion_vol / conditional_vol * base_vega
+            } else {
+                0.0
+            };
+            let vol_correction = if conditional_vol > 0.0 {
+                base_vega * n * jump_variance / (2.0 * conditional_vol * t * t)
+            } else {
+                0.0
+            };
+            let theta_correction = vol_correction + rho * n * jump_exponent / (t * t);
+            let terms = [value, delta, gamma, theta, base_vega, rho, dividend_rho];
+            require!(
+                terms.iter().all(|x| x.is_finite())
+                    && vega.is_finite()
+                    && theta_correction.is_finite(),
+                "conditional Merton price or Greeks are not finite"
+            );
+            sums[0] += weight * value;
+            sums[1] += weight * delta;
+            sums[2] += weight * gamma;
+            sums[3] += weight * (theta + theta_correction + lambda * value)
+                - previous_weight * lambda * value;
+            sums[4] += weight * vega;
+            sums[5] += weight * rho;
+            sums[6] += weight * dividend_rho;
+            require!(
+                sums.iter().all(|x| x.is_finite()),
+                "Merton price or Greeks are not finite"
+            );
+            evaluations = i + 1;
+            let last_contribution = terms
+                .iter()
+                .zip(sums)
+                .map(|(term, sum)| {
+                    (term / if sum.abs() > Real::EPSILON { sum } else { 1.0 }).abs() * weight
                 })
-            .abs()
-                * weight;
-            i += 1;
+                .fold(0.0, Real::max);
+            let asset_tail =
+                spot * dividend_discount * poisson_tail_bound(log_weight, poisson_mean, n);
+            let strike_tail = payoff.strike()
+                * poisson_tail_bound(log_weight + conditional_discount.ln(), strike_mean, n);
+            let scale = if sums[0].abs() > Real::EPSILON {
+                sums[0].abs()
+            } else {
+                1.0
+            };
+            if poisson_mean == 0.0
+                || (n >= poisson_mean.max(strike_mean)
+                    && asset_tail.max(strike_tail) <= self.relative_accuracy * scale
+                    && last_contribution <= self.relative_accuracy)
+            {
+                converged = true;
+                break;
+            }
+            previous_weight = weight;
         }
         require!(
-            i < self.max_iterations,
-            "{i} iterations have been not enough to reach the required {} accuracy",
+            converged,
+            "max iterations ({}) exhausted before reaching relative accuracy {}",
+            self.max_iterations,
             self.relative_accuracy
         );
-        self.base.results_mut().instrument.value = Some(value);
+        let result = self.base.results_mut();
+        result.instrument.value = Some(sums[0]);
+        result.greeks = Greeks {
+            delta: Some(sums[1]),
+            gamma: Some(sums[2]),
+            theta: Some(sums[3]),
+            vega: Some(sums[4]),
+            rho: Some(sums[5]),
+            dividend_rho: Some(sums[6]),
+        };
+        result.more_greeks = MoreGreeks {
+            theta_per_day: Some(sums[3] / 365.0),
+            ..MoreGreeks::default()
+        };
+        result.instrument.additional_results.insert(
+            "evaluations".into(),
+            crate::shared::shared(evaluations) as Shared<dyn Any>,
+        );
         Ok(())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::exercise::EuropeanExercise;
-    use crate::handle::Handle;
-    use crate::instrument::Instrument;
-    use crate::instruments::{EuropeanOption, PlainVanillaPayoff};
-    use crate::option::OptionType::Call;
-    use crate::quotes::{Quote, SimpleQuote};
-    use crate::settings::Settings;
-    use crate::shared::{SharedMut, shared_mut};
-    use crate::time::date::{Date, Month};
-    use crate::time::daycounter::DayCounter;
-    use crate::time::daycounters::actual360::Actual360;
-    use crate::time::daycounters::actual365fixed::Actual365Fixed;
-
-    fn today() -> Date {
-        Date::new(15, Month::June, 2026)
+fn poisson_tail_bound(log_mass: Real, mean: Real, count: Real) -> Real {
+    if mean == 0.0 {
+        return 0.0;
     }
-    fn quote(v: Real) -> Handle<dyn Quote> {
-        Handle::new(shared(SimpleQuote::new(v)) as Shared<dyn Quote>)
+    let ratio = mean / (count + 2.0);
+    if ratio >= 1.0 {
+        return Real::INFINITY;
     }
-    #[rustfmt::skip]
-    fn yts(rate: Real, dc: DayCounter, d: Date) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            d, rate, dc, Compounding::Continuous, Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[rustfmt::skip]
-    fn price(k: Real, days: i32, vol: Real, lam: Real, mu: Real, jv: Real, rdc: DayCounter, vdc: DayCounter, rd: Date, vd: Date) -> (Real, Shared<Merton76Process>, Shared<Settings<Date>>) {
-        let s = shared(Settings::new());
-        s.set_evaluation_date(today());
-        let p = shared(Merton76Process::new(
-            quote(100.0), yts(0.0, rdc.clone(), rd), yts(0.08, rdc, rd),
-            Handle::new(shared(BlackConstantVol::new(vd, None, vol, vdc)) as Shared<dyn BlackVolTermStructure>),
-            quote(lam), quote(mu), quote(jv),
-        ));
-        let mut o = EuropeanOption::new(
-            shared(PlainVanillaPayoff::new(Call, k)),
-            shared(EuropeanExercise::new(today() + days)),
-            Shared::clone(&s),
-        );
-        o.base_mut().set_pricing_engine(
-            shared_mut(JumpDiffusionEngine::new(Shared::clone(&p))) as SharedMut<dyn PricingEngine>,
-        );
-        (o.npv().unwrap(), p, s)
-    }
-
-    #[test]
-    #[rustfmt::skip]
-    fn merton76_haug_and_compensator() {
-        let a360 = Actual360::new();
-        let d = today();
-        let rows: [(Real, Real, Real, Real, Real); 3] = [
-            (80.0, 0.10, 1.0, 0.25, 20.67),
-            (80.0, 0.50, 10.0, 0.25, 23.61),
-            (100.0, 0.25, 10.0, 0.75, 5.85),
-        ];
-        for (k, t, lam, g, exp) in rows {
-            let jv = 0.25 * (g / lam).sqrt();
-            let (npv, _, _) = price(
-                k, (t * 360.0).round() as i32, 0.25 * (1.0 - g).sqrt(), lam,
-                -0.5 * jv * jv, jv, a360.clone(), a360.clone(), d, d,
-            );
-            assert!((npv - exp).abs() <= 1e-2, "{k} {lam} {g}: {npv} vs {exp}");
-        }
-        let (npv, _, _) = price(100.0, 360, 0.20, 1.0, 0.20, 0.25, a360.clone(), a360, d, d);
-        assert!((npv - 18.93059).abs() <= 1e-4, "{npv}");
-    }
-
-    #[test]
-    #[rustfmt::skip]
-    fn risk_free_time_basis_matches_analytic_european() {
-        let (jd, p, s) = price(
-            100.0, 365, 0.20, 0.0, 0.0, 0.0,
-            Actual365Fixed::new(), Actual360::new(), today() - 10, today(),
-        );
-        let mut eu = EuropeanOption::new(
-            shared(PlainVanillaPayoff::new(Call, 100.0)),
-            shared(EuropeanExercise::new(today() + 365)),
-            s,
-        );
-        eu.base_mut().set_pricing_engine(shared_mut(AnalyticEuropeanEngine::new(shared(
-            GeneralizedBlackScholesProcess::new(
-                p.state_variable(), p.dividend_yield(), p.risk_free_rate(), p.black_volatility(),
-            ),
-        ))) as SharedMut<dyn PricingEngine>);
-        let ae = eu.npv().unwrap();
-        assert!((jd - ae).abs() <= 1e-10, "{jd} vs {ae}");
-    }
+    (log_mass + mean.ln() - (count + 1.0).ln()).exp() / (1.0 - ratio)
 }
+
+#[cfg(test)]
+mod tests;

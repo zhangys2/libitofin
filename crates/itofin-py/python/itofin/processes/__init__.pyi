@@ -2,13 +2,76 @@
 # ruff: noqa: E501, F401, F403, F405
 
 import builtins
+from itofin import quotes
 from itofin import termstructures
 from itofin import time
 import typing
 __all__ = [
+    "BatesProcess",
     "BlackScholesProcess",
+    "GJRGARCHProcess",
     "HestonProcess",
+    "Merton76Process",
 ]
+
+@typing.final
+class BatesProcess:
+    r"""
+    Heston variance with independent constant-intensity lognormal jumps.
+
+    Retains live spot and yield curves for analytic pricing, not path generation.
+    """
+    def __init__(self, spot: quotes.SimpleQuote, risk_free: termstructures.YieldTermStructure, dividend: termstructures.YieldTermStructure, v0: builtins.float, kappa: builtins.float, theta: builtins.float, sigma: builtins.float, rho: builtins.float, lambda_: builtins.float, nu: builtins.float, delta: builtins.float) -> None:
+        r"""
+        Retain the market and validate eight finite Bates parameters.
+
+        Variance, mean reversion and variance volatility must be positive;
+        correlation is in [-1, 1], and lambda_ and delta are nonnegative.
+        """
+    def v0(self) -> builtins.float:
+        r"""
+        Return the initial variance.
+        """
+    def kappa(self) -> builtins.float:
+        r"""
+        Return the variance mean-reversion speed.
+        """
+    def theta(self) -> builtins.float:
+        r"""
+        Return the long-run variance.
+        """
+    def sigma(self) -> builtins.float:
+        r"""
+        Return the volatility of variance.
+        """
+    def rho(self) -> builtins.float:
+        r"""
+        Return the spot/variance correlation.
+        """
+    def lambda_(self) -> builtins.float:
+        r"""
+        Return the Poisson jump intensity.
+        """
+    def nu(self) -> builtins.float:
+        r"""
+        Return the logarithmic jump mean.
+        """
+    def delta(self) -> builtins.float:
+        r"""
+        Return the logarithmic jump standard deviation.
+        """
+    def spot(self) -> builtins.float:
+        r"""
+        Return the current retained spot quote.
+        """
+    def initial_values(self) -> builtins.list[builtins.float]:
+        r"""
+        Return the current spot and initial variance.
+        """
+    def time(self, date: time.Date) -> builtins.float:
+        r"""
+        Convert a date using the risk-free curve's clock.
+        """
 
 @typing.final
 class BlackScholesProcess:
@@ -67,6 +130,73 @@ class BlackScholesProcess:
         Returns:
             float: The continuously compounded zero rate on the dividend curve at the
             reference date.
+        """
+
+@typing.final
+class GJRGARCHProcess:
+    r"""
+    GJR-GARCH diffusion approximation retaining live spot and yield curves.
+
+    Parameters `daily_variance` and `omega` use daily units. The state is
+    `[spot, annual_variance]`, with initial annual variance equal to
+    `daily_variance * days_per_year`. Truncation schemes can return a negative
+    raw variance state; this is not a daily GJR recursion or a pricing model.
+    """
+    def __init__(self, spot: quotes.SimpleQuote, risk_free: termstructures.YieldTermStructure, dividend: termstructures.YieldTermStructure, daily_variance: builtins.float, omega: builtins.float, alpha: builtins.float, beta: builtins.float, gamma: builtins.float, lambda_: builtins.float, days_per_year: builtins.float = 252.0, scheme: builtins.str = 'FullTruncation') -> None:
+        r"""
+        Retain spot and curves and validate finite admissible GJR parameters.
+        """
+    def daily_variance(self) -> builtins.float:
+        r"""
+        Return initial daily variance, not the annualized state component.
+        """
+    def omega(self) -> builtins.float:
+        r"""
+        Return the daily variance intercept.
+        """
+    def alpha(self) -> builtins.float:
+        r"""
+        Return the squared innovation coefficient.
+        """
+    def beta(self) -> builtins.float:
+        r"""
+        Return the lagged variance coefficient.
+        """
+    def gamma(self) -> builtins.float:
+        r"""
+        Return the asymmetric innovation coefficient.
+        """
+    def lambda_(self) -> builtins.float:
+        r"""
+        Return the innovation risk premium.
+        """
+    def days_per_year(self) -> builtins.float:
+        r"""
+        Return the daily-to-annual conversion factor.
+        """
+    def discretization(self) -> builtins.str:
+        r"""
+        Return the configured scheme name.
+        """
+    def initial_values(self) -> builtins.list[builtins.float]:
+        r"""
+        Return current spot and initial annual variance.
+        """
+    def drift(self, t: builtins.float, state: typing.Sequence[builtins.float]) -> builtins.list[builtins.float]:
+        r"""
+        Return log-spot and annual-variance drift at a two-component state.
+        """
+    def diffusion(self, t: builtins.float, state: typing.Sequence[builtins.float]) -> builtins.list[builtins.list[builtins.float]]:
+        r"""
+        Return the two-by-two diffusion matrix, one row per state component.
+        """
+    def evolve(self, t0: builtins.float, state: typing.Sequence[builtins.float], dt: builtins.float, draws: typing.Sequence[builtins.float]) -> builtins.list[builtins.float]:
+        r"""
+        Evolve a state with two supplied independent standard-normal draws.
+        """
+    def time(self, date: time.Date) -> builtins.float:
+        r"""
+        Convert a date using the risk-free curve's reference date and day count.
         """
 
 @typing.final
@@ -129,4 +259,40 @@ class HestonProcess:
 
         Returns:
             float: The spot/variance correlation rho.
+        """
+
+@typing.final
+class Merton76Process:
+    r"""
+    Merton's lognormal-jump model retaining observable market and jump inputs.
+
+    This process supports European pricing. Generic drift, diffusion and path
+    generation are unavailable because a Gaussian step cannot represent jumps.
+    """
+    def __init__(self, spot: quotes.SimpleQuote, risk_free: termstructures.YieldTermStructure, dividend: termstructures.YieldTermStructure, volatility: termstructures.BlackVolTermStructure, jump_intensity: quotes.SimpleQuote, log_mean_jump: quotes.SimpleQuote, log_jump_volatility: quotes.SimpleQuote) -> None:
+        r"""
+        Retain the diffusion market and the three live lognormal-jump quotes.
+
+        Jump intensity and log-jump volatility must be finite and nonnegative;
+        the log-jump mean must be finite. Invalid inputs raise ItofinError.
+        """
+    def spot(self) -> builtins.float:
+        r"""
+        Return the current spot held by the diffusion market.
+        """
+    def jump_intensity(self) -> builtins.float:
+        r"""
+        Return the current jump intensity.
+        """
+    def log_mean_jump(self) -> builtins.float:
+        r"""
+        Return the current mean of the logarithmic jump size.
+        """
+    def log_jump_volatility(self) -> builtins.float:
+        r"""
+        Return the current standard deviation of the logarithmic jump size.
+        """
+    def time(self, date: time.Date) -> builtins.float:
+        r"""
+        Convert a date with the risk-free curve's reference date and day count.
         """

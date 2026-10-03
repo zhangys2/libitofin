@@ -13,6 +13,7 @@ mod blackscholesprocess;
 pub mod discretization;
 mod forwardmeasureprocess;
 mod g2process;
+mod gjrgarchprocess;
 mod gsrprocess;
 mod hestonprocess;
 mod hestonslvprocess;
@@ -33,8 +34,11 @@ pub use discretization::{
 };
 pub use forwardmeasureprocess::{ForwardMeasureProcess1D, ForwardMeasureTime};
 pub use g2process::G2Process;
+pub use gjrgarchprocess::{
+    GjrGarchCoefficients, GjrGarchDiscretization, GjrGarchParameters, GjrGarchProcess,
+};
 pub use gsrprocess::GsrProcess;
-pub use hestonprocess::HestonProcess;
+pub use hestonprocess::{Discretization as HestonDiscretization, HestonProcess};
 pub use hestonslvprocess::HestonSLVProcess;
 pub use hullwhiteprocess::HullWhiteForwardProcess;
 pub use merton76process::Merton76Process;

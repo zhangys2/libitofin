@@ -4,13 +4,168 @@
 import builtins
 import typing
 __all__ = [
+    "GeneralStatistics",
+    "IncrementalStatistics",
+    "average_shortfall",
+    "downside_deviation",
+    "downside_variance",
     "expected_shortfall",
     "mean",
     "percentile",
+    "potential_upside",
+    "regret",
+    "semi_deviation",
+    "semi_variance",
+    "shortfall",
     "standard_deviation",
+    "top_percentile",
     "value_at_risk",
     "variance",
 ]
+
+@typing.final
+class GeneralStatistics:
+    r"""
+    Stores weighted observations and exposes empirical moments and risk measures.
+    A zero-weight observation counts toward count-based moment corrections.
+    """
+    def __init__(self) -> None:
+        r"""
+        Create an empty stored-sample accumulator.
+        """
+    def add(self, value: builtins.float, weight: builtins.float = 1.0) -> None:
+        r"""
+        Add one finite observation with a nonnegative weight.
+        """
+    def add_batch(self, observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> None:
+        r"""
+        Atomically append a sequence and optional matching weights.
+        """
+    def reset(self) -> None:
+        r"""
+        Remove all observations.
+        """
+    def samples(self) -> builtins.int:
+        r"""
+        Number of observations, including zero-weight observations.
+        """
+    def weight_sum(self) -> builtins.float:
+        r"""
+        Sum of observation weights.
+        """
+    def min(self) -> builtins.float: ...
+    def max(self) -> builtins.float: ...
+    def mean(self) -> builtins.float: ...
+    def variance(self) -> builtins.float: ...
+    def standard_deviation(self) -> builtins.float: ...
+    def error_estimate(self) -> builtins.float: ...
+    def skewness(self) -> builtins.float: ...
+    def kurtosis(self) -> builtins.float: ...
+    def percentile(self, probability: builtins.float) -> builtins.float: ...
+    def top_percentile(self, probability: builtins.float) -> builtins.float: ...
+    def semi_variance(self) -> builtins.float: ...
+    def semi_deviation(self) -> builtins.float: ...
+    def downside_variance(self) -> builtins.float: ...
+    def downside_deviation(self) -> builtins.float: ...
+    def regret(self, target: builtins.float) -> builtins.float: ...
+    def potential_upside(self, confidence: builtins.float) -> builtins.float: ...
+    def value_at_risk(self, confidence: builtins.float) -> builtins.float: ...
+    def expected_shortfall(self, confidence: builtins.float) -> builtins.float: ...
+    def shortfall(self, target: builtins.float) -> builtins.float: ...
+    def average_shortfall(self, target: builtins.float) -> builtins.float: ...
+
+@typing.final
+class IncrementalStatistics:
+    r"""
+    Weighted streaming moments with fixed memory use, independent of sample count.
+    """
+    def __init__(self) -> None:
+        r"""
+        Create an empty accumulator.
+        """
+    def add(self, value: builtins.float, weight: builtins.float = 1.0) -> None:
+        r"""
+        Append one finite observation and finite nonnegative weight.
+        """
+    def add_batch(self, values: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> None:
+        r"""
+        Append a batch atomically; omitted weights give unit weights.
+        """
+    def reset(self) -> None:
+        r"""
+        Clear all observations while retaining this object.
+        """
+    def samples(self) -> builtins.int:
+        r"""
+        Number of observations, including zero-weight observations.
+        """
+    def downside_samples(self) -> builtins.int:
+        r"""
+        Number of strictly negative observations.
+        """
+    def weight_sum(self) -> builtins.float:
+        r"""
+        Sum of all observation weights.
+        """
+    def downside_weight_sum(self) -> builtins.float:
+        r"""
+        Sum of weights on strictly negative observations.
+        """
+    def min(self) -> builtins.float:
+        r"""
+        Lowest observation.
+        """
+    def max(self) -> builtins.float:
+        r"""
+        Highest observation.
+        """
+    def mean(self) -> builtins.float:
+        r"""
+        Weighted arithmetic mean.
+        """
+    def variance(self) -> builtins.float:
+        r"""
+        Weighted variance corrected by the sample count N/(N-1).
+        """
+    def standard_deviation(self) -> builtins.float:
+        r"""
+        Square root of the corrected variance.
+        """
+    def error_estimate(self) -> builtins.float:
+        r"""
+        Standard error of the mean.
+        """
+    def skewness(self) -> builtins.float:
+        r"""
+        Bias-corrected weighted skewness.
+        """
+    def kurtosis(self) -> builtins.float:
+        r"""
+        Bias-corrected excess kurtosis.
+        """
+    def downside_variance(self) -> builtins.float:
+        r"""
+        Corrected second moment of strictly negative observations.
+        """
+    def downside_deviation(self) -> builtins.float:
+        r"""
+        Square root of the downside variance.
+        """
+
+def average_shortfall(observations: typing.Sequence[builtins.float], target: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Weighted mean of target minus observations strictly below target.
+    """
+
+def downside_deviation(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Square root of downside variance.
+    """
+
+def downside_variance(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Count-corrected conditional variance below zero.
+    """
 
 def expected_shortfall(observations: typing.Sequence[builtins.float], confidence: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
     r"""
@@ -27,9 +182,39 @@ def percentile(observations: typing.Sequence[builtins.float], probability: built
     Weighted empirical percentile for a probability in (0, 1].
     """
 
+def potential_upside(observations: typing.Sequence[builtins.float], confidence: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Nonnegative upper percentile at confidence in [0.9, 1).
+    """
+
+def regret(observations: typing.Sequence[builtins.float], target: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Count-corrected conditional variance below a finite target.
+    """
+
+def semi_deviation(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Square root of semi variance.
+    """
+
+def semi_variance(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Count-corrected conditional variance below the weighted mean.
+    """
+
+def shortfall(observations: typing.Sequence[builtins.float], target: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Weighted probability of observations strictly below a finite target.
+    """
+
 def standard_deviation(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
     r"""
     Square root of weighted sample variance.
+    """
+
+def top_percentile(observations: typing.Sequence[builtins.float], probability: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Weighted empirical percentile traversing observations from high to low.
     """
 
 def value_at_risk(observations: typing.Sequence[builtins.float], confidence: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:

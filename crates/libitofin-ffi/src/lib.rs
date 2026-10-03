@@ -8,6 +8,8 @@
 //! Go enforces these rules through a session worker locked to one OS thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod bates_api;
+pub mod bates_calibration_api;
 pub mod blackformula_api;
 pub mod bma_api;
 pub mod bma_swap_api;
@@ -16,6 +18,8 @@ pub mod bootstrap_callbacks;
 pub mod bootstrap_variables;
 pub mod boundary;
 pub mod chart_api;
+pub mod merton_paths_api;
+pub mod ou_paths_api;
 pub mod simulation_api;
 pub use boundary::{Context, ItofinError};
 pub mod calendar_api;
@@ -29,8 +33,11 @@ pub mod cubicsmile_api;
 pub mod curves_api;
 pub mod fd_engine_api;
 pub mod garch_api;
+pub mod general_statistics_api;
+pub mod gjr_api;
 pub mod helpers_api;
 pub mod heston_engines_api;
+pub mod incremental_statistics_api;
 pub mod indexes_api;
 pub mod inflation_api;
 pub mod inflation_capfloor_api;
@@ -45,6 +52,7 @@ pub mod iterative_bootstrap_api;
 pub mod joint_curves_api;
 pub mod market_api;
 pub mod mc_api;
+pub mod merton_api;
 pub mod models_api;
 pub mod optimize_api;
 pub mod options_api;
