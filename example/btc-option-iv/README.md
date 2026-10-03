@@ -73,14 +73,16 @@ arbitrage-free fit.
 
 ### Kalman smile reader
 
-The selected-expiry chart overlays the **current regularized fit** (dashed) and
-**Kalman-filtered smile** (solid). Both use exactly nine natural-cubic knots at
+The selected-expiry chart overlays the **reference smile** (dashed), a
+`TotalVarianceCubicSmileSection` with Roger Lee wing asymptotics whose Durrleman
+butterfly report is shown above the chart, and the **Kalman-filtered smile**
+(solid; a natural cubic in IV with no arbitrage check). Both use exactly nine natural-cubic knots at
 `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`; seven quotes still give nine knot IVs
 and eight segments. The regularized fit minimizes mean squared quote error plus
 a curvature penalty (`smoothing=0.01`), permitting initialization from two
 fresh, distinct in-range strikes. It is used for bootstrap/reference only, not
-as a repeated filter pseudo-measurement. `smoothing=0` in `CubicSmileSection`
-still requests an unregularized fit requiring full observation rank.
+as a repeated filter pseudo-measurement. The reference fit is repaired for
+butterfly arbitrage; the Kalman curve is not.
 
 The feed controller updates **every expiry independently on source events**, not
 on UI refreshes. The expiry dropdown updates only when the expiry catalog changes,
@@ -127,7 +129,26 @@ are marked and do not update the fit. Negative internal IVs/overshoot are
 **floored only for plotting**, with a warning; no covariance is silently changed.
 Unsampled regions are model-dependent, not market measurements. Residuals and
 covariance are not calibrated uncertainty, there are no confidence bands, and
-neither curve is arbitrage-free or a trading signal.
+the filtered curve is neither arbitrage-free nor a trading signal.
+
+### SPX 0DTE notebook
+
+[`spx_vol_surface.py`](spx_vol_surface.py) runs the same Kalman smile for SPX
+0DTE options next to the BTC surface, fed by an Interactive Brokers gateway
+(`ib-async`, in the `notebook` group). Start IB Gateway/TWS with the API enabled
+(port 4002 paper, 4001 live) and launch:
+
+```bash
+uv run --group dev --group notebook marimo edit spx_vol_surface.py --host 127.0.0.1 --port 8888 --headless
+```
+
+Notes: market data defaults to **live** (needs an OPRA subscription); pick
+**Delayed** for the free ~15-minute feed, in which case the status is flagged
+and the data is not live. Quotes are inverted with Black-76 against the **spot
+as forward** (discount = 1), an approximation over a few hours, using the real
+time to the 4:00 PM ET close; below 30 seconds to the close the feed stops.
+Only SPXW chains are used, and the earliest unexpired expiration is selected.
+The feed has not been exercised against a live gateway in CI.
 
 Implementation: `btc_option_iv/kalman.py` (NumPy/SciPy math and expiry manager),
 `live.py` (source events and three-second immutable snapshot publication), and
@@ -137,6 +158,7 @@ the Rust API or the dependency-light streaming CLI.
 ## Offline tests
 
 ```bash
+uv sync --group dev --group notebook
 pytest example/btc-option-iv/tests -v
 ```
 

@@ -17,8 +17,11 @@ def make_spx_smile_reader(snapshot: dict):
     if not kalman_views:
         return None, snapshot.get("status", "Waiting for SPX 0DTE options data...")
 
-    # For 0DTE, there is typically a single active expiry view
-    expiry_ms, view = next(iter(kalman_views.items()))
+    # Only the subscribed session's filter is shown; never an arbitrary expiry.
+    expiry_ms = snapshot.get("expiry_timestamp_ms")
+    view = kalman_views.get(expiry_ms)
+    if view is None:
+        return None, snapshot.get("status", "Waiting for the subscribed SPX expiry...")
     if view.knot_ivs is None or view.context is None:
         return None, "Kalman filter is waiting for sufficient two-sided quotes to bootstrap..."
 

@@ -242,13 +242,14 @@ def _(butterfly_markdown, mo, smile_analysis, smile_error, textwrap, time):
             **Warnings:** {_warning_text}{_butterfly_text}
 
             Both curves use the same nine fixed knots. The dashed curve is the
-            total variance cubic smile with Roger Lee wing asymptotics and Durrleman
-            butterfly arbitrage verification; the solid curve filters raw mid IVs
+            total variance cubic smile with Roger Lee wing asymptotics and a Durrleman
+            butterfly check (applies to this reference curve only); the solid curve filters raw mid IVs
             with inverse bid–ask IV-spread precision. Curvature regularization is
             used for bootstrap/reference, not repeatedly imposed on the filter.
             Coefficients and knot values below describe the **unclipped filtered**
             natural cubic. Negative plotted IVs are floored for display only.
-            Sparse regions are model-dependent; covariance is not calibrated confidence.
+            Sparse regions are model-dependent; covariance is not calibrated
+            confidence, and the filtered curve is not arbitrage-free.
         """)
         )
     summary_output

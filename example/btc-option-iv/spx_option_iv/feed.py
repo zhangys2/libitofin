@@ -9,18 +9,30 @@ import math
 import time
 from zoneinfo import ZoneInfo
 
-# Initialize event loop for Python 3.14 before importing ib_async
-try:
-    asyncio.get_event_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
-
-from ib_async import IB, Index, Option
 from itofin import ItofinError
 from itofin.instruments import OptionType
 from itofin.pricingengines import black_formula_implied_volatility
 
 from btc_option_iv.kalman import FilterConfig, FilterManager
+
+
+# Stop pricing this long before the close: below it Black-76 IVs of 0DTE
+# options are dominated by noise and the Kalman knot window collapses.
+MIN_SECONDS_TO_EXPIRY = 30.0
+YEAR_MS = 365.25 * 86_400_000
+MARKET_DATA_TYPES = {1: "Live", 2: "Frozen", 3: "Delayed (~15 min)", 4: "Delayed frozen"}
+
+
+def _load_ib():
+    """Import ib_async lazily, inside the running loop that will own the sockets.
+
+    Importing at module level would make ib_async/eventkit bind to whatever loop
+    exists at import time (a different one from marimo's async cells), and would
+    make ``pytest`` collection require the optional notebook dependency.
+    """
+    from ib_async import IB, Index, Option
+
+    return IB, Index, Option
 
 
 @dataclass(frozen=True)
@@ -41,7 +53,10 @@ class SpxIvRow:
     ask_iv: float
     forward: float
     expiry: float
-    bid_premium_btc: float  # named bid_premium_btc to match FilterManager fingerprint
+    # SPX quotes are index points, not BTC or USD cash. The premium_btc names
+    # only match the FilterManager fingerprint; *_usd are the same points (the
+    # views label them "usd" for table-layout parity with the BTC reader).
+    bid_premium_btc: float
     ask_premium_btc: float
     bid_usd: float
     ask_usd: float
@@ -112,6 +127,8 @@ class SpxFeedController:
         self.port = port
         self.client_id = kwargs.get("client_id", client_id)
         self.strike_radius = 80.0
+        self.market_data_type = 1  # live; 3 = delayed (free) fallback
+        self.ingest_errors = 0
         self.task: asyncio.Task | None = None
         self.filters = FilterManager()
         self.snapshot = {
@@ -143,6 +160,11 @@ class SpxFeedController:
 
     def set_port(self, port: int):
         self.port = port
+
+    def set_market_data_type(self, market_data_type: int):
+        if market_data_type not in MARKET_DATA_TYPES:
+            raise ValueError(f"unknown market data type {market_data_type}")
+        self.market_data_type = market_data_type
 
     def set_strike_radius(self, radius: float):
         self.strike_radius = radius
@@ -178,9 +200,15 @@ class SpxFeedController:
         }
         self.publish(self.snapshot)
 
+    def _status_prefix(self) -> str:
+        label = MARKET_DATA_TYPES[self.market_data_type]
+        return "" if self.market_data_type == 1 else f"[{label} data, not live] "
+
     async def _run(self):
-        ib = IB()
+        ib = None
         try:
+            IB, Index, Option = _load_ib()
+            ib = IB()
             self.snapshot = {
                 **self.snapshot,
                 "status": f"Connecting to IB Gateway on {self.host}:{self.port}...",
@@ -200,8 +228,9 @@ class SpxFeedController:
                         continue
                     raise
             if not connected:
-                raise RuntimeError(f"Unable to connect to IB Gateway (clientIds in use)")
-            ib.reqMarketDataType(3)  # 3 = Delayed (free fallback), 1 = Real-time if subscribed
+                raise RuntimeError("Unable to connect to IB Gateway (clientIds in use)")
+            # 1 = live (needs an OPRA subscription), 3 = delayed (~15 min stale).
+            ib.reqMarketDataType(self.market_data_type)
 
             # Qualify SPX Underlying Index
             spx = Index("SPX", "CBOE")
@@ -231,6 +260,9 @@ class SpxFeedController:
             if live_expiry is None:
                 raise RuntimeError("No unexpired SPXW expirations (market closed?)")
             expiry_str, expiry_ms = live_expiry
+            # Only the subscribed session may own a filter (leftovers from an
+            # earlier connection would otherwise show up in the reader).
+            self.filters.retire({expiry_ms}, now_ms=int(time.time() * 1000))
 
             # Select strikes around spot
             strikes = [
@@ -245,7 +277,14 @@ class SpxFeedController:
             for s in strikes:
                 right = "P" if s < spot else "C"
                 contracts.append(
-                    Option("SPX", expiry_str, s, right, "SMART", tradingClass="SPXW")
+                    Option(
+                        "SPX",
+                        expiry_str,
+                        s,
+                        right,
+                        chain.exchange,
+                        tradingClass=chain.tradingClass,
+                    )
                 )
 
             await ib.qualifyContractsAsync(*contracts)
@@ -253,10 +292,14 @@ class SpxFeedController:
 
             self.snapshot = {
                 **self.snapshot,
-                "status": f"Subscribed to {len(contracts)} SPX 0DTE contracts ({expiry_str})",
+                "status": (
+                    f"{self._status_prefix()}Subscribed to {len(contracts)} "
+                    f"SPX 0DTE contracts ({expiry_str})"
+                ),
                 "connected": True,
                 "expiry_str": expiry_str,
                 "expiry_timestamp_ms": expiry_ms,
+                "market_data_type": self.market_data_type,
             }
             self.publish(self.snapshot)
 
@@ -270,9 +313,29 @@ class SpxFeedController:
                     or spot
                 )
 
-                time_to_close_ms = max(1000, expiry_ms - now_ms)
+                time_to_close_ms = expiry_ms - now_ms
+                if time_to_close_ms <= MIN_SECONDS_TO_EXPIRY * 1000:
+                    self.filters.retire(set(), now_ms=now_ms)
+                    self.snapshot = {
+                        **self.snapshot,
+                        "status": (
+                            f"SPX {expiry_str} session closed (4:00 PM ET) — "
+                            "feed stopped, no quotes are being priced."
+                        ),
+                        "connected": True,
+                        "latest_quotes": {},
+                        "kalman_views": {},
+                        "time_to_close_hours": 0.0,
+                        "published_ms": now_ms,
+                        "feed_running": False,
+                    }
+                    self.publish(self.snapshot)
+                    return
+
                 hours_left = time_to_close_ms / (3600 * 1000)
-                t_years = max(1e-4, time_to_close_ms / (365.25 * 86_400_000))
+                # Actual remaining time, no floor: a floor would invert every IV
+                # against a fake expiry (IV too small by sqrt(T_actual / T_floor)).
+                t_years = time_to_close_ms / YEAR_MS
 
                 latest_quotes = {}
 
@@ -294,41 +357,52 @@ class SpxFeedController:
                             bid_iv, ask_iv = ask_iv, bid_iv
                         mid_iv = max(bid_iv, min(ask_iv, mid_iv))
 
+                        name = f"SPX_{expiry_str}_{int(c.strike)}_{c.right}"
+                        inst = SpxInstrumentMeta(
+                            instrument_name=name,
+                            expiration_timestamp_ms=expiry_ms,
+                            option_type=c.right.lower(),
+                            strike=c.strike,
+                        )
+                        row = SpxIvRow(
+                            instrument_name=name,
+                            timestamp_ms=now_ms,
+                            strike=c.strike,
+                            mid_iv=mid_iv,
+                            bid_iv=bid_iv,
+                            ask_iv=ask_iv,
+                            # Spot stands in for the forward (discount = 1); the
+                            # carry error is a few index points at most over
+                            # <= 6.5h and is not corrected here.
+                            forward=spot,
+                            expiry=t_years,
+                            bid_premium_btc=t.bid,
+                            ask_premium_btc=t.ask,
+                            bid_usd=t.bid,
+                            ask_usd=t.ask,
+                            right=c.right,
+                        )
                         try:
-                            name = f"SPX_{expiry_str}_{int(c.strike)}_{c.right}"
-                            inst = SpxInstrumentMeta(
-                                instrument_name=name,
-                                expiration_timestamp_ms=expiry_ms,
-                                option_type=c.right.lower(),
-                                strike=c.strike,
-                            )
-                            row = SpxIvRow(
-                                instrument_name=name,
-                                timestamp_ms=now_ms,
-                                strike=c.strike,
-                                mid_iv=mid_iv,
-                                bid_iv=bid_iv,
-                                ask_iv=ask_iv,
-                                # Spot stands in for the forward: with discount=1
-                                # the carry error is negligible over <= 6.5h.
-                                forward=spot,
-                                expiry=t_years,
-                                bid_premium_btc=t.bid,
-                                ask_premium_btc=t.ask,
-                                bid_usd=t.bid,
-                                ask_usd=t.ask,
-                                right=c.right,
-                            )
-                            latest_quotes[name] = row
                             self.filters.ingest(row, inst, now_ms=now_ms, now=now)
-                        except Exception:
+                        except (ValueError, ItofinError):
+                            # Expected per-quote rejections (crossed spread, bad
+                            # inputs). Counted and shown; anything else is a bug
+                            # and propagates to the error status below.
+                            self.ingest_errors += 1
                             continue
+                        latest_quotes[name] = row
 
                 # Run Kalman prediction tick across active filters
                 self.filters.tick(now_ms=now_ms, now=now)
 
+                rejects = (
+                    f", {self.ingest_errors} rejected" if self.ingest_errors else ""
+                )
                 self.snapshot = {
-                    "status": f"Streaming live 0DTE quotes ({len(latest_quotes)} active strikes)",
+                    "status": (
+                        f"{self._status_prefix()}Streaming 0DTE quotes "
+                        f"({len(latest_quotes)} active strikes{rejects})"
+                    ),
                     "connected": True,
                     "spot_price": spot,
                     "expiry_str": expiry_str,
@@ -337,6 +411,7 @@ class SpxFeedController:
                     "latest_quotes": latest_quotes,
                     "kalman_views": self.filters.snapshots(now=now),
                     "filter_config": self.filters.config,
+                    "market_data_type": self.market_data_type,
                     "published_ms": now_ms,
                     "feed_running": True,
                 }
@@ -354,5 +429,5 @@ class SpxFeedController:
             }
             self.publish(self.snapshot)
         finally:
-            if ib.isConnected():
+            if ib is not None and ib.isConnected():
                 ib.disconnect()

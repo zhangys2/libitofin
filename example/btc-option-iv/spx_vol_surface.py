@@ -136,6 +136,11 @@ def _(mo):
         value="4002 (Paper)",
         label="Gateway Port",
     )
+    spx_data_type = mo.ui.dropdown(
+        options={"Live (OPRA subscription)": 1, "Delayed (~15 min, free)": 3},
+        value="Live (OPRA subscription)",
+        label="Market Data (applies on connect)",
+    )
     spx_strike_radius = mo.ui.slider(
         start=30,
         stop=160,
@@ -184,6 +189,7 @@ def _(mo):
         btc_process_rate,
         btc_reset,
         spx_connect,
+        spx_data_type,
         spx_meas_sd,
         spx_port,
         spx_process_rate,
@@ -196,12 +202,14 @@ def _(mo):
 def _(
     FilterConfig,
     spx_controller,
+    spx_data_type,
     spx_meas_sd,
     spx_port,
     spx_process_rate,
     spx_strike_radius,
 ):
     spx_controller.set_port(int(spx_port.value))
+    spx_controller.set_market_data_type(int(spx_data_type.value))
     spx_controller.set_strike_radius(float(spx_strike_radius.value))
     spx_controller.configure(
         FilterConfig(
@@ -257,6 +265,7 @@ def _(
     btc_reset,
     mo,
     spx_connect,
+    spx_data_type,
     spx_meas_sd,
     spx_port,
     spx_process_rate,
@@ -273,7 +282,7 @@ def _(
     if view_mode.value == "⚡ SPX 0DTE Only":
         tuning_ui = mo.vstack(
             [
-                mo.hstack([spx_port, spx_strike_radius], justify="start", gap=2),
+                mo.hstack([spx_port, spx_data_type, spx_strike_radius], justify="start", gap=2),
                 mo.hstack([spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2),
             ],
             gap=1,
@@ -284,7 +293,7 @@ def _(
         tuning_ui = mo.vstack(
             [
                 mo.md("#### Tuning Controls"),
-                mo.hstack([spx_port, spx_strike_radius, spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2),
+                mo.hstack([spx_port, spx_data_type, spx_strike_radius, spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2),
                 mo.hstack([btc_process_rate, btc_meas_sd, btc_reset], justify="start", gap=2),
             ],
             gap=1,
@@ -394,7 +403,7 @@ def _(
     else:
         view = spx_analysis["view"]
         butterfly_md = butterfly_markdown(
-            spx_analysis.get("butterfly_report"), label="Durrleman Butterfly Arbitrage"
+            spx_analysis.get("butterfly_report"), label="Reference smile (total variance) butterfly check"
         )
         if butterfly_md:
             butterfly_md += "<br>"
@@ -409,7 +418,8 @@ def _(
             ### ⚡ SPX 0DTE Volatility Smile (IBKR Socket)
             **SPX Spot / Forward:** `{spx_analysis['spot_price']:,.2f} USD` · **ATM Vol:** `{spx_analysis['atm_vol']:.2%}` · **0DTE Expiration:** `{spx_analysis['expiry_str']}` (`{time_left_str}` to 4:00 PM ET close)<br>
             {butterfly_md}
-            **Accepted Updates:** `{view.updates}` · **Resets:** `{view.resets}` · **Filter State:** `{view.status}` · **Last Reset Reason:** `{view.reset_reason}`
+            **Accepted Updates:** `{view.updates}` · **Resets:** `{view.resets}` · **Filter State:** `{view.status}` · **Last Reset Reason:** `{view.reset_reason}`<br>
+            _The arbitrage check applies to the dashed reference smile only. The solid Kalman curve is a natural cubic in IV: not arbitrage-free, not a trading signal._
             """)
         )
 
