@@ -106,6 +106,7 @@ def make_spx_smile_reader(snapshot: dict):
         "expiry_str": snapshot.get("expiry_str", ""),
         "spot_price": spot,
         "forward": context.forward,
+        "forward_source": snapshot.get("forward_source"),
         "exercise_time": context.exercise_time,
         "time_to_close_hours": hours_left,
         "atm_vol": context.atm_vol,

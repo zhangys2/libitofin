@@ -144,10 +144,15 @@ uv run --group dev --group notebook marimo edit spx_vol_surface.py --host 127.0.
 
 Notes: market data defaults to **live** (needs an OPRA subscription); pick
 **Delayed** for the free ~15-minute feed, in which case the status is flagged
-and the data is not live. Quotes are inverted with Black-76 against the **spot
-as forward** (discount = 1), an approximation over a few hours, using the real
-time to the 4:00 PM ET close; below 30 seconds to the close the feed stops.
-Only SPXW chains are used, and the earliest unexpired expiration is selected.
+and the data is not live. Quotes are inverted with Black-76 (discount = 1)
+using the real time to the 4:00 PM ET close; below 30 seconds to the close the
+feed stops. The **forward comes from put-call parity**, `F = K + C_mid - P_mid`,
+the median of the tightest (up to five) pairs among the seven strikes nearest
+the money, which are subscribed on both rights. If fewer than two clean pairs
+exist, or the result is more than 2% from spot, it falls back to spot and the
+header says so. Parity mids carry roughly half a bid-ask spread of noise, so
+the forward can jitter by about a point. Only SPXW chains are used, and the
+earliest unexpired expiration is selected.
 The feed has not been exercised against a live gateway in CI.
 
 Implementation: `btc_option_iv/kalman.py` (NumPy/SciPy math and expiry manager),

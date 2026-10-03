@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import math
+import statistics
 import time
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,11 @@ from btc_option_iv.kalman import FilterConfig, FilterManager
 # options are dominated by noise and the Kalman knot window collapses.
 MIN_SECONDS_TO_EXPIRY = 30.0
 YEAR_MS = 365.25 * 86_400_000
+# Put-call parity forward: use calls AND puts at the strikes nearest the money.
+PARITY_STRIKES = 7  # strikes (nearest spot) subscribed on both rights
+PARITY_MAX_PAIRS = 5  # tightest pairs combined by median
+PARITY_MIN_PAIRS = 2
+PARITY_MAX_DEVIATION = 0.02  # reject a parity forward >2% away from spot
 MARKET_DATA_TYPES = {1: "Live", 2: "Frozen", 3: "Delayed (~15 min)", 4: "Delayed frozen"}
 
 
@@ -86,6 +92,50 @@ def _implied_vol(opt_type, strike, forward, expiry, price) -> float | None:
     except (ItofinError, ValueError, OverflowError):
         return None
     return iv if math.isfinite(iv) and iv > 0 else None
+
+
+def _two_sided(ticker) -> tuple[float, float] | None:
+    """(bid, ask) when the ticker has a valid two-sided quote, else None."""
+    bid, ask = _finite_positive(ticker.bid), _finite_positive(ticker.ask)
+    return (bid, ask) if bid is not None and ask is not None and ask >= bid else None
+
+
+def parity_forward(pairs, spot: float) -> tuple[float, int] | None:
+    """Forward implied by put-call parity, as ``(forward, pairs_used)`` or None.
+
+    ``pairs`` holds ``(strike, call_bid, call_ask, put_bid, put_ask)`` in index
+    points. With discount = 1 (as the IV inversion uses), ``C - P = F - K`` so
+    each pair gives ``F = K + C_mid - P_mid``. The tightest pairs (smallest
+    combined spread) are combined by median, which is robust to a stale quote.
+    Returns None when too few usable pairs exist or the result is implausible,
+    so the caller can fall back to spot.
+    """
+    estimates = []
+    for strike, call_bid, call_ask, put_bid, put_ask in pairs:
+        call_mid, put_mid = (call_bid + call_ask) / 2.0, (put_bid + put_ask) / 2.0
+        # Near-ATM premiums are a small fraction of spot; anything else is a bad quote.
+        if not (0 < call_mid < 0.1 * spot and 0 < put_mid < 0.1 * spot):
+            continue
+        spread = (call_ask - call_bid) + (put_ask - put_bid)
+        estimates.append((spread, strike + call_mid - put_mid))
+    estimates.sort(key=lambda e: e[0])
+    used = [f for _, f in estimates[:PARITY_MAX_PAIRS]]
+    if len(used) < PARITY_MIN_PAIRS:
+        return None
+    forward = statistics.median(used)
+    if not math.isfinite(forward) or forward <= 0:
+        return None
+    if abs(forward / spot - 1.0) > PARITY_MAX_DEVIATION:
+        return None
+    return forward, len(used)
+
+
+def _parity_pairs(quotes, strikes):
+    """(strike, call_bid, call_ask, put_bid, put_ask) for strikes quoted on both rights."""
+    for strike in strikes:
+        call, put = quotes.get((strike, "C")), quotes.get((strike, "P"))
+        if call is not None and put is not None:
+            yield (strike, *call, *put)
 
 
 def select_spxw_chain(chains):
@@ -272,20 +322,24 @@ class SpxFeedController:
             if not strikes:
                 strikes = sorted(chain.strikes, key=lambda s: abs(s - spot))[:20]
 
-            # Build OTM Contracts (Puts below spot, Calls above spot)
+            # Both rights at the strikes nearest the money (for put-call parity
+            # and a tighter-spread choice at those strikes); the OTM right
+            # elsewhere. The filter combines same-strike quotes itself.
+            atm_strikes = set(sorted(strikes, key=lambda k: abs(k - spot))[:PARITY_STRIKES])
             contracts = []
             for s in strikes:
-                right = "P" if s < spot else "C"
-                contracts.append(
-                    Option(
-                        "SPX",
-                        expiry_str,
-                        s,
-                        right,
-                        chain.exchange,
-                        tradingClass=chain.tradingClass,
+                rights = ("C", "P") if s in atm_strikes else (("P" if s < spot else "C"),)
+                for right in rights:
+                    contracts.append(
+                        Option(
+                            "SPX",
+                            expiry_str,
+                            s,
+                            right,
+                            chain.exchange,
+                            tradingClass=chain.tradingClass,
+                        )
                     )
-                )
 
             await ib.qualifyContractsAsync(*contracts)
             tickers = [ib.reqMktData(c, genericTickList="100,101,106") for c in contracts]
@@ -337,20 +391,32 @@ class SpxFeedController:
                 # against a fake expiry (IV too small by sqrt(T_actual / T_floor)).
                 t_years = time_to_close_ms / YEAR_MS
 
+                # Forward from put-call parity on the near-ATM strikes; fall back
+                # to spot (and say so) when there are too few clean pairs.
+                quotes = {(c.strike, c.right): _two_sided(t) for c, t in zip(contracts, tickers)}
+                parity = parity_forward(_parity_pairs(quotes, atm_strikes), spot)
+                if parity is not None:
+                    forward, forward_source = (
+                        parity[0],
+                        f"put-call parity ({parity[1]} strikes)",
+                    )
+                else:
+                    forward, forward_source = spot, "spot (parity unavailable)"
+
                 latest_quotes = {}
 
                 for c, t in zip(contracts, tickers):
-                    if t.bid and t.ask and t.bid > 0 and t.ask >= t.bid:
+                    if quotes[(c.strike, c.right)] is not None:
                         mid = (t.bid + t.ask) / 2.0
                         opt_type = OptionType.Put if c.right == "P" else OptionType.Call
                         # Invert bid/ask/mid with Black-76. A quote whose bid or ask
                         # cannot be inverted is skipped, never filled with a
                         # made-up spread (it would set the filter's precision).
-                        bid_iv = _implied_vol(opt_type, c.strike, spot, t_years, t.bid)
-                        ask_iv = _implied_vol(opt_type, c.strike, spot, t_years, t.ask)
+                        bid_iv = _implied_vol(opt_type, c.strike, forward, t_years, t.bid)
+                        ask_iv = _implied_vol(opt_type, c.strike, forward, t_years, t.ask)
                         if bid_iv is None or ask_iv is None:
                             continue
-                        mid_iv = _implied_vol(opt_type, c.strike, spot, t_years, mid)
+                        mid_iv = _implied_vol(opt_type, c.strike, forward, t_years, mid)
                         if mid_iv is None:
                             mid_iv = (bid_iv + ask_iv) / 2.0
                         if ask_iv < bid_iv:
@@ -371,10 +437,7 @@ class SpxFeedController:
                             mid_iv=mid_iv,
                             bid_iv=bid_iv,
                             ask_iv=ask_iv,
-                            # Spot stands in for the forward (discount = 1); the
-                            # carry error is a few index points at most over
-                            # <= 6.5h and is not corrected here.
-                            forward=spot,
+                            forward=forward,
                             expiry=t_years,
                             bid_premium_btc=t.bid,
                             ask_premium_btc=t.ask,
@@ -405,6 +468,8 @@ class SpxFeedController:
                     ),
                     "connected": True,
                     "spot_price": spot,
+                    "forward": forward,
+                    "forward_source": forward_source,
                     "expiry_str": expiry_str,
                     "expiry_timestamp_ms": expiry_ms,
                     "time_to_close_hours": hours_left,

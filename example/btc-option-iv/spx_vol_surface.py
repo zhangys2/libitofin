@@ -416,7 +416,7 @@ def _(
         spx_status_md = mo.md(
             textwrap.dedent(f"""
             ### ⚡ SPX 0DTE Volatility Smile (IBKR Socket)
-            **SPX Spot / Forward:** `{spx_analysis['spot_price']:,.2f} USD` · **ATM Vol:** `{spx_analysis['atm_vol']:.2%}` · **0DTE Expiration:** `{spx_analysis['expiry_str']}` (`{time_left_str}` to 4:00 PM ET close)<br>
+            **SPX Spot:** `{spx_analysis['spot_price']:,.2f}` · **Forward:** `{spx_analysis['forward']:,.2f}` ({spx_analysis.get('forward_source') or 'n/a'}) · **ATM Vol:** `{spx_analysis['atm_vol']:.2%}` · **0DTE Expiration:** `{spx_analysis['expiry_str']}` (`{time_left_str}` to 4:00 PM ET close)<br>
             {butterfly_md}
             **Accepted Updates:** `{view.updates}` · **Resets:** `{view.resets}` · **Filter State:** `{view.status}` · **Last Reset Reason:** `{view.reset_reason}`<br>
             _The arbitrage check applies to the dashed reference smile only. The solid Kalman curve is a natural cubic in IV: not arbitrage-free, not a trading signal._

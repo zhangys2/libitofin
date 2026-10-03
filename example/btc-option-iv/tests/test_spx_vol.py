@@ -21,6 +21,7 @@ from spx_option_iv.feed import (
     SpxIvRow,
     _finite_positive,
     _implied_vol,
+    parity_forward,
     compute_0dte_expiry_ms,
     select_live_expiry,
     select_spxw_chain,
@@ -247,11 +248,12 @@ def _run_feed(monkeypatch, fake_ib, *, now_ms, loops, market_data_type=1):
     return controller, published
 
 
-def _smart_option_ticker(now_ms, spot=7740.0, vol=0.2):
+def _smart_option_ticker(now_ms, forward=7740.0, vol=0.2):
+    """Tickers priced off ``forward`` (which may differ from the index spot)."""
     t = (CLOSE_MS - now_ms) / feed.YEAR_MS
 
     def make(contract):
-        px = _black76(contract.right, contract.strike, spot, t, vol)
+        px = _black76(contract.right, contract.strike, forward, t, vol)
         return _FakeTicker(bid=px * 0.99, ask=px * 1.01)
 
     return make
@@ -391,3 +393,79 @@ def test_reader_shows_only_the_subscribed_expiry():
     assert far["atm_vol"] == pytest.approx(0.30, abs=0.02)
     missing, error = make_spx_smile_reader({**base, "expiry_timestamp_ms": 1})
     assert missing is None and error == "Streaming"
+
+
+def _parity_pairs(forward, strikes, t=1.0 / 8766, vol=0.2, rel_spread=0.01):
+    pairs = []
+    for k in strikes:
+        c, p = _black76("C", k, forward, t, vol), _black76("P", k, forward, t, vol)
+        pairs.append((k, c * (1 - rel_spread), c * (1 + rel_spread),
+                      p * (1 - rel_spread), p * (1 + rel_spread)))
+    return pairs
+
+
+def test_parity_forward_recovers_the_forward_and_is_robust():
+    strikes = [7720.0, 7730.0, 7740.0, 7750.0, 7760.0]
+    result = parity_forward(_parity_pairs(7745.0, strikes), spot=7740.0)
+    assert result is not None
+    forward, used = result
+    assert used == 5
+    assert forward == pytest.approx(7745.0, abs=1e-6)
+    # One stale pair (wide spread, wrong prices) is outvoted by the median.
+    pairs = _parity_pairs(7745.0, strikes)
+    k, cb, ca, pb, pa = pairs[2]
+    pairs[2] = (k, cb + 8, ca + 12, pb, pa)
+    forward, _ = parity_forward(pairs, spot=7740.0)
+    assert forward == pytest.approx(7745.0, abs=1e-6)
+
+
+def test_parity_forward_returns_none_when_unusable():
+    spot = 7740.0
+    assert parity_forward([], spot) is None
+    assert parity_forward(_parity_pairs(7745.0, [7740.0]), spot) is None  # < 2 pairs
+    # Implausible forward (>2% from spot) is rejected.
+    assert parity_forward(_parity_pairs(8000.0, [7980.0, 7990.0, 8000.0]), spot) is None
+    # Premiums that are not near-ATM option prices (bad quotes) are ignored.
+    bad = [(7740.0, 9000.0, 9100.0, 9000.0, 9100.0), (7750.0, 9000.0, 9100.0, 9000.0, 9100.0)]
+    assert parity_forward(bad, spot) is None
+
+
+def test_feed_uses_parity_forward_for_inversion(monkeypatch):
+    now_ms = CLOSE_MS - 3_600_000
+    # Index spot 7740 but the market is priced off a 7746 forward.
+    fake = _FakeIB(
+        _FakeTicker(market_price=7740.0),
+        _smart_option_ticker(now_ms, forward=7746.0, vol=0.2),
+        [_spxw_chain()],
+    )
+    controller, _ = _run_feed(monkeypatch, fake, now_ms=now_ms, loops=1)
+    snap = controller.snapshot
+    assert snap["forward"] == pytest.approx(7746.0, abs=0.05)
+    assert snap["spot_price"] == 7740.0
+    assert "parity" in snap["forward_source"]
+    quotes = snap["latest_quotes"]
+    assert {"C", "P"} <= {r.right for r in quotes.values()}
+    for row in quotes.values():
+        assert row.forward == pytest.approx(7746.0, abs=0.05)
+        if abs(row.strike - 7746.0) <= 30:
+            assert row.mid_iv == pytest.approx(0.2, abs=5e-3)
+    # Both rights are subscribed only at the strikes nearest the money.
+    both = {c.strike for c in fake.option_contracts if c.right == "C"} & {
+        c.strike for c in fake.option_contracts if c.right == "P"
+    }
+    assert len(both) == feed.PARITY_STRIKES
+
+
+def test_feed_falls_back_to_spot_when_parity_is_unavailable(monkeypatch):
+    now_ms = CLOSE_MS - 3_600_000
+    good = _smart_option_ticker(now_ms)
+
+    def calls_only(contract):
+        # No two-sided puts anywhere: no parity pair can form.
+        return good(contract) if contract.right == "C" else _FakeTicker()
+
+    fake = _FakeIB(_FakeTicker(market_price=7740.0), calls_only, [_spxw_chain()])
+    controller, _ = _run_feed(monkeypatch, fake, now_ms=now_ms, loops=1)
+    snap = controller.snapshot
+    assert snap["forward"] == 7740.0
+    assert "spot" in snap["forward_source"]
