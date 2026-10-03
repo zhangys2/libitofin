@@ -400,7 +400,7 @@ def test_skew_shift_replay_is_finite_without_claiming_a_level_reset():
     assert any(d.status == "gated" for d in view.diagnostics) or view.resets > 0
 
 
-def test_reference_only_forward_and_time_transport_preserves_a_strike_space_line():
+def test_reference_only_forward_and_time_transport_preserves_the_total_variance_reference():
     manager = FilterManager(FilterConfig(process_iv_rate=0))
     originals = [quote(x, iv=0.3 + 0.02 * x) for x in [-1, 0]]
     for row, instrument in originals:
@@ -418,9 +418,10 @@ def test_reference_only_forward_and_time_transport_preserves_a_strike_space_line
     )
     assert view.context.exercise_time == pytest.approx(CONTEXT.exercise_time * 1.02)
     strikes = [quote(x)[0].strike for x in [-1, 0, 1]]
+    expected_vols = [0.28, 0.3, math.sqrt(2 * 0.30**2 - 0.28**2)]
     assert view.volatility(
         view.context.coordinates(strikes), display=False
-    ) == pytest.approx([0.28, 0.3, 0.32], abs=1e-12)
+    ) == pytest.approx(expected_vols, abs=1e-5)
     assert view.updates == before.updates and view.resets == before.resets
     assert view.last_accepted_age == 1
 

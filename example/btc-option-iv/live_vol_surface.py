@@ -16,6 +16,7 @@ def _():
     import pandas as pd
     from btc_option_iv.kalman import FilterConfig
     from btc_option_iv.live import LiveFeedController
+    from btc_option_iv.reference import butterfly_markdown
     from btc_option_iv.views import (
         make_quotes_dataframe,
         make_smile_figure,
@@ -26,6 +27,7 @@ def _():
     return (
         FilterConfig,
         LiveFeedController,
+        butterfly_markdown,
         make_quotes_dataframe,
         make_smile_figure,
         make_smile_reader,
@@ -208,7 +210,7 @@ def _(make_smile_reader, market_snapshot, selected_expiry_ms):
 
 
 @app.cell
-def _(mo, smile_analysis, smile_error, textwrap, time):
+def _(butterfly_markdown, mo, smile_analysis, smile_error, textwrap, time):
     if smile_analysis is None:
         summary_output = mo.md(f"### Selected-expiry Kalman smile\n\n{smile_error}")
     else:
@@ -225,6 +227,9 @@ def _(mo, smile_analysis, smile_error, textwrap, time):
                 f"Current reference fit unavailable: {_view.reference_error}"
             )
         _warning_text = " · ".join(_warnings) or "None"
+        _butterfly_text = butterfly_markdown(smile_analysis.get("butterfly_report"))
+        if _butterfly_text:
+            _butterfly_text = "<br>" + _butterfly_text
         summary_output = mo.md(
             textwrap.dedent(f"""
             ### Selected-expiry cubic smile reader — Kalman prototype
@@ -234,16 +239,17 @@ def _(mo, smile_analysis, smile_error, textwrap, time):
             **Forward:** {smile_analysis["forward"]:,.2f} USD · **Expiry:** {smile_analysis["exercise_time"]:.8f} years<br>
             **ATM normalization IV:** {smile_analysis["atm_vol"]:.2%}<br>
             **Accepted measurement updates:** {_view.updates} · **Resets:** {_view.resets} · **Last reset:** {_view.reset_reason}<br>
-            **Warnings:** {_warning_text}
+            **Warnings:** {_warning_text}{_butterfly_text}
 
             Both curves use the same nine fixed knots. The dashed curve is the
-            current regularized fit (λ=0.01); the solid curve filters raw mid IVs
+            total variance cubic smile with Roger Lee wing asymptotics and a Durrleman
+            butterfly check (applies to this reference curve only); the solid curve filters raw mid IVs
             with inverse bid–ask IV-spread precision. Curvature regularization is
             used for bootstrap/reference, not repeatedly imposed on the filter.
             Coefficients and knot values below describe the **unclipped filtered**
             natural cubic. Negative plotted IVs are floored for display only.
             Sparse regions are model-dependent; covariance is not calibrated
-            confidence, and neither curve is arbitrage-free.
+            confidence, and the filtered curve is not arbitrage-free.
         """)
         )
     summary_output

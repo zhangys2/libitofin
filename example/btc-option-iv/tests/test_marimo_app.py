@@ -200,7 +200,7 @@ def _smile_snapshot(*, points=None):
 
 
 def test_reader_has_nine_knots_and_both_curves_with_correct_residuals():
-    from itofin.termstructures import CubicSmileSection
+    from itofin.termstructures import TotalVarianceCubicSmileSection
 
     _, reader, plot = _modules()
     snapshot, expiry_ms, now_ms, manager = _smile_snapshot()
@@ -218,7 +218,7 @@ def test_reader_has_nine_knots_and_both_curves_with_correct_residuals():
     assert table.iloc[0:1]["fitted_minus_observed"].isna().all()
     assert table.iloc[-1:]["filtered_minus_observed"].isna().all()
     assert table[table["strike_usd"] == 100_000.0].iloc[0]["quotes_combined"] == 2
-    reference = CubicSmileSection(
+    reference = TotalVarianceCubicSmileSection(
         [o.strike for o in view.observations],
         [o.mid_iv for o in view.observations],
         view.context.forward,
@@ -228,7 +228,7 @@ def test_reader_has_nine_knots_and_both_curves_with_correct_residuals():
     for record in table.to_dict("records"):
         if record["used_in_fit"]:
             assert record["fitted_minus_observed"] == pytest.approx(
-                reference.volatility_at_std_dev(record["x_std_dev"])
+                reference.volatility(record["strike_usd"])
                 - record["observed_mid_iv"],
                 abs=1e-12,
             )

@@ -18,6 +18,7 @@ btc-option-iv = "btc_option_iv.stream:main"
 
 [project.optional-dependencies]
 notebook = [
+    "ib-async>=2.1",
     "marimo>=0.13",
     "numpy>=1.21",
     "pandas>=2.2",
@@ -28,6 +29,7 @@ notebook = [
 [dependency-groups]
 dev = ["pytest>=8"]
 notebook = [
+    "ib-async>=2.1",
     "marimo>=0.13",
     "numpy>=1.21",
     "pandas>=2.2",
@@ -39,4 +41,4 @@ notebook = [
 itofin = { path = "../../crates/itofin-py", editable = true }
 
 [tool.hatch.build.targets.wheel]
-packages = ["btc_option_iv"]
+packages = ["btc_option_iv", "spx_option_iv"]
