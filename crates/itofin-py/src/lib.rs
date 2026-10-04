@@ -31,6 +31,7 @@ mod fdengine;
 mod fra;
 mod general_statistics;
 mod gjr;
+mod gjr_model;
 mod gjr_simulation;
 mod helpers;
 mod heston;
@@ -54,6 +55,7 @@ mod overnightfuture;
 mod poissonrng;
 mod randomnumbers;
 mod results;
+mod sequence_statistics;
 mod settings;
 mod simulation;
 mod smilesection;
@@ -382,6 +384,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let models = PyModule::new(py, "models")?;
     models.add_class::<PyHestonModel>()?;
     models.add_class::<bates::PyBatesModel>()?;
+    models.add_class::<gjr_model::PyGjrGarchModel>()?;
     models.add_class::<PyHullWhite>()?;
     models.add_class::<PyHestonModelHelper>()?;
     models.add_class::<PySwaptionHelper>()?;
@@ -408,6 +411,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<PyMCEuropeanEngine>()?;
     pricingengines.add_class::<merton::PyJumpDiffusionEngine>()?;
     pricingengines.add_class::<bates::PyBatesEngine>()?;
+    pricingengines.add_class::<gjr_model::PyAnalyticGjrGarchEngine>()?;
+    pricingengines.add_class::<gjr_model::PyMcEuropeanGjrGarchEngine>()?;
     pricingengines.add_class::<PyQMCEuropeanEngine>()?;
     pricingengines.add_class::<heston_engines::PyCosHestonEngine>()?;
     pricingengines.add_class::<heston_engines::PyExponentialFittingHestonEngine>()?;
@@ -487,6 +492,38 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
         &statistics
     )?)?;
     statistics.add_function(wrap_pyfunction!(statistics::top_percentile, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_mean,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_variance,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_standard_deviation,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_error_estimate,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_minimum,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::sequence_maximum,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::covariance_matrix,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        sequence_statistics::correlation_matrix,
+        &statistics
+    )?)?;
 
     let chart = PyModule::new(py, "chart")?;
     chart.add_class::<chart::PyChartSeries>()?;

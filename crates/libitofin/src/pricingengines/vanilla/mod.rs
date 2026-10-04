@@ -1588,3 +1588,10 @@ mod test_greeks {
 
 #[cfg(test)]
 mod qmc_oracle;
+
+pub mod analyticgjrgarchengine;
+pub mod mceuropeangjrgarchengine;
+pub use analyticgjrgarchengine::AnalyticGjrGarchEngine;
+pub use mceuropeangjrgarchengine::{
+    EuropeanGjrGarchPathPricer, MCEuropeanGjrGarchEngine, MakeMcEuropeanGjrGarchEngine,
+};

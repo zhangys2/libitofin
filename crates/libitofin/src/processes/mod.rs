@@ -11,7 +11,7 @@
 mod batesprocess;
 mod blackscholesprocess;
 pub mod discretization;
-mod forwardmeasureprocess;
+pub mod forwardmeasureprocess;
 mod g2process;
 mod gjrgarchprocess;
 mod gsrprocess;
