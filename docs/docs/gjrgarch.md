@@ -4,7 +4,7 @@ GJR-GARCH couples spot returns and variance with an asymmetric leverage effect.
 The shared Rust process is exposed through C, Go and Python. This is a stochastic
 process and simulation API, not the historical `Garch11` estimator. Calibrated
 models and European engines are documented separately in
-[GJR-GARCH pricing](gjrgarch-pricing.md) (#1165, unreleased).
+[GJR-GARCH pricing](gjrgarch-pricing.md) (#1165, v0.33.0).
 
 ## Parameters and units
 
