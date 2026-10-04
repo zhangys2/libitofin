@@ -59,7 +59,7 @@ impl GsrProcess {
         Ok(Self {
             a,
             sigma,
-            measure: ForwardMeasureTime::new(t_measure),
+            measure: ForwardMeasureTime::new(t_measure)?,
             observable: shared(Observable::new()),
         })
     }
@@ -146,12 +146,8 @@ impl GsrProcess {
 }
 
 impl ForwardMeasureProcess1D for GsrProcess {
-    fn forward_measure_time(&self) -> Time {
-        self.measure.get()
-    }
-
-    fn set_forward_measure_time(&mut self, t: Time) {
-        self.measure.set(t);
+    fn forward_measure_state(&self) -> &ForwardMeasureTime {
+        &self.measure
     }
 }
 

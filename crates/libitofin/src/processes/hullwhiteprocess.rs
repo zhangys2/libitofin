@@ -38,7 +38,7 @@ impl HullWhiteForwardProcess {
             h,
             a,
             sigma,
-            measure: ForwardMeasureTime::new(0.0),
+            measure: ForwardMeasureTime::new(0.0)?,
             observable: shared(Observable::new()),
         })
     }
@@ -113,13 +113,8 @@ impl AsObservable for HullWhiteForwardProcess {
 }
 
 impl ForwardMeasureProcess1D for HullWhiteForwardProcess {
-    fn forward_measure_time(&self) -> Time {
-        self.measure.get()
-    }
-
-    fn set_forward_measure_time(&mut self, t: Time) {
-        self.measure.set(t);
-        self.observable.notify_observers();
+    fn forward_measure_state(&self) -> &ForwardMeasureTime {
+        &self.measure
     }
 }
 
@@ -191,7 +186,7 @@ mod tests {
         let mut p = HullWhiteForwardProcess::new(flat(0.0), a, sigma).unwrap();
         let flag = Flag::new();
         p.observable().register_observer(&as_observer(&flag));
-        p.set_forward_measure_time(5.0);
+        p.set_forward_measure_time(5.0).unwrap();
         assert!(Flag::is_up(&flag));
 
         assert!((p.b(1.0, 5.0) - (1.0 - (-0.4_f64).exp()) / a).abs() < 1e-15);
@@ -202,9 +197,9 @@ mod tests {
         // T-forward drift shift: μ(T₂) − μ(T₁) = −(B(t,T₂) − B(t,T₁)) σ².
         let t = 1.0;
         let x = 0.02;
-        p.set_forward_measure_time(4.0);
+        p.set_forward_measure_time(4.0).unwrap();
         let d4 = p.drift(t, x).unwrap();
-        p.set_forward_measure_time(6.0);
+        p.set_forward_measure_time(6.0).unwrap();
         let d6 = p.drift(t, x).unwrap();
         assert!((d6 - d4 + (p.b(t, 6.0) - p.b(t, 4.0)) * sigma * sigma).abs() < 1e-12);
 
@@ -214,7 +209,7 @@ mod tests {
             c * (1.0 - (-a).exp()) - 0.5 * c * ((-a * 3.0).exp() - (-a * (5.0 + 2.0 - 2.0)).exp());
         assert!((m - expected_m).abs() < 1e-15);
 
-        p.set_forward_measure_time(10.0);
+        p.set_forward_measure_time(10.0).unwrap();
         let w = 1.0;
         let dt = 2.0;
         let xw = 0.03;
