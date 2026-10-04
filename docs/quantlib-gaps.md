@@ -19,7 +19,7 @@ reclassified 2026-09-26 against `main` after the upstream sync through benbenban
 
 | Domain | Feature | QL surface | QL oracle(s) | has_surface | has_matching_oracle | Notes |
 |--------|---------|------------|--------------|-------------|---------------------|-------|
-| Rates | GSR (Gaussian short-rate) | `ql/models/shortrate/onefactormodels/gsr.hpp`, `gsrprocess` | `gsr.cpp` | partial | partial | Constant a/σ `GsrProcess` + `ForwardMeasureProcess1D` (horizon finite and nonnegative); piecewise core / `Gsr` model / engines deferred |
+| Rates | GSR (Gaussian short-rate) | `ql/models/shortrate/onefactormodels/gsr.hpp`, `gsrprocess` | `gsr.cpp` | partial | partial | Constant a/σ `GsrProcess` + `ForwardMeasureProcess1D`; piecewise core / `Gsr` model / engines deferred |
 | Rates | Libor market model | `ql/legacy/libormarketmodels/*` | `libormarketmodel.cpp`, `libormarketmodelprocess.cpp` | partial | partial | Exp corr + lin-exp vol + `LfmCovarianceProxy` (`testSimpleCovarianceModels`); process/cap/swaption/calibration deferred |
 | Rates | Generic market model / SMM / CMS-MM | `ql/models/marketmodels/*` | `marketmodel.cpp`, `marketmodel_cms.cpp`, `marketmodel_smm*.cpp` | partial | partial | `AbcdFunction`/`AbcdSquared` + `AbcdMathFunction` (`testAbcdDegenerateCases`, `testAbcdVolatilityIntegration`); evolvers/products/CMS/SMM deferred |
 | Rates | Markov functional / Gaussian 1D | `markovfunctional`, `gaussian1dmodel` | `markovfunctional.cpp`, `gaussian1dmodel.cpp` | partial | partial | `MfStateProcess` (`testMfStateProcess`); `MarkovFunctional` / Gaussian1d model + engines deferred |
