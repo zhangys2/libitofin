@@ -77,7 +77,7 @@ covered. See [units, schemes and examples](../docs/docs/gjrgarch.md).
 
 ## GJR-GARCH model and European pricing
 
-Unreleased [#1165](https://github.com/benbenbang/libitofin/issues/1165) pairs a
+v0.33.0 [#1165](https://github.com/benbenbang/libitofin/issues/1165) pairs a
 six-parameter daily-unit model, calibration and analytic/Monte Carlo European
 engines in Rust, Python, C and Go. Analytic pricing observes model updates;
 MC retains the supplied process snapshot and reports sampling standard error.
