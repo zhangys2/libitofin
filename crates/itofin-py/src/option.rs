@@ -1,6 +1,7 @@
 //! Facades for the option instrument: OptionType and VanillaOption.
 
 use crate::PyQlError;
+use crate::bates::PyBatesEngine;
 use crate::fdengine::PyFdBlackScholesVanillaEngine;
 use crate::heston::PyHestonModel;
 use crate::heston_engines::{PyCosHestonEngine, PyExponentialFittingHestonEngine};
@@ -8,6 +9,7 @@ use crate::market::PyBlackScholesProcess;
 use crate::mcengine::{
     PyMCAmericanEngine, PyMCEuropeanEngine, PyMCEuropeanHestonEngine, PyQMCEuropeanEngine,
 };
+use crate::merton::PyJumpDiffusionEngine;
 use crate::results::Results;
 use crate::settings::PySettings;
 use crate::time::PyDate;
@@ -171,6 +173,28 @@ impl PyVanillaOption {
         self.inner
             .base_mut()
             .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+    }
+
+    /// Attach a European jump-diffusion engine retaining its live inputs.
+    fn set_jump_diffusion_engine(&mut self, engine: &PyJumpDiffusionEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+
+    /// Attach the jump-diffusion engine and return the option value.
+    fn price_jump_diffusion(&mut self, engine: &PyJumpDiffusionEngine) -> PyResult<f64> {
+        self.set_jump_diffusion_engine(engine);
+        self.npv()
+    }
+
+    /// Attach a European Bates engine retaining its observable model.
+    fn set_bates_engine(&mut self, engine: &PyBatesEngine) {
+        self.inner.base_mut().set_pricing_engine(engine.engine());
+    }
+
+    /// Attach the Bates engine and return the option value.
+    fn price_bates(&mut self, engine: &PyBatesEngine) -> PyResult<f64> {
+        self.set_bates_engine(engine);
+        self.npv()
     }
 
     /// Attach an analytic Heston engine built on model.

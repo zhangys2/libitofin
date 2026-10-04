@@ -15,6 +15,7 @@ __all__ = [
     "AccrualBias",
     "BachelierCapFloorEngine",
     "BachelierSwaptionEngine",
+    "BatesEngine",
     "BlackCapFloorEngine",
     "BlackSwaptionEngine",
     "CashAnnuityModel",
@@ -26,6 +27,7 @@ __all__ = [
     "FdScheme",
     "ForwardsInCouponPeriod",
     "IsdaCdsEngine",
+    "JumpDiffusionEngine",
     "MCAmericanEngine",
     "MCEuropeanEngine",
     "MCEuropeanHestonEngine",
@@ -96,6 +98,18 @@ class BachelierSwaptionEngine:
 
         Returns:
             BachelierSwaptionEngine: The engine over the flat surface.
+        """
+
+@typing.final
+class BatesEngine:
+    r"""
+    European plain-vanilla Bates pricing by Gauss-Laguerre integration.
+    """
+    def __init__(self, model: models.BatesModel, integration_order: builtins.int = 144) -> None:
+        r"""
+        Retain the live model with an integration order from 1 through 192.
+
+        Only NPV is supplied. Unsupported exercises and Greeks raise ItofinError.
         """
 
 @typing.final
@@ -340,6 +354,19 @@ class IsdaCdsEngine:
             forwards_in_coupon_period (ForwardsInCouponPeriod): How forward
                 rates inside a coupon period are integrated. Defaults to
                 Piecewise.
+        """
+
+@typing.final
+class JumpDiffusionEngine:
+    r"""
+    European Merton pricing by a convergent Poisson mixture of Black prices.
+    """
+    def __init__(self, process: processes.Merton76Process, relative_accuracy: builtins.float = 0.0001, max_iterations: builtins.int = 100) -> None:
+        r"""
+        Retain the process and configure relative series accuracy and term limit.
+
+        Accuracy must be finite and positive, and the iteration limit must be
+        between 1 and 100000. Failure to converge raises ItofinError when pricing.
         """
 
 @typing.final

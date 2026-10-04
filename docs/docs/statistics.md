@@ -1,5 +1,7 @@
 # Weighted statistics and empirical risk
 
+## Batch statistics
+
 These stateless functions accept signed observations. A negative observation is
 a loss; value at risk (VaR) and expected shortfall (ES) return a nonnegative
 loss magnitude. Pass one nonnegative weight per observation, or omit weights
@@ -18,6 +20,22 @@ accept a confidence level in `[0.9, 1)`. VaR is the negative of the lower
 **strictly below** the negative VaR threshold, negates that average, and floors
 it at zero. ES raises an error when that tail has no positive-weight samples.
 
+The remaining conditional risk measures use the same signed observations.
+`semi_variance` measures squared distance below the weighted mean;
+`downside_variance` uses zero; `regret` uses a supplied target. They apply the
+count correction to the number of observations **strictly below** the threshold,
+including zero-weight observations, and require at least two such observations
+with a positive total tail weight. Their deviation forms are square roots.
+`shortfall(target)` is the weighted probability below target, and
+`average_shortfall(target)` is the conditional mean of `target - observation`
+there. Average shortfall requires a positive-weight tail; shortfall returns zero
+if none lies below target. Targets must be finite.
+
+`potential_upside(confidence)` is the upper percentile floored at zero, with
+confidence in `[0.9, 1)`. `top_percentile(probability)` walks the sorted
+observations from highest to lowest and returns the first value whose
+cumulative weight reaches probability in `(0, 1]`.
+
 === "Python"
 
     ```python
@@ -28,6 +46,8 @@ it at zero. ES raises an error when that tail has no positive-weight samples.
     assert statistics.value_at_risk(observations, 0.9, weights=weights) == 2.0
     assert statistics.expected_shortfall(observations, 0.9, weights=weights) == 5.0
     assert statistics.mean([1.0, 3.0], weights=[1.0, 3.0]) == 2.5
+    assert statistics.shortfall(observations, 0.0, weights=weights) == 11 / 20
+    assert statistics.top_percentile(observations, 0.5, weights=weights) == -2.0
     ```
 
 === "Go"
@@ -42,7 +62,96 @@ it at zero. ES raises an error when that tail has no positive-weight samples.
     es90, err := itofin.StatisticsExpectedShortfall(observations, weights, 0.9)
     if err != nil { panic(err) }
     _, _ = var90, es90
+    missed, err := itofin.StatisticsShortfall(observations, weights, 0)
+    if err != nil { panic(err) }
+    upper, err := itofin.StatisticsTopPercentile(observations, weights, 0.5)
+    if err != nil { panic(err) }
+    _, _ = missed, upper
     ```
 
 Use `nil` weights in Go, or omit `weights` in Python, for unit weights. The
 same signed-observation and tail conventions apply in both languages.
+## Stored samples
+
+`GeneralStatistics` retains observations so you can add data and query moments,
+percentiles, and empirical risk repeatedly. `add_batch` is atomic: an invalid
+value, weight, or length leaves the prior sample set unchanged. A zero-weight
+observation increases `samples` and contributes to count-based moment
+corrections. Weight-dependent queries need a positive total weight; min/max
+need only samples. `reset` empties the set.
+
+=== "Python"
+
+    ```python
+    from itofin import statistics
+
+    samples = statistics.GeneralStatistics()
+    samples.add_batch([-10.0, -5.0, 1.0], weights=[1.0, 2.0, 17.0])
+    assert samples.value_at_risk(0.9) == 5.0
+    assert samples.expected_shortfall(0.9) == 10.0
+    samples.add(-20.0)
+    assert samples.percentile(0.01) == -20.0
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    session, err := itofin.NewSession()
+    if err != nil { panic(err) }
+    defer session.Close()
+    samples, err := session.NewGeneralStatistics()
+    if err != nil { panic(err) }
+    defer samples.Close()
+    if err := samples.AddBatch([]float64{-10, -5, 1}, []float64{1, 2, 17}); err != nil { panic(err) }
+    var90, err := samples.ValueAtRisk(0.9)
+    if err != nil { panic(err) }
+    _ = var90
+    ```
+
+Python owns the accumulator directly. Go accumulators belong to their creating
+session; close each handle and the session when finished. The same count-based
+variance and signed-loss rules as the batch functions apply.
+
+## Incremental statistics
+
+`IncrementalStatistics` keeps weighted moments in fixed memory as observations
+arrive. It accepts finite values and finite nonnegative weights; a zero-weight
+value still counts and can set the minimum or maximum. A batch is added all at
+once or leaves the accumulator unchanged on error. `reset` clears the samples.
+
+Variance, standard deviation, error estimate, skewness and kurtosis use the
+core's observation-count corrections. Downside statistics include strictly
+negative observations. Downside variance requires two such observations with
+positive combined weight. Percentile, VaR and ES require the stored-sample
+statistics facade; the incremental accumulator has no empirical tail queries.
+
+=== "Python"
+
+    ```python
+    from itofin import statistics
+
+    stream = statistics.IncrementalStatistics()
+    stream.add_batch([-4.0, -2.0, 2.0, 8.0], weights=[1.0, 2.0, 1.0, 0.0])
+    assert stream.samples() == 4
+    assert stream.mean() == -1.5
+    assert stream.downside_deviation() == 4.0
+    stream.reset()
+    ```
+
+=== "Go"
+
+    ```go
+    session, err := itofin.NewSession()
+    if err != nil { panic(err) }
+    defer session.Close()
+    stream, err := session.NewIncrementalStatistics()
+    if err != nil { panic(err) }
+    defer stream.Close()
+    err = stream.AddBatch([]float64{-4, -2, 2, 8}, []float64{1, 2, 1, 0})
+    if err != nil { panic(err) }
+    mean, err := stream.Mean()
+    if err != nil { panic(err) }
+    _ = mean
+    ```

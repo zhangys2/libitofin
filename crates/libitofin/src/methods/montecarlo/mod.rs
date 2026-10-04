@@ -6,13 +6,16 @@
 
 mod brownianbridge;
 mod earlyexercisepathpricer;
+pub mod gjr_paths;
 mod longstaffschwartzpathpricer;
 mod lsmbasissystem;
 mod mcsimulation;
 mod mctraits;
+pub mod merton_paths;
 mod montecarlomodel;
 mod multipath;
 mod multipathgenerator;
+pub mod ou_paths;
 mod path;
 mod pathgen;
 mod pathgenerator;

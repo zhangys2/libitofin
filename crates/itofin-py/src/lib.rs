@@ -5,6 +5,7 @@
 //! Python-visible ItofinError exception. The pricing facades land in follow-up
 //! tickets (#485-#487).
 
+mod bates;
 mod blackformula;
 mod bma;
 mod bootstrap;
@@ -28,20 +29,27 @@ mod currency;
 mod curve;
 mod fdengine;
 mod fra;
+mod general_statistics;
+mod gjr;
+mod gjr_simulation;
 mod helpers;
 mod heston;
 mod heston_engines;
 mod hullwhite;
+mod incremental_statistics;
 mod inflation;
 mod iterativebootstrap;
 mod jointcurves;
 mod makeswaption;
 mod market;
 mod mcengine;
+mod merton;
+mod merton_simulation;
 mod ois;
 mod optimize;
 mod option;
 mod optionletvol;
+mod ou_simulation;
 mod overnightfuture;
 mod poissonrng;
 mod randomnumbers;
@@ -206,6 +214,10 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ItofinError", py.get_type::<ItofinError>())?;
     m.add_function(wrap_pyfunction!(simulation::gaussian_draws, m)?)?;
     m.add_function(wrap_pyfunction!(simulation::simulate_gbm, m)?)?;
+    m.add_function(wrap_pyfunction!(simulation::simulate_heston, m)?)?;
+    m.add_function(wrap_pyfunction!(ou_simulation::simulate_ou, m)?)?;
+    m.add_function(wrap_pyfunction!(merton_simulation::simulate_merton, m)?)?;
+    m.add_function(wrap_pyfunction!(gjr_simulation::simulate_gjr, m)?)?;
     m.add_class::<PySettings>()?;
 
     let time = PyModule::new(py, "time")?;
@@ -304,6 +316,9 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let processes = PyModule::new(py, "processes")?;
     processes.add_class::<PyBlackScholesProcess>()?;
     processes.add_class::<PyHestonProcess>()?;
+    processes.add_class::<bates::PyBatesProcess>()?;
+    processes.add_class::<merton::PyMerton76Process>()?;
+    processes.add_class::<gjr::PyGjrGarchProcess>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
     indexes.add_class::<overnightfuture::PySofr>()?;
@@ -366,6 +381,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let models = PyModule::new(py, "models")?;
     models.add_class::<PyHestonModel>()?;
+    models.add_class::<bates::PyBatesModel>()?;
     models.add_class::<PyHullWhite>()?;
     models.add_class::<PyHestonModelHelper>()?;
     models.add_class::<PySwaptionHelper>()?;
@@ -390,6 +406,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<fdengine::PyFdScheme>()?;
     pricingengines.add_class::<fdengine::PyFdBlackScholesVanillaEngine>()?;
     pricingengines.add_class::<PyMCEuropeanEngine>()?;
+    pricingengines.add_class::<merton::PyJumpDiffusionEngine>()?;
+    pricingengines.add_class::<bates::PyBatesEngine>()?;
     pricingengines.add_class::<PyQMCEuropeanEngine>()?;
     pricingengines.add_class::<heston_engines::PyCosHestonEngine>()?;
     pricingengines.add_class::<heston_engines::PyExponentialFittingHestonEngine>()?;
@@ -437,6 +455,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     results.add_class::<Results>()?;
 
     let statistics = PyModule::new(py, "statistics")?;
+    statistics.add_class::<general_statistics::PyGeneralStatistics>()?;
+    statistics.add_class::<incremental_statistics::PyIncrementalStatistics>()?;
     statistics.add_function(wrap_pyfunction!(statistics::mean, &statistics)?)?;
     statistics.add_function(wrap_pyfunction!(statistics::variance, &statistics)?)?;
     statistics.add_function(wrap_pyfunction!(
@@ -449,6 +469,24 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
         statistics::expected_shortfall,
         &statistics
     )?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::semi_variance, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::semi_deviation, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        statistics::downside_variance,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        statistics::downside_deviation,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::regret, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::potential_upside, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::shortfall, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        statistics::average_shortfall,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(statistics::top_percentile, &statistics)?)?;
 
     let chart = PyModule::new(py, "chart")?;
     chart.add_class::<chart::PyChartSeries>()?;

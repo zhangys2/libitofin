@@ -38,6 +38,10 @@ __all__ = [
     "randomnumbers",
     "results",
     "simulate_gbm",
+    "simulate_gjr",
+    "simulate_heston",
+    "simulate_merton",
+    "simulate_ou",
     "statistics",
     "termstructures",
     "time",
@@ -151,4 +155,108 @@ def simulate_gbm(initial: typing.Sequence[builtins.float], drift: typing.Sequenc
 
     Raises:
         ItofinError: If inputs, correlation, or output size are invalid.
+    """
+
+def simulate_gjr(spot: builtins.float, daily_variance: builtins.float, risk_free_rate: builtins.float, dividend_yield: builtins.float, omega: builtins.float, alpha: builtins.float, beta: builtins.float, gamma: builtins.float, lambda_: builtins.float, horizon: builtins.float, steps: builtins.int, paths: builtins.int, seed: builtins.int, days_per_year: builtins.float = 252.0, scheme: builtins.str = 'FullTruncation', terminal_only: builtins.bool = False, max_output_values: builtins.int = 0) -> numpy.typing.NDArray[numpy.float64]:
+    r"""
+    Generate seeded GJR-GARCH diffusion-approximation spot/variance paths.
+
+    Daily `daily_variance` and `omega` parameters are converted internally.
+    Output component zero is spot; component one is raw annual variance,
+    which may be negative with truncation schemes. This is not the daily
+    GJR recursion. Rates and horizon are annualized, continuously compounded.
+
+    `scheme` is `PartialTruncation`, `FullTruncation` or `Reflection`. Each
+    step consumes two MT19937/inverse-normal draws in path/time/factor order,
+    even for zero horizon. Equal seeds and inputs reproduce the same paths
+    across Python and Go. Zero seed is rejected.
+
+    Returns:
+        numpy.ndarray: Owned contiguous float64 values shaped
+            `(paths, steps + 1, 2)` including initial state, or `(paths, 2)`
+            with `terminal_only`. Terminal rows match final full rows exactly.
+
+    Raises:
+        ItofinError: If parameters, time grid, simulation or output size are
+            invalid. `max_output_values=0` selects 16,777,216 values (128 MiB).
+    """
+
+def simulate_heston(spot: builtins.float, variance: builtins.float, risk_free_rate: builtins.float, dividend_yield: builtins.float, kappa: builtins.float, theta: builtins.float, sigma: builtins.float, rho: builtins.float, horizon: builtins.float, steps: builtins.int, paths: builtins.int, seed: builtins.int, scheme: builtins.str = 'qem', terminal_only: builtins.bool = False, max_output_values: builtins.int = 0) -> numpy.typing.NDArray[numpy.float64]:
+    r"""
+    Generate seeded Heston spot/variance paths with flat rates.
+
+    `scheme` is `"qe"` or `"qem"`. Independent normal draws are consumed in
+    path, time, spot-factor, variance-factor order. Component zero is spot and
+    component one is variance. Full output includes time zero; terminal output
+    matches the last full row for the same seed.
+
+    Returns:
+        numpy.ndarray: Float64 values shaped `(paths, steps + 1, 2)` or
+            `(paths, 2)` in terminal mode.
+    """
+
+def simulate_merton(spot: builtins.float, drift: builtins.float, volatility: builtins.float, jump_intensity: builtins.float, log_mean_jump: builtins.float, log_jump_volatility: builtins.float, horizon: builtins.float, steps: builtins.int, paths: builtins.int, seed: builtins.int, terminal_only: builtins.bool = False, max_output_values: builtins.int = 0) -> numpy.typing.NDArray[numpy.float64]:
+    r"""
+    Generate exact constant-parameter Merton jump-diffusion paths.
+
+    `drift` is annualized expected arithmetic spot growth including jumps:
+    risk-neutral callers supply risk-free rate minus dividend yield; forecast
+    callers supply their own assumption. The kernel subtracts the jump
+    compensator internally. It uses original event intensity, rather than the
+    adjusted intensity used by the European pricing engine.
+
+    Separate deterministic MT19937 streams supply diffusion normals, Poisson
+    uniforms and jump normals. Every path step consumes all three draws, even
+    when the horizon or a coefficient is zero. Equal seeds and inputs reproduce
+    the same paths; zero jump intensity matches scalar `simulate_gbm` exactly.
+
+    Args:
+        spot (float): Finite positive initial spot.
+        drift (float): Finite annualized expected arithmetic spot growth.
+        volatility (float): Finite nonnegative diffusion volatility.
+        jump_intensity (float): Finite nonnegative event intensity.
+        log_mean_jump (float): Finite mean of logarithmic jump size.
+        log_jump_volatility (float): Finite nonnegative log-jump dispersion.
+        horizon (float): Finite nonnegative horizon in matching annual units.
+        steps (int): Positive intervals per path.
+        paths (int): Positive independent paths.
+        seed (int): Nonzero 32-bit seed.
+        terminal_only (bool): Return final spots instead of complete paths.
+        max_output_values (int): Zero selects 16,777,216 values (128 MiB).
+
+    Returns:
+        numpy.ndarray: Owned contiguous float64 values shaped
+            `(paths, steps + 1)` including the initial spot, or `(paths,)` for
+            terminal output. Terminal spots match the last full column exactly.
+
+    Raises:
+        ItofinError: If inputs, numerical representation, output size, Poisson
+            recurrence domain or simulated positive finite spots are invalid.
+    """
+
+def simulate_ou(initial: builtins.float, level: builtins.float, speed: builtins.float, volatility: builtins.float, horizon: builtins.float, steps: builtins.int, paths: builtins.int, seed: builtins.int, terminal_only: builtins.bool = False, max_output_values: builtins.int = 0) -> numpy.typing.NDArray[numpy.float64]:
+    r"""
+    Generate exact Ornstein-Uhlenbeck paths with a deterministic seed.
+
+    One standard normal is consumed per path and step. Full output has shape
+    `(paths, steps + 1)` and includes time zero; terminal output has shape
+    `(paths,)`. Zero horizon and zero volatility remain deterministic.
+
+    Args:
+        initial (float): Initial state.
+        level (float): Long-run mean.
+        speed (float): Nonnegative mean-reversion speed.
+        volatility (float): Nonnegative diffusion volatility.
+        horizon (float): Nonnegative simulation horizon.
+        steps (int): Positive intervals per path.
+        paths (int): Positive independent paths.
+        seed (int): Nonzero 32-bit seed.
+        terminal_only (bool): Return only final states.
+        max_output_values (int): Zero selects 16,777,216 values (128 MiB).
+
+    Returns:
+        numpy.ndarray: Contiguous float64 paths.
+
+    Raises:
+        ItofinError: If inputs, output size or simulated values are invalid.
     """

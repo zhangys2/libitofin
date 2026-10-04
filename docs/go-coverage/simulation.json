@@ -14,6 +14,27 @@
       "python": "itofin.simulate_gbm",
       "status": "implemented",
       "tests": "TestGBMLayoutAndTerminalConsistency"
+    },
+    {
+      "c": "itofin_ou_paths",
+      "go": "SimulateOU",
+      "python": "itofin.simulate_ou",
+      "status": "implemented",
+      "tests": "TestOULayoutAndTerminalConsistency"
+    },
+    {
+      "c": "itofin_heston_paths",
+      "go": "SimulateHeston",
+      "python": "itofin.simulate_heston",
+      "status": "implemented",
+      "tests": "TestHestonLayoutTerminalSeedAndZeroTime"
+    },
+    {
+      "c": "itofin_merton_paths",
+      "go": "SimulateMerton",
+      "python": "itofin.simulate_merton",
+      "status": "implemented",
+      "tests": "TestMertonSimulationLayoutSeedTerminalAndOwnedOutput"
     }
   ]
 }

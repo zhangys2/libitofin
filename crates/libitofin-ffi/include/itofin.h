@@ -48,12 +48,34 @@ typedef struct ItofinContext ItofinContext;
 typedef struct ItofinBootstrapOutput ItofinBootstrapOutput;
 
 /**
+ * Physical constructor order, distinct from calibrated parameter-array order.
+ */
+typedef struct ItofinBatesParameters {
+  double v0;
+  double kappa;
+  double theta;
+  double sigma;
+  double rho;
+  double lambda;
+  double nu;
+  double delta;
+} ItofinBatesParameters;
+
+/**
  * Caller-owned error. Zero code means success; message is NUL-terminated UTF-8.
  */
 typedef struct ItofinError {
   int32_t code;
   char message[1024];
 } ItofinError;
+
+typedef struct ItofinCalibrationOptions {
+  uint64_t constraint;
+  const double *weights;
+  size_t weights_len;
+  const uint8_t *fix_parameters;
+  size_t fix_parameters_len;
+} ItofinCalibrationOptions;
 
 /**
  * Coupon constructor; zero reference dates use the accrual dates.
@@ -136,6 +158,45 @@ typedef struct ItofinBootstrapCallbacks {
 } ItofinBootstrapCallbacks;
 
 /**
+ * Scalar annualized Merton parameters and seeded path dimensions.
+ * Drift includes jumps; risk-neutral callers supply risk-free minus dividend.
+ */
+typedef struct ItofinMertonInput {
+  double spot;
+  double drift;
+  double volatility;
+  double jump_intensity;
+  double log_mean_jump;
+  double log_jump_volatility;
+  double horizon;
+  size_t steps;
+  size_t paths;
+  uint32_t seed;
+  /**
+   * 0 full `[path,time]` including initial spot; 1 terminal `[path]`.
+   */
+  int32_t terminal_only;
+} ItofinMertonInput;
+
+/**
+ * Scalar inputs for exact OU simulation.
+ */
+typedef struct ItofinOuInput {
+  ItofinReal initial;
+  ItofinReal level;
+  ItofinReal speed;
+  ItofinReal volatility;
+  ItofinReal horizon;
+  size_t steps;
+  size_t paths;
+  uint32_t seed;
+  /**
+   * 0: full `[path,time]`; 1: terminal `[path]`.
+   */
+  int32_t terminal_only;
+} ItofinOuInput;
+
+/**
  * GBM inputs; arrays each contain `assets` doubles, correlation `assets*assets`.
  */
 typedef struct ItofinGbmInput {
@@ -154,6 +215,26 @@ typedef struct ItofinGbmInput {
   int32_t terminal_only;
 } ItofinGbmInput;
 
+/**
+ * Heston inputs with flat rates. Scheme 0 is QEM; scheme 1 is QE.
+ */
+typedef struct ItofinHestonInput {
+  ItofinReal spot;
+  ItofinReal variance;
+  ItofinReal risk_free_rate;
+  ItofinReal dividend_yield;
+  ItofinReal kappa;
+  ItofinReal theta;
+  ItofinReal sigma;
+  ItofinReal rho;
+  ItofinReal horizon;
+  size_t steps;
+  size_t paths;
+  uint32_t seed;
+  int32_t scheme;
+  int32_t terminal_only;
+} ItofinHestonInput;
+
 typedef struct ItofinCapHelperConfig {
   int32_t length;
   int32_t length_unit;
@@ -170,14 +251,6 @@ typedef struct ItofinCapHelperConfig {
   int32_t volatility_type;
   double shift;
 } ItofinCapHelperConfig;
-
-typedef struct ItofinCalibrationOptions {
-  uint64_t constraint;
-  const double *weights;
-  size_t weights_len;
-  const uint8_t *fix_parameters;
-  size_t fix_parameters_len;
-} ItofinCalibrationOptions;
 
 /**
  * A zero quote handle selects `rate`; a nonzero settings handle selects moving dates.
@@ -272,6 +345,48 @@ typedef struct ItofinFdConfig {
   uint64_t damping_steps;
   int32_t scheme;
 } ItofinFdConfig;
+
+/**
+ * Daily variance parameters; live states contain annualized variance.
+ */
+typedef struct ItofinGjrParameters {
+  double daily_variance;
+  double omega;
+  double alpha;
+  double beta;
+  double gamma;
+  double lambda;
+  double days_per_year;
+} ItofinGjrParameters;
+
+/**
+ * Flat-rate parameters and seeded path dimensions. Full output is
+ * `[path,time,2]`; terminal output is `[path,2]`, with spot then annual variance.
+ */
+typedef struct ItofinGjrInput {
+  double spot;
+  double daily_variance;
+  double risk_free_rate;
+  double dividend_yield;
+  double omega;
+  double alpha;
+  double beta;
+  double gamma;
+  double lambda;
+  double days_per_year;
+  double horizon;
+  size_t steps;
+  size_t paths;
+  uint32_t seed;
+  /**
+   * 0 partial truncation, 1 full truncation, 2 reflection.
+   */
+  int32_t discretization;
+  /**
+   * 0 full paths including initial values; 1 terminal states only.
+   */
+  int32_t terminal_only;
+} ItofinGjrInput;
 
 typedef struct ItofinSwapHelperConfig {
   uint64_t quote;
@@ -1171,6 +1286,117 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * Retain live spot, risk-free and dividend inputs with constant parameters.
+ * # Safety
+ * Pointers must be aligned, live and non-overlapping. Context and handles
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_bates_process_new(struct ItofinContext *ctx,
+                                 uint64_t spot,
+                                 uint64_t risk_free,
+                                 uint64_t dividend,
+                                 const struct ItofinBatesParameters *parameters,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * Retain the process and seed eight calibrated parameters.
+ * # Safety
+ * Pointers, context and handles must obey the C caller contract.
+ */
+int32_t itofin_bates_model_new(struct ItofinContext *ctx,
+                               uint64_t process,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Kind 0 process, 1 model; field 0 v0, 1 kappa, 2 theta, 3 sigma,
+ * 4 rho, 5 lambda, 6 nu, 7 delta.
+ * # Safety
+ * Pointers, context and handles must obey the C caller contract.
+ */
+int32_t itofin_bates_parameter(struct ItofinContext *ctx,
+                               uint64_t handle,
+                               int32_t kind,
+                               size_t field,
+                               double *out,
+                               struct ItofinError *error);
+
+/**
+ * Convert a date with the retained risk-free curve's clock.
+ * # Safety
+ * Pointers, context and handles must obey the C caller contract.
+ */
+int32_t itofin_bates_process_time(struct ItofinContext *ctx,
+                                  uint64_t process,
+                                  int32_t date_serial,
+                                  double *out,
+                                  struct ItofinError *error);
+
+/**
+ * Copy the current spot and initial variance, without partial writes on error.
+ * # Safety
+ * `out` must hold two writable doubles. Other arguments obey the C contract.
+ */
+int32_t itofin_bates_process_initial_values(struct ItofinContext *ctx,
+                                            uint64_t process,
+                                            double *out,
+                                            size_t capacity,
+                                            struct ItofinError *error);
+
+/**
+ * Copy theta,kappa,sigma,rho,v0,nu,delta,lambda atomically.
+ * # Safety
+ * `out` must hold eight writable doubles. Other arguments obey the C contract.
+ */
+int32_t itofin_bates_model_params(struct ItofinContext *ctx,
+                                  uint64_t model,
+                                  double *out,
+                                  size_t capacity,
+                                  struct ItofinError *error);
+
+/**
+ * Validate and atomically replace theta,kappa,sigma,rho,v0,nu,delta,lambda.
+ * Input is copied and never retained.
+ * # Safety
+ * `parameters` must hold `len` readable doubles. Other arguments obey the C contract.
+ */
+int32_t itofin_bates_model_set_params(struct ItofinContext *ctx,
+                                      uint64_t model,
+                                      const double *parameters,
+                                      size_t len,
+                                      struct ItofinError *error);
+
+/**
+ * Retain a Bates engine for option engine kind 2. Orders 1..192;
+ * 144 is conventional. European plain-vanilla NPV only, no Greeks.
+ * # Safety
+ * Pointers, context and handles must obey the C caller contract.
+ */
+int32_t itofin_bates_engine_new(struct ItofinContext *ctx,
+                                uint64_t model,
+                                size_t integration_order,
+                                uint64_t *out,
+                                struct ItofinError *error);
+
+/**
+ * Calibrate eight Bates parameters with copied constraints, weights and fixed mask.
+ * The parameter-mask order is theta,kappa,sigma,rho,v0,nu,delta,lambda.
+ * # Safety
+ * Pointers and handles obey the C caller contract. Input arrays are copied,
+ * not retained. Context and handles belong to the calling thread.
+ */
+int32_t itofin_bates_calibrate_with_options(struct ItofinContext *ctx,
+                                            uint64_t model,
+                                            const uint64_t *helpers,
+                                            size_t helpers_len,
+                                            uint64_t method,
+                                            uint64_t criteria,
+                                            size_t integration_order,
+                                            const struct ItofinCalibrationOptions *options,
+                                            struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. `guess` may be null. Any context
@@ -1553,6 +1779,29 @@ int32_t itofin_chart_volume_bars(const ItofinReal *open,
                                  struct ItofinError *error);
 
 /**
+ * Generate exact constant-parameter paths, preserving outputs on any error.
+ * # Safety
+ * All pointers obey the crate-level C caller contract. Output must hold
+ * `capacity` doubles and must not overlap input or error. No pointer is retained.
+ */
+int32_t itofin_merton_paths(const struct ItofinMertonInput *input,
+                            double *out,
+                            size_t capacity,
+                            struct ItofinError *error);
+
+/**
+ * Generate OU paths into a caller-owned buffer.
+ *
+ * # Safety
+ * Input, output and error pointers obey the crate-level pointer contract;
+ * `out` must hold at least `capacity` doubles and must not overlap `input`.
+ */
+int32_t itofin_ou_paths(const struct ItofinOuInput *input,
+                        ItofinReal *out,
+                        size_t capacity,
+                        struct ItofinError *error);
+
+/**
  * Generate `count` standard normal values with a deterministic nonzero seed.
  * # Safety
  * Follow the crate-level pointer contract. Output contains `count` doubles.
@@ -1573,6 +1822,17 @@ int32_t itofin_gbm_paths(const struct ItofinGbmInput *input,
                          ItofinReal *out,
                          size_t capacity,
                          struct ItofinError *error);
+
+/**
+ * Generate Heston spot/variance paths in path/time/component order.
+ * # Safety
+ * Input and output obey the crate-level pointer/non-overlap contract.
+ * Full capacity is paths*(steps+1)*2; terminal capacity is paths*2.
+ */
+int32_t itofin_heston_paths(const struct ItofinHestonInput *input,
+                            ItofinReal *out,
+                            size_t capacity,
+                            struct ItofinError *error);
 
 /**
  * # Safety
@@ -2510,6 +2770,150 @@ int32_t itofin_garch11_forecast(ItofinReal last_return,
                                 struct ItofinError *error);
 
 /**
+ * Create an empty accumulator. Release the handle with `itofin_handle_release`.
+ * # Safety
+ * Follow the crate-level C caller contract; `out` holds one handle.
+ */
+int32_t itofin_general_statistics_new(struct ItofinContext *ctx,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * Add one finite weighted observation. Zero weight still increases count.
+ * # Safety
+ * Follow the crate-level C caller contract.
+ */
+int32_t itofin_general_statistics_add(struct ItofinContext *ctx,
+                                      uint64_t id,
+                                      ItofinReal value,
+                                      ItofinReal weight,
+                                      struct ItofinError *error);
+
+/**
+ * Atomically append a batch. Null weights with zero length selects unit weights.
+ * An invalid row or weight sum leaves the accumulator unchanged.
+ * # Safety
+ * `values` holds `len` doubles; when present, `weights` holds `weights_len`
+ * doubles. Follow the crate-level C pointer contract.
+ */
+int32_t itofin_general_statistics_add_batch(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            const ItofinReal *values,
+                                            size_t len,
+                                            const ItofinReal *weights,
+                                            size_t weights_len,
+                                            struct ItofinError *error);
+
+/**
+ * Reset to an empty accumulator.
+ * # Safety
+ * Follow the crate-level C caller contract.
+ */
+int32_t itofin_general_statistics_reset(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        struct ItofinError *error);
+
+/**
+ * Copy the observation count and total weight. Either output may be null.
+ * # Safety
+ * Non-null outputs hold one value and follow the crate-level pointer contract.
+ */
+int32_t itofin_general_statistics_summary(struct ItofinContext *ctx,
+                                          uint64_t id,
+                                          size_t *out_samples,
+                                          ItofinReal *out_weight_sum,
+                                          struct ItofinError *error);
+
+/**
+ * Query a statistic. Selectors 0-19 are min, max, mean, variance, standard
+ * deviation, error estimate, skewness, kurtosis, percentile, top percentile,
+ * semi variance, semi deviation, downside variance, downside deviation,
+ * regret, potential upside, VaR, ES, shortfall, and average shortfall.
+ * `argument` supplies a probability, confidence, or target where applicable.
+ * Nonfinite results and invalid selectors leave `out` unchanged.
+ * # Safety
+ * `out` holds one double and follows the crate-level C caller contract.
+ */
+int32_t itofin_general_statistics_query(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        int32_t selector,
+                                        ItofinReal argument,
+                                        ItofinReal *out,
+                                        struct ItofinError *error);
+
+/**
+ * Retain a live spot quote and live risk-free/dividend curves.
+ * # Safety
+ * All pointers obey the crate-level C caller contract. Parameters are read
+ * during this call only. Context and handles belong to the calling thread.
+ */
+int32_t itofin_gjr_process_new(struct ItofinContext *ctx,
+                               uint64_t spot,
+                               uint64_t risk_free,
+                               uint64_t dividend,
+                               const struct ItofinGjrParameters *params,
+                               int32_t discretization,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Query kind 0 initial state (2), 1 drift (2), 2 row-major diffusion (4),
+ * 3 daily parameters (7, ordered as ItofinGjrParameters), or 4 scheme (1).
+ * # Safety
+ * Follow the crate-level caller contract. State is exactly two doubles for
+ * kinds 1/2; it is ignored for kinds 0/3/4. Output holds `capacity` doubles.
+ */
+int32_t itofin_gjr_process_query(struct ItofinContext *ctx,
+                                 uint64_t process,
+                                 int32_t kind,
+                                 double t,
+                                 const double *state,
+                                 size_t state_len,
+                                 double *out,
+                                 size_t capacity,
+                                 struct ItofinError *error);
+
+/**
+ * Evolve a two-component state with two independent standard Gaussian draws.
+ * # Safety
+ * Follow the crate-level caller contract. State/draws contain their stated
+ * lengths, each exactly 2. Output contains at least `capacity` doubles.
+ */
+int32_t itofin_gjr_process_evolve(struct ItofinContext *ctx,
+                                  uint64_t process,
+                                  double t0,
+                                  const double *state,
+                                  size_t state_len,
+                                  double dt,
+                                  const double *draws,
+                                  size_t draws_len,
+                                  double *out,
+                                  size_t capacity,
+                                  struct ItofinError *error);
+
+/**
+ * Convert a date using the retained risk-free curve's reference date/day counter.
+ * # Safety
+ * Follow the crate-level context, pointer and thread contract.
+ */
+int32_t itofin_gjr_process_time(struct ItofinContext *ctx,
+                                uint64_t process,
+                                int32_t date_serial,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * Generate deterministic seeded paths, preserving output on any failure.
+ * # Safety
+ * Follow the crate-level caller contract; no pointer is retained. Output holds
+ * `capacity` doubles and does not overlap input or error.
+ */
+int32_t itofin_gjr_paths(const struct ItofinGjrInput *input,
+                         double *out,
+                         size_t capacity,
+                         struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -2724,6 +3128,79 @@ int32_t itofin_cos_heston_value(struct ItofinContext *ctx,
                                 double *out_real,
                                 double *out_imag,
                                 struct ItofinError *error);
+
+/**
+ * Create an empty incremental accumulator in the caller's context.
+ *
+ * # Safety
+ * Follow the crate-level C caller contract; `out` is writable.
+ */
+int32_t itofin_incremental_statistics_new(struct ItofinContext *ctx,
+                                          uint64_t *out,
+                                          struct ItofinError *error);
+
+/**
+ * Add one signed observation with its nonnegative weight.
+ *
+ * # Safety
+ * Follow the crate-level C caller contract.
+ */
+int32_t itofin_incremental_statistics_add(struct ItofinContext *ctx,
+                                          uint64_t id,
+                                          ItofinReal value,
+                                          ItofinReal weight,
+                                          struct ItofinError *error);
+
+/**
+ * Atomically add a batch; null weights and zero weight length mean unit weights.
+ *
+ * # Safety
+ * `values` and optional `weights` hold readable `len` doubles.
+ */
+int32_t itofin_incremental_statistics_add_batch(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                const ItofinReal *values,
+                                                size_t len,
+                                                const ItofinReal *weights,
+                                                size_t weights_len,
+                                                struct ItofinError *error);
+
+/**
+ * Reset the accumulator without releasing its handle.
+ *
+ * # Safety
+ * Follow the crate-level C caller contract.
+ */
+int32_t itofin_incremental_statistics_reset(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            struct ItofinError *error);
+
+/**
+ * Read the total sample count (0) or negative sample count (1).
+ *
+ * # Safety
+ * `out` is writable and does not overlap context or error storage.
+ */
+int32_t itofin_incremental_statistics_count(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            int32_t which,
+                                            size_t *out,
+                                            struct ItofinError *error);
+
+/**
+ * Read a scalar statistic: weight sum (0), downside weight sum (1),
+ * min (2), max (3), mean (4), variance (5), standard deviation (6),
+ * error estimate (7), skewness (8), kurtosis (9), downside variance (10),
+ * or downside deviation (11).
+ *
+ * # Safety
+ * `out` is writable and does not overlap context or error storage.
+ */
+int32_t itofin_incremental_statistics_query(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            int32_t measure,
+                                            ItofinReal *out,
+                                            struct ItofinError *error);
 
 /**
  * # Safety
@@ -4203,6 +4680,61 @@ int32_t itofin_mc_american_engine_new(struct ItofinContext *ctx,
                                       struct ItofinError *error);
 
 /**
+ * Retain live spot, market curves, volatility and three jump quotes.
+ * # Safety
+ * Pointers must be aligned, live and non-overlapping. Context and handles
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_merton76_new(struct ItofinContext *ctx,
+                            uint64_t spot,
+                            uint64_t risk_free,
+                            uint64_t dividend,
+                            uint64_t volatility,
+                            uint64_t jump_intensity,
+                            uint64_t log_mean_jump,
+                            uint64_t log_jump_volatility,
+                            uint64_t *out,
+                            struct ItofinError *error);
+
+/**
+ * Field: 0 spot, 1 jump intensity, 2 log mean jump, 3 log jump volatility.
+ * # Safety
+ * Pointers must be aligned, live and non-overlapping. Context and handles
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_merton76_value(struct ItofinContext *ctx,
+                              uint64_t process,
+                              int32_t field,
+                              double *out,
+                              struct ItofinError *error);
+
+/**
+ * Convert a date using the retained market's risk-free day counter.
+ * # Safety
+ * Pointers must be aligned, live and non-overlapping. Context and handles
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_merton76_time(struct ItofinContext *ctx,
+                             uint64_t process,
+                             int32_t date_serial,
+                             double *out,
+                             struct ItofinError *error);
+
+/**
+ * Retain a Merton76 process for European plain-vanilla option engine kind 2.
+ * Conventional settings are relative_accuracy=1e-4, max_iterations=100.
+ * # Safety
+ * Pointers must be aligned, live and non-overlapping. Context and handles
+ * belong to the calling thread; serialize calls including destruction.
+ */
+int32_t itofin_jump_diffusion_engine_new(struct ItofinContext *ctx,
+                                         uint64_t process,
+                                         double relative_accuracy,
+                                         size_t max_iterations,
+                                         uint64_t *out,
+                                         struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -5361,11 +5893,14 @@ int32_t itofin_sabr_smile_query(struct ItofinContext *ctx,
  * Evaluate one weighted batch statistic into caller-owned storage.
  *
  * `measure` selects mean (0), sample variance (1), standard deviation (2),
- * percentile (3), value at risk (4), or expected shortfall (5). `probability`
- * is used for percentile and risk measures only. Null `weights` with zero
- * `weights_len` selects unit weights. Inputs are signed observations; VaR and
- * expected shortfall return nonnegative loss magnitudes. On error, `out` is
- * unchanged.
+ * percentile (3), value at risk (4), expected shortfall (5), semi variance
+ * (6), semi deviation (7), downside variance (8), downside deviation (9),
+ * regret (10), potential upside (11), shortfall (12), average shortfall (13),
+ * or top percentile (14). `probability` carries a target for measures 10,
+ * 12 and 13, a percentile for 3 and 14, and a confidence for 4, 5 and 11.
+ * Null `weights` with zero `weights_len` selects unit weights. Inputs are
+ * signed observations; VaR and expected shortfall return nonnegative loss
+ * magnitudes. On error, `out` is unchanged.
  *
  * # Safety
  *
@@ -5764,6 +6299,19 @@ int32_t itofin_black_constant_vol_new(struct ItofinContext *ctx,
                                       uint64_t cal,
                                       uint64_t *out,
                                       struct ItofinError *error);
+
+/**
+ * Retain an observable volatility quote with a fixed reference date.
+ * # Safety
+ * Follow the crate C caller contract; outputs must be live and non-overlapping.
+ */
+int32_t itofin_black_constant_vol_from_quote(struct ItofinContext *ctx,
+                                             int32_t reference_date,
+                                             uint64_t volatility,
+                                             uint64_t dc,
+                                             uint64_t cal,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
 
 /**
  * # Safety
