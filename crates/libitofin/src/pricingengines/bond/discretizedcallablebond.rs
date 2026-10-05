@@ -9,11 +9,11 @@
 use crate::discretizedasset::{CouponAdjustment, DiscretizedAsset, DiscretizedAssetBase};
 use crate::errors::QlResult;
 use crate::instruments::{CallabilityType, CallableBondArguments};
-use crate::interestrate::Compounding;
 use crate::math::array::Array;
+use crate::pricingengine::Arguments;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
-use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
+use crate::{fail, require};
 
 /// A week, used to snap call dates to a nearly coincident coupon date.
 const ONE_WEEK: Time = 1.0 / 52.0;
@@ -34,13 +34,21 @@ pub struct DiscretizedCallableFixedRateBond {
 impl DiscretizedCallableFixedRateBond {
     /// Builds the discretized bond from the engine arguments and the discount
     /// curve (`discretizedcallablefixedratebond.cpp:35-100`).
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid argument shapes/values, curve lookups, nonfinite times
+    /// and exercise-price adjustment overflow.
     pub fn new(
         args: &CallableBondArguments,
         curve: &dyn YieldTermStructure,
     ) -> QlResult<DiscretizedCallableFixedRateBond> {
+        args.validate()?;
         let reference_date = curve.reference_date()?;
         let day_counter = curve.require_day_counter()?;
-        let redemption_date = args.redemption_date.expect("validated redemption date");
+        let Some(redemption_date) = args.redemption_date else {
+            fail!("null redemption date");
+        };
         let redemption_time = day_counter.year_fraction(reference_date, redemption_date);
 
         let coupon_times: Vec<Time> = args
@@ -60,35 +68,32 @@ impl DiscretizedCallableFixedRateBond {
                     && coupon_time <= call_time + ONE_WEEK
                     && call_date < coupon_date
                 {
-                    // Snap the call to the coupon date; the coupon must then be
-                    // applied *before* the call in post-order, so tag it `Pre`,
-                    // and rescale the price by the missing discount (including
-                    // any OAS spread on the short rate).
                     call_time = coupon_time;
                     coupon_adjustments[j] = CouponAdjustment::Pre;
-                    let spread = args.spread;
-                    let df_incl_spread = |date| -> QlResult<Real> {
-                        let t = curve.time_from_reference(date)?;
-                        let z = curve
-                            .zero_rate_date(
-                                date,
-                                curve.require_day_counter()?,
-                                Compounding::Continuous,
-                                Frequency::NoFrequency,
-                                true,
-                            )?
-                            .rate();
-                        Ok((-(z + spread) * t).exp())
-                    };
-                    let df_call = df_incl_spread(call_date)?;
-                    let df_coupon = df_incl_spread(coupon_date)?;
+                    let df_call = curve.discount_date(call_date, false)?;
+                    let df_coupon = curve.discount_date(coupon_date, false)?;
+                    require!(
+                        df_call.is_finite()
+                            && df_call > 0.0
+                            && df_coupon.is_finite()
+                            && df_coupon > 0.0,
+                        "invalid exercise adjustment discount factor"
+                    );
                     adjusted[i] *= df_call / df_coupon;
                     break;
                 }
             }
             adjusted[i] *= args.face_amount / 100.0;
+            require!(adjusted[i].is_finite(), "exercise amount overflow");
             callability_times.push(call_time);
         }
+
+        require!(
+            redemption_time.is_finite()
+                && coupon_times.iter().all(|t| t.is_finite())
+                && callability_times.iter().all(|t| t.is_finite()),
+            "nonfinite callable bond time"
+        );
 
         Ok(DiscretizedCallableFixedRateBond {
             base: DiscretizedAssetBase::default(),
@@ -103,18 +108,27 @@ impl DiscretizedCallableFixedRateBond {
         })
     }
 
-    fn add_coupon(&mut self, i: usize) {
+    fn add_coupon(&mut self, i: usize) -> QlResult<()> {
         let amount = self.coupon_amounts[i];
         let values = self.values_mut();
         for j in 0..values.size() {
             values[j] += amount;
+            require!(
+                values[j].is_finite(),
+                "nonfinite callable bond node after coupon"
+            );
         }
+        Ok(())
     }
 
-    fn apply_callability(&mut self, i: usize) {
+    fn apply_callability(&mut self, i: usize) -> QlResult<()> {
         let price = self.adjusted_callability_prices[i];
         let call_type = self.callability_types[i];
         let values = self.values_mut();
+        require!(
+            values.iter().all(|value| value.is_finite()),
+            "nonfinite callable bond continuation value"
+        );
         match call_type {
             CallabilityType::Call => {
                 for j in 0..values.size() {
@@ -127,6 +141,7 @@ impl DiscretizedCallableFixedRateBond {
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -167,23 +182,21 @@ impl DiscretizedAsset for DiscretizedCallableFixedRateBond {
     }
 
     fn pre_adjust_values_impl(&mut self) -> QlResult<()> {
-        let t = self.time();
         for i in 0..self.coupon_times.len() {
             if self.coupon_adjustments[i] == CouponAdjustment::Pre
                 && self.coupon_times[i] >= 0.0
                 && self.is_on_time(self.coupon_times[i])
             {
-                self.add_coupon(i);
+                self.add_coupon(i)?;
             }
         }
-        let _ = t;
         Ok(())
     }
 
     fn post_adjust_values_impl(&mut self) -> QlResult<()> {
         for i in 0..self.callability_times.len() {
             if self.callability_times[i] >= 0.0 && self.is_on_time(self.callability_times[i]) {
-                self.apply_callability(i);
+                self.apply_callability(i)?;
             }
         }
         for i in 0..self.coupon_times.len() {
@@ -191,7 +204,7 @@ impl DiscretizedAsset for DiscretizedCallableFixedRateBond {
                 && self.coupon_times[i] >= 0.0
                 && self.is_on_time(self.coupon_times[i])
             {
-                self.add_coupon(i);
+                self.add_coupon(i)?;
             }
         }
         Ok(())

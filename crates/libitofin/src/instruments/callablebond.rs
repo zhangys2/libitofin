@@ -35,6 +35,7 @@ use crate::math::solvers1d::brent::Brent;
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::pricingengines::bond::BlackCallableFixedRateBondEngine;
 use crate::quotes::{Quote, SimpleQuote};
+use crate::require;
 use crate::settings::Settings;
 use crate::shared::{Shared, shared};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -72,14 +73,27 @@ pub struct Callability {
 }
 
 impl Callability {
-    /// Builds a hard callability at `date` exercisable at `price`.
-    pub fn new(price: BondPrice, call_type: CallabilityType, date: Date) -> Self {
+    fn hard(price: BondPrice, call_type: CallabilityType, date: Date) -> Self {
         Self {
             price,
             call_type,
             date,
             trigger: None,
         }
+    }
+
+    /// Builds a hard callability at `date` exercisable at `price`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects negative or nonfinite prices and null exercise dates.
+    pub fn new(price: BondPrice, call_type: CallabilityType, date: Date) -> QlResult<Self> {
+        require!(
+            price.amount().is_finite() && price.amount() >= 0.0,
+            "callability price must be finite and nonnegative"
+        );
+        require!(date != Date::null(), "null callability date");
+        Ok(Self::hard(price, call_type, date))
     }
 
     /// Builds a soft call at `date` with soft-call `trigger`
@@ -169,24 +183,57 @@ impl Default for CallableBondArguments {
 
 impl Arguments for CallableBondArguments {
     fn validate(&self) -> QlResult<()> {
-        require_field(self.settlement_date.is_some(), "null settlement date")?;
-        require_field(self.redemption_date.is_some(), "null redemption date")?;
-        require_field(self.redemption >= 0.0, "negative redemption")?;
-        require_field(
+        let Some(settlement) = self.settlement_date else {
+            fail!("null settlement date");
+        };
+        let Some(redemption_date) = self.redemption_date else {
+            fail!("null redemption date");
+        };
+        require!(
+            settlement != Date::null() && redemption_date != Date::null(),
+            "null bond date"
+        );
+        require!(settlement <= redemption_date, "settlement after redemption");
+        require!(
+            self.face_amount.is_finite() && self.face_amount > 0.0,
+            "face amount must be finite and positive"
+        );
+        require!(
+            self.redemption.is_finite() && self.redemption >= 0.0,
+            "redemption must be finite and nonnegative"
+        );
+        require!(
             self.callability_dates.len() == self.callability_prices.len()
                 && self.callability_dates.len() == self.callability_types.len(),
             "callability dates/prices/types length mismatch",
-        )?;
-        require_field(
+        );
+        require!(
             self.coupon_dates.len() == self.coupon_amounts.len(),
             "coupon dates/amounts length mismatch",
-        )
+        );
+        require!(
+            self.coupon_dates.windows(2).all(|pair| pair[0] <= pair[1]),
+            "coupon dates must be ordered"
+        );
+        for (date, amount) in self.coupon_dates.iter().zip(&self.coupon_amounts) {
+            require!(
+                *date != Date::null() && *date > settlement && *date <= redemption_date,
+                "coupon outside settlement/redemption interval"
+            );
+            require!(amount.is_finite(), "nonfinite coupon amount");
+        }
+        for (date, price) in self.callability_dates.iter().zip(&self.callability_prices) {
+            require!(
+                *date != Date::null() && *date > settlement && *date <= redemption_date,
+                "callability outside settlement/redemption interval"
+            );
+            require!(
+                price.is_finite() && *price >= 0.0,
+                "invalid callability price"
+            );
+        }
+        Ok(())
     }
-}
-
-#[allow(clippy::neg_cmp_op_on_partial_ord)]
-fn require_field(ok: bool, message: &str) -> QlResult<()> {
-    if ok { Ok(()) } else { fail!("{message}") }
 }
 
 /// Fills [`CallableBondArguments`] from a bond's cash flows and callability
@@ -712,6 +759,19 @@ impl CallableFixedRateBond {
         ex_coupon_end_of_month: bool,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<CallableFixedRateBond> {
+        require!(
+            schedule.len() >= 2,
+            "callable bond schedule requires at least two dates"
+        );
+        require!(
+            schedule.dates().iter().all(|date| *date != Date::null())
+                && schedule.dates().windows(2).all(|pair| pair[0] < pair[1]),
+            "callable bond schedule dates must be nonnull and strictly increasing"
+        );
+        require!(
+            face_amount.is_finite() && face_amount > 0.0,
+            "face amount must be finite and positive"
+        );
         let maturity = schedule.end_date();
         for callability in &put_call_schedule {
             if callability.date() > maturity {
@@ -774,7 +834,9 @@ impl CallableFixedRateBond {
             return Ok(0.0);
         }
         let value = self.settlement_value()?;
-        Ok(value * 100.0 / notional)
+        let dirty = (value / notional) * 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        Ok(dirty)
     }
 
     /// The theoretical clean price, per 100 of notional.
@@ -782,7 +844,9 @@ impl CallableFixedRateBond {
         let settlement = self.bond().settlement_date(None)?;
         let dirty = self.dirty_price()?;
         let accrued = self.bond().accrued_amount(Some(settlement))?;
-        Ok(dirty - accrued)
+        let clean = dirty - accrued;
+        require!(clean.is_finite(), "clean price must be finite");
+        Ok(clean)
     }
 
     /// Black implied forward yield volatility for a European put/call schedule
@@ -1069,7 +1133,9 @@ impl CallableZeroCouponBond {
             return Ok(0.0);
         }
         let value = self.settlement_value()?;
-        Ok(value * 100.0 / notional)
+        let dirty = (value / notional) * 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        Ok(dirty)
     }
 
     /// The theoretical clean price, per 100 of notional.
@@ -1077,7 +1143,9 @@ impl CallableZeroCouponBond {
         let settlement = self.bond().settlement_date(None)?;
         let dirty = self.dirty_price()?;
         let accrued = self.bond().accrued_amount(Some(settlement))?;
-        Ok(dirty - accrued)
+        let clean = dirty - accrued;
+        require!(clean.is_finite(), "clean price must be finite");
+        Ok(clean)
     }
 
     /// Black implied forward yield volatility for a European put/call schedule
@@ -1423,12 +1491,12 @@ mod tests {
         let s = settings();
         let straight = straight_clean(&s);
 
-        let call = vec![Callability::new(
+        let call = vec![Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             option_date(),
         )];
-        let put = vec![Callability::new(
+        let put = vec![Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Put,
             option_date(),
@@ -1497,13 +1565,13 @@ mod tests {
         let mut both = Vec::new();
         for i in (2..10).step_by(2) {
             let date = calendar.advance(issue, i, TimeUnit::Years, rolling, false);
-            let exercise = Callability::new(BondPrice::Clean(110.0), CallabilityType::Call, date);
+            let exercise = Callability::hard(BondPrice::Clean(110.0), CallabilityType::Call, date);
             calls.push(exercise.clone());
             both.push(exercise);
         }
         for i in (1..10).step_by(2) {
             let date = calendar.advance(issue, i, TimeUnit::Years, rolling, false);
-            let exercise = Callability::new(BondPrice::Clean(100.0), CallabilityType::Put, date);
+            let exercise = Callability::hard(BondPrice::Clean(100.0), CallabilityType::Put, date);
             puts.push(exercise.clone());
             both.push(exercise);
         }
@@ -1664,12 +1732,12 @@ mod tests {
         let calls: CallabilitySchedule = g
             .even_years()
             .into_iter()
-            .map(|d| Callability::new(BondPrice::Clean(110.0), CallabilityType::Call, d))
+            .map(|d| Callability::hard(BondPrice::Clean(110.0), CallabilityType::Call, d))
             .collect();
         let puts: CallabilitySchedule = g
             .odd_years()
             .into_iter()
-            .map(|d| Callability::new(BondPrice::Clean(90.0), CallabilityType::Put, d))
+            .map(|d| Callability::hard(BondPrice::Clean(90.0), CallabilityType::Put, d))
             .collect();
 
         let tree = shared_mut(
@@ -1787,12 +1855,12 @@ mod tests {
         let mut otm: CallabilitySchedule = g
             .even_years()
             .into_iter()
-            .map(|d| Callability::new(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
+            .map(|d| Callability::hard(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
             .collect();
         otm.extend(
             g.odd_years()
                 .into_iter()
-                .map(|d| Callability::new(BondPrice::Clean(0.0), CallabilityType::Put, d)),
+                .map(|d| Callability::hard(BondPrice::Clean(0.0), CallabilityType::Put, d)),
         );
         let mut worthless = CallableFixedRateBond::new(
             3,
@@ -1874,12 +1942,12 @@ mod tests {
         let mut otm: CallabilitySchedule = g
             .even_years()
             .into_iter()
-            .map(|d| Callability::new(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
+            .map(|d| Callability::hard(BondPrice::Clean(10_000.0), CallabilityType::Call, d))
             .collect();
         otm.extend(
             g.odd_years()
                 .into_iter()
-                .map(|d| Callability::new(BondPrice::Clean(0.0), CallabilityType::Put, d)),
+                .map(|d| Callability::hard(BondPrice::Clean(0.0), CallabilityType::Put, d)),
         );
         let mut worthless = CallableZeroCouponBond::new(
             3,
@@ -1936,7 +2004,7 @@ mod tests {
         let mut callabilities: CallabilitySchedule = (2..10)
             .step_by(2)
             .map(|i| {
-                Callability::new(
+                Callability::hard(
                     BondPrice::Clean(110.0),
                     CallabilityType::Call,
                     calendar.advance(issue, i, TimeUnit::Years, rolling, false),
@@ -1944,7 +2012,7 @@ mod tests {
             })
             .collect();
         callabilities.extend((1..10).step_by(2).map(|i| {
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(90.0),
                 CallabilityType::Put,
                 calendar.advance(issue, i, TimeUnit::Years, rolling, false),
@@ -2026,7 +2094,7 @@ mod tests {
         let engine = shared_mut(
             TreeCallableFixedRateBondEngine::new(model, 240, Shared::clone(&settings)).unwrap(),
         ) as SharedMut<dyn PricingEngine>;
-        let callabilities = vec![Callability::new(
+        let callabilities = vec![Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             dates[2],
@@ -2093,13 +2161,13 @@ mod tests {
         };
 
         // Case 1: early OTM call blocks a later deep ITM put.
-        let call_y4 = Callability::new(
+        let call_y4 = Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             g.calendar
                 .advance(g.issue, 4, TimeUnit::Years, g.rolling, false),
         );
-        let put_y6 = Callability::new(
+        let put_y6 = Callability::hard(
             BondPrice::Clean(1000.0),
             CallabilityType::Put,
             g.calendar
@@ -2114,7 +2182,7 @@ mod tests {
         );
 
         // Case 2: same, with an added later call.
-        let call_y8 = Callability::new(
+        let call_y8 = Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             g.calendar
@@ -2122,7 +2190,7 @@ mod tests {
         );
         let mut bond = make_zero(vec![
             call_y4.clone(),
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(1000.0),
                 CallabilityType::Put,
                 g.calendar
@@ -2138,13 +2206,13 @@ mod tests {
         );
 
         // Case 3: early ITM put blocks a later deep ITM call.
-        let put_y4 = Callability::new(
+        let put_y4 = Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Put,
             g.calendar
                 .advance(g.issue, 4, TimeUnit::Years, g.rolling, false),
         );
-        let call_y6 = Callability::new(
+        let call_y6 = Callability::hard(
             BondPrice::Clean(10.0),
             CallabilityType::Call,
             g.calendar
@@ -2159,7 +2227,7 @@ mod tests {
         );
 
         // Case 4: same, with an added later put.
-        let put_y8 = Callability::new(
+        let put_y8 = Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Put,
             g.calendar
@@ -2167,7 +2235,7 @@ mod tests {
         );
         let mut bond = make_zero(vec![
             put_y4.clone(),
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(10.0),
                 CallabilityType::Call,
                 g.calendar
@@ -2212,7 +2280,7 @@ mod tests {
         ))
             as Shared<dyn YieldTermStructure>);
 
-        let callabilities = vec![Callability::new(
+        let callabilities = vec![Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             call_date,
@@ -2287,7 +2355,7 @@ mod tests {
             .build();
         let callability_date = schedule.date(6);
         let strike = 50.0;
-        let callabilities = vec![Callability::new(
+        let callabilities = vec![Callability::hard(
             BondPrice::Clean(strike),
             CallabilityType::Call,
             callability_date,
@@ -2341,7 +2409,7 @@ mod tests {
     fn implied_vol_round_trips_dirty_and_clean_targets() {
         let g = Globals::new(0.03);
         let day_counter = Thirty360::with_convention(Convention::BondBasis);
-        let callabilities = vec![Callability::new(
+        let callabilities = vec![Callability::hard(
             BondPrice::Clean(100.0),
             CallabilityType::Call,
             g.schedule.date(8),
@@ -2448,7 +2516,7 @@ mod tests {
             .dates()
             .iter()
             .copied()
-            .map(|d| Callability::new(BondPrice::Clean(100.0), CallabilityType::Call, d))
+            .map(|d| Callability::hard(BondPrice::Clean(100.0), CallabilityType::Call, d))
             .collect();
 
         let accrual = Actual365Fixed::new();
@@ -2553,22 +2621,22 @@ mod tests {
             .build();
 
         let call_schedule = vec![
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(102.438),
                 CallabilityType::Call,
                 Date::new(1, Month::June, 2024),
             ),
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(101.219),
                 CallabilityType::Call,
                 Date::new(1, Month::June, 2025),
             ),
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(100.0),
                 CallabilityType::Call,
                 Date::new(1, Month::June, 2026),
             ),
-            Callability::new(
+            Callability::hard(
                 BondPrice::Clean(100.0),
                 CallabilityType::Call,
                 Date::new(1, Month::June, 2029),
@@ -2748,7 +2816,7 @@ mod tests {
                 continue;
             }
 
-            let callabilities = vec![Callability::new(
+            let callabilities = vec![Callability::hard(
                 BondPrice::Clean(face),
                 CallabilityType::Call,
                 call_date,
@@ -2879,7 +2947,7 @@ mod tests {
         let mut min_oas = f64::INFINITY;
         let mut call_date = sweep_start;
         while call_date <= sweep_end {
-            let callabilities = vec![Callability::new(
+            let callabilities = vec![Callability::hard(
                 BondPrice::Clean(100.0),
                 CallabilityType::Call,
                 call_date,

@@ -30,7 +30,7 @@ bindings. All three language surfaces share the Rust numerical core.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.33.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.34.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
@@ -48,6 +48,12 @@ links to the language guides and project documentation.
 | Rust API reference | [docs.rs/libitofin](https://docs.rs/libitofin) - see [Rust API](rust.md) |
 | Go SDK | [Installation, sessions, and examples](go.md), plus [API reference](https://pkg.go.dev/github.com/benbenbang/libitofin/sdk/go) |
 | Worked examples | [`example/python`](https://github.com/benbenbang/libitofin/tree/main/example/python), [`sdk/go/examples`](https://github.com/benbenbang/libitofin/tree/main/sdk/go/examples), and [`crates/libitofin/examples`](https://github.com/benbenbang/libitofin/tree/main/crates/libitofin/examples) |
+
+## Reviewed Rust additions
+
+- [Priority adoption scope and limits](priority-adoption.md): 18 retained High
+  rows, with 10 excluded because existing issue acceptance already owns them.
+- Rust-core only: no new Python, C or Go facades, and no release implied.
 
 ## Project guides
 
