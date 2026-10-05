@@ -70,7 +70,9 @@ impl BondFunctions {
     ) -> QlResult<Real> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
         let dirty = Self::dirty_price(bond, discount_curve, Some(settlement))?;
-        Ok(dirty - bond.accrued_amount(Some(settlement))?)
+        let clean = dirty - bond.accrued_amount(Some(settlement))?;
+        require!(clean.is_finite(), "clean price must be finite");
+        Ok(clean)
     }
 
     /// The dirty price per 100 of notional on `discount_curve`
@@ -94,7 +96,9 @@ impl BondFunctions {
             Some(settlement),
             None,
         )?;
-        Ok(npv * 100.0 / notional)
+        let dirty = (npv / notional) * 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        Ok(dirty)
     }
 
     /// The basis-point value per 100 of notional on `discount_curve`
@@ -338,6 +342,7 @@ impl BondFunctions {
     ) -> QlResult<Real> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
         let notional = Self::require_tradable(bond, settlement)?;
+        require!(yield_rate.rate().is_finite(), "yield rate must be finite");
         let npv = CashFlows::npv_at_yield(
             bond.cashflows(),
             yield_rate,
@@ -346,7 +351,10 @@ impl BondFunctions {
             Some(settlement),
             None,
         )?;
-        Ok(npv * 100.0 / notional)
+        require!(npv.is_finite(), "yield NPV must be finite");
+        let dirty = (npv / notional) * 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        Ok(dirty)
     }
 
     /// The clean price per 100 of notional under a flat `yield_rate`
@@ -362,7 +370,9 @@ impl BondFunctions {
     ) -> QlResult<Real> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
         let dirty = Self::dirty_price_at_yield(bond, yield_rate, Some(settlement))?;
-        Ok(dirty - bond.accrued_amount(Some(settlement))?)
+        let clean = dirty - bond.accrued_amount(Some(settlement))?;
+        require!(clean.is_finite(), "clean price must be finite");
+        Ok(clean)
     }
 
     /// Dirty price from a bare yield and its conventions

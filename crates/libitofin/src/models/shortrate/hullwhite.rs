@@ -511,15 +511,15 @@ impl CalibratedModelHolder for HullWhite {
     }
 
     fn generate_arguments(&mut self) {
-        let zero = self
-            .ts_model
-            .term_structure()
-            .current_link()
-            .expect("the Hull-White model requires a non-empty term-structure handle")
-            .zero_rate(0.0, Compounding::Continuous, Frequency::NoFrequency, false)
-            .expect("the Hull-White zero rate at t=0 is well-defined on its curve")
-            .rate();
-        self.base.set_r0(zero);
+        let Ok(curve) = self.ts_model.term_structure().current_link() else {
+            return;
+        };
+        if let Ok(zero) =
+            curve.zero_rate(0.0, Compounding::Continuous, Frequency::NoFrequency, false)
+            && zero.rate().is_finite()
+        {
+            self.base.set_r0(zero.rate());
+        }
         let law = FittingParameterValue {
             term_structure: self.ts_model.term_structure().clone(),
             a: self.a(),

@@ -485,6 +485,8 @@ impl CashFlows {
         settlement_date: Option<Date>,
         npv_date: Option<Date>,
     ) -> QlResult<Real> {
+        require!(z_spread.is_finite(), "z-spread must be finite");
+        discount_curve.current_link()?;
         if leg.is_empty() {
             return Ok(0.0);
         }
@@ -495,14 +497,16 @@ impl CashFlows {
             compounding,
             frequency,
         );
-        Self::npv(
+        let npv = Self::npv(
             leg,
             &spreaded,
             settings,
             include_settlement_date_flows,
             settlement_date,
             npv_date,
-        )
+        )?;
+        require!(npv.is_finite(), "spreaded NPV must be finite");
+        Ok(npv)
     }
 
     /// The zero-rate spread that reprices the leg to `npv` on `discount_curve`
@@ -528,6 +532,16 @@ impl CashFlows {
         max_iterations: Option<usize>,
         guess: Option<Rate>,
     ) -> QlResult<Spread> {
+        require!(npv.is_finite(), "target NPV must be finite");
+        if let Some(accuracy) = accuracy {
+            require!(
+                accuracy.is_finite() && accuracy > 0.0,
+                "accuracy must be finite and positive"
+            );
+        }
+        if let Some(guess) = guess {
+            require!(guess.is_finite(), "guess must be finite");
+        }
         let (settlement, npv_date) = Self::yield_dates(settings, settlement_date, npv_date)?;
         let quote = shared(SimpleQuote::new(0.0));
         let spreaded = ZeroSpreadedTermStructure::with_compounding(

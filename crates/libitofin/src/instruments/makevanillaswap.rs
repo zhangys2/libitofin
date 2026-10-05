@@ -367,7 +367,8 @@ impl MakeVanillaSwap {
     /// Returns an error when both an effective date and settlement days are set,
     /// when the requested coupon mode conflicts with [`Settings`], when the start
     /// date must be derived but no evaluation date is set, when the currency has
-    /// no fixed-leg default, and propagates the swap construction and (for a
+    /// no fixed-leg default, when schedule stubs or end-of-month controls are
+    /// incompatible with the selected rule, and propagates the swap construction and (for a
     /// fair-rate fill) the pricing.
     pub fn build(self) -> QlResult<VanillaSwap> {
         if self.effective_date.is_some() && self.settlement_days.is_some() {
@@ -399,6 +400,25 @@ impl MakeVanillaSwap {
         };
         let float_tenor = self.ibor_index.tenor();
         let float_day_count = self.ibor_index.day_counter().clone();
+
+        validate_schedule_inputs(
+            start_date,
+            end_date,
+            fixed_tenor,
+            self.fixed_rule,
+            self.fixed_end_of_month,
+            self.fixed_first_date,
+            self.fixed_next_to_last_date,
+        )?;
+        validate_schedule_inputs(
+            start_date,
+            end_date,
+            float_tenor,
+            self.float_rule,
+            self.float_end_of_month,
+            self.float_first_date,
+            self.float_next_to_last_date,
+        )?;
 
         let fixed_schedule = Schedule::new(
             start_date,
@@ -463,6 +483,15 @@ impl MakeVanillaSwap {
     pub fn floating_leg(&self) -> QlResult<Vec<Shared<IborCoupon>>> {
         let start_date = self.start_date()?;
         let end_date = self.end_date(start_date);
+        validate_schedule_inputs(
+            start_date,
+            end_date,
+            self.ibor_index.tenor(),
+            self.float_rule,
+            self.float_end_of_month,
+            self.float_first_date,
+            self.float_next_to_last_date,
+        )?;
         let float_schedule = Schedule::new(
             start_date,
             end_date,
@@ -612,6 +641,65 @@ fn default_fixed_day_count(currency: &Currency) -> QlResult<DayCounter> {
     } else {
         crate::fail!("unknown fixed leg day counter for {}", currency.code());
     }
+}
+
+fn validate_schedule_inputs(
+    start: Date,
+    end: Date,
+    tenor: Period,
+    rule: DateGeneration,
+    end_of_month: bool,
+    first: Date,
+    next_to_last: Date,
+) -> QlResult<()> {
+    crate::require!(
+        start != Date::null() && end != Date::null() && start < end,
+        "invalid schedule date range"
+    );
+    crate::require!(tenor.length() >= 0, "non positive schedule tenor");
+    let effective_rule = if tenor.length() == 0 {
+        DateGeneration::Zero
+    } else {
+        rule
+    };
+    let has_first = first != Date::null() && first != start;
+    let has_next_to_last = next_to_last != Date::null() && next_to_last != end;
+    crate::require!(
+        !has_first || !has_next_to_last || first <= next_to_last,
+        "first stub date later than next-to-last stub date"
+    );
+    for (date, initial) in [(first, true), (next_to_last, false)] {
+        if date == Date::null() || (initial && date == start) || (!initial && date == end) {
+            continue;
+        }
+        match effective_rule {
+            DateGeneration::Forward | DateGeneration::Backward => {
+                let valid = if initial {
+                    date > start && date <= end
+                } else {
+                    date >= start && date < end
+                };
+                crate::require!(valid, "stub date outside schedule range");
+            }
+            DateGeneration::ThirdWednesday => {
+                crate::require!(
+                    crate::time::imm::is_imm_date(date, false),
+                    "stub date is not an IMM date"
+                );
+            }
+            _ => crate::fail!("stub date incompatible with {effective_rule} date generation rule"),
+        }
+    }
+    crate::require!(
+        !end_of_month
+            || !allows_end_of_month(tenor)
+            || matches!(
+                effective_rule,
+                DateGeneration::Forward | DateGeneration::Backward | DateGeneration::Zero
+            ),
+        "endOfMonth convention incompatible with {effective_rule} date generation rule"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1003,7 +1091,6 @@ mod tests {
             .with_floating_leg_end_of_month(true)
         };
 
-        // Irregular first period (Backward + first date) on both legs.
         let swap_first = base()
             .with_fixed_leg_first_date(fixed_first)
             .with_floating_leg_first_date(float_first)
@@ -1029,7 +1116,6 @@ mod tests {
             "fixed first stub must land on the given first date"
         );
 
-        // Irregular next-to-last on the floating leg (Forward + float ntl only).
         let swap_float_ntl = base()
             .with_floating_leg_next_to_last_date(float_ntl)
             .with_floating_leg_rule(DateGeneration::Forward)
@@ -1065,7 +1151,6 @@ mod tests {
             "maker floating schedule must match a hand-built Schedule with the same stubs"
         );
 
-        // Irregular next-to-last on the fixed leg (Forward + fixed ntl only).
         let swap_fixed_ntl = base()
             .with_fixed_leg_next_to_last_date(fixed_ntl)
             .with_fixed_leg_rule(DateGeneration::Forward)
@@ -1102,7 +1187,6 @@ mod tests {
             "maker fixed schedule must match a hand-built Schedule with the same stubs"
         );
 
-        // `floating_leg()` must forward the same float stubs as `build()`.
         let maker = base()
             .with_floating_leg_first_date(float_first)
             .with_floating_leg_rule(DateGeneration::Backward);
@@ -1114,7 +1198,6 @@ mod tests {
             .windows(2)
             .map(|w| w[0])
             .collect();
-        // Rebuild: `build` consumed `maker`; reconstruct with the same stubs.
         let maker = base()
             .with_floating_leg_first_date(float_first)
             .with_floating_leg_rule(DateGeneration::Backward);
@@ -1126,5 +1209,164 @@ mod tests {
         );
         assert_eq!(leg_starts[0], effective);
         assert_eq!(leg_starts[1], float_first);
+    }
+    #[test]
+    fn invalid_stub_controls_return_errors_instead_of_schedule_panics() {
+        let settings = settings_today();
+        let index = euribor6m(&settings);
+        let start = Date::new(9, Month::July, 2026);
+        let make = || {
+            MakeVanillaSwap::new(
+                Period::new(5, TimeUnit::Years),
+                Shared::clone(&index),
+                Some(0.03),
+                Period::new(0, TimeUnit::Days),
+                Shared::clone(&settings),
+            )
+            .with_effective_date(start)
+        };
+        assert!(make().with_fixed_leg_first_date(start - 1).build().is_err());
+        assert!(
+            make()
+                .with_floating_leg_next_to_last_date(start - 1)
+                .floating_leg()
+                .is_err()
+        );
+        assert!(
+            make()
+                .with_rule(DateGeneration::Twentieth)
+                .with_fixed_leg_first_date(start + 1)
+                .build()
+                .is_err()
+        );
+        assert!(
+            make()
+                .with_floating_leg_rule(DateGeneration::ThirdWednesday)
+                .with_floating_leg_end_of_month(true)
+                .floating_leg()
+                .is_err()
+        );
+        assert!(
+            make()
+                .with_fixed_leg_rule(DateGeneration::ThirdWednesday)
+                .with_fixed_leg_first_date(start + 1)
+                .build()
+                .is_err()
+        );
+    }
+    /// Complete combined-stub schedule dates generated by QuantLib 1.43.
+    #[test]
+    fn combined_distinct_leg_stubs_match_quantlib_forward_and_backward() {
+        use crate::time::calendars::NullCalendar;
+        let settings = settings_today();
+        let index = euribor6m(&settings);
+        let d = |month, year| Date::new(15, month, year);
+        let cases = [
+            (
+                DateGeneration::Forward,
+                vec![
+                    d(Month::January, 2026),
+                    d(Month::July, 2026),
+                    d(Month::July, 2027),
+                    d(Month::July, 2028),
+                    d(Month::October, 2028),
+                    d(Month::January, 2029),
+                ],
+                vec![
+                    d(Month::January, 2026),
+                    d(Month::April, 2026),
+                    d(Month::October, 2026),
+                    d(Month::April, 2027),
+                    d(Month::October, 2027),
+                    d(Month::April, 2028),
+                    d(Month::October, 2028),
+                    d(Month::November, 2028),
+                    d(Month::January, 2029),
+                ],
+            ),
+            (
+                DateGeneration::Backward,
+                vec![
+                    d(Month::January, 2026),
+                    d(Month::July, 2026),
+                    d(Month::October, 2026),
+                    d(Month::October, 2027),
+                    d(Month::October, 2028),
+                    d(Month::January, 2029),
+                ],
+                vec![
+                    d(Month::January, 2026),
+                    d(Month::April, 2026),
+                    d(Month::May, 2026),
+                    d(Month::November, 2026),
+                    d(Month::May, 2027),
+                    d(Month::November, 2027),
+                    d(Month::May, 2028),
+                    d(Month::November, 2028),
+                    d(Month::January, 2029),
+                ],
+            ),
+        ];
+        for (rule, fixed_dates, floating_dates) in cases {
+            let swap = MakeVanillaSwap::new(
+                Period::new(3, TimeUnit::Years),
+                Shared::clone(&index),
+                Some(0.03),
+                Period::new(0, TimeUnit::Days),
+                Shared::clone(&settings),
+            )
+            .with_effective_date(d(Month::January, 2026))
+            .with_rule(rule)
+            .with_fixed_leg_calendar(NullCalendar::new())
+            .with_floating_leg_calendar(NullCalendar::new())
+            .with_fixed_leg_convention(BusinessDayConvention::Unadjusted)
+            .with_floating_leg_convention(BusinessDayConvention::Unadjusted)
+            .with_fixed_leg_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .with_floating_leg_termination_date_convention(BusinessDayConvention::Unadjusted)
+            .with_fixed_leg_first_date(d(Month::July, 2026))
+            .with_fixed_leg_next_to_last_date(d(Month::October, 2028))
+            .with_floating_leg_first_date(d(Month::April, 2026))
+            .with_floating_leg_next_to_last_date(d(Month::November, 2028))
+            .build()
+            .unwrap();
+            assert_eq!(
+                swap.fixed_vs_floating().fixed_schedule().dates(),
+                fixed_dates.as_slice()
+            );
+            assert_eq!(
+                swap.fixed_vs_floating().floating_schedule().dates(),
+                floating_dates.as_slice()
+            );
+        }
+    }
+
+    #[test]
+    fn schedule_validation_normalizes_eom_and_rejects_reversed_active_stubs() {
+        let start = Date::new(15, Month::January, 2026);
+        let end = Date::new(15, Month::January, 2029);
+        assert!(
+            validate_schedule_inputs(
+                start,
+                end,
+                Period::new(1, TimeUnit::Weeks),
+                DateGeneration::ThirdWednesday,
+                true,
+                Date::null(),
+                Date::null()
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_schedule_inputs(
+                start,
+                end,
+                Period::new(1, TimeUnit::Years),
+                DateGeneration::Forward,
+                false,
+                end - 1,
+                start + 1
+            )
+            .is_err()
+        );
     }
 }

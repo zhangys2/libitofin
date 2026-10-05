@@ -1,10 +1,9 @@
-//! Tree engine for callable fixed-rate bonds.
+//! Hull-White lattice valuation for callable fixed-rate bonds.
 //!
-//! Port of QuantLib's
-//! `ql/experimental/callablebonds/treecallablebondengine.{hpp,cpp}` for the
-//! Hull-White short-rate model: it builds a trinomial lattice fitted to the
-//! model's term structure, rolls the [`DiscretizedCallableFixedRateBond`] back
-//! to today, and reads the present value.
+//! Port of `ql/experimental/callablebonds/treecallablebondengine.{hpp,cpp}`,
+//! concretely bound to the parent's existing Hull-White tree, as its swaption
+//! tree engine is. General short-rate model dispatch and OAS are outside this
+//! engine's contract.
 
 use super::discretizedcallablebond::DiscretizedCallableFixedRateBond;
 use crate::discretizedasset::DiscretizedAsset;
@@ -16,45 +15,46 @@ use crate::models::model::CalibratedModelHolder;
 use crate::models::shortrate::HullWhite;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
-use crate::require;
 use crate::settings::Settings;
 use crate::shared::{Shared, SharedMut, shared};
 use crate::time::date::Date;
 use crate::types::Size;
+use crate::{fail, require};
 
 type CallableBondEngineBase = GenericEngine<CallableBondArguments, BondResults>;
 
-/// A Hull-White lattice engine for callable fixed-rate bonds.
+/// A callable/puttable fixed-rate bond engine on a fitted Hull-White tree.
+///
+/// Rebuilds the event-aligned lattice on each calculation. Observes both model
+/// and evaluation-date changes so input updates invalidate attached instruments.
 pub struct TreeCallableFixedRateBondEngine {
     base: CallableBondEngineBase,
     model: SharedMut<HullWhite>,
     time_steps: Size,
-    settings: Shared<Settings<Date>>,
+    _settings: Shared<Settings<Date>>,
 }
 
 impl TreeCallableFixedRateBondEngine {
-    /// Builds the engine over `model` with `time_steps` lattice steps.
+    /// Constructs an engine over a Hull-White model and positive step count.
     ///
     /// # Errors
     ///
-    /// Fails when `time_steps` is zero.
+    /// Rejects a zero step count.
     pub fn new(
         model: SharedMut<HullWhite>,
         time_steps: Size,
         settings: Shared<Settings<Date>>,
-    ) -> QlResult<TreeCallableFixedRateBondEngine> {
-        require!(
-            time_steps > 0,
-            "timeSteps must be positive, {time_steps} not allowed"
-        );
+    ) -> QlResult<Self> {
+        require!(time_steps > 0, "timeSteps must be positive");
         let base =
             CallableBondEngineBase::new(CallableBondArguments::default(), BondResults::default());
         base.register_with(model.borrow().calibrated_model().observable());
-        Ok(TreeCallableFixedRateBondEngine {
+        settings.register_eval_date_observer(&base.observer());
+        Ok(Self {
             base,
             model,
             time_steps,
-            settings,
+            _settings: settings,
         })
     }
 }
@@ -69,56 +69,67 @@ impl PricingEngine for TreeCallableFixedRateBondEngine {
     fn arguments_mut(&mut self) -> &mut dyn Arguments {
         self.base.arguments_mut()
     }
-
     fn results(&self) -> &dyn Results {
         self.base.results()
     }
-
     fn reset(&mut self) {
         self.base.reset();
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        let _ = &self.settings;
-        let (curve, reference_date, day_counter, settlement_date, redemption_date) = {
-            let model = self.model.borrow();
-            let curve = model.term_structure().current_link()?;
-            let reference_date = curve.reference_date()?;
-            let day_counter = curve.require_day_counter()?;
-            let args = self.base.arguments();
-            let settlement_date = args.settlement_date.expect("validated settlement date");
-            let redemption_date = args.redemption_date.expect("validated redemption date");
-            (
-                curve,
-                reference_date,
-                day_counter,
-                settlement_date,
-                redemption_date,
-            )
+        self.base.reset();
+        self.base.arguments().validate()?;
+        let params = self.model.borrow().calibrated_model().params();
+        require!(
+            params.iter().all(|value| value.is_finite()),
+            "nonfinite Hull-White parameters"
+        );
+        let curve = self.model.borrow().term_structure().current_link()?;
+        let reference_date = curve.reference_date()?;
+        let day_counter = curve.require_day_counter()?;
+        let Some(settlement_date) = self.base.arguments().settlement_date else {
+            fail!("null settlement date");
         };
-
+        let Some(redemption_date) = self.base.arguments().redemption_date else {
+            fail!("null redemption date");
+        };
+        require!(
+            settlement_date >= reference_date,
+            "settlement before curve reference date"
+        );
+        require!(
+            redemption_date > reference_date,
+            "redemption must follow curve reference date"
+        );
         let mut bond = DiscretizedCallableFixedRateBond::new(self.base.arguments(), &*curve)?;
-
-        let times = bond.mandatory_times();
-        let grid = TimeGrid::with_mandatory_times(&times, self.time_steps)?;
+        let grid = TimeGrid::with_mandatory_times(&bond.mandatory_times(), self.time_steps)?;
+        for time in grid.times() {
+            let discount = curve.discount(*time, false)?;
+            require!(
+                discount.is_finite() && discount > 0.0,
+                "invalid callable bond curve discount"
+            );
+        }
+        let tree = self.model.borrow().tree(grid)?;
         let spread = self.base.arguments().spread;
-        let lattice: Shared<dyn Lattice> = {
-            let model = self.model.borrow();
-            let lattice = model.tree(grid)?;
-            if spread != 0.0 {
-                lattice.implementation().set_spread(spread);
-            }
-            shared(lattice)
-        };
-
+        if spread != 0.0 {
+            tree.implementation().set_spread(spread);
+        }
+        let lattice: Shared<dyn Lattice> = shared(tree);
         let redemption_time = day_counter.year_fraction(reference_date, redemption_date);
         bond.initialize(Shared::clone(&lattice), redemption_time)?;
         bond.rollback(0.0)?;
         let value = bond.present_value()?;
-        let settlement_value = value / curve.discount_date(settlement_date, true)?;
-
+        let discount = curve.discount_date(settlement_date, false)?;
+        require!(
+            value.is_finite() && discount.is_finite() && discount > 0.0,
+            "invalid callable bond value or settlement discount"
+        );
+        let settlement_value = value / discount;
+        require!(settlement_value.is_finite(), "settlement value overflow");
         let results = self.base.results_mut();
         results.instrument.value = Some(value);
+        results.instrument.valuation_date = Some(reference_date);
         results.settlement_value = Some(settlement_value);
         Ok(())
     }
