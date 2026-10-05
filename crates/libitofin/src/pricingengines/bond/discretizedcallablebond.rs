@@ -9,9 +9,11 @@
 use crate::discretizedasset::{CouponAdjustment, DiscretizedAsset, DiscretizedAssetBase};
 use crate::errors::QlResult;
 use crate::instruments::{CallabilityType, CallableBondArguments};
+use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::pricingengine::Arguments;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
 use crate::{fail, require};
 
@@ -70,8 +72,22 @@ impl DiscretizedCallableFixedRateBond {
                 {
                     call_time = coupon_time;
                     coupon_adjustments[j] = CouponAdjustment::Pre;
-                    let df_call = curve.discount_date(call_date, false)?;
-                    let df_coupon = curve.discount_date(coupon_date, false)?;
+                    let spread = args.spread;
+                    let df_incl_spread = |date| -> QlResult<Real> {
+                        let t = curve.time_from_reference(date)?;
+                        let z = curve
+                            .zero_rate_date(
+                                date,
+                                curve.require_day_counter()?,
+                                Compounding::Continuous,
+                                Frequency::NoFrequency,
+                                true,
+                            )?
+                            .rate();
+                        Ok((-(z + spread) * t).exp())
+                    };
+                    let df_call = df_incl_spread(call_date)?;
+                    let df_coupon = df_incl_spread(coupon_date)?;
                     require!(
                         df_call.is_finite()
                             && df_call > 0.0

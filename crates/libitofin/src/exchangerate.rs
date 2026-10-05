@@ -1,7 +1,8 @@
-//! Direct two-currency exchange rates, without manager or derived chaining.
+//! Direct and chained two-currency exchange rates.
 //!
-//! Matches the direct-rate core of `ql/exchangerate.cpp`. Unlike QuantLib,
-//! checked construction and exchange reject non-finite or non-positive rates.
+//! Matches the direct-rate core of `ql/exchangerate.cpp`, plus [`ExchangeRate::chain`]
+//! for derived cross rates. Unlike QuantLib, checked construction and exchange
+//! reject non-finite or non-positive rates.
 
 use crate::currency::Currency;
 use crate::errors::QlResult;
@@ -9,12 +10,12 @@ use crate::money::Money;
 use crate::types::Real;
 use crate::{fail, require};
 
-/// Whether a rate is direct or derived. Only direct construction is supported.
+/// Whether a rate is quoted directly or built by chaining two rates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExchangeRateType {
     /// A supplied two-currency rate.
     Direct,
-    /// A chained rate, reserved for the exchange-rate manager.
+    /// A cross rate produced by [`ExchangeRate::chain`].
     Derived,
 }
 
@@ -24,6 +25,7 @@ pub struct ExchangeRate {
     source: Currency,
     target: Currency,
     rate: Real,
+    rate_type: ExchangeRateType,
 }
 
 impl ExchangeRate {
@@ -33,6 +35,7 @@ impl ExchangeRate {
             source,
             target,
             rate,
+            rate_type: ExchangeRateType::Direct,
         }
     }
 
@@ -60,7 +63,7 @@ impl ExchangeRate {
 
     /// The rate type.
     pub fn rate_type(&self) -> ExchangeRateType {
-        ExchangeRateType::Direct
+        self.rate_type
     }
 
     /// The target amount per unit of source.
@@ -89,6 +92,44 @@ impl ExchangeRate {
                 self.source.code(),
                 self.target.code()
             );
+        }
+    }
+
+    /// Chains two rates that share a currency, marking the result derived.
+    ///
+    /// # Errors
+    /// Returns an error when the two rates have no currency in common.
+    pub fn chain(r1: &ExchangeRate, r2: &ExchangeRate) -> QlResult<ExchangeRate> {
+        if r1.target == r2.source {
+            Ok(ExchangeRate {
+                source: r1.source.clone(),
+                target: r2.target.clone(),
+                rate: r1.rate * r2.rate,
+                rate_type: ExchangeRateType::Derived,
+            })
+        } else if r1.source == r2.target {
+            Ok(ExchangeRate {
+                source: r2.source.clone(),
+                target: r1.target.clone(),
+                rate: r1.rate * r2.rate,
+                rate_type: ExchangeRateType::Derived,
+            })
+        } else if r1.target == r2.target {
+            Ok(ExchangeRate {
+                source: r1.source.clone(),
+                target: r2.source.clone(),
+                rate: r1.rate / r2.rate,
+                rate_type: ExchangeRateType::Derived,
+            })
+        } else if r1.source == r2.source {
+            Ok(ExchangeRate {
+                source: r1.target.clone(),
+                target: r2.target.clone(),
+                rate: r2.rate / r1.rate,
+                rate_type: ExchangeRateType::Derived,
+            })
+        } else {
+            fail!("exchange rates not chainable");
         }
     }
 }
@@ -130,6 +171,24 @@ mod tests {
         assert!(
             rate.exchange(&Money::new(Currency::eur(), Real::NAN))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn chain_builds_a_derived_cross_rate() {
+        let eur_usd = ExchangeRate::new(Currency::eur(), Currency::usd(), 1.10);
+        let usd_jpy = ExchangeRate::new(Currency::usd(), Currency::jpy(), 150.0);
+        let eur_jpy = ExchangeRate::chain(&eur_usd, &usd_jpy).unwrap();
+        assert_eq!(eur_jpy.rate_type(), ExchangeRateType::Derived);
+        assert_eq!(eur_jpy.source(), &Currency::eur());
+        assert_eq!(eur_jpy.target(), &Currency::jpy());
+        assert!((eur_jpy.rate() - 165.0).abs() < 1e-12);
+        assert!(
+            ExchangeRate::chain(
+                &eur_usd,
+                &ExchangeRate::new(Currency::gbp(), Currency::jpy(), 200.0)
+            )
+            .is_err()
         );
     }
 }

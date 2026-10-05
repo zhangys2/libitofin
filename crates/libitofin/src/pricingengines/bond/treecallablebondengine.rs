@@ -110,7 +110,12 @@ impl PricingEngine for TreeCallableFixedRateBondEngine {
                 "invalid callable bond curve discount"
             );
         }
-        let lattice: Shared<dyn Lattice> = shared(self.model.borrow().tree(grid)?);
+        let tree = self.model.borrow().tree(grid)?;
+        let spread = self.base.arguments().spread;
+        if spread != 0.0 {
+            tree.implementation().set_spread(spread);
+        }
+        let lattice: Shared<dyn Lattice> = shared(tree);
         let redemption_time = day_counter.year_fraction(reference_date, redemption_date);
         bond.initialize(Shared::clone(&lattice), redemption_time)?;
         bond.rollback(0.0)?;
