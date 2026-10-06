@@ -1,104 +1,208 @@
-//! Variance swap. Port of `ql/instruments/varianceswap.{hpp,cpp}`.
-//!
-//! Does not manage seasoned variance swaps.
+//! Spot-start annualized variance swap with inspectable option-strip replication.
 
 use std::any::Any;
 
 use crate::errors::QlResult;
 use crate::event::event_has_occurred;
-use crate::fail;
 use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
+use crate::option::OptionType;
 use crate::position::Position;
-use crate::pricingengine::{Arguments, Results};
-use crate::require;
+use crate::pricingengine::{Arguments, GenericEngine, Results};
 use crate::settings::Settings;
 use crate::shared::Shared;
 use crate::time::date::Date;
-use crate::types::Real;
+use crate::{fail, require};
 
+/// Purchased European option and its discrete log-payoff replication weight.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VarianceSwapOptionWeight {
+    /// Call or put.
+    pub option_type: OptionType,
+    /// Positive option strike.
+    pub strike: f64,
+    /// Finite signed replication weight.
+    pub weight: f64,
+}
+
+/// Typed variance-swap engine inputs.
 #[derive(Default)]
 pub struct VarianceSwapArguments {
+    /// Long or short variance exposure.
     pub position: Option<Position>,
-    pub strike: Option<Real>,
-    pub notional: Option<Real>,
+    /// Annualized variance strike, not volatility.
+    pub strike: Option<f64>,
+    /// Cash amount per whole variance unit.
+    pub notional: Option<f64>,
+    /// Contract start date.
     pub start_date: Option<Date>,
+    /// Contract maturity date.
     pub maturity_date: Option<Date>,
+    /// Explicit evaluation-date settings.
+    pub settings: Option<Shared<Settings<Date>>>,
 }
 
 impl Arguments for VarianceSwapArguments {
-    #[rustfmt::skip]
     fn validate(&self) -> QlResult<()> {
-        let Some(strike) = self.strike else { fail!("no strike given"); };
-        require!(strike > 0.0, "negative or null strike given");
-        let Some(notional) = self.notional else { fail!("no notional given"); };
-        require!(notional > 0.0, "negative or null notional given");
-        require!(self.start_date.is_some(), "null start date given");
-        require!(self.maturity_date.is_some(), "null maturity date given");
-        require!(self.position.is_some(), "no position given");
+        require!(self.position.is_some(), "variance swap position missing");
+        require!(
+            self.strike.is_some_and(|v| v.is_finite() && v > 0.0),
+            "variance strike must be finite and positive"
+        );
+        require!(
+            self.notional.is_some_and(|v| v.is_finite() && v > 0.0),
+            "variance notional must be finite and positive"
+        );
+        let Some((start, maturity)) = self.start_date.zip(self.maturity_date) else {
+            fail!("variance swap dates missing");
+        };
+        require!(
+            start != Date::default() && maturity != Date::default() && start < maturity,
+            "variance swap requires valid start before maturity"
+        );
+        require!(self.settings.is_some(), "variance swap settings missing");
         Ok(())
     }
 }
 
+/// Typed variance-swap outputs; cleared together before a calculation.
 #[derive(Default)]
 pub struct VarianceSwapResults {
+    /// Common instrument outputs.
     pub instrument: InstrumentResults,
-    pub variance: Option<Real>,
+    /// Annualized finite signed variance.
+    pub variance: Option<f64>,
+    /// Annualized variance standard error, available only for Monte Carlo.
+    pub variance_error: Option<f64>,
+    /// Actual Monte Carlo sample count.
+    pub samples: Option<usize>,
+    /// Calls ascending followed by puts descending.
+    pub option_weights: Vec<VarianceSwapOptionWeight>,
 }
 
 impl Results for VarianceSwapResults {
     fn reset(&mut self) {
         self.instrument.reset();
         self.variance = None;
+        self.variance_error = None;
+        self.samples = None;
+        self.option_weights.clear();
     }
+
     fn as_instrument_results(&self) -> Option<&InstrumentResults> {
         Some(&self.instrument)
     }
 }
 
+/// Generic engine base for variance-swap pricing.
+pub type VarianceSwapEngine = GenericEngine<VarianceSwapArguments, VarianceSwapResults>;
+
+/// Spot-start variance swap, without realized observations or sampling corrections.
 pub struct VarianceSwap {
     base: InstrumentBase,
-    settings: Shared<Settings<Date>>,
     position: Position,
-    strike: Real,
-    notional: Real,
+    strike: f64,
+    notional: f64,
     start_date: Date,
     maturity_date: Date,
-    variance: Option<Real>,
+    settings: Shared<Settings<Date>>,
+    variance: Option<f64>,
+    variance_error: Option<f64>,
+    samples: Option<usize>,
+    option_weights: Vec<VarianceSwapOptionWeight>,
 }
 
 impl VarianceSwap {
-    #[rustfmt::skip]
+    /// Creates immutable terms. Live start/reference-date support is checked at pricing.
     pub fn new(
-        position: Position, strike: Real, notional: Real, start_date: Date, maturity_date: Date,
+        position: Position,
+        strike: f64,
+        notional: f64,
+        start_date: Date,
+        maturity_date: Date,
         settings: Shared<Settings<Date>>,
-    ) -> Self {
+    ) -> QlResult<Self> {
+        let arguments = VarianceSwapArguments {
+            position: Some(position),
+            strike: Some(strike),
+            notional: Some(notional),
+            start_date: Some(start_date),
+            maturity_date: Some(maturity_date),
+            settings: Some(settings.clone()),
+        };
+        arguments.validate()?;
         let base = InstrumentBase::new();
         settings.register_eval_date_observer(&base.observer());
-        Self { base, settings, position, strike, notional, start_date, maturity_date, variance: None }
+        Ok(Self {
+            base,
+            position,
+            strike,
+            notional,
+            start_date,
+            maturity_date,
+            settings,
+            variance: None,
+            variance_error: None,
+            samples: None,
+            option_weights: Vec::new(),
+        })
     }
 
-    pub fn strike(&self) -> Real {
-        self.strike
-    }
+    /// Exposure direction.
     pub fn position(&self) -> Position {
         self.position
     }
+    /// Annualized variance strike.
+    pub fn strike(&self) -> f64 {
+        self.strike
+    }
+    /// Cash amount per whole variance unit.
+    pub fn notional(&self) -> f64 {
+        self.notional
+    }
+    /// Immutable contract start.
     pub fn start_date(&self) -> Date {
         self.start_date
     }
+    /// Immutable contract maturity.
     pub fn maturity_date(&self) -> Date {
         self.maturity_date
     }
-    pub fn notional(&self) -> Real {
-        self.notional
+
+    /// Lazily prices and returns annualized variance; unavailable after expiry.
+    pub fn variance(&mut self) -> QlResult<f64> {
+        self.calculate()?;
+        let Some(variance) = self.variance else {
+            fail!("variance not provided");
+        };
+        Ok(variance)
     }
 
-    pub fn variance(&mut self) -> QlResult<Real> {
+    /// Annualized variance standard error; unavailable for replication or expiry.
+    pub fn variance_error(&mut self) -> QlResult<f64> {
         self.calculate()?;
-        let Some(v) = self.variance else {
-            fail!("result not available");
+        let Some(error) = self.variance_error else {
+            fail!("variance standard error not provided");
         };
-        Ok(v)
+        Ok(error)
+    }
+
+    /// Actual Monte Carlo sample count; unavailable for replication or expiry.
+    pub fn samples(&mut self) -> QlResult<usize> {
+        self.calculate()?;
+        let Some(samples) = self.samples else {
+            fail!("variance sample count not provided");
+        };
+        Ok(samples)
+    }
+
+    /// Fresh owned copy of purchased option weights; unavailable after expiry.
+    pub fn option_weights(&mut self) -> QlResult<Vec<VarianceSwapOptionWeight>> {
+        self.calculate()?;
+        require!(
+            self.variance.is_some(),
+            "variance option weights not provided"
+        );
+        Ok(self.option_weights.clone())
     }
 }
 
@@ -109,39 +213,66 @@ impl Instrument for VarianceSwap {
     fn base_mut(&mut self) -> &mut InstrumentBase {
         &mut self.base
     }
-
     fn is_expired(&self) -> QlResult<bool> {
         event_has_occurred(self.maturity_date, &self.settings, None, None)
     }
 
-    #[rustfmt::skip]
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
-        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<VarianceSwapArguments>() else {
-            fail!("wrong argument type");
+        let Some(arguments) = (arguments as &mut dyn Any).downcast_mut::<VarianceSwapArguments>()
+        else {
+            fail!("wrong variance swap arguments");
         };
-        arguments.position = Some(self.position);
-        arguments.strike = Some(self.strike);
-        arguments.notional = Some(self.notional);
-        arguments.start_date = Some(self.start_date);
-        arguments.maturity_date = Some(self.maturity_date);
+        *arguments = VarianceSwapArguments {
+            position: Some(self.position),
+            strike: Some(self.strike),
+            notional: Some(self.notional),
+            start_date: Some(self.start_date),
+            maturity_date: Some(self.maturity_date),
+            settings: Some(self.settings.clone()),
+        };
         Ok(())
     }
 
-    #[rustfmt::skip]
-    fn setup_expired(&mut self) {
-        self.base_mut().store_results(&InstrumentResults {
-            value: Some(0.0), error_estimate: Some(0.0), ..InstrumentResults::default()
-        });
-        self.variance = None;
-    }
-
-    #[rustfmt::skip]
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
         let Some(results) = (results as &dyn Any).downcast_ref::<VarianceSwapResults>() else {
-            fail!("wrong result type");
+            fail!("wrong variance swap results");
         };
-        self.base_mut().store_results(&results.instrument);
+        require!(
+            results.variance.is_some_and(f64::is_finite)
+                && results.instrument.value.is_some_and(f64::is_finite),
+            "invalid variance swap results"
+        );
+        require!(
+            results
+                .variance_error
+                .is_none_or(|v| v.is_finite() && v >= 0.0)
+                && results.samples.is_none_or(|v| v >= 2)
+                && results.variance_error.is_some() == results.samples.is_some()
+                && results.instrument.error_estimate.is_none_or(f64::is_finite),
+            "invalid variance sampling results"
+        );
+        self.base.store_results(&results.instrument);
         self.variance = results.variance;
+        self.variance_error = results.variance_error;
+        self.samples = results.samples;
+        self.option_weights.clone_from(&results.option_weights);
         Ok(())
     }
+
+    fn setup_expired(&mut self) {
+        let results = InstrumentResults {
+            value: Some(0.0),
+            error_estimate: Some(0.0),
+            ..InstrumentResults::default()
+        };
+        self.base.store_results(&results);
+        self.variance = None;
+        self.variance_error = None;
+        self.samples = None;
+        self.option_weights.clear();
+    }
 }
+
+#[cfg(test)]
+#[path = "varianceswap_tests.rs"]
+mod tests;

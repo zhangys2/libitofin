@@ -38,6 +38,7 @@ __all__ = [
     "Swaption",
     "VanillaOption",
     "VanillaSwap",
+    "VarianceSwap",
     "YearOnYearInflationSwap",
     "YoYInflationCapFloor",
     "ZeroCouponInflationSwap",
@@ -1716,6 +1717,83 @@ class VanillaSwap:
 
         Returns:
             float: The rate the fixed leg accrues at.
+        """
+
+@typing.final
+class VarianceSwap:
+    r"""
+    A spot-start contract on annualized variance, not volatility.
+
+    Notional multiplies one whole variance unit. Live pricing requires start,
+    evaluation and all market reference dates to coincide. Realized fixings,
+    forward starts and discrete-monitoring corrections are unsupported.
+    """
+    def __init__(self, position: Position, strike: builtins.float, notional: builtins.float, start_date: time.Date, maturity_date: time.Date, settings: itofin.Settings) -> None:
+        r"""
+        Retain settings and immutable positive variance strike and notional.
+        """
+    def set_engine(self, engine: pricingengines.ReplicatingVarianceSwapEngine | pricingengines.MCVarianceSwapEngine) -> None:
+        r"""
+        Attach an engine, retaining its process after Python owners disappear.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Return the discounted signed payoff on one whole variance unit.
+        """
+    def variance(self) -> builtins.float:
+        r"""
+        Return annualized variance; finite-strip replication can be signed.
+        """
+    def variance_error(self) -> builtins.float:
+        r"""
+        Return nonnegative annualized-variance Monte Carlo standard error.
+        """
+    def error_estimate(self) -> builtins.float:
+        r"""
+        Return the native signed monetary error estimate: negative for shorts.
+        """
+    def samples(self) -> builtins.int:
+        r"""
+        Return actual Monte Carlo observations, not a configured sample cap.
+        """
+    def option_weights(self) -> builtins.list[tuple[OptionType, builtins.float, builtins.float]]:
+        r"""
+        Return a fresh list of (option type, strike, weight) tuples.
+
+        Calls ascend, then puts descend. Synthetic terminal strikes are not
+        purchased. Expired contracts have no variance or replication weights.
+        """
+    def recalculate(self) -> None:
+        r"""
+        Force a fresh calculation without bypassing live-input validation.
+        """
+    def is_calculated(self) -> builtins.bool:
+        r"""
+        Return whether a successful lazy valuation is cached.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Return expiry under the retained explicit settings.
+        """
+    def position(self) -> Position:
+        r"""
+        Return the immutable long or short position.
+        """
+    def strike(self) -> builtins.float:
+        r"""
+        Return the annualized variance strike, not volatility.
+        """
+    def notional(self) -> builtins.float:
+        r"""
+        Return notional per one whole variance unit.
+        """
+    def start_date(self) -> time.Date:
+        r"""
+        Return the immutable contract start date.
+        """
+    def maturity_date(self) -> time.Date:
+        r"""
+        Return the immutable contract maturity date.
         """
 
 @typing.final

@@ -28,11 +28,9 @@ records the SciPy version and the generation date into every fixture it writes.
 
 ## Release
 
-The first crates.io publish of `itofin-optimize` is manual, done by the
-maintainer with a token: crates.io Trusted Publishing requires a first manual
-release before it can take over. The CI publish job is added only afterwards, so
-that the release workflow does not turn red once `libitofin` has already been
-published.
+This fork does not publish `itofin-optimize` through `semantic-release.yml`.
+The crate bundles the workspace BSD-3-Clause `LICENSE`. Upstream's crates.io
+release of 0.36.0 is a separate publication from `benbenbang/libitofin`.
 
 ## Citations
 

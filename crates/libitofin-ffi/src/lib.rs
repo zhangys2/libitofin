@@ -36,6 +36,7 @@ pub mod discrepancy_statistics_api;
 pub mod fd_engine_api;
 pub mod garch_api;
 pub mod general_statistics_api;
+pub mod geometric_brownian_api;
 pub mod gjr_api;
 pub mod gjr_model_api;
 pub mod helpers_api;
@@ -96,3 +97,5 @@ mod swaption_facades_tests;
 
 #[cfg(test)]
 mod cap_calibration_tests;
+
+pub mod variance_swap_api;

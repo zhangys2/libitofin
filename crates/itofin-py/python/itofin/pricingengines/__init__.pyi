@@ -33,9 +33,11 @@ __all__ = [
     "MCEuropeanEngine",
     "MCEuropeanGJRGARCHEngine",
     "MCEuropeanHestonEngine",
+    "MCVarianceSwapEngine",
     "MidPointCdsEngine",
     "NumericalFix",
     "QMCEuropeanEngine",
+    "ReplicatingVarianceSwapEngine",
     "TreeCapFloorEngine",
     "TreeSwaptionEngine",
     "YoYInflationCapFloorEngine",
@@ -530,6 +532,26 @@ class MCEuropeanHestonEngine:
         """
 
 @typing.final
+class MCVarianceSwapEngine:
+    r"""
+    Estimate integrated log-price diffusion variance, not squared returns.
+
+    Exactly one grid selector and one stopping selector are required. Tolerance
+    is an absolute annualized-variance standard-error target, not a cash target.
+    Sampling error excludes grid/integration bias. Nonzero seeds reproduce each
+    recalculation; zero selects the existing randomized convention. No advanced
+    Monte Carlo features or historical observations are supported.
+    """
+    def __init__(self, process: processes.BlackScholesProcess, *, steps: typing.Optional[builtins.int] = None, steps_per_year: typing.Optional[builtins.int] = None, samples: typing.Optional[builtins.int] = None, tolerance: typing.Optional[builtins.float] = None, max_samples: typing.Optional[builtins.int] = None, seed: builtins.int = 0) -> None:
+        r"""
+        Retain a Black-Scholes process with bounded sampling and grid work.
+
+        Fixed samples require at least two. Tolerance sampling starts with 1023
+        observations and defaults to a 50000-sample maximum. Failure to reach
+        tolerance within the permitted budget raises ItofinError.
+        """
+
+@typing.final
 class MidPointCdsEngine:
     r"""
     The mid-point credit-default-swap engine: each live premium period is
@@ -569,6 +591,25 @@ class QMCEuropeanEngine:
         No statistical error estimate is available. Absolute tolerance and
         max_samples are rejected. Seed selects Sobol direction initialization;
         it is deterministic even when omitted or zero.
+        """
+
+@typing.final
+class ReplicatingVarianceSwapEngine:
+    r"""
+    Discrete log-payoff replication on a retained live Black-Scholes market.
+
+    Each side requires 2..4096 positive finite raw strikes and at least two
+    distinct strikes. The minimum call equals the maximum put exactly. Tail
+    extension dk must remain positive and representable on both sides.
+    This is a finite strip, not infinite-tail integration or a sigma-squared
+    guarantee. Native nonzero-dividend drift has a boundary-dependent mismatch.
+    """
+    def __init__(self, process: processes.BlackScholesProcess, call_strikes: typing.Sequence[builtins.float], put_strikes: typing.Sequence[builtins.float], *, dk: builtins.float = 5.0) -> None:
+        r"""
+        Copy list or tuple strike inputs, canonicalizing each side independently.
+
+        PyO3 extracts Python sequences before core bounds; additional core
+        allocations are bounded. No iterator-only generator contract is promised.
         """
 
 @typing.final

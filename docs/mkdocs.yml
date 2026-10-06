@@ -74,6 +74,9 @@ nav:
   - Getting started: getting-started.md
   - Go SDK: go.md
   - Finite-difference options: finite-difference.md
+  - Exotic option scope: exotic-options.md
+  - Variance swaps: variance-swaps.md
+  - Monte Carlo variance swaps: mc-variance-swaps.md
   - Merton jump diffusion: jump-diffusion.md
   - Bates stochastic volatility: bates.md
   - GJR-GARCH process and paths: gjrgarch.md
@@ -82,6 +85,7 @@ nav:
   - Municipal BMA swaps: bma.md
   - Random policies: random-policies.md
   - GBM simulation: simulation.md
+  - Standalone Euler GBM: geometric-brownian.md
   - Statistics and risk: statistics.md
   - Mean convergence: convergence.md
   - QMC discrepancy: discrepancy.md
