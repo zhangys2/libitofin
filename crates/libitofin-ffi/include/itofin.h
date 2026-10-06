@@ -1281,6 +1281,21 @@ typedef struct ItofinVolGridConfig {
   int32_t flat_extrapolation;
 } ItofinVolGridConfig;
 
+/**
+ * Zero denotes an unset option. Exactly one grid and one sampling mode is required.
+ * Tolerance measures annualized variance standard error, not monetary NPV error.
+ * Seed zero is randomized; nonzero seeds must fit uint32.
+ * Tolerance mode defaults to 50,000 maximum samples.
+ */
+typedef struct ItofinVarianceSwapMcConfig {
+  size_t steps;
+  size_t steps_per_year;
+  size_t samples;
+  double absolute_tolerance;
+  size_t max_samples;
+  uint64_t seed;
+} ItofinVarianceSwapMcConfig;
+
 #define ITOFIN_OPTIMIZE_CONVERGED_XTOL 0
 
 #define ITOFIN_OPTIMIZE_CONVERGED_FTOL 1
@@ -2975,6 +2990,35 @@ int32_t itofin_general_statistics_query(struct ItofinContext *ctx,
                                         int32_t selector,
                                         ItofinReal argument,
                                         ItofinReal *out,
+                                        struct ItofinError *error);
+
+/**
+ * Create a scalar process with finite initial value/drift and nonnegative volatility.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_geometric_brownian_new(struct ItofinContext *ctx,
+                                      double initial,
+                                      double mu,
+                                      double volatility,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * Kind: 0 initial, 1 mu, 2 volatility, 3 drift, 4 diffusion, 5 expectation,
+ * 6 variance, 7 signed standard deviation, 8 Euler evolve with Gaussian `draw`.
+ * State/time are used by 3-8; dt by 5-8; draw only by 8. Unused inputs are ignored.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_geometric_brownian_query(struct ItofinContext *ctx,
+                                        uint64_t process,
+                                        int32_t kind,
+                                        double t,
+                                        double state,
+                                        double dt,
+                                        double draw,
+                                        double *out,
                                         struct ItofinError *error);
 
 /**
@@ -6861,6 +6905,128 @@ int32_t itofin_capfloor_vol_query(struct ItofinContext *ctx,
                                   int32_t extrapolate,
                                   double *out,
                                   struct ItofinError *error);
+
+/**
+ * Variance units, positive notional and start-before-maturity are required.
+ * Position is zero long or one short. Settings are retained.
+ * # Safety
+ * Pointers follow the crate-level C caller contract.
+ */
+int32_t itofin_variance_swap_new(struct ItofinContext *ctx,
+                                 int32_t position,
+                                 double strike,
+                                 double notional,
+                                 int32_t start,
+                                 int32_t maturity,
+                                 uint64_t settings,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * Each strip has 2..4096 raw entries with at least two distinct strikes.
+ * Finite positive dk and an exact shared call/put boundary are required.
+ * # Safety
+ * Arrays must be live for the stated lengths and outputs non-overlapping.
+ */
+int32_t itofin_replicating_variance_swap_engine_new(struct ItofinContext *ctx,
+                                                    uint64_t process,
+                                                    double dk,
+                                                    const double *calls,
+                                                    size_t calls_len,
+                                                    const double *puts,
+                                                    size_t puts_len,
+                                                    uint64_t *out,
+                                                    struct ItofinError *error);
+
+/**
+ * Attach a typed variance-swap engine; both owners are retained.
+ * # Safety
+ * Context, handles and error follow the crate-level caller contract.
+ */
+int32_t itofin_variance_swap_set_engine(struct ItofinContext *ctx,
+                                        uint64_t swap,
+                                        uint64_t engine,
+                                        struct ItofinError *error);
+
+/**
+ * Scalar fields: zero NPV, one variance, two strike, three notional,
+ * four signed NPV sampling error, five nonnegative variance sampling error.
+ * # Safety
+ * Outputs follow the crate-level caller contract and stay unchanged on error.
+ */
+int32_t itofin_variance_swap_value(struct ItofinContext *ctx,
+                                   uint64_t swap,
+                                   int32_t field,
+                                   double *out,
+                                   struct ItofinError *error);
+
+/**
+ * Integer field: zero position, one start serial, two maturity serial,
+ * three calculated flag, four expired flag.
+ * # Safety
+ * Outputs follow the crate-level caller contract and stay unchanged on error.
+ */
+int32_t itofin_variance_swap_integer(struct ItofinContext *ctx,
+                                     uint64_t swap,
+                                     int32_t field,
+                                     int32_t *out,
+                                     struct ItofinError *error);
+
+/**
+ * Force recalculation. Invalid market inputs return an error, not stale results.
+ * # Safety
+ * Context, handles and error follow the crate-level caller contract.
+ */
+int32_t itofin_variance_swap_recalculate(struct ItofinContext *ctx,
+                                         uint64_t swap,
+                                         struct ItofinError *error);
+
+/**
+ * Return the exact current weight count; unavailable after expiry.
+ * # Safety
+ * Outputs follow the crate-level caller contract and stay unchanged on error.
+ */
+int32_t itofin_variance_swap_weights_count(struct ItofinContext *ctx,
+                                           uint64_t swap,
+                                           size_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * Copy fresh typed weights into exact-size arrays. Types are zero call, one put.
+ * Length and pointer errors are rejected before lazy calculation.
+ * Weights are unavailable after expiry.
+ * # Safety
+ * Arrays must be writable, aligned, exact-size and non-overlapping.
+ */
+int32_t itofin_variance_swap_weights(struct ItofinContext *ctx,
+                                     uint64_t swap,
+                                     int32_t *kinds,
+                                     double *strikes,
+                                     double *weights,
+                                     size_t len,
+                                     struct ItofinError *error);
+
+/**
+ * Retain the generalized Black-Scholes process and construct a typed MC engine.
+ * No antithetic, bridge or discrete squared-return estimator is selected.
+ * # Safety
+ * Config and output pointers follow the crate-level C caller contract.
+ */
+int32_t itofin_mc_variance_swap_engine_new(struct ItofinContext *ctx,
+                                           uint64_t process,
+                                           const struct ItofinVarianceSwapMcConfig *config,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * Return actual MC samples. Replication and expired sampling results are unavailable.
+ * # Safety
+ * Output follows the C caller contract and remains unchanged on failure.
+ */
+int32_t itofin_variance_swap_samples(struct ItofinContext *ctx,
+                                     uint64_t swap,
+                                     size_t *out,
+                                     struct ItofinError *error);
 
 #ifdef __cplusplus
 }  // extern "C"

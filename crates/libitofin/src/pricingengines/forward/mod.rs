@@ -8,9 +8,11 @@ mod analyticforwardvanillaengine;
 mod analytichestonforwardeuropeanengine;
 mod mcforwardeuropeanbsengine;
 mod mcforwardeuropeanhestonengine;
+mod mcvarianceswapengine;
 mod quantoforwardengine;
 mod quantoforwardperformanceengine;
 mod replicatingvarianceswapengine;
+mod varianceswapstrip;
 
 pub use analyticforwardperformancevanillaengine::{
     AnalyticForwardPerformanceVanillaEngine, set_analytic_forward_performance_vanilla_engine,
@@ -27,13 +29,26 @@ pub use mcforwardeuropeanhestonengine::{
     ForwardEuropeanHestonPathPricer, MakeMcForwardEuropeanHestonEngine,
     McForwardEuropeanHestonEngine,
 };
+pub use mcvarianceswapengine::MCVarianceSwapEngine;
 pub use quantoforwardengine::{QuantoForwardEuropeanEngine, set_quanto_forward_european_engine};
 pub use quantoforwardperformanceengine::{
     QuantoForwardPerformanceEuropeanEngine, set_quanto_forward_performance_european_engine,
 };
-pub use replicatingvarianceswapengine::{
-    ReplicatingVarianceSwapEngine, set_replicating_variance_swap_engine,
-};
+pub use replicatingvarianceswapengine::ReplicatingVarianceSwapEngine;
+pub use varianceswapstrip::MAX_VARIANCE_SWAP_STRIKES;
+
+#[cfg(test)]
+pub(crate) mod test_market;
+#[cfg(test)]
+mod variance_native_cases;
+#[cfg(test)]
+mod variance_native_tests;
+#[cfg(test)]
+mod variance_native_weights;
+#[cfg(test)]
+mod variance_numerical_tests;
+#[cfg(test)]
+mod variance_strip_tests;
 
 #[cfg(test)]
 mod test_greeks {

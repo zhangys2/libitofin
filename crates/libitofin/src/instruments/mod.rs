@@ -171,7 +171,10 @@ pub use vanillaswingoption::{
     SwingExercise, VanillaForwardPayoff, VanillaSwingArguments, VanillaSwingOption,
     VanillaSwingResults,
 };
-pub use varianceswap::{VarianceSwap, VarianceSwapArguments, VarianceSwapResults};
+pub use varianceswap::{
+    VarianceSwap, VarianceSwapArguments, VarianceSwapEngine, VarianceSwapOptionWeight,
+    VarianceSwapResults,
+};
 pub use writerextensibleoption::{
     WriterExtensibleArguments, WriterExtensibleOption, WriterExtensibleResults,
 };

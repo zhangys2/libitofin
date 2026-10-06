@@ -32,6 +32,7 @@ mod discrepancy_statistics;
 mod fdengine;
 mod fra;
 mod general_statistics;
+mod geometric_brownian;
 mod gjr;
 mod gjr_model;
 mod gjr_simulation;
@@ -45,6 +46,7 @@ mod iterativebootstrap;
 mod jointcurves;
 mod makeswaption;
 mod market;
+mod mc_variance_swap;
 mod mcengine;
 mod merton;
 mod merton_simulation;
@@ -69,6 +71,7 @@ mod swaptionengine;
 mod swaptionvol;
 mod time;
 mod treeswaption;
+mod variance_swap;
 mod vol;
 
 use calibration::{
@@ -322,6 +325,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     processes.add_class::<PyHestonProcess>()?;
     processes.add_class::<bates::PyBatesProcess>()?;
     processes.add_class::<merton::PyMerton76Process>()?;
+    processes.add_class::<geometric_brownian::PyGeometricBrownianMotionProcess>()?;
     processes.add_class::<gjr::PyGjrGarchProcess>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
@@ -355,6 +359,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     cashflows.add_function(wrap_pyfunction!(cashflows::npv, &cashflows)?)?;
 
     let instruments = PyModule::new(py, "instruments")?;
+    instruments.add_class::<variance_swap::PyVarianceSwap>()?;
     instruments.add_class::<PyOptionType>()?;
     instruments.add_class::<PyVanillaOption>()?;
     instruments.add_class::<PySwapType>()?;
@@ -393,6 +398,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     models.add_class::<PyCalibrationErrorType>()?;
 
     let pricingengines = PyModule::new(py, "pricingengines")?;
+    pricingengines.add_class::<variance_swap::PyReplicatingVarianceSwapEngine>()?;
+    pricingengines.add_class::<mc_variance_swap::PyMCVarianceSwapEngine>()?;
     pricingengines.add_class::<PyCashAnnuityModel>()?;
     pricingengines.add_class::<PyBlackSwaptionEngine>()?;
     pricingengines.add_class::<PyTreeSwaptionEngine>()?;

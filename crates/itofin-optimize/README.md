@@ -28,11 +28,24 @@ records the SciPy version and the generation date into every fixture it writes.
 
 ## Release
 
-The first crates.io publish of `itofin-optimize` is manual, done by the
-maintainer with a token: crates.io Trusted Publishing requires a first manual
-release before it can take over. The CI publish job is added only afterwards, so
-that the release workflow does not turn red once `libitofin` has already been
-published.
+The initial **0.36.0** publication is available on
+[crates.io](https://crates.io/crates/itofin-optimize/0.36.0). Bootstrap and the
+GitHub trusted-publisher configuration are verified:
+
+- Owner `benbenbang`, repository `libitofin`, workflow `semantic-release.yml`;
+  no GitHub environment is configured for the Rust publish jobs.
+- Future coordinated releases publish `itofin-optimize` before `libitofin`, using
+  the same released tag, committed-version checks and OIDC authentication.
+  Optimizer publication failure blocks core publication.
+- Python and Go release jobs remain independently gated by the release; their
+  existing artifacts bundle optimizer code without an additional runtime install.
+- CI dry runs perform no publication. The first successful future CI publication
+  is still pending; [#1091](https://github.com/benbenbang/libitofin/issues/1091)
+  remains open until it is verified. That issue retains historical bootstrap details.
+
+See [Trusted Publishing](https://crates.io/docs/trusted-publishing) for authentication
+and the [Cargo publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html)
+for package validation.
 
 ## Citations
 
