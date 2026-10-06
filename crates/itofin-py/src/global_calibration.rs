@@ -33,10 +33,10 @@ impl PyDifferentialEvolution {
         #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
         #[pyo3(from_py_with = extract_population_size)] population_size: Option<usize>,
         initial_population: Option<Vec<Vec<f64>>>,
-        xatol: Option<f64>,
-        fatol: Option<f64>,
-        mutation: f64,
-        recombination: f64,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_mutation)] mutation: f64,
+        #[pyo3(from_py_with = extract_recombination)] recombination: f64,
         #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
         #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
     ) -> PyResult<Self> {
@@ -101,4 +101,16 @@ fn extract_maxiter(value: &Bound<'_, PyAny>) -> PyResult<Option<usize>> {
 }
 fn extract_maxfev(value: &Bound<'_, PyAny>) -> PyResult<Option<usize>> {
     optional_integer(value, "maxfev")
+}
+fn extract_xatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+    crate::optimize::strict_global_optional_f64(value, "xatol")
+}
+fn extract_fatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+    crate::optimize::strict_global_optional_f64(value, "fatol")
+}
+fn extract_mutation(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "mutation")
+}
+fn extract_recombination(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "recombination")
 }

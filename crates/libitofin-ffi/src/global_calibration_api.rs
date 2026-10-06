@@ -51,6 +51,11 @@ pub unsafe extern "C" fn itofin_differential_evolution_new(
                     "population must contain rows times dimension values",
                 ));
             }
+            if population_rows != 0 && !(4..=4096).contains(&population_rows) {
+                return Err(BindingError::invalid(
+                    "initial population rows must be in 4..=4096",
+                ));
+            }
             let bounds = Bounds {
                 lower: input_slice(lower, lower_len)?.to_vec(),
                 upper: input_slice(upper, upper_len)?.to_vec(),

@@ -434,6 +434,26 @@ pub(crate) fn strict_global_seed(value: &Bound<'_, PyAny>) -> PyResult<u64> {
     value.extract()
 }
 
+pub(crate) fn strict_global_f64(value: &Bound<'_, PyAny>, name: &str) -> PyResult<f64> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!(
+            "option {name} must be a float, not bool"
+        )));
+    }
+    value.extract()
+}
+
+pub(crate) fn strict_global_optional_f64(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<f64>> {
+    if value.is_none() {
+        Ok(None)
+    } else {
+        strict_global_f64(value, name).map(Some)
+    }
+}
+
 fn reject_global_bool(value: &Bound<'_, PyAny>, name: &str) -> PyResult<()> {
     if value.is_instance_of::<PyBool>() {
         return Err(PyValueError::new_err(format!(
@@ -459,10 +479,10 @@ fn differential_evolution(
                     Some(strict_global_usize(&value, "population_size")?)
             }
             "initial_population" => method.global.initial_population = Some(value.extract()?),
-            "xatol" => method.global.xatol = Some(value.extract()?),
-            "fatol" => method.global.fatol = Some(value.extract()?),
-            "mutation" => method.mutation = value.extract()?,
-            "recombination" => method.recombination = value.extract()?,
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "mutation" => method.mutation = strict_global_f64(&value, "mutation")?,
+            "recombination" => method.recombination = strict_global_f64(&value, "recombination")?,
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Differential-Evolution does not support option {other}"

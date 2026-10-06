@@ -72,6 +72,24 @@ def test_invalid_inputs_do_not_invoke_the_objective(overrides: dict) -> None:
     assert not calls
 
 
+@pytest.mark.parametrize(
+    "key",
+    ["xatol", "fatol", "mutation", "recombination"],
+)
+@pytest.mark.parametrize("value", [True, False])
+def test_float_options_reject_bool(key: str, value: bool) -> None:
+    """Bool is not a float tolerance or DE coefficient."""
+    calls = []
+
+    def objective(x: np.ndarray) -> float:
+        calls.append(x.copy())
+        return float(x[0] ** 2)
+
+    with pytest.raises(ValueError, match="must be a float, not bool"):
+        minimize(objective, [0.0], method=METHOD, bounds=[(-1.0, 1.0)], options={key: value})
+    assert not calls
+
+
 @pytest.mark.parametrize("key", ["seed", "population_size", "maxiter", "maxfev"])
 @pytest.mark.parametrize("value", [-1, True, False, 1.5, 2**65])
 def test_unsigned_integer_options_reject_lossy_or_boolean_conversion(key: str, value: object) -> None:

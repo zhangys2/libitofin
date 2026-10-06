@@ -230,7 +230,7 @@ impl PyHestonModel {
     ///
     /// Args:
     ///     helpers (list[HestonModelHelper]): The calibration instruments to fit; must not be empty.
-    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent): The optimizer driving the fit.
+    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent | DifferentialEvolution): The optimizer driving the fit.
     ///     end_criteria (EndCriteria): The stopping rule handed to the optimizer.
     ///     integration_order (int): The order of the Gauss-Laguerre integration the
     ///         engine uses; at most 192.
