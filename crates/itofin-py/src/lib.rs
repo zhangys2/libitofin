@@ -36,6 +36,7 @@ mod geometric_brownian;
 mod gjr;
 mod gjr_model;
 mod gjr_simulation;
+mod global_calibration;
 mod helpers;
 mod heston;
 mod heston_engines;
@@ -440,6 +441,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let optimization = PyModule::new(py, "optimization")?;
     optimization.add_class::<PyLevenbergMarquardt>()?;
     optimization.add_class::<PySimplex>()?;
+    optimization.add_class::<global_calibration::PyDifferentialEvolution>()?;
     optimization.add_class::<PyConjugateGradient>()?;
     optimization.add_class::<PySteepestDescent>()?;
     optimization.add_class::<PyEndCriteria>()?;
