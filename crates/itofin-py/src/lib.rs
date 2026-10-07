@@ -30,6 +30,7 @@ mod currency;
 mod curve;
 mod discrepancy_statistics;
 mod fdengine;
+mod forward;
 mod fra;
 mod general_statistics;
 mod geometric_brownian;
@@ -226,6 +227,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ou_simulation::simulate_ou, m)?)?;
     m.add_function(wrap_pyfunction!(merton_simulation::simulate_merton, m)?)?;
     m.add_function(wrap_pyfunction!(gjr_simulation::simulate_gjr, m)?)?;
+    m.add_function(wrap_pyfunction!(forward::implied_forward, m)?)?;
     m.add_class::<PySettings>()?;
 
     let time = PyModule::new(py, "time")?;
@@ -288,6 +290,10 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyCubicSmileSection>()?;
     termstructures.add_class::<PyTotalVarianceCubicSmileSection>()?;
     termstructures.add_class::<PyButterflyArbitrageReport>()?;
+    termstructures.add_class::<forward::PyOptionQuotePair>()?;
+    termstructures.add_class::<forward::PyForwardDiagnostics>()?;
+    termstructures.add_class::<forward::PyImpliedForwardResult>()?;
+    termstructures.add_function(wrap_pyfunction!(forward::implied_forward, &termstructures)?)?;
     termstructures.add_class::<PyOptionletVolatilityStructure>()?;
     termstructures.add_class::<PyConstantOptionletVolatility>()?;
     termstructures.add_class::<PyCapFloorTermVolSurface>()?;
