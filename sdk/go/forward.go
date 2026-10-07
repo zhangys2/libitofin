@@ -29,9 +29,9 @@ func NewOptionQuotePair(strike, callBid, callAsk, putBid, putAsk float64) *Optio
 	}
 }
 
-// IsValid checks whether both call and put quotes have positive bid <= ask.
+// IsValid checks whether both call and put quotes have non-negative bid, positive ask, and ask >= bid.
 func (p *OptionQuotePair) IsValid() bool {
-	return p.CallBid > 0 && p.CallAsk >= p.CallBid && p.PutBid > 0 && p.PutAsk >= p.PutBid
+	return p.CallBid >= 0 && p.CallAsk > 0 && p.CallAsk >= p.CallBid && p.PutBid >= 0 && p.PutAsk > 0 && p.PutAsk >= p.PutBid
 }
 
 // Repr returns the string representation.

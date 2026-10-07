@@ -51,17 +51,19 @@ impl OptionQuotePair {
         }
     }
 
-    /// True if all prices and strike are positive, finite, and non-inverted ($ask \ge bid$).
+    /// True if all prices and strike are non-negative, finite, ask is positive, and non-inverted ($ask \ge bid$).
     pub fn is_valid(&self) -> bool {
         self.strike > 0.0
             && self.strike.is_finite()
-            && self.call_bid > 0.0
+            && self.call_bid >= 0.0
             && self.call_bid.is_finite()
             && self.call_ask >= self.call_bid
+            && self.call_ask > 0.0
             && self.call_ask.is_finite()
-            && self.put_bid > 0.0
+            && self.put_bid >= 0.0
             && self.put_bid.is_finite()
             && self.put_ask >= self.put_bid
+            && self.put_ask > 0.0
             && self.put_ask.is_finite()
     }
 
@@ -204,15 +206,23 @@ impl ImpliedForward {
             "at least one option quote pair is required"
         );
 
+        require!(
+            config.min_pairs >= 2,
+            "min_pairs must be at least 2, got {}",
+            config.min_pairs
+        );
+        require!(
+            config.max_pairs >= config.min_pairs,
+            "max_pairs ({}) must be >= min_pairs ({})",
+            config.max_pairs,
+            config.min_pairs
+        );
+
         let total_received = quotes.len();
 
         // 1. Initial sanity filter: drop non-positive or inverted quotes
         let mut valid_pairs: Vec<OptionQuotePair> =
             quotes.iter().copied().filter(|q| q.is_valid()).collect();
-
-        if let Some(s) = config.spot {
-            valid_pairs.retain(|q| q.call_mid() < 0.5 * s && q.put_mid() < 0.5 * s);
-        }
 
         // 2. Convention-specific strike filtering
         if let MarketConvention::AmericanEquity { spot, atm_vol } = convention {
@@ -224,13 +234,6 @@ impl ImpliedForward {
             let window = config.american_kappa * vol * expiry_years.sqrt();
             valid_pairs.retain(|q| (q.strike / spot).ln().abs() <= window.max(0.05));
         }
-
-        require!(
-            valid_pairs.len() >= config.min_pairs,
-            "insufficient valid strike pairs: expected at least {}, found {}",
-            config.min_pairs,
-            valid_pairs.len()
-        );
 
         // Sort by strike ascending
         valid_pairs.sort_by(|a, b| {
@@ -256,6 +259,13 @@ impl ImpliedForward {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
         }
+
+        require!(
+            valid_pairs.len() >= config.min_pairs,
+            "insufficient valid strike pairs: expected at least {}, found {}",
+            config.min_pairs,
+            valid_pairs.len()
+        );
 
         let pairs_used = valid_pairs.len();
         let pairs_pruned = total_received - pairs_used;
@@ -288,7 +298,7 @@ impl ImpliedForward {
         config: &ImpliedForwardConfig,
         expiry_years: Time,
         total_received: usize,
-        mut pairs_pruned: usize,
+        _pairs_pruned: usize,
     ) -> QlResult<ImpliedForwardResult> {
         let n = pairs.len();
         let mut min_spread = Real::INFINITY;
@@ -365,8 +375,8 @@ impl ImpliedForward {
             }
         };
 
-        // Two-pass outlier pruning if RMSE > 0 and pairs > min_pairs + 1
-        if wls_rmse > 0.0 && pairs.len() > config.min_pairs + 1 {
+        // Outlier pruning: refit on filtered pairs if RMSE > 0 and pairs > min_pairs + 1
+        let (eval_pairs, eval_weights) = if wls_rmse > 0.0 && pairs.len() > config.min_pairs + 1 {
             let threshold = 3.5 * wls_rmse;
             let mut filtered_pairs = Vec::with_capacity(n);
             let mut filtered_weights = Vec::with_capacity(n);
@@ -380,7 +390,6 @@ impl ImpliedForward {
                     filtered_weights.push(weights[i]);
                 } else {
                     pruned_any = true;
-                    pairs_pruned += 1;
                 }
             }
 
@@ -406,16 +415,24 @@ impl ImpliedForward {
                         status = st;
                     }
                 }
+                (filtered_pairs, filtered_weights)
+            } else {
+                (pairs.to_vec(), weights)
             }
-        }
+        } else {
+            (pairs.to_vec(), weights)
+        };
 
-        // Synthetic bounds calculation
+        let pairs_used = eval_pairs.len();
+        let pairs_pruned = total_received.saturating_sub(pairs_used);
+
+        // Synthetic bounds calculation using post-pruning pairs
         let mut forward_bid_strict = Real::NEG_INFINITY;
         let mut forward_ask_strict = Real::INFINITY;
         let mut forward_bid_robust = 0.0;
         let mut forward_ask_robust = 0.0;
 
-        for (i, q) in pairs.iter().enumerate() {
+        for (i, q) in eval_pairs.iter().enumerate() {
             let f_bid = q.strike + (q.call_bid - q.put_ask) / discount_factor;
             let f_ask = q.strike + (q.call_ask - q.put_bid) / discount_factor;
 
@@ -426,8 +443,8 @@ impl ImpliedForward {
                 forward_ask_strict = f_ask;
             }
 
-            forward_bid_robust += weights[i] * f_bid;
-            forward_ask_robust += weights[i] * f_ask;
+            forward_bid_robust += eval_weights[i] * f_bid;
+            forward_ask_robust += eval_weights[i] * f_ask;
         }
 
         let is_crossed = forward_bid_strict > forward_ask_strict;
@@ -435,19 +452,19 @@ impl ImpliedForward {
             status = ForwardStatus::WarningCrossedSyntheticQuotes;
         }
 
-        // Box spread parity checks
+        // Box spread parity checks: (C_b1 - P_a1) - (C_a2 - P_b2) <= D(K2 - K1) <= (C_a1 - P_b1) - (C_b2 - P_a2)
         let mut box_violations = 0;
-        for i in 0..pairs.len().saturating_sub(1) {
-            let q1 = pairs[i];
-            let q2 = pairs[i + 1];
-            let box_mid = (q1.call_mid() - q1.put_mid()) - (q2.call_mid() - q2.put_mid());
-            let box_expected = discount_factor * (q2.strike - q1.strike);
-            let tol = 0.5 * (q1.combined_spread() + q2.combined_spread());
-            if (box_mid - box_expected).abs() > tol.max(0.10) {
+        for i in 0..eval_pairs.len().saturating_sub(1) {
+            let q1 = eval_pairs[i];
+            let q2 = eval_pairs[i + 1];
+            let box_lower = (q1.call_bid - q1.put_ask) - (q2.call_ask - q2.put_bid);
+            let box_upper = (q1.call_ask - q1.put_bid) - (q2.call_bid - q2.put_ask);
+            let box_target = discount_factor * (q2.strike - q1.strike);
+            if box_lower > box_target + 1e-4 || box_upper < box_target - 1e-4 {
                 box_violations += 1;
             }
         }
-        if box_violations > pairs.len() / 2 && status == ForwardStatus::Valid {
+        if box_violations > eval_pairs.len() / 2 && status == ForwardStatus::Valid {
             status = ForwardStatus::WarningBoxSpreadArbitrage;
         }
 
@@ -467,7 +484,7 @@ impl ImpliedForward {
         if let MarketConvention::AmericanEquity { .. } = convention {
             let mut f_min = Real::NEG_INFINITY;
             let mut f_max = Real::INFINITY;
-            for q in pairs {
+            for q in &eval_pairs {
                 let lb = q.strike + (q.call_bid - q.put_ask) / discount_factor;
                 let ee_put = q.strike * (1.0 - discount_factor).max(0.0);
                 let ub = q.strike + (q.call_ask - (q.put_bid - ee_put)) / discount_factor;
@@ -483,7 +500,13 @@ impl ImpliedForward {
             }
         }
 
-        let implied_carry_rate = if discount_factor > 0.0 && expiry_years > 0.0 {
+        let implied_carry_rate = if let Some(s) = spot_ref {
+            if s > 0.0 && forward > 0.0 && expiry_years > 0.0 {
+                Some((forward / s).ln() / expiry_years)
+            } else {
+                None
+            }
+        } else if discount_factor > 0.0 && expiry_years > 0.0 {
             Some(-discount_factor.ln() / expiry_years)
         } else {
             None
@@ -500,7 +523,7 @@ impl ImpliedForward {
             diagnostics: ForwardDiagnostics {
                 status,
                 total_pairs_received: total_received,
-                pairs_used: pairs.len(),
+                pairs_used,
                 pairs_pruned,
                 is_crossed,
                 box_arbitrage_violations: box_violations,
@@ -583,6 +606,9 @@ impl ImpliedForward {
             if f <= 0.0 || !f.is_finite() {
                 fail!("calculated negative or infinite crypto forward: {f}");
             }
+            if !(0.5..=1.5).contains(&alpha) && status == ForwardStatus::Valid {
+                status = ForwardStatus::WarningImplausibleDiscountFactor;
+            }
             (alpha.clamp(0.5, 1.5), f)
         } else {
             status = ForwardStatus::WarningImplausibleDiscountFactor;
@@ -601,7 +627,7 @@ impl ImpliedForward {
         let wls_rmse = sum_sq_err.sqrt();
 
         // Synthetic bounds in coin space:
-        // 1 - K / F_bid = C_ask - P_bid => F_bid = K / (1 - (C_ask - P_bid))
+        // C - P = D_coin * (1 - K / F) => F = D_coin * K / (D_coin - (C - P))
         let mut forward_bid_strict = Real::NEG_INFINITY;
         let mut forward_ask_strict = Real::INFINITY;
         let mut forward_bid_robust = 0.0;
@@ -611,14 +637,17 @@ impl ImpliedForward {
             let diff_ask = q.call_ask - q.put_bid;
             let diff_bid = q.call_bid - q.put_ask;
 
-            let f_ask = if 1.0 - diff_ask > 1e-4 {
-                q.strike / (1.0 - diff_ask)
+            let denom_ask = d_coin - diff_ask;
+            let denom_bid = d_coin - diff_bid;
+
+            let f_ask = if denom_ask > 1e-4 {
+                d_coin * q.strike / denom_ask
             } else {
                 q.strike
             };
 
-            let f_bid = if 1.0 - diff_bid > 1e-4 {
-                q.strike / (1.0 - diff_bid)
+            let f_bid = if denom_bid > 1e-4 {
+                d_coin * q.strike / denom_bid
             } else {
                 q.strike
             };
@@ -647,15 +676,15 @@ impl ImpliedForward {
             }
         }
 
-        // Effective USD discount factor D = S / F
-        let discount_factor = if let Some(s) = config.spot {
-            s / forward
-        } else {
-            d_coin
-        };
+        // Consistent coin discount factor
+        let discount_factor = d_coin;
 
-        let implied_carry_rate = if discount_factor > 0.0 && expiry_years > 0.0 {
-            Some(-discount_factor.ln() / expiry_years)
+        let implied_carry_rate = if let Some(s) = config.spot {
+            if s > 0.0 && forward > 0.0 && expiry_years > 0.0 {
+                Some((forward / s).ln() / expiry_years)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -895,5 +924,73 @@ mod tests {
         // Wings should have been pruned by ATM corridor
         assert!(res.diagnostics.pairs_pruned > 0);
         assert!(res.diagnostics.pairs_used < strikes.len());
+    }
+
+    #[test]
+    fn test_zero_bid_quotes_accepted() {
+        let pair = OptionQuotePair::new(5000.0, 0.0, 1.0, 50.0, 51.0);
+        assert!(pair.is_valid());
+    }
+
+    #[test]
+    fn test_crypto_inverse_parity_non_unit_df() {
+        let true_forward = 70000.0;
+        let d_coin = 0.95;
+        let expiry = 0.25;
+        let strikes = vec![65000.0, 68000.0, 70000.0, 72000.0, 75000.0];
+
+        let mut quotes = Vec::new();
+        for &k in &strikes {
+            // Parity: C - P = d_coin * (1 - K / F)
+            let diff_coin: Real = d_coin * (1.0 - k / true_forward);
+            let base_c = 0.1 + diff_coin.max(0.0);
+            let base_p = base_c - diff_coin;
+
+            quotes.push(OptionQuotePair::new(
+                k,
+                base_c - 0.001,
+                base_c + 0.001,
+                base_p - 0.001,
+                base_p + 0.001,
+            ));
+        }
+
+        let config = ImpliedForwardConfig {
+            spot: Some(69500.0),
+            ..Default::default()
+        };
+
+        let res =
+            ImpliedForward::calculate(&quotes, MarketConvention::CryptoInverse, &config, expiry)
+                .unwrap();
+
+        assert!(res.is_valid());
+        assert!(
+            (res.forward - true_forward).abs() < 5.0,
+            "forward={}",
+            res.forward
+        );
+        assert!(
+            (res.discount_factor - d_coin).abs() < 1e-3,
+            "d_coin={}",
+            res.discount_factor
+        );
+        assert!(res.forward_bid_strict <= res.forward && res.forward <= res.forward_ask_strict);
+    }
+
+    #[test]
+    fn test_invalid_config_pair_counts() {
+        let quotes = vec![
+            OptionQuotePair::new(5000.0, 10.0, 11.0, 10.0, 11.0),
+            OptionQuotePair::new(5100.0, 5.0, 6.0, 15.0, 16.0),
+        ];
+        let config = ImpliedForwardConfig {
+            min_pairs: 5,
+            max_pairs: 3,
+            ..Default::default()
+        };
+        let err =
+            ImpliedForward::calculate(&quotes, MarketConvention::EuropeanVanilla, &config, 0.1);
+        assert!(err.is_err());
     }
 }
