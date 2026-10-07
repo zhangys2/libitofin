@@ -31,10 +31,12 @@ __all__ = [
     "FlatForward",
     "FlatHazardRate",
     "ForwardCurve",
+    "ForwardDiagnostics",
     "FraRateHelper",
     "FuturesRateHelper",
     "FuturesType",
     "IborIborBasisSwapRateHelper",
+    "ImpliedForwardResult",
     "InterpolatedDefaultDensityCurve",
     "InterpolatedHazardRateCurve",
     "InterpolatedSwaptionVolatilityCube",
@@ -46,6 +48,7 @@ __all__ = [
     "KerkhofSeasonality",
     "MultiplicativePriceSeasonality",
     "OISRateHelper",
+    "OptionQuotePair",
     "OptionletSmileSection",
     "OptionletStripper1",
     "OptionletStripper2",
@@ -86,6 +89,7 @@ __all__ = [
     "ZeroCurve",
     "ZeroInflationHelper",
     "ZeroInflationTermStructure",
+    "implied_forward",
 ]
 
 @typing.final
@@ -1512,6 +1516,32 @@ class ForwardCurve(YieldTermStructure):
         """
 
 @typing.final
+class ForwardDiagnostics:
+    r"""
+    Diagnostic health metrics for the calculated forward.
+    """
+    @property
+    def status(self) -> builtins.str: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    @property
+    def total_pairs_received(self) -> builtins.int: ...
+    @property
+    def pairs_used(self) -> builtins.int: ...
+    @property
+    def pairs_pruned(self) -> builtins.int: ...
+    @property
+    def is_crossed(self) -> builtins.bool: ...
+    @property
+    def box_arbitrage_violations(self) -> builtins.int: ...
+    @property
+    def wls_rmse(self) -> builtins.float: ...
+    @property
+    def min_spread(self) -> builtins.float: ...
+    @property
+    def max_spread(self) -> builtins.float: ...
+
+@typing.final
 class FraRateHelper(RateHelper):
     r"""
     A helper fitting a forward-rate-agreement rate over the window starting
@@ -1700,6 +1730,35 @@ class IborIborBasisSwapRateHelper(RateHelper):
         r"""
         Construct a live basis helper fitting either the base or other index.
         """
+
+@typing.final
+class ImpliedForwardResult:
+    r"""
+    Result of the implied forward estimation.
+    """
+    @property
+    def forward(self) -> builtins.float: ...
+    @property
+    def forward_bid_strict(self) -> builtins.float: ...
+    @property
+    def forward_ask_strict(self) -> builtins.float: ...
+    @property
+    def forward_bid_robust(self) -> builtins.float: ...
+    @property
+    def forward_ask_robust(self) -> builtins.float: ...
+    @property
+    def discount_factor(self) -> builtins.float: ...
+    @property
+    def implied_carry_rate(self) -> typing.Optional[builtins.float]: ...
+    @property
+    def diagnostics(self) -> ForwardDiagnostics: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    @property
+    def pairs_used(self) -> builtins.int: ...
+    @property
+    def status(self) -> builtins.str: ...
+    def __repr__(self) -> builtins.str: ...
 
 @typing.final
 class InterpolatedDefaultDensityCurve(DefaultProbabilityTermStructure):
@@ -2247,6 +2306,26 @@ class OISRateHelper(RateHelper):
             averaging_method (RateAveraging): How the daily fixings combine;
                 defaults to Compound.
         """
+
+@typing.final
+class OptionQuotePair:
+    r"""
+    A two-sided option quote pair at a single strike.
+    """
+    @property
+    def strike(self) -> builtins.float: ...
+    @property
+    def call_bid(self) -> builtins.float: ...
+    @property
+    def call_ask(self) -> builtins.float: ...
+    @property
+    def put_bid(self) -> builtins.float: ...
+    @property
+    def put_ask(self) -> builtins.float: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    def __new__(cls, strike: builtins.float, call_bid: builtins.float, call_ask: builtins.float, put_bid: builtins.float, put_ask: builtins.float) -> OptionQuotePair: ...
+    def __repr__(self) -> builtins.str: ...
 
 @typing.final
 class OptionletSmileSection:
@@ -4471,3 +4550,20 @@ class VolatilityType:
     def __new__(cls, _unconstructible: typing.NoReturn) -> VolatilityType: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5) -> ImpliedForwardResult:
+    r"""
+    Calculate implied forward price and discount factor from option quotes.
+
+    Args:
+        quotes: A list of OptionQuotePair instances or (strike, call_bid, call_ask, put_bid, put_ask) tuples.
+        expiry_years: Time to expiration in years.
+        convention: "european" (default), "crypto_inverse", or "american".
+        spot: Underlying spot price (optional; required for American options).
+        discount_factor: Pre-specified discount factor D = exp(-r*T) (optional; if None, fits jointly).
+        min_pairs: Minimum valid strike pairs required (default: 2).
+        max_pairs: Maximum number of ATM strike pairs used (default: 50).
+        spread_floor: Spread floor regularizer (default: 1e-4).
+        max_spot_deviation: Maximum relative deviation from spot (default: 0.10).
+        american_kappa: American ATM moneyness corridor multiplier (default: 0.5).
+    """

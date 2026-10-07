@@ -346,6 +346,20 @@ typedef struct ItofinFdConfig {
   int32_t scheme;
 } ItofinFdConfig;
 
+typedef struct ItofinImpliedForwardResult {
+  double forward;
+  double forward_bid_strict;
+  double forward_ask_strict;
+  double forward_bid_robust;
+  double forward_ask_robust;
+  double discount_factor;
+  double implied_carry_rate;
+  int32_t status_code;
+  uint32_t pairs_used;
+  uint32_t pairs_pruned;
+  double wls_rmse;
+} ItofinImpliedForwardResult;
+
 /**
  * Daily variance parameters; live states contain annualized variance.
  */
@@ -2896,6 +2910,23 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
                                            struct ItofinFdConfig cfg,
                                            uint64_t *out,
                                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be live, valid, aligned, and non-overlapping.
+ */
+int32_t itofin_implied_forward_calculate(const double *strikes,
+                                         const double *call_bids,
+                                         const double *call_asks,
+                                         const double *put_bids,
+                                         const double *put_asks,
+                                         size_t count,
+                                         int32_t convention_code,
+                                         const double *spot,
+                                         const double *discount_factor,
+                                         double expiry_years,
+                                         struct ItofinImpliedForwardResult *out,
+                                         struct ItofinError *error);
 
 /**
  * Fit a stationary GARCH(1,1) model to a return series and forecast one variance.

@@ -6,7 +6,7 @@ use libitofin::termstructures::forward::{
 };
 use pyo3::prelude::*;
 #[allow(unused_imports)]
-use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
+use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pyfunction, gen_stub_pymethods};
 
 /// A two-sided option quote pair at a single strike.
 #[gen_stub_pyclass]
@@ -182,6 +182,7 @@ impl PyImpliedForwardResult {
 ///     spread_floor: Spread floor regularizer (default: 1e-4).
 ///     max_spot_deviation: Maximum relative deviation from spot (default: 0.10).
 ///     american_kappa: American ATM moneyness corridor multiplier (default: 0.5).
+#[gen_stub_pyfunction(module = "itofin.termstructures")]
 #[pyfunction]
 #[pyo3(signature = (quotes, expiry_years, convention="european", spot=None, discount_factor=None, min_pairs=2, max_pairs=50, spread_floor=1e-4, max_spot_deviation=Some(0.10), american_kappa=0.5))]
 #[allow(clippy::too_many_arguments)]
