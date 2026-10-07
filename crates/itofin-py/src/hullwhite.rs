@@ -123,7 +123,7 @@ impl PyHullWhite {
     ///
     /// Args:
     ///     helpers (list[SwaptionHelper]): The calibration instruments to fit; must not be empty.
-    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent): The optimizer driving the fit.
+    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent | DifferentialEvolution): The optimizer driving the fit.
     ///     end_criteria (EndCriteria): The stopping rule handed to the optimizer.
     ///     fix_reversion (bool): Pin the mean reversion a and free only sigma; when
     ///         False both parameters are free.
@@ -139,7 +139,7 @@ impl PyHullWhite {
     fn calibrate(
         &mut self,
         helpers: Vec<PyRef<PySwaptionHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent | optimization.DifferentialEvolution", imports = ("itofin.optimization")))]
         method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         fix_reversion: bool,
@@ -182,7 +182,7 @@ impl PyHullWhite {
     fn calibrate_caps(
         &self,
         helpers: Vec<PyRef<crate::caphelper::PyCapHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent | optimization.DifferentialEvolution", imports = ("itofin.optimization")))]
         method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         fix_reversion: bool,

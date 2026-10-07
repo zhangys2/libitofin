@@ -23,6 +23,7 @@ class OptimizerReleaseTests(unittest.TestCase):
         self.assertFalse((ROOT / ".github/workflows/semantic-release.yml").is_file())
         readme = (ROOT / "crates/itofin-optimize/README.md").read_text()
         self.assertIn("does not publish `itofin-optimize` through `semantic-release.yml`", readme)
+        self.assertIn("including 0.37.0", readme)
         self.assertNotIn("Owner `benbenbang`", readme)
         self.assertNotIn("trusted-publisher configuration are verified", readme)
 

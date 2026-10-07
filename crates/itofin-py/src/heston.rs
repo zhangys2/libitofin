@@ -230,7 +230,7 @@ impl PyHestonModel {
     ///
     /// Args:
     ///     helpers (list[HestonModelHelper]): The calibration instruments to fit; must not be empty.
-    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent): The optimizer driving the fit.
+    ///     method (LevenbergMarquardt | Simplex | ConjugateGradient | SteepestDescent | DifferentialEvolution): The optimizer driving the fit.
     ///     end_criteria (EndCriteria): The stopping rule handed to the optimizer.
     ///     integration_order (int): The order of the Gauss-Laguerre integration the
     ///         engine uses; at most 192.
@@ -247,7 +247,7 @@ impl PyHestonModel {
     fn calibrate(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent | optimization.DifferentialEvolution", imports = ("itofin.optimization")))]
         method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         integration_order: usize,
@@ -270,7 +270,7 @@ impl PyHestonModel {
     fn calibrate_cos(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent | optimization.DifferentialEvolution", imports = ("itofin.optimization")))]
         method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         l: f64,
@@ -291,7 +291,7 @@ impl PyHestonModel {
     fn calibrate_exponential_fitting(
         &mut self,
         helpers: Vec<PyRef<PyHestonModelHelper>>,
-        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent", imports = ("itofin.optimization")))]
+        #[gen_stub(override_type(type_repr = "optimization.LevenbergMarquardt | optimization.Simplex | optimization.ConjugateGradient | optimization.SteepestDescent | optimization.DifferentialEvolution", imports = ("itofin.optimization")))]
         method: &Bound<'_, PyAny>,
         end_criteria: &PyEndCriteria,
         control_variate: PyExponentialFittingControlVariate,
