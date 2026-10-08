@@ -22,7 +22,9 @@
 //! end-of-month flags, the fixed-leg tenor and day count, the per-leg stub
 //! first / next-to-last dates, the discounting term structure and the
 //! indexed-coupon mode. The swap tenor, index, optional fixed rate and forward
-//! start are the constructor arguments (`makevanillaswap.hpp:41`).
+//! start are the constructor arguments (`makevanillaswap.hpp:41`). Unset
+//! settlement days derive the spot start on the index fixing calendar, even
+//! when the floating-leg calendar differs (`makevanillaswap.cpp:76-77`).
 //!
 //! ## Deferred knobs
 //!
@@ -40,8 +42,6 @@
 //! - `withPricingEngine`: the engine is always the [`DiscountingSwapEngine`] over
 //!   the discounting curve (set) or the index's forwarding curve (default),
 //!   matching `makevanillaswap.cpp:171-199`.
-//! - `withSettlementCalendar`: spot derivation still uses the index fixing
-//!   calendar (default) or the floating-leg calendar (explicit settlement days).
 //!
 //! [`with_rule`](Self::with_rule) / [`with_fixed_leg_rule`](Self::with_fixed_leg_rule) /
 //! [`with_floating_leg_rule`](Self::with_floating_leg_rule) are ported; both
@@ -888,6 +888,80 @@ mod tests {
             .unwrap()
             .accrual_start_date();
         assert_eq!(first_start, expected_spot);
+    }
+
+    /// `swap.cpp` `testSpotDateUsesFixingCalendar`: a payment calendar closed on
+    /// the evaluation date must not move the spot start. Unset settlement days
+    /// follow the index fixing calendar (`makevanillaswap.cpp:76-77`).
+    ///
+    /// 19 Jan 2026 is a US Federal Reserve holiday and a Taiwan business day.
+    /// The swap is 9 months, not the suite's 1 year, because Taiwan's holiday
+    /// table stops at 2026 and a 1-year end date is in 2027. Nine months keeps
+    /// three regular 3-month floating periods inside that horizon. `Currency::eur`
+    /// stands in for TWD; tenor and day count are set explicitly.
+    #[test]
+    fn spot_start_uses_the_fixing_calendar_when_the_payment_calendar_differs() {
+        use crate::currency::Currency;
+        use crate::time::calendars::jointcalendar::{JointCalendar, JointCalendarRule};
+        use crate::time::calendars::taiwan::{Market as TaiwanMarket, Taiwan};
+        use crate::time::calendars::unitedstates::{Market as UsMarket, UnitedStates};
+        use crate::time::daycounters::actual365fixed::Actual365Fixed;
+
+        let spot_day = Date::new(19, Month::January, 2026);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(spot_day);
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            spot_day,
+            0.03,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let fixing = Taiwan::new(TaiwanMarket::Tsec);
+        let payment = JointCalendar::of_two(
+            Taiwan::new(TaiwanMarket::Tsec),
+            UnitedStates::new(UsMarket::FederalReserve),
+            JointCalendarRule::JoinHolidays,
+        );
+        let index = shared(IborIndex::new(
+            "Taibor3M".to_string(),
+            Period::new(3, TimeUnit::Months),
+            2,
+            Currency::eur(),
+            fixing.clone(),
+            BusinessDayConvention::ModifiedFollowing,
+            true,
+            Actual365Fixed::new(),
+            curve,
+            Shared::clone(&settings),
+        ));
+
+        let expected = index
+            .value_date(fixing.adjust(spot_day, BusinessDayConvention::Following))
+            .unwrap();
+        let rolled_on_payment = index
+            .value_date(payment.adjust(spot_day, BusinessDayConvention::Following))
+            .unwrap();
+        assert_ne!(expected, rolled_on_payment);
+
+        let swap = MakeVanillaSwap::new(
+            Period::new(9, TimeUnit::Months),
+            Shared::clone(&index),
+            Some(0.03),
+            Period::new(0, TimeUnit::Days),
+            settings,
+        )
+        .with_fixed_leg_tenor(Period::new(3, TimeUnit::Months))
+        .with_fixed_leg_day_count(Actual365Fixed::new())
+        .with_fixed_leg_calendar(payment.clone())
+        .with_floating_leg_calendar(payment)
+        .build()
+        .unwrap();
+        let start = swap.fixed_vs_floating().fixed_leg()[0]
+            .as_coupon()
+            .unwrap()
+            .accrual_start_date();
+        assert_eq!(start, expected);
     }
 
     /// The EUR fixed-leg default tenor is `1Y` (`makevanillaswap.cpp:122`): a 2Y
