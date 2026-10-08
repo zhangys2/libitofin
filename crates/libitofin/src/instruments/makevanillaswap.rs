@@ -22,7 +22,9 @@
 //! end-of-month flags, the fixed-leg tenor and day count, the per-leg stub
 //! first / next-to-last dates, the discounting term structure and the
 //! indexed-coupon mode. The swap tenor, index, optional fixed rate and forward
-//! start are the constructor arguments (`makevanillaswap.hpp:41`).
+//! start are the constructor arguments (`makevanillaswap.hpp:41`). Unset
+//! settlement days derive the spot start on the index fixing calendar, even
+//! when the floating-leg calendar differs (`makevanillaswap.cpp:76-77`).
 //!
 //! ## Deferred knobs
 //!
@@ -40,9 +42,6 @@
 //! - `withPricingEngine`: the engine is always the [`DiscountingSwapEngine`] over
 //!   the discounting curve (set) or the index's forwarding curve (default),
 //!   matching `makevanillaswap.cpp:171-199`.
-//!
-//! Unset settlement days derive the spot start on the index fixing calendar,
-//! even when the floating-leg calendar differs (`makevanillaswap.cpp:76-77`).
 //!
 //! [`with_rule`](Self::with_rule) / [`with_fixed_leg_rule`](Self::with_fixed_leg_rule) /
 //! [`with_floating_leg_rule`](Self::with_floating_leg_rule) are ported; both
@@ -891,10 +890,15 @@ mod tests {
         assert_eq!(first_start, expected_spot);
     }
 
-    /// A payment calendar that is closed on the evaluation date must not move
-    /// the spot start. Unset settlement days follow the index fixing calendar
-    /// (`makevanillaswap.cpp:76-77`). 19 Jan 2026 is a US Federal Reserve
-    /// holiday and a Taiwan business day.
+    /// `swap.cpp` `testSpotDateUsesFixingCalendar`: a payment calendar closed on
+    /// the evaluation date must not move the spot start. Unset settlement days
+    /// follow the index fixing calendar (`makevanillaswap.cpp:76-77`).
+    ///
+    /// 19 Jan 2026 is a US Federal Reserve holiday and a Taiwan business day.
+    /// The swap is 9 months, not the suite's 1 year, because Taiwan's holiday
+    /// table stops at 2026 and a 1-year end date is in 2027. Nine months keeps
+    /// three regular 3-month floating periods inside that horizon. `Currency::eur`
+    /// stands in for TWD; tenor and day count are set explicitly.
     #[test]
     fn spot_start_uses_the_fixing_calendar_when_the_payment_calendar_differs() {
         use crate::currency::Currency;
@@ -941,13 +945,13 @@ mod tests {
         assert_ne!(expected, rolled_on_payment);
 
         let swap = MakeVanillaSwap::new(
-            Period::new(2, TimeUnit::Months),
+            Period::new(9, TimeUnit::Months),
             Shared::clone(&index),
             Some(0.03),
             Period::new(0, TimeUnit::Days),
             settings,
         )
-        .with_fixed_leg_tenor(Period::new(2, TimeUnit::Months))
+        .with_fixed_leg_tenor(Period::new(3, TimeUnit::Months))
         .with_fixed_leg_day_count(Actual365Fixed::new())
         .with_fixed_leg_calendar(payment.clone())
         .with_floating_leg_calendar(payment)
