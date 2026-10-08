@@ -7,7 +7,10 @@ from itofin import ItofinError
 from itofin.optimize import minimize
 
 
-METHOD = "Differential-Evolution"
+@pytest.fixture(params=["Differential-Evolution", "Particle-Swarm"])
+def method(request: pytest.FixtureRequest) -> str:
+    """Exercise the same callback and validation contracts for both global solvers."""
+    return str(request.param)
 
 
 @pytest.mark.parametrize(
@@ -57,7 +60,7 @@ METHOD = "Differential-Evolution"
         {"constraints": [{"type": "ineq", "fun": lambda _: 1.0}]},
     ],
 )
-def test_invalid_inputs_do_not_invoke_the_objective(overrides: dict) -> None:
+def test_invalid_inputs_do_not_invoke_the_objective(method: str, overrides: dict) -> None:
     """Invalid shapes, bounds, limits and combinations fail before a call."""
     calls = []
 
@@ -65,7 +68,7 @@ def test_invalid_inputs_do_not_invoke_the_objective(overrides: dict) -> None:
         calls.append(x.copy())
         return 0.0
 
-    kwargs = {"x0": [0.0], "method": METHOD, "bounds": [(-1.0, 1.0)]}
+    kwargs = {"x0": [0.0], "method": method, "bounds": [(-1.0, 1.0)]}
     kwargs.update(overrides)
     with pytest.raises((ValueError, ItofinError)):
         minimize(objective, **kwargs)
@@ -73,12 +76,22 @@ def test_invalid_inputs_do_not_invoke_the_objective(overrides: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    "key",
-    ["xatol", "fatol", "mutation", "recombination"],
+    ("method", "key"),
+    [
+        (solver, key)
+        for solver, keys in (
+            ("Differential-Evolution", ("xatol", "fatol", "mutation", "recombination")),
+            (
+                "Particle-Swarm",
+                ("xatol", "fatol", "inertia", "cognitive", "social", "velocity_clamp"),
+            ),
+        )
+        for key in keys
+    ],
 )
 @pytest.mark.parametrize("value", [True, False])
-def test_float_options_reject_bool(key: str, value: bool) -> None:
-    """Bool is not a float tolerance or DE coefficient."""
+def test_float_options_reject_bool(method: str, key: str, value: bool) -> None:
+    """Bool is not a float tolerance or global-solver coefficient."""
     calls = []
 
     def objective(x: np.ndarray) -> float:
@@ -86,13 +99,13 @@ def test_float_options_reject_bool(key: str, value: bool) -> None:
         return float(x[0] ** 2)
 
     with pytest.raises(ValueError, match="must be a float, not bool"):
-        minimize(objective, [0.0], method=METHOD, bounds=[(-1.0, 1.0)], options={key: value})
+        minimize(objective, [0.0], method=method, bounds=[(-1.0, 1.0)], options={key: value})
     assert not calls
 
 
 @pytest.mark.parametrize("key", ["seed", "population_size", "maxiter", "maxfev"])
 @pytest.mark.parametrize("value", [-1, True, False, 1.5, 2**65])
-def test_unsigned_integer_options_reject_lossy_or_boolean_conversion(key: str, value: object) -> None:
+def test_unsigned_integer_options_reject_lossy_or_boolean_conversion(method: str, key: str, value: object) -> None:
     """No wraparound, truncation or bool-as-int seed and budget conversion."""
     calls = []
 
@@ -101,11 +114,11 @@ def test_unsigned_integer_options_reject_lossy_or_boolean_conversion(key: str, v
         return float(x[0] ** 2)
 
     with pytest.raises((ValueError, OverflowError, TypeError, ItofinError)):
-        minimize(objective, [0.0], method=METHOD, bounds=[(-1.0, 1.0)], options={key: value})
+        minimize(objective, [0.0], method=method, bounds=[(-1.0, 1.0)], options={key: value})
     assert not calls
 
 
-def test_fixed_coordinate_population_mismatch_is_rejected_without_calls() -> None:
+def test_fixed_coordinate_population_mismatch_is_rejected_without_calls(method: str) -> None:
     """Every explicit row must match the fixed-coordinate value exactly."""
     calls = []
 
@@ -117,26 +130,26 @@ def test_fixed_coordinate_population_mismatch_is_rejected_without_calls() -> Non
         minimize(
             objective,
             [0.0, 3.0],
-            method=METHOD,
+            method=method,
             bounds=[(-1.0, 1.0), (3.0, 3.0)],
             options={"initial_population": [[0.0, 3.0], [0.5, 3.0], [-0.5, 4.0], [1.0, 3.0]]},
         )
     assert not calls
 
 
-def test_dimension_and_population_cell_caps_are_enforced() -> None:
+def test_dimension_and_population_cell_caps_are_enforced(method: str) -> None:
     """Population allocations have both dimensional and cell-count limits."""
 
     def forbidden(_: np.ndarray) -> float:
         pytest.fail("invalid input evaluated the objective")
 
     with pytest.raises(ItofinError):
-        minimize(forbidden, [0.0] * 257, method=METHOD, bounds=[(-1.0, 1.0)] * 257)
+        minimize(forbidden, [0.0] * 257, method=method, bounds=[(-1.0, 1.0)] * 257)
     with pytest.raises(ItofinError):
         minimize(
             forbidden,
             [0.0] * 256,
-            method=METHOD,
+            method=method,
             bounds=[(-1.0, 1.0)] * 256,
             options={"population_size": 4096},
         )
