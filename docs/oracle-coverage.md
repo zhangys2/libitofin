@@ -146,6 +146,7 @@ credit.
 | VanillaSwap ThirdWednesdayInclusive | `VanillaSwap` schedules | `swap.cpp` `testThirdWednesdayAdjustment` | floating start 16-Sep-2015 / end 21-Sep-2016 |
 | MakeVanillaSwap with_rule | `MakeVanillaSwap::with_rule` | `makevanillaswap.cpp:238` + ThirdWednesdayInclusive | Inclusive snaps floating end 16-Sep-2016 → 21-Sep-2016 |
 | MakeVanillaSwap stub dates | `with_*_leg_first_date` / `with_*_leg_next_to_last_date` | `makevanillaswap.cpp:139/146` + Schedule stub pins | float/fixed first + float/fixed ntl irregular; `floating_leg` stub parity; matches hand-built `Schedule` |
+| MakeVanillaSwap spot calendar | `MakeVanillaSwap` unset settlement days | `makevanillaswap.cpp:76-77` | 19 Jan 2026 start follows Taiwan fixing calendar, not the Taiwan+US Federal Reserve payment calendar |
 | Vanilla IRS in-arrears Hull NPV | `BlackIborCouponPricer` Black76 convexity + `IborLeg::in_arrears` | `swap.cpp` `testInArrears` | NPV −144813 ± 1 (Hull 4th ed. p.550; vol 0.22) |
 | HundsdorferScheme | `HundsdorferScheme` + factories | `hundsdorferscheme` | BS replay; diagonal closed form; dual BC apply cycles |
 | TreeLattice2D | `TwoFactorTree` / `TreeLattice2D` | `lattice2d.hpp` | size=product; ρ=0⇒independent; |ρ| HW term; neg ρ flips m; probs∑≈1; grid fails; flat rollback |
