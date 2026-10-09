@@ -550,12 +550,12 @@ fn firefly(options: Option<&Bound<'_, PyDict>>) -> PyResult<(FireflyOptions, Com
                     Some(strict_global_usize(&value, "population_size")?)
             }
             "initial_population" => method.global.initial_population = Some(value.extract()?),
-            "xatol" => method.global.xatol = Some(value.extract()?),
-            "fatol" => method.global.fatol = Some(value.extract()?),
-            "alpha" => method.alpha = value.extract()?,
-            "beta0" => method.beta0 = value.extract()?,
-            "gamma" => method.gamma = value.extract()?,
-            "alpha_decay" => method.alpha_decay = value.extract()?,
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "alpha" => method.alpha = strict_global_f64(&value, "alpha")?,
+            "beta0" => method.beta0 = strict_global_f64(&value, "beta0")?,
+            "gamma" => method.gamma = strict_global_f64(&value, "gamma")?,
+            "alpha_decay" => method.alpha_decay = strict_global_f64(&value, "alpha_decay")?,
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Firefly does not support option {other}"
@@ -582,9 +582,11 @@ fn hybrid_simulated_annealing(
             "maxiter" => common.maxiter = Some(strict_global_usize(&value, "maxiter")?),
             "maxfev" => common.maxfev = Some(strict_global_usize(&value, "maxfev")?),
             "seed" => method.seed = strict_global_seed(&value)?,
-            "initial_temperature" => method.initial_temperature = value.extract()?,
-            "cooling_rate" => method.cooling_rate = value.extract()?,
-            "step_size" => method.step_size = value.extract()?,
+            "initial_temperature" => {
+                method.initial_temperature = strict_global_f64(&value, "initial_temperature")?
+            }
+            "cooling_rate" => method.cooling_rate = strict_global_f64(&value, "cooling_rate")?,
+            "step_size" => method.step_size = strict_global_f64(&value, "step_size")?,
             "local_search_interval" => {
                 method.local_search_interval = strict_global_usize(&value, "local_search_interval")?
             }
@@ -594,8 +596,8 @@ fn hybrid_simulated_annealing(
             "reanneal_interval" => {
                 method.reanneal_interval = strict_global_usize(&value, "reanneal_interval")?
             }
-            "xatol" => method.xatol = Some(value.extract()?),
-            "fatol" => method.fatol = Some(value.extract()?),
+            "xatol" => method.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.fatol = Some(strict_global_f64(&value, "fatol")?),
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Hybrid-Simulated-Annealing does not support option {other}"

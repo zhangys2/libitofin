@@ -85,6 +85,20 @@ def test_invalid_inputs_do_not_invoke_the_objective(method: str, overrides: dict
                 "Particle-Swarm",
                 ("xatol", "fatol", "inertia", "cognitive", "social", "velocity_clamp"),
             ),
+            (
+                "Firefly",
+                ("xatol", "fatol", "alpha", "beta0", "gamma", "alpha_decay"),
+            ),
+            (
+                "Hybrid-Simulated-Annealing",
+                (
+                    "xatol",
+                    "fatol",
+                    "initial_temperature",
+                    "cooling_rate",
+                    "step_size",
+                ),
+            ),
         )
         for key in keys
     ],

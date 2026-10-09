@@ -130,6 +130,33 @@ fn invalid_constructor_never_writes_handle_or_poison_context() {
         );
         assert_eq!(id, 77);
     }
+    let dangling = std::ptr::dangling::<f64>();
+    assert_eq!(
+        unsafe {
+            itofin_firefly_new(
+                &mut context,
+                [-1.0].as_ptr(),
+                1,
+                [1.0].as_ptr(),
+                1,
+                std::ptr::null(),
+                dangling,
+                3,
+                3,
+                &mut id,
+                &mut e,
+            )
+        },
+        INVALID_ARGUMENT
+    );
+    assert_eq!(id, 77);
+    let message: String = e
+        .message
+        .iter()
+        .take_while(|&&byte| byte != 0)
+        .map(|&byte| byte as u8 as char)
+        .collect();
+    assert!(message.contains("4..=4096"));
     assert!(new_method(&mut context) > 0);
 }
 

@@ -340,6 +340,11 @@ pub unsafe extern "C" fn itofin_firefly_new(
                     "population must contain rows times dimension values",
                 ));
             }
+            if population_rows != 0 && !(4..=4096).contains(&population_rows) {
+                return Err(BindingError::invalid(
+                    "initial population rows must be in 4..=4096",
+                ));
+            }
             let options = if options.is_null() {
                 crate::optimize_api::ItofinFireflyOptions::default()
             } else {
