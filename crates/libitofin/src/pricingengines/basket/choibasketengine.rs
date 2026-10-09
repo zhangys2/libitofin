@@ -184,9 +184,10 @@ impl PricingEngine for ChoiBasketEngine {
 
         let mut e1 = Array::with_size(self.n);
         e1[0] = 1.0;
-        let r =
-            HouseholderTransformation::new(HouseholderReflection::new(e1).reflection_vector(&q1)?)
-                .matrix();
+        let r = HouseholderTransformation::new(
+            HouseholderReflection::new(e1)?.reflection_vector(&q1)?,
+        )?
+        .matrix()?;
 
         let mut r_2_n = Matrix::with_size(self.n, self.n - 1);
         for i in 0..self.n {

@@ -419,7 +419,7 @@ impl PricingEngine for VannaVolgaDoubleBarrierEngine {
         a[(2, 2)] = volga25_put;
 
         let b = Array::from([vega_bar_bs, vanna_bar_bs, volga_bar_bs]);
-        let q = &inverse_3x3(&a) * &b;
+        let q = &(inverse_3x3(&a)?) * &b;
 
         let r_dom = domestic
             .zero_rate(

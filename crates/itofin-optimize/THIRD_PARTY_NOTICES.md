@@ -36,6 +36,29 @@ strict best-update ties and velocity-aware convergence are our explicit policies
 No QuantLib, Argmin or other upstream particle-swarm implementation or tests
 were copied, adapted or translated. This is not a clean-room claim.
 
+## Hybrid simulated annealing
+
+The solver is independently written from the Metropolis annealing rule described
+by Kirkpatrick, Gelatt and Vecchi (1983), DOI
+<https://doi.org/10.1126/science.220.4598.671>, and exploratory coordinate search
+inspired by Hooke and Jeeves (1961), DOI <https://doi.org/10.1145/321062.321069>.
+It does not implement the full Hooke-Jeeves pattern-move algorithm. Reflected
+uniform proposals, geometric cooling, periodic best-point reannealing and the
+local-poll convergence test are our finite-budget policies, not a global-optimum
+guarantee. No QuantLib, SciPy, Argmin or other upstream hybrid-annealing source
+or tests were copied, adapted or translated. This is not a clean-room claim.
+
+## Firefly
+
+The solver is independently written from Yang (2009), *Firefly Algorithms for
+Multimodal Optimization*, available as author manuscript arXiv:1003.1466v1
+<https://arxiv.org/html/1003.1466>. It uses exponential squared-distance attraction
+and uniform random motion. Frozen brighter-target eligibility, row-ordered
+sequential moves, box-scaled distance, reflection, noise decay and separate
+best-point archival are our explicit finite-budget policies. No QuantLib,
+SciPy, Argmin or other upstream firefly source or tests were copied, adapted or
+translated. This is not a clean-room or global-optimum claim.
+
 ## SciPy
 
 SciPy is used at development time only, by `scripts/fixtures/optimize/gen_fixtures.py`,

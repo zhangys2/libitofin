@@ -13,10 +13,12 @@ __all__ = [
     "Garch11FitResult",
     "Garch11Result",
     "Kd",
+    "KeltnerChannels",
     "Macd",
     "OhlcOvernightEstimates",
     "OhlcPointEstimates",
     "VolumeBars",
+    "atr",
     "bollinger_bands",
     "constant_volatility",
     "ema",
@@ -25,7 +27,9 @@ __all__ = [
     "garch11_forecast",
     "interval_prices",
     "kd",
+    "keltner_channels",
     "macd",
+    "obv",
     "ohlc_overnight_volatility",
     "ohlc_overnight_volatility_constant_fraction",
     "ohlc_point_volatility",
@@ -34,7 +38,9 @@ __all__ = [
     "simple_local_volatility",
     "simple_local_volatility_constant_fraction",
     "sma",
+    "true_range",
     "volume_bars",
+    "vwap",
 ]
 
 @typing.final
@@ -178,6 +184,27 @@ class Kd:
         """
 
 @typing.final
+class KeltnerChannels:
+    r"""
+    Modern EMA-close center and Wilder-ATR envelopes, with shared warmup.
+    """
+    @property
+    def center(self) -> ChartSeries:
+        r"""
+        EMA of closes, preserving the existing arithmetic seed.
+        """
+    @property
+    def upper(self) -> ChartSeries:
+        r"""
+        Center plus the multiplier times Wilder ATR.
+        """
+    @property
+    def lower(self) -> ChartSeries:
+        r"""
+        Center minus the multiplier times Wilder ATR.
+        """
+
+@typing.final
 class Macd:
     r"""
     MACD line, signal, and histogram aligned with input closes.
@@ -261,6 +288,13 @@ class VolumeBars:
         Per-bar direction: -1 for down, 0 for flat, 1 for up.
         """
 
+def atr(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], period: builtins.int = 14) -> ChartSeries:
+    r"""
+    Wilder ATR with an arithmetic seed over the first period true ranges.
+    Bar zero contributes high-low; first-valid is period-1, capped at length.
+    Default period is 14; period one returns exactly the true-range series.
+    """
+
 def bollinger_bands(close: typing.Sequence[builtins.float], period: builtins.int = 20, multiplier: builtins.float = 2.0) -> BollingerBands:
     r"""
     Bollinger bands using a population standard deviation over each window.
@@ -301,9 +335,22 @@ def kd(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.floa
     Taiwan KD with RSV and recursive K/D smoothing seeded at 50.
     """
 
+def keltner_channels(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], center_period: builtins.int = 20, atr_period: builtins.int = 10, multiplier: builtins.float = 2.0) -> KeltnerChannels:
+    r"""
+    Modern Keltner channels with EMA(close) center and Wilder ATR envelopes.
+    All three series share the later warmup index. Defaults are EMA 20,
+    ATR 10 and multiplier 2; this differs from standalone ATR's default 14.
+    """
+
 def macd(close: typing.Sequence[builtins.float], fast_period: builtins.int = 12, slow_period: builtins.int = 26, signal_period: builtins.int = 9) -> Macd:
     r"""
     MACD with SMA-seeded fast, slow, and signal exponential averages.
+    """
+
+def obv(close: typing.Sequence[builtins.float], volume: typing.Sequence[builtins.float]) -> ChartSeries:
+    r"""
+    Zero-seeded OBV; rises add volume, falls subtract it, equal closes preserve it.
+    The initial volume is validated but does not contribute to the zero seed.
     """
 
 def ohlc_overnight_volatility(open: typing.Sequence[builtins.float], high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], year_fractions: typing.Sequence[builtins.float], overnight_fraction: builtins.float) -> OhlcOvernightEstimates:
@@ -346,7 +393,19 @@ def sma(close: typing.Sequence[builtins.float], period: builtins.int) -> ChartSe
     Simple moving average, seeded after `period` closing prices.
     """
 
+def true_range(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float]) -> ChartSeries:
+    r"""
+    Gap-aware true range, with high-low used for the first bar.
+    Finite ordered HLC inputs and finite differences are required.
+    """
+
 def volume_bars(open: typing.Sequence[builtins.float], high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], volume: typing.Sequence[builtins.float]) -> VolumeBars:
     r"""
     Validate OHLCV bars and return raw volume with close-versus-open direction.
+    """
+
+def vwap(price: typing.Sequence[builtins.float], volume: typing.Sequence[builtins.float]) -> ChartSeries:
+    r"""
+    Cumulative VWAP of supplied prices; a separate call starts a new session.
+    Zero-volume prefixes are missing; later zero volume carries the last value.
     """

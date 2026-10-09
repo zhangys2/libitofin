@@ -441,7 +441,9 @@ impl BondFunctions {
             Some(settlement),
             None,
         )?;
-        Ok(npv * 100.0 / notional)
+        let dirty = (npv / notional) * 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        Ok(dirty)
     }
 
     /// The clean price per 100 of notional on `discount_curve` shifted by a
@@ -468,7 +470,9 @@ impl BondFunctions {
             frequency,
             Some(settlement),
         )?;
-        Ok(dirty - bond.accrued_amount(Some(settlement))?)
+        let clean = dirty - bond.accrued_amount(Some(settlement))?;
+        require!(clean.is_finite(), "clean price must be finite");
+        Ok(clean)
     }
 
     /// The zero-rate spread that reprices the bond at `price` on
@@ -495,11 +499,23 @@ impl BondFunctions {
     ) -> QlResult<Spread> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
         let notional = Self::require_tradable(bond, settlement)?;
+        require!(price.amount().is_finite(), "bond price must be finite");
+        let accuracy = accuracy.unwrap_or(1.0e-10);
+        require!(
+            accuracy.is_finite() && accuracy > 0.0,
+            "accuracy must be finite and positive"
+        );
+        let max_evaluations = max_evaluations.unwrap_or(100);
+        require!(max_evaluations > 0, "maximum evaluations must be positive");
+        let guess = guess.unwrap_or(0.0);
+        require!(guess.is_finite(), "z-spread guess must be finite");
         let mut dirty = price.amount();
         if matches!(price, BondPrice::Clean(_)) {
             dirty += bond.accrued_amount(Some(settlement))?;
         }
-        let npv = dirty * notional / 100.0;
+        require!(dirty.is_finite(), "dirty price must be finite");
+        let npv = (dirty / 100.0) * notional;
+        require!(npv.is_finite(), "target NPV must be finite");
         CashFlows::z_spread(
             bond.cashflows(),
             npv,
@@ -510,9 +526,9 @@ impl BondFunctions {
             Some(false),
             Some(settlement),
             Some(settlement),
-            accuracy,
-            max_evaluations,
-            guess,
+            Some(accuracy),
+            Some(max_evaluations),
+            Some(guess),
         )
     }
 

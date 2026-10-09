@@ -134,7 +134,7 @@ pub fn fdm_black_scholes_mesher_with_quanto(
             Handle::new(Shared::clone(quanto.fx_vol_ts())),
             quanto.exch_rate_atm_level(),
             quanto.equity_fx_correlation(),
-        )) as Shared<dyn YieldTermStructure>
+        )?) as Shared<dyn YieldTermStructure>
     } else {
         process.dividend_yield().current_link()?
     };

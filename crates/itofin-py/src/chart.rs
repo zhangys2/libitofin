@@ -2,7 +2,9 @@
 
 use crate::PyQlError;
 use libitofin::errors::QlError;
-use libitofin::math::chart::{self, BollingerBands, ChartSeries, Kd, Macd, VolumeBars};
+use libitofin::math::chart::{
+    self, BollingerBands, ChartSeries, Kd, KeltnerChannels, Macd, VolumeBars,
+};
 use libitofin::math::volatility;
 use numpy::PyArray1;
 use pyo3::prelude::*;
@@ -127,6 +129,47 @@ impl PyBollingerBands {
     }
 }
 
+/// Modern EMA-close center and Wilder-ATR envelopes, with shared warmup.
+#[gen_stub_pyclass]
+#[pyclass(name = "KeltnerChannels", frozen, module = "itofin.chart")]
+pub(crate) struct PyKeltnerChannels {
+    center: PyChartSeries,
+    upper: PyChartSeries,
+    lower: PyChartSeries,
+}
+
+impl From<KeltnerChannels> for PyKeltnerChannels {
+    fn from(bands: KeltnerChannels) -> Self {
+        Self {
+            center: PyChartSeries::from_core(bands.center),
+            upper: PyChartSeries::from_core(bands.upper),
+            lower: PyChartSeries::from_core(bands.lower),
+        }
+    }
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyKeltnerChannels {
+    /// EMA of closes, preserving the existing arithmetic seed.
+    #[getter]
+    fn center(&self) -> PyChartSeries {
+        self.center.clone()
+    }
+
+    /// Center plus the multiplier times Wilder ATR.
+    #[getter]
+    fn upper(&self) -> PyChartSeries {
+        self.upper.clone()
+    }
+
+    /// Center minus the multiplier times Wilder ATR.
+    #[getter]
+    fn lower(&self) -> PyChartSeries {
+        self.lower.clone()
+    }
+}
+
 /// Taiwan stochastic oscillator lines aligned with input bars.
 #[gen_stub_pyclass]
 #[pyclass(name = "Kd", frozen, module = "itofin.chart")]
@@ -229,6 +272,61 @@ pub(crate) fn ema(close: Vec<f64>, period: usize) -> PyResult<PyChartSeries> {
         .map_err(Into::into)
 }
 
+/// Cumulative VWAP of supplied prices; a separate call starts a new session.
+/// Zero-volume prefixes are missing; later zero volume carries the last value.
+#[gen_stub_pyfunction(module = "itofin.chart")]
+#[pyfunction]
+pub(crate) fn vwap(price: Vec<f64>, volume: Vec<f64>) -> PyResult<PyChartSeries> {
+    chart::vwap(&price, &volume)
+        .map(PyChartSeries::from_core)
+        .map_err(PyQlError::from)
+        .map_err(Into::into)
+}
+
+/// Zero-seeded OBV; rises add volume, falls subtract it, equal closes preserve it.
+/// The initial volume is validated but does not contribute to the zero seed.
+#[gen_stub_pyfunction(module = "itofin.chart")]
+#[pyfunction]
+pub(crate) fn obv(close: Vec<f64>, volume: Vec<f64>) -> PyResult<PyChartSeries> {
+    chart::obv(&close, &volume)
+        .map(PyChartSeries::from_core)
+        .map_err(PyQlError::from)
+        .map_err(Into::into)
+}
+
+/// Gap-aware true range, with high-low used for the first bar.
+/// Finite ordered HLC inputs and finite differences are required.
+#[gen_stub_pyfunction(module = "itofin.chart")]
+#[pyfunction]
+pub(crate) fn true_range(
+    high: Vec<f64>,
+    low: Vec<f64>,
+    close: Vec<f64>,
+) -> PyResult<PyChartSeries> {
+    chart::true_range(&high, &low, &close)
+        .map(PyChartSeries::from_core)
+        .map_err(PyQlError::from)
+        .map_err(Into::into)
+}
+
+/// Wilder ATR with an arithmetic seed over the first period true ranges.
+/// Bar zero contributes high-low; first-valid is period-1, capped at length.
+/// Default period is 14; period one returns exactly the true-range series.
+#[gen_stub_pyfunction(module = "itofin.chart")]
+#[pyfunction]
+#[pyo3(signature = (high, low, close, period = 14))]
+pub(crate) fn atr(
+    high: Vec<f64>,
+    low: Vec<f64>,
+    close: Vec<f64>,
+    period: usize,
+) -> PyResult<PyChartSeries> {
+    chart::atr(&high, &low, &close, period)
+        .map(PyChartSeries::from_core)
+        .map_err(PyQlError::from)
+        .map_err(Into::into)
+}
+
 /// Validate OHLCV bars and return raw volume with close-versus-open direction.
 #[gen_stub_pyfunction(module = "itofin.chart")]
 #[pyfunction]
@@ -256,6 +354,26 @@ pub(crate) fn bollinger_bands(
 ) -> PyResult<PyBollingerBands> {
     chart::bollinger_bands(&close, period, multiplier)
         .map(PyBollingerBands::from)
+        .map_err(PyQlError::from)
+        .map_err(Into::into)
+}
+
+/// Modern Keltner channels with EMA(close) center and Wilder ATR envelopes.
+/// All three series share the later warmup index. Defaults are EMA 20,
+/// ATR 10 and multiplier 2; this differs from standalone ATR's default 14.
+#[gen_stub_pyfunction(module = "itofin.chart")]
+#[pyfunction]
+#[pyo3(signature = (high, low, close, center_period = 20, atr_period = 10, multiplier = 2.0))]
+pub(crate) fn keltner_channels(
+    high: Vec<f64>,
+    low: Vec<f64>,
+    close: Vec<f64>,
+    center_period: usize,
+    atr_period: usize,
+    multiplier: f64,
+) -> PyResult<PyKeltnerChannels> {
+    chart::keltner_channels(&high, &low, &close, center_period, atr_period, multiplier)
+        .map(PyKeltnerChannels::from)
         .map_err(PyQlError::from)
         .map_err(Into::into)
 }
