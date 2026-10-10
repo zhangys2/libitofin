@@ -148,6 +148,54 @@ fn haug_merton_cached_prices_preserve_quantlib_tolerance() {
     }
 }
 
+/// All 135 corrected Haug calls from `jumpdiffusion.cpp` `testMerton76`.
+///
+/// Cached prices use the published absolute tolerance. Native QuantLib 1.43
+/// values use 1e-8. The series budget and accuracy are the columns of
+/// `sdk/go/testdata/merton76-haug.csv`.
+#[test]
+fn all_corrected_haug_prices_match_quantlib() {
+    const HAUG: &str = include_str!("../../../../../../sdk/go/testdata/merton76-haug.csv");
+    let mut rows = 0_usize;
+    for line in HAUG.lines().skip(1).filter(|line| !line.is_empty()) {
+        let column: Vec<&str> = line.split(',').collect();
+        assert_eq!(column.len(), 18, "{line}");
+        let kind = match column[0] {
+            "call" => OptionType::Call,
+            "put" => OptionType::Put,
+            other => panic!("unexpected option type {other}"),
+        };
+        let parse = |index: usize| -> Real { column[index].parse().unwrap() };
+        let spot = parse(1);
+        let strike = parse(2);
+        let dividend = parse(3);
+        let rate = parse(4);
+        let volatility = parse(5);
+        let intensity = parse(6);
+        let mean = parse(7);
+        let jump_vol = parse(8);
+        let days: i32 = column[9].parse().unwrap();
+        let accuracy = parse(10);
+        let iterations: usize = column[11].parse().unwrap();
+        let expected = parse(15);
+        let tolerance = parse(16);
+        let quantlib = parse(17);
+
+        let market = JumpMarket::new(intensity, mean, jump_vol);
+        market.market.set(spot, dividend, rate, volatility);
+        let mut option = market.market.option(kind, strike, today() + days);
+        option.base_mut().set_pricing_engine(shared_mut(
+            JumpDiffusionEngine::new(Shared::clone(&market.process), accuracy, iterations).unwrap(),
+        )
+            as crate::shared::SharedMut<dyn PricingEngine>);
+        let npv = option.npv().unwrap();
+        close(npv, expected, tolerance);
+        close(npv, quantlib, 1e-8);
+        rows += 1;
+    }
+    assert_eq!(rows, 135);
+}
+
 #[test]
 fn analytic_greeks_agree_with_price_derivatives() {
     let m = JumpMarket::new(0.7, -0.12, 0.3);
