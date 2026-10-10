@@ -254,6 +254,11 @@ impl HullWhite {
         self.base.r0()
     }
 
+    /// Current short-rate volatility, including calibration parameter updates.
+    pub fn sigma(&self) -> Real {
+        self.base.sigma()
+    }
+
     /// The fitted-curve handle (`termStructure()`, `model.hpp:77`), from which the
     /// [`JamshidianSwaptionEngine`](crate::pricingengines::swaption::JamshidianSwaptionEngine)
     /// (#392) reads the reference date and day counter it turns the swaption's
@@ -266,11 +271,6 @@ impl HullWhite {
     /// embedded Vasicek. Distinct from the affine [`OneFactorAffineModel::a`].
     pub fn a(&self) -> Real {
         self.base.a()
-    }
-
-    /// Short-rate volatility `sigma()` (`vasicek.hpp:57`).
-    pub fn sigma(&self) -> Real {
-        self.base.sigma()
     }
 
     /// Analytic fitting drift `φ(t)` (`phi_`, `hullwhite.hpp:101`).

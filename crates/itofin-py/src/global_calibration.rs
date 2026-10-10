@@ -1,11 +1,14 @@
-//! Global population methods accepted by the existing calibration dispatch.
+//! Bounded global methods accepted by the existing calibration dispatch.
 
 use crate::ItofinError;
 use crate::optimize::PyOptimizeResult;
 use itofin_optimize::{
-    Bounds, Common, DifferentialEvolutionOptions, GlobalOptions, ParticleSwarmOptions,
+    Bounds, Common, DifferentialEvolutionOptions, FireflyOptions, GlobalOptions,
+    HybridSimulatedAnnealingOptions, ParticleSwarmOptions,
 };
-use libitofin::math::optimization::global::{DifferentialEvolution, ParticleSwarm};
+use libitofin::math::optimization::global::{
+    DifferentialEvolution, Firefly, HybridSimulatedAnnealing, ParticleSwarm,
+};
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
 
@@ -165,6 +168,174 @@ impl PyParticleSwarm {
     }
 }
 
+/// Bounded hybrid annealing calibration in projected free-parameter order.
+/// The complete search box must satisfy the model's constraint.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "HybridSimulatedAnnealing",
+    unsendable,
+    module = "itofin.optimization"
+)]
+pub struct PyHybridSimulatedAnnealing {
+    inner: HybridSimulatedAnnealing,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyHybridSimulatedAnnealing {
+    /// Construct a seeded single-chain annealing method with coordinate local searches.
+    /// Bounds use the free parameter order; no population is constructed.
+    /// Invalid candidates abort before pricing rather than receiving a penalty.
+    #[new]
+    #[pyo3(signature = (bounds, *, seed=0, initial_temperature=1.0, cooling_rate=0.95, step_size=0.25, local_search_interval=10, local_search_steps=4, reanneal_interval=100, xatol=None, fatol=None, maxiter=None, maxfev=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        bounds: Vec<(f64, f64)>,
+        #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
+        #[pyo3(from_py_with = extract_initial_temperature)] initial_temperature: f64,
+        #[pyo3(from_py_with = extract_cooling_rate)] cooling_rate: f64,
+        #[pyo3(from_py_with = extract_step_size)] step_size: f64,
+        #[pyo3(from_py_with = extract_local_search_interval)] local_search_interval: usize,
+        #[pyo3(from_py_with = extract_local_search_steps)] local_search_steps: usize,
+        #[pyo3(from_py_with = extract_reanneal_interval)] reanneal_interval: usize,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
+        #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
+    ) -> PyResult<Self> {
+        let bounds = Bounds {
+            lower: bounds.iter().map(|pair| pair.0).collect(),
+            upper: bounds.iter().map(|pair| pair.1).collect(),
+        };
+        let options = HybridSimulatedAnnealingOptions {
+            seed,
+            initial_temperature,
+            cooling_rate,
+            step_size,
+            local_search_interval,
+            local_search_steps,
+            reanneal_interval,
+            xatol,
+            fatol,
+        };
+        let inner = HybridSimulatedAnnealing::new(
+            bounds,
+            options,
+            Common {
+                maxiter,
+                maxfev,
+                tol: None,
+            },
+        )
+        .map_err(|error| ItofinError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Copy the exact last result, or None before a completed run.
+    /// Exhausted runs retain their actual counters without being labelled successful.
+    fn last_result(&self) -> PyResult<Option<PyOptimizeResult>> {
+        self.inner
+            .last_result()
+            .cloned()
+            .map(PyOptimizeResult::from_core)
+            .transpose()
+    }
+}
+
+impl PyHybridSimulatedAnnealing {
+    pub(crate) fn inner_mut(&mut self) -> &mut HybridSimulatedAnnealing {
+        &mut self.inner
+    }
+}
+
+/// Bounded global calibration in projected free-parameter order.
+/// The complete search box must satisfy the model's constraint.
+#[gen_stub_pyclass]
+#[pyclass(name = "Firefly", unsendable, module = "itofin.optimization")]
+pub struct PyFirefly {
+    inner: Firefly,
+}
+
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyFirefly {
+    /// Construct a bounded, deterministic synchronous normalized firefly calibration method.
+    /// Bounds and population coordinates use the free parameter order.
+    /// Invalid candidates abort before pricing rather than receiving a penalty.
+    #[new]
+    #[pyo3(signature = (bounds, *, seed=0, population_size=None, initial_population=None, xatol=None, fatol=None, alpha=0.25, beta0=1.0, gamma=1.0, alpha_decay=0.97, maxiter=None, maxfev=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        bounds: Vec<(f64, f64)>,
+        #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
+        #[pyo3(from_py_with = extract_population_size)] population_size: Option<usize>,
+        initial_population: Option<Vec<Vec<f64>>>,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_alpha)] alpha: f64,
+        #[pyo3(from_py_with = extract_beta0)] beta0: f64,
+        #[pyo3(from_py_with = extract_gamma)] gamma: f64,
+        #[pyo3(from_py_with = extract_alpha_decay)] alpha_decay: f64,
+        #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
+        #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
+    ) -> PyResult<Self> {
+        let bounds = Bounds {
+            lower: bounds.iter().map(|pair| pair.0).collect(),
+            upper: bounds.iter().map(|pair| pair.1).collect(),
+        };
+        let options = FireflyOptions {
+            global: GlobalOptions {
+                seed,
+                population_size,
+                initial_population,
+                xatol,
+                fatol,
+            },
+            alpha,
+            beta0,
+            gamma,
+            alpha_decay,
+        };
+        let inner = Firefly::new(
+            bounds,
+            options,
+            Common {
+                maxiter,
+                maxfev,
+                tol: None,
+            },
+        )
+        .map_err(|error| ItofinError::new_err(error.to_string()))?;
+        Ok(Self { inner })
+    }
+
+    /// Copy the exact last global result, or None before a completed run.
+    /// Exhausted runs are retained without being labelled successful.
+    fn last_result(&self) -> PyResult<Option<PyOptimizeResult>> {
+        self.inner
+            .last_result()
+            .cloned()
+            .map(PyOptimizeResult::from_core)
+            .transpose()
+    }
+}
+
+impl PyFirefly {
+    pub(crate) fn inner_mut(&mut self) -> &mut Firefly {
+        &mut self.inner
+    }
+}
+
+fn extract_local_search_interval(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    crate::optimize::strict_global_usize(value, "local_search_interval")
+}
+fn extract_local_search_steps(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    crate::optimize::strict_global_usize(value, "local_search_steps")
+}
+fn extract_reanneal_interval(value: &Bound<'_, PyAny>) -> PyResult<usize> {
+    crate::optimize::strict_global_usize(value, "reanneal_interval")
+}
+
 fn optional_integer(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<usize>> {
     if value.is_none() {
         Ok(None)
@@ -187,6 +358,27 @@ fn extract_xatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
 }
 fn extract_fatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
     crate::optimize::strict_global_optional_f64(value, "fatol")
+}
+fn extract_initial_temperature(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "initial_temperature")
+}
+fn extract_cooling_rate(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "cooling_rate")
+}
+fn extract_step_size(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "step_size")
+}
+fn extract_alpha(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "alpha")
+}
+fn extract_beta0(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "beta0")
+}
+fn extract_gamma(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "gamma")
+}
+fn extract_alpha_decay(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "alpha_decay")
 }
 fn extract_mutation(value: &Bound<'_, PyAny>) -> PyResult<f64> {
     crate::optimize::strict_global_f64(value, "mutation")

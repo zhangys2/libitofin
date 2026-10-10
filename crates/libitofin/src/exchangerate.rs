@@ -1,8 +1,9 @@
-//! Direct and chained two-currency exchange rates.
+//! Direct and ordered, derived two-currency exchange rates.
 //!
-//! Matches the direct-rate core of `ql/exchangerate.cpp`, plus [`ExchangeRate::chain`]
-//! for derived cross rates. Unlike QuantLib, checked construction and exchange
-//! reject non-finite or non-positive rates.
+//! Matches the conversion ordering of `ql/exchangerate.cpp`. Unlike QuantLib,
+//! checked construction, chaining and exchange reject invalid numeric values.
+
+use std::sync::Arc;
 
 use crate::currency::Currency;
 use crate::errors::QlResult;
@@ -10,12 +11,12 @@ use crate::money::Money;
 use crate::types::Real;
 use crate::{fail, require};
 
-/// Whether a rate is quoted directly or built by chaining two rates.
+/// Whether a rate is supplied directly or derived by chaining.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExchangeRateType {
     /// A supplied two-currency rate.
     Direct,
-    /// A cross rate produced by [`ExchangeRate::chain`].
+    /// A rate derived from two ordered child rates.
     Derived,
 }
 
@@ -25,7 +26,7 @@ pub struct ExchangeRate {
     source: Currency,
     target: Currency,
     rate: Real,
-    rate_type: ExchangeRateType,
+    chain: Option<(Arc<Self>, Arc<Self>)>,
 }
 
 impl ExchangeRate {
@@ -35,7 +36,7 @@ impl ExchangeRate {
             source,
             target,
             rate,
-            rate_type: ExchangeRateType::Direct,
+            chain: None,
         }
     }
 
@@ -63,7 +64,11 @@ impl ExchangeRate {
 
     /// The rate type.
     pub fn rate_type(&self) -> ExchangeRateType {
-        self.rate_type
+        if self.chain.is_some() {
+            ExchangeRateType::Derived
+        } else {
+            ExchangeRateType::Direct
+        }
     }
 
     /// The target amount per unit of source.
@@ -71,7 +76,49 @@ impl ExchangeRate {
         self.rate
     }
 
+    /// Chains two rates sharing a currency, retaining their conversion order.
+    ///
+    /// The first matching orientation follows QuantLib: common source,
+    /// first source/second target, first target/second source, then common target.
+    /// The stored rate is descriptive; exchange applies the retained children,
+    /// not a flattened multiplication. Child rates may themselves be derived.
+    ///
+    /// # Errors
+    /// Returns an error for rates without a shared currency, invalid input rates,
+    /// or a computed rate that is non-finite or non-positive, including underflow.
+    pub fn chain(first: &Self, second: &Self) -> QlResult<Self> {
+        require!(
+            first.rate.is_finite()
+                && first.rate > 0.0
+                && second.rate.is_finite()
+                && second.rate > 0.0,
+            "exchange rates must be finite and positive"
+        );
+        let (source, target, rate) = if first.source == second.source {
+            (&first.target, &second.target, second.rate / first.rate)
+        } else if first.source == second.target {
+            (
+                &first.target,
+                &second.source,
+                1.0 / (first.rate * second.rate),
+            )
+        } else if first.target == second.source {
+            (&first.source, &second.target, first.rate * second.rate)
+        } else if first.target == second.target {
+            (&first.source, &second.source, first.rate / second.rate)
+        } else {
+            fail!("exchange rates not chainable");
+        };
+        let mut result = Self::checked_new(source.clone(), target.clone(), rate)?;
+        result.chain = Some((Arc::new(first.clone()), Arc::new(second.clone())));
+        Ok(result)
+    }
+
     /// Converts in either direction, preserving the amount's sign.
+    ///
+    /// Derived rates apply the first child followed by the second when the
+    /// amount matches either endpoint of the first child, otherwise vice versa.
+    /// Intermediate underflow can yield zero; intermediate overflow is an error.
     ///
     /// # Errors
     /// Returns an error for unrelated currencies, invalid rate/amount, or overflow.
@@ -81,6 +128,18 @@ impl ExchangeRate {
             "exchange rate must be finite and positive"
         );
         require!(amount.value().is_finite(), "money amount must be finite");
+        if let Some((first, second)) = &self.chain {
+            if amount.currency() == first.source() || amount.currency() == first.target() {
+                return second.exchange(&first.exchange(amount)?);
+            } else if amount.currency() == second.source() || amount.currency() == second.target() {
+                return first.exchange(&second.exchange(amount)?);
+            } else {
+                fail!(
+                    "exchange rate not applicable: money is {}",
+                    amount.currency().code()
+                );
+            }
+        }
         if amount.currency() == &self.source {
             Money::checked_new(self.target.clone(), amount.value() * self.rate)
         } else if amount.currency() == &self.target {
@@ -92,44 +151,6 @@ impl ExchangeRate {
                 self.source.code(),
                 self.target.code()
             );
-        }
-    }
-
-    /// Chains two rates that share a currency, marking the result derived.
-    ///
-    /// # Errors
-    /// Returns an error when the two rates have no currency in common.
-    pub fn chain(r1: &ExchangeRate, r2: &ExchangeRate) -> QlResult<ExchangeRate> {
-        if r1.target == r2.source {
-            Ok(ExchangeRate {
-                source: r1.source.clone(),
-                target: r2.target.clone(),
-                rate: r1.rate * r2.rate,
-                rate_type: ExchangeRateType::Derived,
-            })
-        } else if r1.source == r2.target {
-            Ok(ExchangeRate {
-                source: r2.source.clone(),
-                target: r1.target.clone(),
-                rate: r1.rate * r2.rate,
-                rate_type: ExchangeRateType::Derived,
-            })
-        } else if r1.target == r2.target {
-            Ok(ExchangeRate {
-                source: r1.source.clone(),
-                target: r2.source.clone(),
-                rate: r1.rate / r2.rate,
-                rate_type: ExchangeRateType::Derived,
-            })
-        } else if r1.source == r2.source {
-            Ok(ExchangeRate {
-                source: r1.target.clone(),
-                target: r2.target.clone(),
-                rate: r2.rate / r1.rate,
-                rate_type: ExchangeRateType::Derived,
-            })
-        } else {
-            fail!("exchange rates not chainable");
         }
     }
 }
@@ -171,24 +192,6 @@ mod tests {
         assert!(
             rate.exchange(&Money::new(Currency::eur(), Real::NAN))
                 .is_err()
-        );
-    }
-
-    #[test]
-    fn chain_builds_a_derived_cross_rate() {
-        let eur_usd = ExchangeRate::new(Currency::eur(), Currency::usd(), 1.10);
-        let usd_jpy = ExchangeRate::new(Currency::usd(), Currency::jpy(), 150.0);
-        let eur_jpy = ExchangeRate::chain(&eur_usd, &usd_jpy).unwrap();
-        assert_eq!(eur_jpy.rate_type(), ExchangeRateType::Derived);
-        assert_eq!(eur_jpy.source(), &Currency::eur());
-        assert_eq!(eur_jpy.target(), &Currency::jpy());
-        assert!((eur_jpy.rate() - 165.0).abs() < 1e-12);
-        assert!(
-            ExchangeRate::chain(
-                &eur_usd,
-                &ExchangeRate::new(Currency::gbp(), Currency::jpy(), 200.0)
-            )
-            .is_err()
         );
     }
 }

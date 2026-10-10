@@ -191,7 +191,7 @@ impl PricingEngine for VannaVolgaBarrierEngine {
         a[(0, 0)] = vega_atm; a[(0, 1)] = vega25c; a[(0, 2)] = vega25p;
         a[(1, 0)] = vanna_atm; a[(1, 1)] = vanna25c; a[(1, 2)] = vanna25p;
         a[(2, 0)] = volga_atm; a[(2, 1)] = volga25c; a[(2, 2)] = volga25p;
-        let q = &inverse_3x3(&a) * &Array::from([vega_bar, vanna_bar, volga_bar]);
+        let q = &(inverse_3x3(&a)?) * &Array::from([vega_bar, vanna_bar, volga_bar]);
         let zr = |ts: &dyn YieldTermStructure| ts.zero_rate(self.t, Compounding::Continuous, Frequency::NoFrequency, false).map(|z| z.rate());
         let mu = zr(domestic.as_ref())? - zr(foreign.as_ref())? - atm_vol0 * atm_vol0 / 2.0;
         let h2 = ((barrier / spot0).ln() + mu * self.t) / (atm_vol0 * sqrt_t);

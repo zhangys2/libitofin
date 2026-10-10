@@ -292,6 +292,127 @@ contain both open and close, and volume must be nonnegative. Volume direction
 compares each close with its open: `-1` down, `0` flat, `1` up. Chart colors
 remain the caller's choice.
 
+## Cumulative VWAP and on-balance volume
+
+`vwap`/`VWAP` takes **caller-supplied prices** and nonnegative volumes. Choose
+trade prices, closes, or precomputed typical prices explicitly. It computes
+`sum(price * volume) / sum(volume)` cumulatively from the beginning of each
+call, not a rolling window. Call it separately for each session or anchor;
+there are no inferred dates or automatic intraday resets.
+
+A zero-volume prefix is missing: `first_valid` is the first positive-volume
+bar, or the input length when none exists. After that, zero volume carries the
+previous VWAP. `obv`/`OBV` instead starts with a **valid zero at index 0** and
+ignores the initial volume after validating it. Later price rises add volume,
+falls subtract it, and equal closes preserve the previous OBV.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    price = [10.0, 12.0, 11.0, 11.0, 9.0]
+    volume = [0.0, 2.0, 1.0, 0.0, 3.0]
+    weighted = chart.vwap(price, volume)
+    signed = chart.obv(price, volume)
+    assert weighted.first_valid == 1
+    assert weighted.to_list()[0] is None
+    assert abs(weighted.values[-1] - 31 / 3) < 1e-12
+    assert signed.to_list() == [0.0, 2.0, 1.0, 1.0, -2.0]
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    price := []float64{10, 12, 11, 11, 9}
+    volume := []float64{0, 2, 1, 0, 3}
+    weighted, err := itofin.VWAP(price, volume)
+    if err != nil { panic(err) }
+    signed, err := itofin.OBV(price, volume)
+    if err != nil { panic(err) }
+    _ = weighted.NullableValues()
+    _ = signed.Values
+    ```
+
+Rust exposes `math::chart::{vwap, obv}` with the same `ChartSeries` result.
+C exposes `itofin_chart_vwap` and `itofin_chart_obv` with caller-owned output
+buffers and one `first_valid` index. The hand fixture above has VWAP values
+`[missing, 12, 35/3, 35/3, 31/3]`; all four facades use the same core.
+
+Inputs must have equal lengths and finite prices/volumes. Negative prices are
+valid, but negative volume is not. Overflowing cumulative volume or signed OBV
+returns an error. VWAP uses an online weighted mean rather than raw products,
+so extreme finite prices and tiny positive volumes need not overflow or
+underflow artificially. Ordinary floating-point rounding still applies;
+very small relative weights may round their contribution to zero.
+
+The formulas follow [StockCharts VWAP](https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/volume-weighted-average-price-vwap)
+and [OBV](https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-indicators/on-balance-volume-obv).
+The zero OBV seed and missing zero-volume VWAP prefix are explicit local conventions.
+
+## True range and Wilder ATR
+
+`true_range`/`TrueRange` measures each bar's range including overnight gaps.
+Bar zero uses `high - low`; later bars take the maximum of that range,
+`abs(high - previous_close)`, and `abs(low - previous_close)`. It is valid from
+index zero, even when the first range is zero.
+
+`atr`/`ATR` seeds the arithmetic mean of the **first `period` true ranges,
+including bar zero**, then applies Wilder smoothing:
+`previous + (true_range - previous) / period`. The default is 14 bars.
+`first_valid` is `period - 1`, capped at the input length; shorter inputs are
+entirely missing. Period one returns the exact true-range series.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    high = [12.0, 16.0, 11.0]
+    low = [10.0, 14.0, 9.0]
+    close = [11.0, 15.0, 10.0]
+    ranges = chart.true_range(high, low, close)
+    smoothed = chart.atr(high, low, close, period=3)
+    assert ranges.to_list() == [2.0, 5.0, 6.0]
+    assert smoothed.first_valid == 2
+    assert smoothed.to_list()[:2] == [None, None]
+    assert abs(smoothed.values[2] - 13 / 3) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    high := []float64{12, 16, 11}
+    low := []float64{10, 14, 9}
+    close := []float64{11, 15, 10}
+    ranges, err := itofin.TrueRange(high, low, close)
+    if err != nil { panic(err) }
+    smoothed, err := itofin.ATR(high, low, close, 3)
+    if err != nil { panic(err) }
+    _ = ranges.Values
+    _ = smoothed.NullableValues()
+    ```
+
+Python's omitted `period` and Go's `DefaultATR` both select 14. Rust exposes
+`math::chart::{true_range, atr, atr_default}`; C exposes
+`itofin_chart_true_range` and `itofin_chart_atr` with caller-owned buffers.
+The six-bar hand fixture has ranges `[2, 5, 6, 5, 2, 1]` and ATR(3) values
+`[missing, missing, 13/3, 41/9, 100/27, 227/81]` across all four facades.
+
+HLC arrays must have equal lengths and finite values with
+`low <= close <= high`; negative prices are valid. Periods must be positive.
+Every raw range difference must stay finite, including during warmup.
+The seed uses an incremental mean to avoid overflowing an otherwise finite
+average. Ordinary floating-point rounding still applies. C errors leave
+outputs and `first_valid` unchanged.
+
+Formula references: [Fidelity ATR](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr)
+and [AAII's first-bar and seed convention](https://www.aaii.com/journal/article/average-true-range-atr).
+
 ## Bollinger Bands and RSI
 
 Bollinger Bands use a trailing population standard deviation. The default is
@@ -324,6 +445,65 @@ window 100, and a loss-only window 0.
 Python functions accept explicit periods and also provide these defaults. Go
 offers `ChartBollingerBands` and `RSI` for explicit parameters, alongside the
 default helpers.
+
+## Modern Keltner channels
+
+`keltner_channels`/`ChartKeltnerChannels` uses the existing **EMA of closes**
+for its center and shared **Wilder ATR** for width. This is the modern variant,
+not the original typical-price SMA with a high-low-range envelope. Separate
+`center_period` and `atr_period` settings preserve each indicator's arithmetic
+seed. Upper and lower bands are `center +/- multiplier * ATR`.
+
+Defaults are **EMA 20, ATR 10, multiplier 2**. The ATR period here is 10,
+not standalone `atr`/`DefaultATR`'s 14. Every returned `center`, `upper`, and
+`lower` series has the same first-valid index: the later of the two warmups,
+capped at the input length. All earlier values are zero placeholders and
+render as missing through `to_list()` or `NullableValues()`.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    channels = chart.keltner_channels(
+        high=[12.0, 16.0, 11.0], low=[10.0, 14.0, 9.0],
+        close=[11.0, 15.0, 10.0],
+        center_period=3, atr_period=2, multiplier=1.5,
+    )
+    assert channels.center.to_list() == [None, None, 12.0]
+    assert channels.upper.values[2] == 153 / 8
+    assert channels.lower.values[2] == 39 / 8
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    channels, err := itofin.ChartKeltnerChannels(
+        []float64{12, 16, 11}, []float64{10, 14, 9},
+        []float64{11, 15, 10}, 3, 2, 1.5,
+    )
+    if err != nil { panic(err) }
+    _ = channels.Center.NullableValues()
+    _ = channels.Upper.Values
+    ```
+
+Python returns a read-only `KeltnerChannels` result; its series getters and
+NumPy values return copies. Go's `DefaultKeltnerChannels` selects the defaults.
+Rust exposes `math::chart::{KeltnerChannels, keltner_channels,
+keltner_channels_default}`. C's `itofin_chart_keltner_channels` writes
+channel-major center, upper, then lower values with one shared `first_valid`.
+
+Both periods must be positive and the multiplier finite and nonnegative.
+Multiplier zero collapses the envelopes to the center but still validates
+all HLC values and true-range differences, including during warmup. Inputs
+must have equal lengths, finite values and `low <= close <= high`; negative
+prices remain valid. Overflowing ATR offsets or either band returns an error,
+with C outputs and metadata unchanged. Floating-point rounding still applies.
+
+References: [StockCharts modern formula and defaults](https://chartschool.stockcharts.com/table-of-contents/technical-indicators-and-overlays/technical-overlays/keltner-channels)
+and [TradingView's close-price source](https://www.tradingview.com/support/solutions/43000502266-keltner-channels-kc/).
 
 ## Taiwan KD and MACD
 

@@ -146,11 +146,15 @@ func Minimize(ctx context.Context, fn func(x []float64) (float64, error), x0 []f
 	var slsqp SLSQP
 	var de DifferentialEvolution
 	var pso ParticleSwarm
+	var firefly Firefly
+	var anneal HybridSimulatedAnnealing
 	isBFGS := false
 	isLBFGSB := false
 	isSLSQP := false
 	isDE := false
 	isPSO := false
+	isFirefly := false
+	isAnneal := false
 	switch selected := method.(type) {
 	case NelderMeadOptions:
 		nm = selected
@@ -202,6 +206,20 @@ func Minimize(ctx context.Context, fn func(x []float64) (float64, error), x0 []f
 			return OptimizeResult{}, fmt.Errorf("%w: nil method", ErrInvalidArgument)
 		}
 		isPSO, pso = true, *selected
+	case HybridSimulatedAnnealing:
+		isAnneal, anneal = true, selected
+	case *HybridSimulatedAnnealing:
+		if selected == nil {
+			return OptimizeResult{}, fmt.Errorf("%w: nil method", ErrInvalidArgument)
+		}
+		isAnneal, anneal = true, *selected
+	case Firefly:
+		isFirefly, firefly = true, selected
+	case *Firefly:
+		if selected == nil {
+			return OptimizeResult{}, fmt.Errorf("%w: nil method", ErrInvalidArgument)
+		}
+		isFirefly, firefly = true, *selected
 	default:
 		return OptimizeResult{}, fmt.Errorf("%w: unknown method", ErrInvalidArgument)
 	}
@@ -209,7 +227,15 @@ func Minimize(ctx context.Context, fn func(x []float64) (float64, error), x0 []f
 		return OptimizeResult{}, err
 	}
 	var dimensions []int
-	if isPSO {
+	if isFirefly {
+		if err := validateFirefly(firefly, x0); err != nil {
+			return OptimizeResult{}, err
+		}
+	} else if isAnneal {
+		if err := validateHybridSimulatedAnnealing(anneal, x0); err != nil {
+			return OptimizeResult{}, err
+		}
+	} else if isPSO {
 		if err := validateParticleSwarm(pso, x0); err != nil {
 			return OptimizeResult{}, err
 		}
@@ -269,7 +295,11 @@ func Minimize(ctx context.Context, fn func(x []float64) (float64, error), x0 []f
 	out.x = (*C.double)(unsafe.Pointer(unsafe.SliceData(x)))
 	var e C.ItofinError
 	var status C.int32_t
-	if isPSO {
+	if isFirefly {
+		status = runFirefly(&objective, x0, firefly, &out, &e)
+	} else if isAnneal {
+		status = runHybridSimulatedAnnealing(&objective, x0, anneal, &out, &e)
+	} else if isPSO {
 		status = runParticleSwarm(&objective, x0, pso, &out, &e)
 	} else if isDE {
 		status = runDifferentialEvolution(&objective, x0, de, &out, &e)

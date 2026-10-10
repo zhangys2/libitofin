@@ -483,6 +483,48 @@ typedef struct ItofinParticleSwarmOptions {
   bool has_velocity_clamp;
 } ItofinParticleSwarmOptions;
 
+/**
+ * Single-chain annealing controls. Presence flags preserve explicit values;
+ * a zero-initialized record selects deterministic seed zero and solver defaults.
+ */
+typedef struct ItofinHybridSimulatedAnnealingOptions {
+  uint64_t seed;
+  size_t maxiter;
+  size_t maxfev;
+  double xatol;
+  double fatol;
+  double initial_temperature;
+  double cooling_rate;
+  double step_size;
+  size_t local_search_interval;
+  size_t local_search_steps;
+  size_t reanneal_interval;
+  bool has_xatol;
+  bool has_fatol;
+  bool has_initial_temperature;
+  bool has_cooling_rate;
+  bool has_step_size;
+  bool has_local_search_interval;
+  bool has_local_search_steps;
+  bool has_reanneal_interval;
+} ItofinHybridSimulatedAnnealingOptions;
+
+/**
+ * Firefly controls with presence flags preserving explicit zero alpha/gamma.
+ * Zero-initialized options select alpha .25, beta0 1, gamma 1 and decay .97.
+ */
+typedef struct ItofinFireflyOptions {
+  struct ItofinGlobalOptions global;
+  double alpha;
+  double beta0;
+  double gamma;
+  double alpha_decay;
+  bool has_alpha;
+  bool has_beta0;
+  bool has_gamma;
+  bool has_alpha_decay;
+} ItofinFireflyOptions;
+
 typedef struct ItofinSwapHelperConfig {
   uint64_t quote;
   int32_t tenor_length;
@@ -1754,6 +1796,88 @@ int32_t itofin_context_free(struct ItofinContext *ctx, struct ItofinError *error
 int32_t itofin_handle_release(struct ItofinContext *ctx,
                               uint64_t handle,
                               struct ItofinError *error);
+
+/**
+ * Compute gap-aware true range, using high-low for the first bar.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_true_range(const ItofinReal *high,
+                                const ItofinReal *low,
+                                const ItofinReal *close,
+                                size_t len,
+                                ItofinReal *out,
+                                size_t capacity,
+                                size_t *first_valid,
+                                struct ItofinError *error);
+
+/**
+ * Compute Wilder ATR seeded by the first `period` true ranges, including bar 0.
+ * Warmup slots are zero; first-valid is `period - 1`, capped at `len`.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_atr(const ItofinReal *high,
+                         const ItofinReal *low,
+                         const ItofinReal *close,
+                         size_t len,
+                         size_t period,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         struct ItofinError *error);
+
+/**
+ * Compute modern EMA-close/Wilder-ATR Keltner channels. Output is channel
+ * major: center, upper, then lower, with `len` values per channel. All share
+ * the later first-valid index after both warmups.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_keltner_channels(const ItofinReal *high,
+                                      const ItofinReal *low,
+                                      const ItofinReal *close,
+                                      size_t len,
+                                      size_t center_period,
+                                      size_t atr_period,
+                                      ItofinReal multiplier,
+                                      ItofinReal *out,
+                                      size_t capacity,
+                                      size_t *first_valid,
+                                      struct ItofinError *error);
+
+/**
+ * Compute cumulative VWAP of supplied prices, starting a session per call.
+ * Zero cumulative volume is missing; later zero volume carries the last VWAP.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_vwap(const ItofinReal *price,
+                          const ItofinReal *volume,
+                          size_t len,
+                          ItofinReal *out,
+                          size_t capacity,
+                          size_t *first_valid,
+                          struct ItofinError *error);
+
+/**
+ * Compute zero-seeded OBV; equal closes leave signed volume unchanged.
+ * The initial volume is validated but does not contribute to the seed.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_obv(const ItofinReal *close,
+                         const ItofinReal *volume,
+                         size_t len,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         struct ItofinError *error);
 
 /**
  * Compute an input-aligned simple moving average. Prefix values before
@@ -3317,6 +3441,64 @@ int32_t itofin_particle_swarm_result(struct ItofinContext *ctx,
                                      size_t n,
                                      struct ItofinOptimizeResult *out,
                                      struct ItofinError *error);
+
+/**
+ * Construct a retained hybrid-annealing calibration method in free-parameter order.
+ * A null or zeroed options record selects defaults. Model calibration uses root-RSS;
+ * every candidate must satisfy the model constraint before pricing.
+ * # Safety
+ * Pointers must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_hybrid_simulated_annealing_new(struct ItofinContext *ctx,
+                                              const double *lower,
+                                              size_t lower_len,
+                                              const double *upper,
+                                              size_t upper_len,
+                                              const struct ItofinHybridSimulatedAnnealingOptions *options,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Copy the preserved hybrid-annealing outcome without repricing.
+ * # Safety
+ * `out` and other pointers follow `itofin_differential_evolution_result`.
+ */
+int32_t itofin_hybrid_simulated_annealing_result(struct ItofinContext *ctx,
+                                                 uint64_t method,
+                                                 size_t n,
+                                                 struct ItofinOptimizeResult *out,
+                                                 struct ItofinError *error);
+
+/**
+ * Construct a calibration method in projected free-parameter order.
+ * A zeroed options record selects defaults, including deterministic seed zero.
+ * Population is optional row-major `rows * n`, with exact length required.
+ * Every candidate must satisfy the model constraint before its cost is called.
+ * # Safety
+ * Pointers must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_firefly_new(struct ItofinContext *ctx,
+                           const double *lower,
+                           size_t lower_len,
+                           const double *upper,
+                           size_t upper_len,
+                           const struct ItofinFireflyOptions *options,
+                           const double *population,
+                           size_t population_rows,
+                           size_t population_len,
+                           uint64_t *out,
+                           struct ItofinError *error);
+
+/**
+ * Copy the preserved firefly outcome without repricing.
+ * # Safety
+ * `out` and all other pointers follow `itofin_differential_evolution_result`.
+ */
+int32_t itofin_firefly_result(struct ItofinContext *ctx,
+                              uint64_t method,
+                              size_t n,
+                              struct ItofinOptimizeResult *out,
+                              struct ItofinError *error);
 
 /**
  * # Safety
@@ -5478,6 +5660,50 @@ int32_t itofin_optimize_particle_swarm(const struct ItofinObjective *objective,
                                        const struct ItofinParticleSwarmOptions *options,
                                        struct ItofinOptimizeResult *out_result,
                                        struct ItofinError *error);
+
+/**
+ * Minimize a signed scalar cost using seeded bounded hybrid annealing.
+ * Bounds are mandatory, finite, contain x0 and have finite widths.
+ * A null options pointer selects defaults. A supplied gradient is not used.
+ * # Safety
+ * The objective and output follow `itofin_optimize_lbfgsb` ownership rules.
+ * Inputs must be readable for their lengths; result.x must hold n doubles.
+ * Errors leave the result and its x buffer untouched.
+ */
+int32_t itofin_optimize_hybrid_simulated_annealing(const struct ItofinObjective *objective,
+                                                   const double *x0,
+                                                   size_t n,
+                                                   const double *lower,
+                                                   size_t lower_len,
+                                                   const double *upper,
+                                                   size_t upper_len,
+                                                   const struct ItofinHybridSimulatedAnnealingOptions *options,
+                                                   struct ItofinOptimizeResult *out_result,
+                                                   struct ItofinError *error);
+
+/**
+ * Minimize with seeded bounded firefly optimization. Bounds must be finite,
+ * contain x0 and have finite widths. Optional initial rows are preserved exactly;
+ * Zero rows and zero length mean automatic initialization; null options select
+ * defaults. Row-major storage must contain `initial_rows * n` values. A supplied gradient is not used.
+ * # Safety
+ * Objective/options/output follow the `itofin_optimize_lbfgsb` contract.
+ * Each input pointer must be readable for its declared length. Output fields
+ * and its x buffer remain untouched when the call returns an error.
+ */
+int32_t itofin_optimize_firefly(const struct ItofinObjective *objective,
+                                const double *x0,
+                                size_t n,
+                                const double *lower,
+                                size_t lower_len,
+                                const double *upper,
+                                size_t upper_len,
+                                const double *initial_population,
+                                size_t initial_rows,
+                                size_t initial_len,
+                                const struct ItofinFireflyOptions *options,
+                                struct ItofinOptimizeResult *out_result,
+                                struct ItofinError *error);
 
 /**
  * `american`: 0 European, 1 American; earliest ignored for European exercise.

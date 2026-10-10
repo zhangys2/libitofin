@@ -1390,3 +1390,11 @@ mod global_tests;
 
 pub(crate) mod particle_swarm;
 pub use particle_swarm::{ItofinParticleSwarmOptions, itofin_optimize_particle_swarm};
+
+pub(crate) mod hybrid_simulated_annealing;
+pub use hybrid_simulated_annealing::{
+    ItofinHybridSimulatedAnnealingOptions, itofin_optimize_hybrid_simulated_annealing,
+};
+
+pub(crate) mod firefly;
+pub use firefly::{ItofinFireflyOptions, itofin_optimize_firefly};

@@ -406,7 +406,7 @@ impl Payoff for NullPayoff {
     }
 
     fn value(&self, _price: Real) -> Real {
-        unimplemented!("dummy payoff given")
+        panic!("dummy payoff given")
     }
 }
 

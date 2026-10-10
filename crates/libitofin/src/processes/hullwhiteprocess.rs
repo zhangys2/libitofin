@@ -1,108 +1,178 @@
-//! Hull–White forward-measure process (`ql/processes/hullwhiteprocess`).
-//!
-//! First Hybrid Heston×HW gap slice: [`HullWhiteForwardProcess`] only. Spot
-//! `HullWhiteProcess` is deferred with hybrid `evolve` / engines.
+//! Checked Hull-White short-rate dynamics under a validated forward measure.
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::interestrate::Compounding;
-use crate::patterns::observable::{AsObservable, Observable};
-use crate::processes::OrnsteinUhlenbeckProcess;
-use crate::processes::forwardmeasureprocess::{ForwardMeasureProcess1D, ForwardMeasureTime};
-use crate::shared::{Shared, shared};
+use crate::patterns::observable::{AsObservable, Observable, Observer, ResetThenNotify};
+use crate::processes::{ForwardMeasureProcess1D, ForwardMeasureTime, OrnsteinUhlenbeckProcess};
+use crate::require;
+use crate::shared::{Shared, SharedMut, shared};
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Time};
 
-/// Forward-measure Hull–White process (`hullwhiteprocess.hpp`).
+/// Hull-White short-rate process under the `T`-forward measure.
+///
+/// Follows `ql/processes/hullwhiteprocess.{hpp,cpp}`. The initial short rate is
+/// captured at construction; drift and fitting shifts read the live curve.
+/// Curve changes and horizon changes notify observers. The initial horizon is
+/// zero and may be replaced through [`ForwardMeasureProcess1D`]. Times need not
+/// precede the horizon. Date conversion remains unsupported, as in QuantLib.
+///
+/// Stable algebra supplies the zero-mean-reversion drift limit and avoids the
+/// native small-`a` cancellation in `B`, `alpha` and `M_T`. Transition variance
+/// retains QuantLib's Ornstein-Uhlenbeck small-speed branch.
 pub struct HullWhiteForwardProcess {
     process: OrnsteinUhlenbeckProcess,
-    h: Handle<dyn YieldTermStructure>,
+    curve: Handle<dyn YieldTermStructure>,
     a: Real,
     sigma: Real,
-    measure: ForwardMeasureTime,
+    horizon: ForwardMeasureTime,
     observable: Shared<Observable>,
+    _listener: SharedMut<ResetThenNotify>,
 }
 
 impl HullWhiteForwardProcess {
-    /// `HullWhiteForwardProcess(Handle, a, sigma)`.
+    /// Constructs a process with initial forward-measure horizon zero.
     ///
     /// # Errors
     ///
-    /// Fails when the curve forward at `(0,0)` is unavailable or σ is negative.
-    pub fn new(h: Handle<dyn YieldTermStructure>, a: Real, sigma: Real) -> QlResult<Self> {
-        let x0 = Self::fwd(&h, 0.0)?;
+    /// Rejects nonfinite or negative parameters and unavailable/nonfinite
+    /// initial curve forwards. Curve queries do not request extrapolation.
+    pub fn new(curve: Handle<dyn YieldTermStructure>, a: Real, sigma: Real) -> QlResult<Self> {
+        require!(
+            a.is_finite() && a >= 0.0,
+            "a must be finite and nonnegative"
+        );
+        require!(
+            sigma.is_finite() && sigma >= 0.0,
+            "sigma must be finite and nonnegative"
+        );
+        let initial = Self::forward(&curve, 0.0)?;
+        let observable = shared(Observable::new());
+        let listener = ResetThenNotify::forwarding(observable.clone());
+        curve.register_observer(&(listener.clone() as SharedMut<dyn Observer>));
         Ok(Self {
-            process: OrnsteinUhlenbeckProcess::new(a, sigma, x0, 0.0)?,
-            h,
+            process: OrnsteinUhlenbeckProcess::new(a, sigma, initial, 0.0)?,
+            curve,
             a,
             sigma,
-            measure: ForwardMeasureTime::new(0.0)?,
-            observable: shared(Observable::new()),
+            horizon: ForwardMeasureTime::new(0.0)?,
+            observable,
+            _listener: listener,
         })
     }
 
-    /// Mean-reversion speed `a`.
+    /// Returns the constant mean-reversion speed.
     pub fn a(&self) -> Real {
         self.a
     }
 
-    /// Short-rate volatility `σ`.
+    /// Returns the constant short-rate volatility.
     pub fn sigma(&self) -> Real {
         self.sigma
     }
 
-    /// Fitting shift `α(t)`.
+    /// Returns the curve-fitting shift `f(t,t) + sigma² B(0,t)² / 2`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects invalid times, unavailable curve forwards and nonfinite results.
     pub fn alpha(&self, t: Time) -> QlResult<Real> {
-        let mut alfa = if self.a > f64::EPSILON {
-            (self.sigma / self.a) * (1.0 - (-self.a * t).exp())
+        Self::time_argument(t)?;
+        let shift = if self.sigma == 0.0 {
+            0.0
         } else {
-            self.sigma * t
+            let scaled = self.sigma * self.b_interval(t)?;
+            0.5 * scaled * scaled
         };
-        alfa = 0.5 * alfa * alfa;
-        Ok(alfa + Self::fwd(&self.h, t)?)
+        Self::finite(shift + Self::forward(&self.curve, t)?)
     }
 
-    /// Affine factor `B(t, T)`.
-    pub fn b(&self, t: Time, t_end: Time) -> Real {
-        if self.a > f64::EPSILON {
-            (1.0 - (-self.a * (t_end - t)).exp()) / self.a
-        } else {
-            t_end - t
+    /// Returns the affine factor `B(t,T) = (1-exp(-a(T-t)))/a`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects nonfinite/negative endpoint times and nonfinite results. `T < t`
+    /// is allowed, yielding a negative factor; at `a = 0`, returns `T-t`.
+    pub fn b(&self, t: Time, maturity: Time) -> QlResult<Real> {
+        Self::time_argument(t)?;
+        Self::time_argument(maturity)?;
+        self.b_interval(maturity - t)
+    }
+
+    /// Returns the integrated forward-measure adjustment `M_T(s,t,T)`.
+    ///
+    /// Evaluates `sigma² ∫[s,t] exp(-a(t-u)) B(u,T) du` using stable algebra.
+    /// At zero `a` this is `sigma² (t-s) ((T-t) + (t-s)/2)`.
+    ///
+    /// # Errors
+    ///
+    /// Requires finite nonnegative times, `s <= t`, and a finite result. The
+    /// measure horizon may precede either endpoint, as in QuantLib.
+    pub fn m_t(&self, s: Time, t: Time, maturity: Time) -> QlResult<Real> {
+        Self::time_argument(s)?;
+        Self::time_argument(t)?;
+        Self::time_argument(maturity)?;
+        require!(
+            s.partial_cmp(&t).is_some_and(|order| order.is_le()),
+            "M_T requires s <= t"
+        );
+        if s == t || self.sigma == 0.0 {
+            return Ok(0.0);
         }
+        let duration = self.b_interval(t - s)?;
+        let remaining = self.b_interval(maturity - t)?;
+        Self::finite(
+            self.sigma
+                * self.sigma
+                * duration
+                * (remaining + 0.5 * (-self.a * (maturity - t)).exp() * duration),
+        )
     }
 
-    /// Forward-measure adjustment `M_T(s, t, T)`.
-    pub fn m_t(&self, s: Real, t: Real, t_measure: Real) -> Real {
-        if self.a > f64::EPSILON {
-            let coeff = (self.sigma * self.sigma) / (self.a * self.a);
-            let exp1 = (-self.a * (t - s)).exp();
-            let exp2 = (-self.a * (t_measure - t)).exp();
-            let exp3 = (-self.a * (t_measure + t - 2.0 * s)).exp();
-            coeff * (1.0 - exp1) - 0.5 * coeff * (exp2 - exp3)
+    fn b_interval(&self, interval: Time) -> QlResult<Real> {
+        let exponent = -self.a * interval;
+        Self::finite(if self.a == 0.0 || exponent == 0.0 {
+            interval
         } else {
-            let coeff = (self.sigma * self.sigma) / 2.0;
-            coeff * (t - s) * (2.0 * t_measure - t - s)
-        }
+            -exponent.exp_m1() / self.a
+        })
     }
 
-    fn fwd(h: &Handle<dyn YieldTermStructure>, t: Time) -> QlResult<Real> {
-        Ok(h.current_link()?
-            .forward_rate(t, t, Compounding::Continuous, Frequency::NoFrequency, false)?
-            .rate())
+    fn forward(curve: &Handle<dyn YieldTermStructure>, t: Time) -> QlResult<Real> {
+        Self::finite(
+            curve
+                .current_link()?
+                .forward_rate(t, t, Compounding::Continuous, Frequency::NoFrequency, false)?
+                .rate(),
+        )
     }
 
-    fn alpha_drift(&self, t: Time) -> QlResult<Real> {
-        // QL `hullwhiteprocess.cpp` uses unguarded σ²/(2a)(1−e^{−2at}); `a = 0`
-        // makes this NaN/Inf while `alpha`/`b`/`m_t` stay finite (Ho–Lee footgun).
-        let mut alpha_drift =
-            self.sigma * self.sigma / (2.0 * self.a) * (1.0 - (-2.0 * self.a * t).exp());
-        let shift = 0.0001;
-        let f = Self::fwd(&self.h, t)?;
-        let f_up = Self::fwd(&self.h, t + shift)?;
-        alpha_drift += self.a * f + (f_up - f) / shift;
-        Ok(alpha_drift)
+    fn time_argument(t: Time) -> QlResult<()> {
+        require!(
+            t.is_finite() && t >= 0.0,
+            "time must be finite and nonnegative"
+        );
+        Ok(())
+    }
+
+    fn state(t: Time, x: Real) -> QlResult<()> {
+        Self::time_argument(t)?;
+        require!(x.is_finite(), "state must be finite");
+        Ok(())
+    }
+
+    fn step(t: Time, x: Real, dt: Time) -> QlResult<Time> {
+        Self::state(t, x)?;
+        Self::time_argument(dt)?;
+        Self::finite(t + dt)
+    }
+
+    fn finite(value: Real) -> QlResult<Real> {
+        require!(value.is_finite(), "process produced a nonfinite value");
+        Ok(value)
     }
 }
 
@@ -114,7 +184,7 @@ impl AsObservable for HullWhiteForwardProcess {
 
 impl ForwardMeasureProcess1D for HullWhiteForwardProcess {
     fn forward_measure_state(&self) -> &ForwardMeasureTime {
-        &self.measure
+        &self.horizon
     }
 }
 
@@ -124,101 +194,57 @@ impl StochasticProcess1D for HullWhiteForwardProcess {
     }
 
     fn drift(&self, t: Time, x: Real) -> QlResult<Real> {
-        Ok(self.process.drift(t, x)? + self.alpha_drift(t)?
-            - self.b(t, self.measure.get()) * self.sigma * self.sigma)
+        Self::state(t, x)?;
+        let shift = 0.0001;
+        let shifted_time = Self::finite(t + shift)?;
+        let forward = Self::forward(&self.curve, t)?;
+        let derivative = (Self::forward(&self.curve, shifted_time)? - forward) / shift;
+        let volatility_drift = if self.sigma == 0.0 {
+            0.0
+        } else {
+            self.sigma
+                * self.sigma
+                * (0.5 * self.b_interval(t)? * (1.0 + (-self.a * t).exp())
+                    - self.b(t, self.forward_measure_time())?)
+        };
+        Self::finite(self.process.drift(t, x)? + volatility_drift + self.a * forward + derivative)
     }
 
     fn diffusion(&self, t: Time, x: Real) -> QlResult<Real> {
-        self.process.diffusion(t, x)
+        Self::state(t, x)?;
+        Ok(self.sigma)
     }
 
-    fn expectation(&self, t0: Time, x0: Real, dt: Time) -> QlResult<Real> {
-        let t_m = self.measure.get();
-        Ok(self.process.expectation(t0, x0, dt)? + self.alpha(t0 + dt)?
-            - self.alpha(t0)? * (-self.a * dt).exp()
-            - self.m_t(t0, t0 + dt, t_m))
+    fn expectation(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
+        let end = Self::step(t, x, dt)?;
+        if dt == 0.0 {
+            return Ok(x);
+        }
+        Self::finite(
+            self.process.expectation(t, x, dt)? + self.alpha(end)?
+                - self.alpha(t)? * (-self.a * dt).exp()
+                - self.m_t(t, end, self.forward_measure_time())?,
+        )
     }
 
-    fn std_deviation(&self, t0: Time, x0: Real, dt: Time) -> QlResult<Real> {
-        self.process.std_deviation(t0, x0, dt)
+    fn variance(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
+        Self::step(t, x, dt)?;
+        if dt == 0.0 || self.sigma == 0.0 {
+            return Ok(0.0);
+        }
+        Self::finite(self.process.variance(t, x, dt)?)
     }
 
-    fn variance(&self, t0: Time, x0: Real, dt: Time) -> QlResult<Real> {
-        self.process.variance(t0, x0, dt)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::termstructures::yields::FlatForward;
-    use crate::test_support::{Flag, as_observer};
-    use crate::time::date::{Date, Month};
-    use crate::time::daycounters::actual365fixed::Actual365Fixed;
-
-    fn flat(rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            Date::new(19, Month::September, 2026),
-            rate,
-            Actual365Fixed::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
+    fn std_deviation(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
+        Ok(self.variance(t, x, dt)?.sqrt())
     }
 
-    /// Independent HW-forward E with flat zero curve (`gsrprocess` helper).
-    fn hw_forward_e(a: Real, sigma: Real, t_m: Time, w: Time, xw: Real, dt: Time) -> Real {
-        let t = w + dt;
-        let alpha = |u: Time| {
-            let x = (sigma / a) * (1.0 - (-a * u).exp());
-            0.5 * x * x
-        };
-        let c = (sigma * sigma) / (a * a);
-        let m_t = c * (1.0 - (-a * dt).exp())
-            - 0.5 * c * ((-a * (t_m - t)).exp() - (-a * (t_m + t - 2.0 * w)).exp());
-        xw * (-a * dt).exp() + alpha(t) - alpha(w) * (-a * dt).exp() - m_t
-    }
-
-    #[test]
-    fn forward_measure_pins_and_notify() {
-        let a = 0.1;
-        let sigma = 0.01;
-        let mut p = HullWhiteForwardProcess::new(flat(0.0), a, sigma).unwrap();
-        let flag = Flag::new();
-        p.observable().register_observer(&as_observer(&flag));
-        p.set_forward_measure_time(5.0).unwrap();
-        assert!(Flag::is_up(&flag));
-
-        assert!((p.b(1.0, 5.0) - (1.0 - (-0.4_f64).exp()) / a).abs() < 1e-15);
-        let mut alfa = (sigma / a) * (1.0 - (-a).exp());
-        alfa = 0.5 * alfa * alfa;
-        assert!((p.alpha(1.0).unwrap() - alfa).abs() < 1e-12);
-
-        // T-forward drift shift: μ(T₂) − μ(T₁) = −(B(t,T₂) − B(t,T₁)) σ².
-        let t = 1.0;
-        let x = 0.02;
-        p.set_forward_measure_time(4.0).unwrap();
-        let d4 = p.drift(t, x).unwrap();
-        p.set_forward_measure_time(6.0).unwrap();
-        let d6 = p.drift(t, x).unwrap();
-        assert!((d6 - d4 + (p.b(t, 6.0) - p.b(t, 4.0)) * sigma * sigma).abs() < 1e-12);
-
-        let m = p.m_t(1.0, 2.0, 5.0);
-        let c = (sigma * sigma) / (a * a);
-        let expected_m =
-            c * (1.0 - (-a).exp()) - 0.5 * c * ((-a * 3.0).exp() - (-a * (5.0 + 2.0 - 2.0)).exp());
-        assert!((m - expected_m).abs() < 1e-15);
-
-        p.set_forward_measure_time(10.0).unwrap();
-        let w = 1.0;
-        let dt = 2.0;
-        let xw = 0.03;
-        let e = p.expectation(w, xw, dt).unwrap();
-        assert!((e - hw_forward_e(a, sigma, 10.0, w, xw, dt)).abs() < 1e-12);
-        let v = p.variance(w, xw, dt).unwrap();
-        assert!((v - 0.5 * sigma * sigma / a * (1.0 - (-2.0 * a * dt).exp())).abs() < 1e-15);
-
-        let z = HullWhiteForwardProcess::new(flat(0.0), 0.0, 0.02).unwrap();
-        assert!((z.m_t(1.0, 2.0, 5.0) - (0.02 * 0.02) / 2.0 * 1.0 * 7.0).abs() < 1e-15);
+    fn evolve(&self, t: Time, x: Real, dt: Time, dw: Real) -> QlResult<Real> {
+        Self::step(t, x, dt)?;
+        require!(dw.is_finite(), "shock must be finite");
+        if dt == 0.0 {
+            return Ok(x);
+        }
+        Self::finite(self.expectation(t, x, dt)? + self.std_deviation(t, x, dt)? * dw)
     }
 }

@@ -7,9 +7,10 @@
 
 use crate::ItofinError;
 use itofin_optimize::{
-    BfgsOptions, Bounds, Common, ConstraintKind, Converged, DifferentialEvolutionOptions, Flow,
-    IterationState, LbfgsbOptions, Method, Minimize, MinimizeError, NelderMeadOptions, Objective,
-    ParticleSwarmOptions, Problem, SlsqpOptions, Termination, minimize as run,
+    BfgsOptions, Bounds, Common, ConstraintKind, Converged, DifferentialEvolutionOptions,
+    FireflyOptions, Flow, HybridSimulatedAnnealingOptions, IterationState, LbfgsbOptions, Method,
+    Minimize, MinimizeError, NelderMeadOptions, Objective, ParticleSwarmOptions, Problem,
+    SlsqpOptions, Termination, minimize as run,
 };
 use numpy::PyArray1;
 use pyo3::exceptions::{PyStopIteration, PyValueError};
@@ -535,13 +536,90 @@ fn particle_swarm(options: Option<&Bound<'_, PyDict>>) -> PyResult<(ParticleSwar
     Ok((method, common))
 }
 
+fn firefly(options: Option<&Bound<'_, PyDict>>) -> PyResult<(FireflyOptions, Common)> {
+    let mut method = FireflyOptions::default();
+    let mut common = Common::default();
+    for (key, value) in options.into_iter().flat_map(|options| options.iter()) {
+        let key = key.extract::<String>()?;
+        match key.as_str() {
+            "maxiter" => common.maxiter = Some(strict_global_usize(&value, "maxiter")?),
+            "maxfev" => common.maxfev = Some(strict_global_usize(&value, "maxfev")?),
+            "seed" => method.global.seed = strict_global_seed(&value)?,
+            "population_size" => {
+                method.global.population_size =
+                    Some(strict_global_usize(&value, "population_size")?)
+            }
+            "initial_population" => method.global.initial_population = Some(value.extract()?),
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "alpha" => method.alpha = strict_global_f64(&value, "alpha")?,
+            "beta0" => method.beta0 = strict_global_f64(&value, "beta0")?,
+            "gamma" => method.gamma = strict_global_f64(&value, "gamma")?,
+            "alpha_decay" => method.alpha_decay = strict_global_f64(&value, "alpha_decay")?,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "method Firefly does not support option {other}"
+                )));
+            }
+        }
+    }
+    if common.maxiter == Some(0) || common.maxfev == Some(0) {
+        return Err(PyValueError::new_err(
+            "Firefly maxiter and maxfev must be positive",
+        ));
+    }
+    Ok((method, common))
+}
+
+fn hybrid_simulated_annealing(
+    options: Option<&Bound<'_, PyDict>>,
+) -> PyResult<(HybridSimulatedAnnealingOptions, Common)> {
+    let mut method = HybridSimulatedAnnealingOptions::default();
+    let mut common = Common::default();
+    for (key, value) in options.into_iter().flat_map(|options| options.iter()) {
+        let key = key.extract::<String>()?;
+        match key.as_str() {
+            "maxiter" => common.maxiter = Some(strict_global_usize(&value, "maxiter")?),
+            "maxfev" => common.maxfev = Some(strict_global_usize(&value, "maxfev")?),
+            "seed" => method.seed = strict_global_seed(&value)?,
+            "initial_temperature" => {
+                method.initial_temperature = strict_global_f64(&value, "initial_temperature")?
+            }
+            "cooling_rate" => method.cooling_rate = strict_global_f64(&value, "cooling_rate")?,
+            "step_size" => method.step_size = strict_global_f64(&value, "step_size")?,
+            "local_search_interval" => {
+                method.local_search_interval = strict_global_usize(&value, "local_search_interval")?
+            }
+            "local_search_steps" => {
+                method.local_search_steps = strict_global_usize(&value, "local_search_steps")?
+            }
+            "reanneal_interval" => {
+                method.reanneal_interval = strict_global_usize(&value, "reanneal_interval")?
+            }
+            "xatol" => method.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.fatol = Some(strict_global_f64(&value, "fatol")?),
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "method Hybrid-Simulated-Annealing does not support option {other}"
+                )));
+            }
+        }
+    }
+    if common.maxiter == Some(0) || common.maxfev == Some(0) {
+        return Err(PyValueError::new_err(
+            "Hybrid-Simulated-Annealing maxiter and maxfev must be positive",
+        ));
+    }
+    Ok((method, common))
+}
+
 /// Minimize a scalar function of one or more variables.
 ///
 /// Args:
 ///     fun (Callable): Called as fun(x) with a float64 array; returns a float.
 ///     x0 (Sequence[float]): The starting point.
 ///     method (str): "Nelder-Mead", "BFGS", "L-BFGS-B", "SLSQP", or
-///         "Differential-Evolution" or "Particle-Swarm" (any case).
+///         "Differential-Evolution", "Particle-Swarm", "Hybrid-Simulated-Annealing" or "Firefly" (any case).
 ///     options (dict | None): Nelder-Mead accepts maxiter, maxfev, xatol,
 ///         fatol and adaptive. BFGS accepts maxiter, gtol and eps. L-BFGS-B
 ///         accepts maxiter, maxfev, maxcor, ftol, gtol and eps. SLSQP accepts
@@ -553,6 +631,14 @@ fn particle_swarm(options: Option<&Bound<'_, PyDict>>) -> PyResult<(ParticleSwar
 ///         Particle-Swarm accepts the same shared controls plus inertia, cognitive,
 ///         social and velocity_clamp, instead of mutation and recombination.
 ///         Its convergence additionally requires small normalized velocity.
+///         Hybrid-Simulated-Annealing accepts maxiter, maxfev, seed, xatol,
+///         fatol, initial_temperature, cooling_rate, step_size, local_search_interval,
+///         local_search_steps and reanneal_interval. It uses a reflected uniform
+///         proposal, Metropolis acceptance and bounded coordinate local searches.
+///         It does not accept population controls.
+///         Firefly accepts the shared population controls plus alpha, beta0,
+///         gamma and alpha_decay. Distances and random displacements are
+///         normalized by the finite box; attraction uses a frozen generation.
 ///     callback (Callable | None): Called as callback(xk) after every
 ///         iteration. Raising StopIteration stops the run with
 ///         Status.Cancelled.
@@ -595,7 +681,9 @@ pub(crate) fn minimize(
     let is_slsqp = method.eq_ignore_ascii_case("slsqp");
     let is_de = method.eq_ignore_ascii_case("differential-evolution");
     let is_pso = method.eq_ignore_ascii_case("particle-swarm");
-    let is_global = is_de || is_pso;
+    let is_hsa = method.eq_ignore_ascii_case("hybrid-simulated-annealing");
+    let is_firefly = method.eq_ignore_ascii_case("firefly");
+    let is_global = is_de || is_pso || is_hsa || is_firefly;
     if bounds.is_some() && !is_lbfgsb && !is_slsqp && !is_global {
         return Err(PyValueError::new_err(format!(
             "method {method} does not support bounds"
@@ -639,6 +727,20 @@ pub(crate) fn minimize(
         }
         let (options, common) = particle_swarm(options.as_ref())?;
         (Method::ParticleSwarm(options), common)
+    } else if is_hsa {
+        if jac.is_some() {
+            return Err(PyValueError::new_err(
+                "method Hybrid-Simulated-Annealing does not support jac",
+            ));
+        }
+        let (options, common) = hybrid_simulated_annealing(options.as_ref())?;
+        (Method::HybridSimulatedAnnealing(options), common)
+    } else if is_firefly {
+        if jac.is_some() {
+            return Err(PyValueError::new_err("method Firefly does not support jac"));
+        }
+        let (options, common) = firefly(options.as_ref())?;
+        (Method::Firefly(options), common)
     } else {
         return Err(ItofinError::new_err(format!("unknown method {method}")));
     };

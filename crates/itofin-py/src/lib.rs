@@ -449,6 +449,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     optimization.add_class::<PySimplex>()?;
     optimization.add_class::<global_calibration::PyDifferentialEvolution>()?;
     optimization.add_class::<global_calibration::PyParticleSwarm>()?;
+    optimization.add_class::<global_calibration::PyFirefly>()?;
+    optimization.add_class::<global_calibration::PyHybridSimulatedAnnealing>()?;
     optimization.add_class::<PyConjugateGradient>()?;
     optimization.add_class::<PySteepestDescent>()?;
     optimization.add_class::<PyEndCriteria>()?;
@@ -558,6 +560,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     chart.add_class::<chart_garch::PyGarch11FitResult>()?;
     chart.add_class::<chart::PyVolumeBars>()?;
     chart.add_class::<chart::PyBollingerBands>()?;
+    chart.add_class::<chart::PyKeltnerChannels>()?;
     chart.add_class::<chart::PyKd>()?;
     chart.add_class::<chart::PyMacd>()?;
     chart.add_class::<chart_ohlc_overnight::PyOhlcOvernightEstimates>()?;
@@ -565,8 +568,13 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     chart.add_class::<chart_prices::PyDatedIntervalPrice>()?;
     chart.add_function(wrap_pyfunction!(chart::sma, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::ema, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::vwap, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::obv, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::true_range, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::atr, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::volume_bars, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::bollinger_bands, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart::keltner_channels, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::rsi, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::kd, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::macd, &chart)?)?;

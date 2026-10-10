@@ -1,412 +1,367 @@
-//! Forward contract on a bond, valued by the spot-minus-income identity.
-//!
-//! Port of QuantLib's `ql/instruments/bondforward.{hpp,cpp}` (spot-minus-income
-//! slice). A [`BondForward`] is an agreement to buy (long) or sell (short) an
-//! underlying bond on `delivery_date` for an agreed `strike` cash amount. It is
-//! priced analytically off a discount curve (and an optional income-discount
-//! curve), mirroring the value-type approach of
-//! [`FxForward`](crate::fxforward::FxForward) rather than going through a
-//! pricing engine.
-//!
-//! With `V` the underlying bond's spot dirty value (the present value of all of
-//! its remaining cash flows), `I` the present value of the coupons/redemptions
-//! it pays strictly before delivery (which accrue to the current holder, not the
-//! forward buyer), `P` the discount factor to delivery and `K` the strike, the
-//! fair dirty forward price is `(V − I) / P` and the present value of a long
-//! position is `(V − I) − K · P`. The clean forward subtracts accrued interest
-//! on the bond at delivery. There is no single cached `test-suite` oracle here,
-//! so the behaviour is pinned by the forward-price identities in the tests
-//! (cross-checked against the `DiscountingBondEngine` spot value).
+//! Checked, engine-less bond forwards with retained live underlying bonds.
 
-use crate::cashflow::Leg;
-use crate::cashflows::CashFlows;
 use crate::errors::QlResult;
+use crate::event::event_has_occurred;
 use crate::handle::Handle;
-use crate::instruments::{Bond, Position};
-use crate::require;
+use crate::instrument::{Instrument, InstrumentBase, InstrumentResults};
+use crate::instruments::Bond;
+use crate::position::Position;
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, SharedMut};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::businessdayconvention::BusinessDayConvention;
+use crate::time::calendar::Calendar;
 use crate::time::date::Date;
-use crate::types::Real;
+use crate::time::daycounter::DayCounter;
+use crate::types::{Natural, Real};
+use crate::{fail, require};
 
-/// A forward contract on a bond.
+/// Forward contract retaining its underlying bond, pricing engine and settings.
+///
+/// Matches QuantLib's dirty spot quote per 100 minus raw cash-flow income.
+/// This upstream convention is dimensionally consistent for a non-amortizing
+/// face-100 bond only; non-100 and amortizing bonds retain the upstream result.
+/// Income includes all payments after forward settlement and on delivery,
+/// including amortization, without filtering ex-coupon payments.
+/// No pricing engine needs to be attached to this forward itself.
 pub struct BondForward {
-    cashflows: Leg,
+    base: InstrumentBase,
+    bond: SharedMut<Bond>,
+    settings: Shared<Settings<Date>>,
     discount_curve: Handle<dyn YieldTermStructure>,
     income_discount_curve: Handle<dyn YieldTermStructure>,
-    settings: Shared<Settings<Date>>,
+    value_date: Date,
     delivery_date: Date,
-    strike: Real,
     position: Position,
+    strike: Real,
+    settlement_days: Natural,
+    day_counter: DayCounter,
+    calendar: Calendar,
+    convention: BusinessDayConvention,
+    forward_price: Option<Real>,
 }
 
 impl BondForward {
-    /// Builds a bond forward on `bond`, using `discount_curve` for both the
-    /// financing discount and the income discount (QuantLib's common default
-    /// when the income handle is empty / identical).
+    /// Constructs a forward using the financing curve for income discounting.
     ///
-    /// `strike` is the agreed cash amount exchanged for the bond on
-    /// `delivery_date`; `position` is the side that receives the bond and pays
-    /// the strike (long) at delivery.
+    /// This explicit convenience default is not a QuantLib empty-handle fallback.
+    /// Strike is a dirty delivery quote, not a cash notional. Value date is the
+    /// earliest forward settlement; delivery is adjusted under `convention`.
+    /// The bond's own settlement date and engine determine the dirty spot quote.
     ///
     /// # Errors
-    ///
-    /// Fails when `strike` is not finite or is negative.
+    /// Propagates [`Self::with_income_curve`] validation.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        bond: &Bond,
-        discount_curve: Handle<dyn YieldTermStructure>,
-        settings: Shared<Settings<Date>>,
+        bond: SharedMut<Bond>,
+        value_date: Date,
         delivery_date: Date,
-        strike: Real,
         position: Position,
+        strike: Real,
+        settlement_days: Natural,
+        day_counter: DayCounter,
+        calendar: Calendar,
+        convention: BusinessDayConvention,
+        discount_curve: Handle<dyn YieldTermStructure>,
     ) -> QlResult<Self> {
         Self::with_income_curve(
             bond,
+            value_date,
+            delivery_date,
+            position,
+            strike,
+            settlement_days,
+            day_counter,
+            calendar,
+            convention,
             discount_curve.clone(),
             discount_curve,
-            settings,
-            delivery_date,
-            strike,
-            position,
         )
     }
 
-    /// Builds a bond forward with a distinct income-discount curve (coupons
-    /// between settlement and delivery are discounted on
-    /// `income_discount_curve`; the forward itself is financed on
-    /// `discount_curve`).
+    /// Constructs a forward with independent financing and income curves.
+    ///
+    /// Retains the same bond and derives its evaluation-date settings from it.
+    /// Empty curves may be relinked later; pricing then requires valid links.
     ///
     /// # Errors
-    ///
-    /// Fails when `strike` is not finite or is negative.
-    #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
+    /// Rejects nonfinite or negative strike, null dates, delivery before value
+    /// date after adjustment, date adjustment outside the supported range, and
+    /// an exclusively borrowed bond.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_income_curve(
-        bond: &Bond,
+        bond: SharedMut<Bond>,
+        value_date: Date,
+        delivery_date: Date,
+        position: Position,
+        strike: Real,
+        settlement_days: Natural,
+        day_counter: DayCounter,
+        calendar: Calendar,
+        convention: BusinessDayConvention,
         discount_curve: Handle<dyn YieldTermStructure>,
         income_discount_curve: Handle<dyn YieldTermStructure>,
-        settings: Shared<Settings<Date>>,
-        delivery_date: Date,
-        strike: Real,
-        position: Position,
     ) -> QlResult<Self> {
-        require!(strike.is_finite(), "strike must be finite");
-        require!(strike >= 0.0, "negative strike given");
+        require!(
+            strike.is_finite() && strike >= 0.0,
+            "strike must be finite and nonnegative"
+        );
+        require!(value_date >= Date::min_date(), "null value date");
+        require!(delivery_date >= Date::min_date(), "null delivery date");
+        let delivery_date = adjust_date(&calendar, delivery_date, convention)?;
+        require!(value_date <= delivery_date, "value date after delivery");
+        let underlying = bond.try_borrow().map_err(|_| {
+            crate::errors::QlError::new("bond is exclusively borrowed", file!(), line!())
+        })?;
+        let settings = underlying.settings_handle();
+        let base = InstrumentBase::new();
+        settings.register_eval_date_observer(&base.observer());
+        underlying.base().register_observer(&base.observer());
+        discount_curve.register_observer(&base.observer());
+        income_discount_curve.register_observer(&base.observer());
+        drop(underlying);
         Ok(Self {
-            cashflows: bond.cashflows().to_vec(),
+            base,
+            bond,
+            settings,
             discount_curve,
             income_discount_curve,
-            settings,
+            value_date,
             delivery_date,
-            strike,
             position,
+            strike,
+            settlement_days,
+            day_counter,
+            calendar,
+            convention,
+            forward_price: None,
         })
     }
 
-    /// The bond spot dirty value `V`, the pre-delivery income `I` and the
-    /// financing discount factor `P` to delivery.
-    fn components(&self) -> QlResult<(Real, Real, Real)> {
-        let curve = self.discount_curve.current_link()?;
-        let income_curve = self.income_discount_curve.current_link()?;
-        let valuation_date = curve.reference_date()?;
-        let include_ref = self.settings.include_reference_date_events();
-
-        let spot_value = CashFlows::npv(
-            &self.cashflows,
-            &*curve,
-            &self.settings,
-            Some(include_ref),
-            Some(valuation_date),
-            Some(valuation_date),
-        )?;
-
-        // Coupons/redemptions paid after settlement and on/before delivery
-        // accrue to the current holder (`bondforward.cpp` `spotIncome`).
-        let mut income = 0.0;
-        for flow in &self.cashflows {
-            let date = flow.date();
-            // `!hasOccurred(settlement, false)` ∧ `hasOccurred(delivery, false)`
-            // with include_ref_date = false → settlement < date ≤ delivery.
-            if date > valuation_date && date <= self.delivery_date {
-                income += flow.amount()? * income_curve.discount_date(date, true)?;
-            } else if date > self.delivery_date {
-                break;
-            }
-        }
-
-        let discount = curve.discount_date(self.delivery_date, true)?;
-        Ok((spot_value, income, discount))
-    }
-
-    /// The fair dirty forward price `(V − I) / P` (cash amount at delivery).
-    pub fn fair_forward_price(&self) -> QlResult<Real> {
-        let (spot_value, income, discount) = self.components()?;
-        Ok((spot_value - income) / discount)
-    }
-
-    /// The fair dirty forward price minus accrued interest on the bond at
-    /// delivery (`BondForward::cleanForwardPrice`).
-    pub fn clean_forward_price(&self, bond: &Bond) -> QlResult<Real> {
-        let dirty = self.fair_forward_price()?;
-        let accrued = bond.accrued_amount(Some(self.delivery_date))?;
-        Ok(dirty - accrued)
-    }
-
-    /// The present value of the position.
+    /// Forward settlement: max(value date, evaluation date plus business days).
     ///
-    /// A long forward is worth `(V − I) − K · P`; the short side is its
-    /// negative (equivalent to QuantLib's `ForwardTypePayoff` times the
-    /// delivery discount).
-    pub fn npv(&self) -> QlResult<Real> {
-        let (spot_value, income, discount) = self.components()?;
-        let long_value = (spot_value - income) - self.strike * discount;
-        Ok(match self.position {
-            Position::Long => long_value,
-            Position::Short => -long_value,
+    /// With zero settlement days, evaluation date is adjusted Following.
+    /// # Errors
+    /// Requires a valid evaluation date and a settlement within Date's range.
+    pub fn settlement_date(&self) -> QlResult<Date> {
+        let Some(mut date) = self.settings.evaluation_date() else {
+            fail!("no evaluation date set");
+        };
+        require!(date >= Date::min_date(), "null evaluation date");
+        date = advance_settlement(&self.calendar, date, self.settlement_days)?;
+        Ok(date.max(self.value_date))
+    }
+
+    /// Dirty fair delivery quote `(bond.dirty_price() - income) / D(delivery)`.
+    /// # Errors
+    /// Propagates bond/curve errors; rejects expired forwards and nonfinite output.
+    pub fn fair_forward_price(&mut self) -> QlResult<Real> {
+        self.calculate()?;
+        self.forward_price.ok_or_else(|| {
+            crate::errors::QlError::new("forward price unavailable after expiry", file!(), line!())
         })
     }
 
-    /// The agreed delivery cash amount.
-    pub fn strike(&self) -> Real {
-        self.strike
+    /// Dirty fair quote minus the retained bond's accrued quote at delivery.
+    /// # Errors
+    /// Propagates fair-price, borrowing and accrued-interest errors.
+    pub fn clean_forward_price(&mut self) -> QlResult<Real> {
+        let dirty = self.fair_forward_price()?;
+        let bond = self.bond.try_borrow().map_err(|_| {
+            crate::errors::QlError::new("bond is exclusively borrowed", file!(), line!())
+        })?;
+        let clean = dirty - bond.accrued_amount(Some(self.delivery_date))?;
+        require!(clean.is_finite(), "nonfinite clean forward price");
+        Ok(clean)
     }
 
-    /// The delivery (repurchase) date — not the underlying bond's maturity.
+    /// Adjusted delivery date, distinct from the underlying bond's maturity.
     pub fn delivery_date(&self) -> Date {
         self.delivery_date
     }
-
-    /// The side of the trade.
+    /// Earliest forward settlement date.
+    pub fn value_date(&self) -> Date {
+        self.value_date
+    }
+    /// Agreed dirty delivery quote.
+    pub fn strike(&self) -> Real {
+        self.strike
+    }
+    /// Long or short delivery position.
     pub fn position(&self) -> Position {
         self.position
     }
-
-    /// The financing / discount curve.
+    /// Forward settlement and delivery calendar.
+    pub fn calendar(&self) -> &Calendar {
+        &self.calendar
+    }
+    /// Delivery adjustment convention.
+    pub fn business_day_convention(&self) -> BusinessDayConvention {
+        self.convention
+    }
+    /// Retained day counter, matching the upstream forward contract metadata.
+    pub fn day_counter(&self) -> &DayCounter {
+        &self.day_counter
+    }
+    /// Live financing curve handle.
     pub fn discount_curve(&self) -> &Handle<dyn YieldTermStructure> {
         &self.discount_curve
     }
-
-    /// The curve used to discount pre-delivery coupon income.
+    /// Live income curve handle.
     pub fn income_discount_curve(&self) -> &Handle<dyn YieldTermStructure> {
         &self.income_discount_curve
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::instrument::Instrument;
-    use crate::instruments::FixedRateBond;
-    use crate::interestrate::Compounding;
-    use crate::pricingengine::PricingEngine;
-    use crate::pricingengines::bond::DiscountingBondEngine;
-    use crate::shared::{SharedMut, shared, shared_mut};
-    use crate::termstructures::yields::FlatForward;
-    use crate::time::businessdayconvention::BusinessDayConvention;
-    use crate::time::calendars::nullcalendar::NullCalendar;
-    use crate::time::date::Month;
-    use crate::time::daycounters::actual360::Actual360;
-    use crate::time::frequency::Frequency;
-    use crate::time::schedule::MakeSchedule;
-
-    const RATE: Real = 0.03;
-
-    fn today() -> Date {
-        Date::new(15, Month::January, 2020)
+impl Instrument for BondForward {
+    fn base(&self) -> &InstrumentBase {
+        &self.base
     }
-
-    fn settings() -> Shared<Settings<Date>> {
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today());
-        settings
+    fn base_mut(&mut self) -> &mut InstrumentBase {
+        &mut self.base
     }
-
-    fn curve() -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            today(),
-            RATE,
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    fn priced_bond(settings: &Shared<Settings<Date>>) -> FixedRateBond {
-        let schedule = MakeSchedule::new()
-            .from(today())
-            .to(Date::new(15, Month::January, 2025))
-            .with_frequency(Frequency::Annual)
-            .with_calendar(NullCalendar::new())
-            .with_convention(BusinessDayConvention::Unadjusted)
-            .with_termination_date_convention(BusinessDayConvention::Unadjusted)
-            .backwards()
-            .build();
-        let mut bond = FixedRateBond::new(
-            0,
-            100.0,
-            schedule,
-            vec![0.05],
-            Actual360::new(),
-            BusinessDayConvention::Unadjusted,
-            100.0,
-            Some(today()),
+    fn is_expired(&self) -> QlResult<bool> {
+        event_has_occurred(
+            self.delivery_date,
+            &self.settings,
+            Some(self.settlement_date()?),
             None,
-            None,
-            NullCalendar::new(),
-            BusinessDayConvention::Unadjusted,
-            false,
-            None,
-            Shared::clone(settings),
         )
-        .unwrap();
-        let engine = shared_mut(DiscountingBondEngine::new(
-            curve(),
-            None,
-            Shared::clone(settings),
-        ));
-        bond.bond_mut()
-            .base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
-        bond
     }
-
-    #[test]
-    fn striking_at_the_fair_price_gives_zero_value() {
-        let settings = settings();
-        let bond = priced_bond(&settings);
-        let delivery = Date::new(15, Month::July, 2022);
-
-        let probe = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            100.0,
-            Position::Long,
-        )
-        .unwrap();
-        let fair = probe.fair_forward_price().unwrap();
-
-        let at_fair = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            fair,
-            Position::Long,
-        )
-        .unwrap();
-        assert!(
-            at_fair.npv().unwrap().abs() < 1e-9,
-            "value at the fair price should vanish, got {}",
-            at_fair.npv().unwrap()
-        );
+    fn setup_expired(&mut self) {
+        self.forward_price = None;
+        self.base.store_results(&InstrumentResults {
+            value: Some(0.0),
+            error_estimate: Some(0.0),
+            ..InstrumentResults::default()
+        });
     }
-
-    #[test]
-    fn income_free_forward_equals_spot_over_discount() {
-        // Delivery before the first coupon (2021-01-15): no intermediate income,
-        // so fair * P must equal the bond's spot value from the engine.
-        let settings = settings();
-        let mut bond = priced_bond(&settings);
-        let spot_value = bond.bond_mut().npv().unwrap();
-
-        let delivery = Date::new(15, Month::July, 2020);
-        let fwd = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            100.0,
-            Position::Long,
-        )
-        .unwrap();
-
-        let discount = curve()
-            .current_link()
-            .unwrap()
-            .discount_date(delivery, true)
-            .unwrap();
-        assert!(
-            (fwd.fair_forward_price().unwrap() * discount - spot_value).abs() < 1e-9,
-            "fair {} * P {discount} vs spot {spot_value}",
-            fwd.fair_forward_price().unwrap()
+    fn perform_calculations(&mut self) -> QlResult<()> {
+        let settlement = self.settlement_date()?;
+        let curve = self.discount_curve.current_link()?;
+        let income_curve = self.income_discount_curve.current_link()?;
+        let discount = curve.discount_date(self.delivery_date, false)?;
+        require!(
+            discount.is_finite() && discount > 0.0,
+            "financing discount must be finite and positive"
         );
-    }
-
-    #[test]
-    fn clean_forward_subtracts_accrued_at_delivery() {
-        let settings = settings();
-        let bond = priced_bond(&settings);
-        let delivery = Date::new(15, Month::July, 2020);
-        let fwd = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            100.0,
-            Position::Long,
-        )
-        .unwrap();
-        let dirty = fwd.fair_forward_price().unwrap();
-        let accrued = bond.bond().accrued_amount(Some(delivery)).unwrap();
-        let clean = fwd.clean_forward_price(bond.bond()).unwrap();
-        assert!(
-            (clean - (dirty - accrued)).abs() < 1e-12,
-            "clean {clean} vs dirty {dirty} − AI {accrued}"
-        );
-    }
-
-    #[test]
-    fn long_and_short_values_are_opposite() {
-        let settings = settings();
-        let bond = priced_bond(&settings);
-        let delivery = Date::new(15, Month::July, 2022);
-
-        let long = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            90.0,
-            Position::Long,
-        )
-        .unwrap();
-        let short = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            delivery,
-            90.0,
-            Position::Short,
-        )
-        .unwrap();
-
-        let long_npv = long.npv().unwrap();
-        assert!((long_npv + short.npv().unwrap()).abs() < 1e-12);
-        // A strike below the fair price is favourable to the long.
-        assert!(long.fair_forward_price().unwrap() > 90.0);
-        assert!(
-            long_npv > 0.0,
-            "long value should be positive here: {long_npv}"
-        );
-    }
-
-    #[test]
-    fn a_negative_strike_is_rejected() {
-        let settings = settings();
-        let bond = priced_bond(&settings);
-        let result = BondForward::new(
-            bond.bond(),
-            curve(),
-            Shared::clone(&settings),
-            Date::new(15, Month::July, 2022),
-            -1.0,
-            Position::Long,
-        );
-        let Err(err) = result else {
-            panic!("a negative strike must be rejected");
+        let mut bond = self.bond.try_borrow_mut().map_err(|_| {
+            crate::errors::QlError::new("bond is already borrowed", file!(), line!())
+        })?;
+        let Some(evaluation) = self.settings.evaluation_date() else {
+            fail!("no evaluation date set");
         };
-        assert!(err.message().contains("negative strike"));
+        advance_settlement(bond.calendar(), evaluation, bond.settlement_days())?;
+        let spot = bond.dirty_price()?;
+        require!(spot.is_finite(), "nonfinite dirty spot price");
+        let mut income = 0.0;
+        for flow in bond.cashflows() {
+            if !flow.has_occurred(&self.settings, Some(settlement), Some(false))? {
+                if !flow.has_occurred(&self.settings, Some(self.delivery_date), Some(false))? {
+                    break;
+                }
+                let amount = flow.amount()?;
+                let df = income_curve.discount_date(flow.date(), false)?;
+                require!(
+                    amount.is_finite() && df.is_finite() && df > 0.0,
+                    "invalid income amount or discount"
+                );
+                income += amount * df;
+                require!(income.is_finite(), "nonfinite income present value");
+            }
+        }
+        let forward = (spot - income) / discount;
+        let long_value = (forward - self.strike) * discount;
+        require!(
+            forward.is_finite() && long_value.is_finite(),
+            "nonfinite forward result"
+        );
+        self.forward_price = Some(forward);
+        let npv = match self.position {
+            Position::Long => long_value,
+            Position::Short => -long_value,
+        };
+        self.base.store_results(&InstrumentResults {
+            value: Some(npv),
+            valuation_date: Some(curve.reference_date()?),
+            ..InstrumentResults::default()
+        });
+        Ok(())
+    }
+}
+
+fn advance_settlement(calendar: &Calendar, mut date: Date, days: Natural) -> QlResult<Date> {
+    require!(date >= Date::min_date(), "null evaluation date");
+    require!(
+        u64::from(days) <= (Date::max_date() - date) as u64,
+        "settlement outside date range"
+    );
+    if days == 0 {
+        return roll(calendar, date, 1);
+    }
+    for _ in 0..days {
+        date = roll(calendar, step(date, 1)?, 1)?;
+    }
+    Ok(date)
+}
+
+fn step(date: Date, direction: i32) -> QlResult<Date> {
+    require!(
+        (direction > 0 && date < Date::max_date()) || (direction < 0 && date > Date::min_date()),
+        "business-day adjustment outside date range"
+    );
+    Ok(date + direction)
+}
+
+fn roll(calendar: &Calendar, mut date: Date, direction: i32) -> QlResult<Date> {
+    while !calendar.is_business_day(date) {
+        date = step(date, direction)?;
+    }
+    Ok(date)
+}
+
+fn adjust_date(
+    calendar: &Calendar,
+    date: Date,
+    convention: BusinessDayConvention,
+) -> QlResult<Date> {
+    use BusinessDayConvention::*;
+    match convention {
+        Unadjusted => Ok(date),
+        Following => roll(calendar, date, 1),
+        Preceding => roll(calendar, date, -1),
+        ModifiedFollowing | HalfMonthModifiedFollowing => {
+            let following = roll(calendar, date, 1)?;
+            if following.month() != date.month()
+                || (convention == HalfMonthModifiedFollowing
+                    && date.day_of_month() <= 15
+                    && following.day_of_month() > 15)
+            {
+                roll(calendar, date, -1)
+            } else {
+                Ok(following)
+            }
+        }
+        ModifiedPreceding => {
+            let preceding = roll(calendar, date, -1)?;
+            if preceding.month() != date.month() {
+                roll(calendar, date, 1)
+            } else {
+                Ok(preceding)
+            }
+        }
+        Nearest => {
+            let mut before = date;
+            let mut after = date;
+            while !calendar.is_business_day(after) && !calendar.is_business_day(before) {
+                after = step(after, 1)?;
+                before = step(before, -1)?;
+            }
+            Ok(if calendar.is_business_day(after) {
+                after
+            } else {
+                before
+            })
+        }
     }
 }

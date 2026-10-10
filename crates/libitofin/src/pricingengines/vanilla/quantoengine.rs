@@ -108,7 +108,7 @@ impl PricingEngine for QuantoEuropeanEngine {
             self.exchange_rate_volatility.clone(),
             EXCHANGE_RATE_ATM,
             correlation,
-        )) as Shared<dyn YieldTermStructure>);
+        )?) as Shared<dyn YieldTermStructure>);
         let quanto_process = shared(GeneralizedBlackScholesProcess::new(
             self.process.state_variable(),
             dividend_yield,

@@ -2,8 +2,8 @@
 //!
 //! Port of the basic algebra in `ql/math/matrix.hpp`: construction, element and
 //! row access, element-wise `+`/`-`, scalar `*`/`/`, matrix and matrix-vector
-//! products, and transpose. Decompositions (SVD, QR, Cholesky, inverse,
-//! determinant) are a separate ticket (QL-1.14). The C++ lvalue/rvalue operator
+//! products, and transpose. General decompositions live in `matrixutilities`; the fixed-size
+//! [`det3`] and [`inverse_3x3`] helpers use checked row-scaled pivoting. The C++ lvalue/rvalue operator
 //! overloads collapse into `&Matrix`-based `std::ops` impls.
 
 use std::ops::{Add, Div, Index, IndexMut, Mul, Neg, Sub};
@@ -257,27 +257,184 @@ impl Mul<&Matrix> for &Array {
     }
 }
 
-/// Determinant of a 3×3 matrix (closed form).
-pub fn det3(m: &Matrix) -> Real {
-    m[(0, 0)] * (m[(1, 1)] * m[(2, 2)] - m[(1, 2)] * m[(2, 1)])
-        - m[(0, 1)] * (m[(1, 0)] * m[(2, 2)] - m[(1, 2)] * m[(2, 0)])
-        + m[(0, 2)] * (m[(1, 0)] * m[(2, 1)] - m[(1, 1)] * m[(2, 0)])
-}
-
-/// Inverse of a 3×3 matrix via the adjugate formula.
-pub fn inverse_3x3(m: &Matrix) -> Matrix {
-    assert_eq!(m.rows(), 3);
-    assert_eq!(m.columns(), 3);
-    let d = det3(m);
-    let mut inv = Matrix::with_size(3, 3);
-    for i in 0..3 {
-        for j in 0..3 {
-            inv[(j, i)] = (m[((i + 1) % 3, (j + 1) % 3)] * m[((i + 2) % 3, (j + 2) % 3)]
-                - m[((i + 1) % 3, (j + 2) % 3)] * m[((i + 2) % 3, (j + 1) % 3)])
-                / d;
+/// Determinant of an exactly 3 by 3 matrix, with row scaling and pivoting.
+///
+/// This fixed-size helper does not replace a general decomposition. No absolute
+/// pivot tolerance is imposed; accuracy still depends on conditioning.
+///
+/// # Errors
+/// Rejects wrong shapes, nonfinite inputs, unresolvable row scaling and a
+/// nonzero determinant that cannot be represented as a finite nonzero `Real`.
+pub fn det3(matrix: &Matrix) -> crate::errors::QlResult<Real> {
+    let (mut rows, scales) = scaled_3x3(matrix)?;
+    let mut factors = [scales[0], scales[1], scales[2], 1.0, 1.0, 1.0];
+    let mut sign = 1.0;
+    for column in 0..3 {
+        let pivot = (column..3)
+            .max_by(|&i, &j| rows[i][column].abs().total_cmp(&rows[j][column].abs()))
+            .expect("a three-dimensional pivot range is nonempty");
+        if rows[pivot][column] == 0.0 {
+            return Ok(0.0);
+        }
+        if pivot != column {
+            rows.swap(pivot, column);
+            sign = -sign;
+        }
+        factors[column + 3] = rows[column][column];
+        let pivot_row = rows[column];
+        for row in rows.iter_mut().skip(column + 1) {
+            let multiplier = row[column] / pivot_row[column];
+            for (value, &pivot_value) in row.iter_mut().zip(&pivot_row).skip(column + 1) {
+                *value = (-multiplier).mul_add(pivot_value, *value);
+            }
         }
     }
-    inv
+    Ok(sign * scaled_product(&factors)?)
+}
+
+/// Inverse of an exactly 3 by 3 matrix, using row-scaled pivoted elimination.
+///
+/// The inverse does not depend on a representable determinant. Uniformly tiny
+/// or large matrices can therefore have a valid finite inverse. No conditioning
+/// estimate or absolute determinant tolerance is supplied. Both identity-product
+/// residuals must be at most `256 * Real::EPSILON`; unresolved results error.
+///
+/// # Errors
+/// Rejects malformed/nonfinite input, singular or numerically unresolved
+/// systems, and unrepresentable intermediate or final inverse entries.
+pub fn inverse_3x3(matrix: &Matrix) -> crate::errors::QlResult<Matrix> {
+    let (rows, scales) = scaled_3x3(matrix)?;
+    let mut augmented = [[0.0; 6]; 3];
+    for i in 0..3 {
+        augmented[i][..3].copy_from_slice(&rows[i]);
+        augmented[i][i + 3] = 1.0 / scales[i];
+        crate::require!(
+            augmented[i][i + 3].is_finite(),
+            "inverse scale is not representable"
+        );
+    }
+    for column in 0..3 {
+        let pivot = (column..3)
+            .max_by(|&i, &j| {
+                augmented[i][column]
+                    .abs()
+                    .total_cmp(&augmented[j][column].abs())
+            })
+            .expect("a three-dimensional pivot range is nonempty");
+        augmented.swap(pivot, column);
+        let divisor = augmented[column][column];
+        crate::require!(divisor != 0.0, "singular or numerically unresolved matrix");
+        let pivot_row = augmented[column];
+        for (index, row) in augmented.iter_mut().enumerate() {
+            if index != column {
+                let multiplier = row[column] / divisor;
+                for (value, &pivot_value) in row.iter_mut().zip(&pivot_row) {
+                    *value = (-multiplier).mul_add(pivot_value, *value);
+                    crate::require!(
+                        value.is_finite(),
+                        "inverse elimination is not representable"
+                    );
+                }
+                row[column] = 0.0;
+            }
+        }
+        for value in &mut augmented[column] {
+            let previous = *value;
+            *value /= divisor;
+            crate::require!(
+                value.is_finite() && (previous == 0.0 || *value != 0.0),
+                "inverse elimination is not representable"
+            );
+        }
+    }
+    let inverse = Matrix::from(std::array::from_fn::<_, 3, _>(|i| {
+        std::array::from_fn::<_, 3, _>(|j| augmented[i][j + 3])
+    }));
+    for i in 0..3 {
+        for j in 0..3 {
+            let left: Real = (0..3).map(|k| matrix[(i, k)] * inverse[(k, j)]).sum();
+            let right: Real = (0..3).map(|k| inverse[(i, k)] * matrix[(k, j)]).sum();
+            let expected = Real::from(i == j);
+            crate::require!(
+                left.is_finite()
+                    && right.is_finite()
+                    && (left - expected).abs() <= 256.0 * Real::EPSILON
+                    && (right - expected).abs() <= 256.0 * Real::EPSILON,
+                "inverse identity residual is numerically unresolved"
+            );
+        }
+    }
+    Ok(inverse)
+}
+
+fn scaled_3x3(matrix: &Matrix) -> crate::errors::QlResult<([[Real; 3]; 3], [Real; 3])> {
+    crate::require!(
+        matrix.rows() == 3 && matrix.columns() == 3,
+        "matrix must be exactly 3 by 3"
+    );
+    let mut rows = [[0.0; 3]; 3];
+    let mut scales = [1.0; 3];
+    for i in 0..3 {
+        let mut scale: Real = 0.0;
+        for j in 0..3 {
+            let value = matrix[(i, j)];
+            crate::require!(value.is_finite(), "matrix entries must be finite");
+            scale = scale.max(value.abs());
+        }
+        if scale != 0.0 {
+            scales[i] = binary_power(binary_parts(scale).1);
+        }
+        for j in 0..3 {
+            rows[i][j] = matrix[(i, j)] / scales[i];
+            crate::require!(
+                matrix[(i, j)] == 0.0 || rows[i][j] != 0.0,
+                "matrix row scaling is numerically unresolved"
+            );
+        }
+    }
+    Ok((rows, scales))
+}
+
+fn scaled_product(factors: &[Real]) -> crate::errors::QlResult<Real> {
+    let mut mantissa: Real = 1.0;
+    let mut exponent = 0;
+    for &factor in factors {
+        let (fraction, power) = binary_parts(factor);
+        mantissa *= fraction;
+        exponent += power;
+    }
+    let (fraction, power) = binary_parts(mantissa);
+    exponent += power;
+    crate::require!(
+        (-1075..=1023).contains(&exponent),
+        "determinant is not representable"
+    );
+    let first_power = exponent.clamp(-1022, 1023);
+    let value = (fraction * binary_power(first_power)) * binary_power(exponent - first_power);
+    crate::require!(
+        value.is_finite() && value != 0.0,
+        "determinant is not representable"
+    );
+    Ok(value)
+}
+
+fn binary_parts(value: Real) -> (Real, i32) {
+    let bits = value.abs().to_bits();
+    let encoded = ((bits >> 52) & 0x7ff) as i32;
+    let exponent = if encoded == 0 {
+        63 - bits.leading_zeros() as i32 - 1074
+    } else {
+        encoded - 1023
+    };
+    (value / binary_power(exponent), exponent)
+}
+
+fn binary_power(exponent: i32) -> Real {
+    if exponent >= -1022 {
+        Real::from_bits(((exponent + 1023) as u64) << 52)
+    } else {
+        Real::from_bits(1 << (exponent + 1074))
+    }
 }
 
 #[cfg(test)]

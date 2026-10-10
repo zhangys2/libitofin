@@ -30,7 +30,7 @@ bindings. All three language surfaces share the Rust numerical core.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.37.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.39.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
@@ -64,3 +64,28 @@ links to the language guides and project documentation.
 - [Development](https://github.com/benbenbang/libitofin/blob/main/wiki/development.md)
 - [Design](https://github.com/benbenbang/libitofin/blob/main/wiki/design.md)
 - [QuantLib compatibility](https://github.com/benbenbang/libitofin/blob/main/wiki/compatibility.md)
+
+- [Small LOW Rust additions](low-small-additions.md): additive helpers, immutable
+  legacy components, independent references and deferred scope.
+
+- [Bond Z-spread analytics](bond-zspread.md): live-curve clean/dirty quotes and
+  checked spread inversion with settlement and current-notional conventions.
+
+- [Exchange-rate chaining](exchange-rate-chaining.md): ordered direct/derived
+  conversions, currency orientations and checked numerical boundaries.
+
+- [Bond forwards](bond-forward.md): retained live bonds, explicit income/financing curves and checked delivery quotes.
+
+- [Implied volatility term structure](implied-vol-term-structure.md): fixed-reference forward variance, live source handles and explicit extrapolation.
+
+- [Black-Scholes theta](black-scholes-theta.md): current-market theta from supplied Greeks with checked source-order arithmetic.
+
+- [FX forwards](fx-forwards.md): explicit settlement-normalized currency-tagged valuation and snapshot spot inputs.
+
+- [Hull-White forward process](hullwhite-forward-process.md): live yield curves, forward-measure transitions and checked stable limiting formulas.
+
+- [Quanto term structure](quanto-term-structure.md): linked standalone quanto dividend yields with native numeric-time conventions.
+
+- [ABCD math and volatility](abcd.md): coefficient validation, volatility shape and integrated variance/covariance.
+
+- [Householder utilities](householder.md): checked reflections, orthogonal matrices and explicit native application conventions.
