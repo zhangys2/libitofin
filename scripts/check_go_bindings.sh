@@ -52,6 +52,36 @@ cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/chart_keltner.c -Ltarget/release -litofin_ffi -o target/cpp-chart-keltner
 ./target/cpp-chart-keltner
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/chart_williams.c -Ltarget/release -litofin_ffi -o target/c-chart-williams
+./target/c-chart-williams
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/chart_williams.c -Ltarget/release -litofin_ffi -o target/cpp-chart-williams
+./target/cpp-chart-williams
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/drawdown.c -Ltarget/release -litofin_ffi -o target/c-drawdown
+./target/c-drawdown
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/drawdown.c -Ltarget/release -litofin_ffi -o target/cpp-drawdown
+./target/cpp-drawdown
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/benchmark_beta.c -Ltarget/release -litofin_ffi -o target/c-benchmark-beta
+./target/c-benchmark-beta
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/benchmark_beta.c -Ltarget/release -litofin_ffi -o target/cpp-benchmark-beta
+./target/cpp-benchmark-beta
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/performance_ratios.c -Ltarget/release -litofin_ffi -o target/c-performance-ratios
+./target/c-performance-ratios
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/performance_ratios.c -Ltarget/release -litofin_ffi -o target/cpp-performance-ratios
+./target/cpp-performance-ratios
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/chart_adx.c -Ltarget/release -litofin_ffi -o target/c-chart-adx
+./target/c-chart-adx
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/chart_adx.c -Ltarget/release -litofin_ffi -o target/cpp-chart-adx
+./target/cpp-chart-adx
 cargo build -p libitofin-ffi --release --features optimization-method-oracle
 cd sdk/go
 go vet ./...
@@ -60,3 +90,9 @@ go test -tags optimization_oracle -race -count=1 -run "^TestOptimizationMethodsQ
 go test -race -count=1 -coverprofile=../../target/go-coverage.out ./...
 go run ./examples/european_option
 go run ./examples/portfolio
+
+go run ./examples/drawdown
+go run ./examples/benchmark_beta
+
+go run ./examples/performance_ratios
+go run ./examples/chart_adx

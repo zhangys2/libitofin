@@ -413,6 +413,86 @@ outputs and `first_valid` unchanged.
 Formula references: [Fidelity ATR](https://www.fidelity.com/learning-center/trading-investing/technical-analysis/technical-indicator-guide/atr)
 and [AAII's first-bar and seed convention](https://www.aaii.com/journal/article/average-true-range-atr).
 
+## Wilder ADX and directional movement
+
+`adx`/`ADX` returns **+DI, -DI, DX and ADX**, each as an aligned series.
+ADX measures trend strength, not trend direction. DI shows direction. Default
+period is **14 transitions**, selecting `DefaultADX` in Go.
+
+- For bar `i >= 1`, `up = high[i]-high[i-1]` and
+  `down = low[i-1]-low[i]`. Only the strictly larger positive movement wins.
+  Equal movements select neither, including positive ties and inside bars.
+- Smooth true range and both movements with arithmetic-mean seeds over
+  **bars 1 through period**. Bar zero is excluded, unlike standalone ATR.
+  Gap-aware true range is shared with `true_range`; existing ATR is unchanged.
+- Later means use `previous + (current-previous)/period`.
+  DI is `100 * mean_DM/mean_TR`; DX is
+  `100 * abs(plus_DI-minus_DI)/(plus_DI+minus_DI)`.
+- Zero smoothed TR sets both DI to zero. Zero DI sum sets DX to zero.
+  ADX seeds the arithmetic mean of the first period valid DX observations,
+  then uses the same Wilder recurrence.
+
+| Series | First valid index | Default 14 |
+| --- | --- | --- |
+| +DI, -DI, DX | `period` | 14 |
+| ADX | `2*period-1` | 27 |
+
+Indices are capped at input length. Period one is supported: all four start
+at index one. Empty or insufficient history remains aligned and missing.
+Use **each channel's** `to_list()`/`NullableValues()` to mask its warmup zeroes.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    result = chart.adx(
+        high=[10, 12, 11, 14], low=[8, 9, 7, 10],
+        close=[9, 11, 8, 13], period=2,
+    )
+    assert result.dx.to_list()[:2] == [None, None]
+    assert result.adx.to_list()[:3] == [None, None, None]
+    assert abs(result.adx.values[3] - 30) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    import itofin "github.com/benbenbang/libitofin/sdk/go"
+
+    result, err := itofin.ADX(
+        []float64{10, 12, 11, 14}, []float64{8, 9, 7, 10},
+        []float64{9, 11, 8, 13}, 2,
+    )
+    if err != nil { panic(err) }
+    if result.DX.FirstValid != 2 || result.ADX.FirstValid != 3 {
+        panic("unexpected warmup")
+    }
+    _ = result.ADX.NullableValues()
+    ```
+
+Runnable examples: `python example/python/chart_adx.py` and, from `sdk/go`,
+`go run ./examples/chart_adx`.
+
+Rust exposes `math::chart::{Adx, adx, adx_default}`. Python's frozen `Adx`
+getters and NumPy values return copies. Go returns an owned `ADXResult` with
+`PlusDI`, `MinusDI`, `DX`, `ADX`. C `itofin_chart_adx` writes four channel-major
+buffers in that order and four corresponding validity indices. Capacity,
+input, arithmetic and pointer errors leave both output arrays unchanged.
+
+HLC lengths must match, values must be finite and `low <= close <= high`;
+negative prices are supported. Every range and movement difference must stay
+finite, even a discarded negative movement during warmup. Periods must be
+positive. Ratios are divided before multiplying by 100 to avoid artificial
+multiply overflow. Incremental means avoid overflowing representable seeds.
+Floating-point rounding, including underflow of very small means, still applies.
+
+The [independent step fixture](https://github.com/benbenbang/libitofin/blob/main/crates/libitofin/tests/fixtures/chart_adx.csv)
+records raw TR/DM, smoothed means, DI/DX/ADX as exact fractions. Regenerate it
+with `python3 scripts/chart_adx_fixture.py`; it imports no production code.
+The period-two fixture covers rising/falling movements, gaps, a positive tie
+and an inside bar. At its last bar ADX is `22255/504`.
+
 ## Bollinger Bands and RSI
 
 Bollinger Bands use a trailing population standard deviation. The default is
@@ -540,3 +620,65 @@ Both bindings also accept explicit periods through Python keyword arguments
 or Go's `ChartKD` and `ChartMACD` functions.
 
 ::: itofin.chart
+
+## Williams percent R
+
+`williams_r` / `WilliamsR` uses an **inclusive trailing window**, including the
+current HLC bar. The default is **14 bars**. For the window's highest high H and
+lowest low L, the value is `-100 * ((H-close)/(H-L))`, in **[-100, 0]**.
+A close at H gives 0; a close at L gives -100. A flat window gives **-50**,
+consistent with Taiwan KD's neutral RSV 50, without smoothing K or D.
+
+First-valid is `min(period-1, len)`. Earlier dense values are zero placeholders,
+not real oscillator values; use `to_list()` / `NullableValues()` for missing
+warmup. Empty inputs return an empty result; short inputs remain entirely missing.
+Inputs must be equal-length, finite and satisfy `low <= close <= high`.
+Negative prices are valid. A positive period is required. Overflowing high-low
+or high-close differences are rejected, including partial windows during warmup.
+Returns and intermediates are not silently rescaled or clipped.
+
+=== "Python"
+
+    ```python
+    from itofin import chart
+
+    result = chart.williams_r(
+        [12, 16, 11], [10, 14, 9], [11, 15, 10], period=3
+    )
+    assert result.first_valid == 2
+    assert result.to_list()[:2] == [None, None]
+    assert abs(result.values[2] + 600 / 7) < 1e-12
+    ```
+
+=== "Go"
+
+    ```go
+    package main
+
+    import (
+        "fmt"
+        "math"
+        itofin "github.com/benbenbang/libitofin/sdk/go"
+    )
+
+    func main() {
+        result, err := itofin.WilliamsR(
+            []float64{12, 16, 11}, []float64{10, 14, 9},
+            []float64{11, 15, 10}, 3)
+        if err != nil { panic(err) }
+        if result.FirstValid != 2 || math.Abs(result.Values[2]+600.0/7) > 1e-12 {
+            panic("unexpected Williams percent R")
+        }
+        fmt.Println(result.NullableValues())
+    }
+    ```
+
+Rust exposes `math::chart::{williams_r, williams_r_default}` and returns the
+existing owned `ChartSeries`. C's `itofin_chart_williams_r` takes an explicit
+period and writes caller-owned values and first-valid only on success. No
+context or result handle needs closing. Go's `DefaultWilliamsR` and Python's
+omitted period use 14. Python value properties return independent NumPy copies.
+
+[Independent fixture](https://github.com/benbenbang/libitofin/blob/main/crates/libitofin/tests/data/chart/williams_r.md):
+exact standard-library Fraction calculations, shared across Rust, Go and Python;
+standalone C and C++ clients separately pin the same rational values.
