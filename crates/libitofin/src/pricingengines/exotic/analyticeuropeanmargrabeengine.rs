@@ -424,4 +424,126 @@ mod tests {
         let exp_rho = (val_pr - val_mr) / (2.0 * dr);
         assert!((rho - exp_rho).abs() <= 1e-4);
     }
+
+    /// Full `margrabeoption.cpp` `testGreeks` grid: analytic greeks vs central
+    /// differences at the suite's 1e-5 tolerance relative to spot 1.
+    ///
+    /// The C++ loop indexes `vols2` with the `vols1` bound, so only 0.15 is
+    /// visited. Correlation stays −0.5 and both quantities stay 1.
+    #[test]
+    fn test_analytic_european_margrabe_greeks_grid() {
+        let underlyings1 = [22.0];
+        let underlyings2 = [20.0];
+        let q_rates1 = [0.06, 0.16, 0.04];
+        let q_rates2 = [0.04, 0.14, 0.02];
+        let r_rates = [0.1, 0.2, 0.08];
+        let residual_times = [0.1, 0.5];
+        let vols1 = [0.20];
+        let vols2 = [0.15, 0.20, 0.25];
+        let tolerance = 1.0e-5;
+        let mut checked = 0_usize;
+
+        for residual_time in residual_times {
+            for l in 0..underlyings1.len() {
+                for m in 0..q_rates1.len() {
+                    for r in r_rates {
+                        for p in 0..vols1.len() {
+                            let u1 = underlyings1[l];
+                            let u2 = underlyings2[l];
+                            let q1 = q_rates1[m];
+                            let q2 = q_rates2[m];
+                            let v1 = vols1[p];
+                            let v2 = vols2[p];
+                            let (mut option, today, spot1, spot2, r_quote, dc, settings) =
+                                build_test_option(
+                                    u1,
+                                    u2,
+                                    1,
+                                    1,
+                                    q1,
+                                    q2,
+                                    r,
+                                    residual_time,
+                                    v1,
+                                    v2,
+                                    -0.50,
+                                );
+                            let value = option.npv().unwrap();
+                            if value <= u1 * 1.0e-5 {
+                                continue;
+                            }
+                            checked += 1;
+
+                            let calculated = [
+                                ("delta1", option.delta1().unwrap()),
+                                ("delta2", option.delta2().unwrap()),
+                                ("gamma1", option.gamma1().unwrap()),
+                                ("gamma2", option.gamma2().unwrap()),
+                                ("theta", option.theta().unwrap()),
+                                ("rho", option.rho().unwrap()),
+                            ];
+
+                            let du = u1 * 1.0e-4;
+                            spot1.set_value(Some(u1 + du));
+                            let value_p = option.npv().unwrap();
+                            let delta_p = option.delta1().unwrap();
+                            spot1.set_value(Some(u1 - du));
+                            let value_m = option.npv().unwrap();
+                            let delta_m = option.delta1().unwrap();
+                            spot1.set_value(Some(u1));
+                            let exp_delta1 = (value_p - value_m) / (2.0 * du);
+                            let exp_gamma1 = (delta_p - delta_m) / (2.0 * du);
+
+                            // The suite reuses the spot-1 step for spot 2.
+                            spot2.set_value(Some(u2 + du));
+                            let value_p = option.npv().unwrap();
+                            let delta_p = option.delta2().unwrap();
+                            spot2.set_value(Some(u2 - du));
+                            let value_m = option.npv().unwrap();
+                            let delta_m = option.delta2().unwrap();
+                            spot2.set_value(Some(u2));
+                            let exp_delta2 = (value_p - value_m) / (2.0 * du);
+                            let exp_gamma2 = (delta_p - delta_m) / (2.0 * du);
+
+                            let dr = r * 1.0e-4;
+                            r_quote.set_value(Some(r + dr));
+                            let value_p = option.npv().unwrap();
+                            r_quote.set_value(Some(r - dr));
+                            let value_m = option.npv().unwrap();
+                            r_quote.set_value(Some(r));
+                            let exp_rho = (value_p - value_m) / (2.0 * dr);
+
+                            let d_t = dc.year_fraction(today - 1, today + 1);
+                            settings.set_evaluation_date(today - 1);
+                            let value_m = option.npv().unwrap();
+                            settings.set_evaluation_date(today + 1);
+                            let value_p = option.npv().unwrap();
+                            settings.set_evaluation_date(today);
+                            let exp_theta = (value_p - value_m) / d_t;
+
+                            let expected = [
+                                ("delta1", exp_delta1),
+                                ("delta2", exp_delta2),
+                                ("gamma1", exp_gamma1),
+                                ("gamma2", exp_gamma2),
+                                ("theta", exp_theta),
+                                ("rho", exp_rho),
+                            ];
+                            for ((name, calculated), (_, expected)) in
+                                calculated.into_iter().zip(expected)
+                            {
+                                let error = (expected - calculated).abs() / u1;
+                                assert!(
+                                    error <= tolerance,
+                                    "{name} t={residual_time} q=({q1},{q2}) r={r} vol=({v1},{v2}): \
+                                     calculated {calculated} expected {expected} error {error}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 18);
+    }
 }
