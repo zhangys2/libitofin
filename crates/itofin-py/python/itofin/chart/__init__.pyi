@@ -7,6 +7,7 @@ import numpy
 import numpy.typing
 import typing
 __all__ = [
+    "Adx",
     "BollingerBands",
     "ChartSeries",
     "DatedIntervalPrice",
@@ -18,6 +19,7 @@ __all__ = [
     "OhlcOvernightEstimates",
     "OhlcPointEstimates",
     "VolumeBars",
+    "adx",
     "atr",
     "bollinger_bands",
     "constant_volatility",
@@ -41,7 +43,34 @@ __all__ = [
     "true_range",
     "volume_bars",
     "vwap",
+    "williams_r",
 ]
+
+@typing.final
+class Adx:
+    r"""
+    Aligned +DI, -DI, DX and ADX, each with its own warmup metadata.
+    """
+    @property
+    def plus_di(self) -> ChartSeries:
+        r"""
+        Copy of positive directional indicator, valid from index period.
+        """
+    @property
+    def minus_di(self) -> ChartSeries:
+        r"""
+        Copy of negative directional indicator, valid from index period.
+        """
+    @property
+    def dx(self) -> ChartSeries:
+        r"""
+        Copy of directional index, valid from index period.
+        """
+    @property
+    def adx(self) -> ChartSeries:
+        r"""
+        Copy of Wilder-smoothed DX, valid from index 2*period-1.
+        """
 
 @typing.final
 class BollingerBands:
@@ -288,6 +317,16 @@ class VolumeBars:
         Per-bar direction: -1 for down, 0 for flat, 1 for up.
         """
 
+def adx(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], period: builtins.int = 14) -> Adx:
+    r"""
+    Wilder +DI/-DI/DX/ADX, seeded from transitions excluding bar zero.
+    Strictly larger positive movements win; ties select neither. TR/DM seed
+    from bars1..=period; ADX seeds the first period valid DX values. Zero TR
+    sets DI to zero; zero DI sum sets DX to zero. Period one is supported.
+    Warmup zeroes are missing through each series' to_list(). Invalid bars,
+    zero periods and nonfinite differences fail even during warmup.
+    """
+
 def atr(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], period: builtins.int = 14) -> ChartSeries:
     r"""
     Wilder ATR with an arithmetic seed over the first period true ranges.
@@ -408,4 +447,11 @@ def vwap(price: typing.Sequence[builtins.float], volume: typing.Sequence[builtin
     r"""
     Cumulative VWAP of supplied prices; a separate call starts a new session.
     Zero-volume prefixes are missing; later zero volume carries the last value.
+    """
+
+def williams_r(high: typing.Sequence[builtins.float], low: typing.Sequence[builtins.float], close: typing.Sequence[builtins.float], period: builtins.int = 14) -> ChartSeries:
+    r"""
+    Inclusive trailing Williams percent R in [-100, 0]; flat windows return -50.
+    Default period is 14. First-valid is period-1 capped at length, with zero
+    warmup placeholders. Finite differences are required even during warmup.
     """

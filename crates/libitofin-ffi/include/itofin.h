@@ -335,6 +335,24 @@ typedef struct ItofinMakeCdsConfig {
 } ItofinMakeCdsConfig;
 
 /**
+ * Maximum fractional running-peak loss and zero-based peak/trough indices.
+ */
+typedef struct ItofinDrawdownResult {
+  /**
+   * Nonnegative fractional loss, not a percentage or signed return.
+   */
+  ItofinReal drawdown;
+  /**
+   * Earliest equal running peak before the winning trough.
+   */
+  size_t peak_index;
+  /**
+   * First trough with the greatest computed loss.
+   */
+  size_t trough_index;
+} ItofinDrawdownResult;
+
+/**
  * Optional fields: time grid=1, equity grid=2, damping steps=4, scheme=8.
  * Scheme 0 is Douglas and scheme 1 is implicit Euler.
  */
@@ -1798,6 +1816,29 @@ int32_t itofin_handle_release(struct ItofinContext *ctx,
                               struct ItofinError *error);
 
 /**
+ * Compute Wilder +DI, -DI, DX and ADX in channel-major order.
+ * Each channel holds `len` values, with zero warmup placeholders. Four
+ * corresponding validity indices are written. DI/DX start at `period`;
+ * ADX starts at `2*period-1`, capped at `len`. Period one is supported.
+ * Inputs and arithmetic are validated before any output is written.
+ *
+ * # Safety
+ * Follow the crate-level pointer/non-overlap contract. Each HLC input holds
+ * `len` doubles. `out` holds `capacity` doubles. `first_valid` holds
+ * `first_valid_capacity` size_t entries, with capacity at least four.
+ */
+int32_t itofin_chart_adx(const ItofinReal *high,
+                         const ItofinReal *low,
+                         const ItofinReal *close,
+                         size_t len,
+                         size_t period,
+                         ItofinReal *out,
+                         size_t capacity,
+                         size_t *first_valid,
+                         size_t first_valid_capacity,
+                         struct ItofinError *error);
+
+/**
  * Compute gap-aware true range, using high-low for the first bar.
  * # Safety
  * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
@@ -1828,6 +1869,25 @@ int32_t itofin_chart_atr(const ItofinReal *high,
                          size_t capacity,
                          size_t *first_valid,
                          struct ItofinError *error);
+
+/**
+ * Compute inclusive rolling Williams percent R in [-100, 0], flat windows -50.
+ * Period must be positive; conventional default is 14. Finite rolling
+ * differences are required even during incomplete warmup. Failure is atomic.
+ * Warmup slots are zero; first-valid is `period - 1`, capped at `len`.
+ * # Safety
+ * Inputs each hold `len` doubles. Follow the crate-level pointer/non-overlap
+ * contract. `out` holds `capacity` doubles and `first_valid` holds one size_t.
+ */
+int32_t itofin_chart_williams_r(const ItofinReal *high,
+                                const ItofinReal *low,
+                                const ItofinReal *close,
+                                size_t len,
+                                size_t period,
+                                ItofinReal *out,
+                                size_t capacity,
+                                size_t *first_valid,
+                                struct ItofinError *error);
 
 /**
  * Compute modern EMA-close/Wilder-ATR Keltner channels. Output is channel
@@ -2047,6 +2107,30 @@ int32_t itofin_heston_paths(const struct ItofinHestonInput *input,
                             ItofinReal *out,
                             size_t capacity,
                             struct ItofinError *error);
+
+/**
+ * Compute asset/benchmark beta from already aligned return samples.
+ *
+ * Requires 2-100,000 observations and equal asset/benchmark lengths. Null
+ * weights with zero length selects unit weights; otherwise weights must have
+ * one finite nonnegative entry per observation and a finite positive total.
+ * Count-corrected covariance/benchmark variance uses all rows, including
+ * zero-weight rows. No annualization or risk-free adjustment is applied.
+ * Zero benchmark variance and nonfinite calculations fail. On error `out`
+ * is unchanged. No handles or retained native allocations are created.
+ *
+ * # Safety
+ * Each input points to its stated number of readable doubles and `out` to
+ * one writable double. Pointers follow crate-level alignment/non-overlap rules.
+ */
+int32_t itofin_benchmark_beta(const ItofinReal *asset_returns,
+                              size_t asset_len,
+                              const ItofinReal *benchmark_returns,
+                              size_t benchmark_len,
+                              const ItofinReal *weights,
+                              size_t weights_len,
+                              ItofinReal *out,
+                              struct ItofinError *error);
 
 /**
  * # Safety
@@ -3037,6 +3121,20 @@ int32_t itofin_discrepancy_statistics_evaluate(const ItofinReal *values,
                                                size_t weights_len,
                                                ItofinReal *out,
                                                struct ItofinError *error);
+
+/**
+ * Evaluate ordered finite strictly positive NAVs. Empty input is an error;
+ * one NAV or no decline returns zero and indices (0, 0). Tied peaks keep the
+ * earliest index and tied losses keep the first trough. Errors leave `out`
+ * unchanged. The result owns no handles or resources and needs no destruction.
+ * # Safety
+ * `values` holds `len` readable doubles and `out` one writable result. Follow
+ * the crate-level alignment, lifetime and non-overlap pointer contract.
+ */
+int32_t itofin_maximum_drawdown(const ItofinReal *values,
+                                size_t len,
+                                struct ItofinDrawdownResult *out,
+                                struct ItofinError *error);
 
 /**
  * Construct an FD engine retaining the Black-Scholes process. Attach it to a
@@ -5879,6 +5977,52 @@ int32_t itofin_overnight_add_fixing(struct ItofinContext *ctx,
                                     int32_t fixing_date,
                                     double value,
                                     struct ItofinError *error);
+
+/**
+ * All-observation RMS shortfall below a per-period target, without annualization.
+ * On failure `out` is unchanged. An all-above-target sample returns zero.
+ *
+ * # Safety
+ * `returns` holds `len` readable doubles and `out` one writable double.
+ * All pointers follow the crate-level alignment and non-overlap contract.
+ */
+int32_t itofin_target_downside_deviation(const double *returns,
+                                         size_t len,
+                                         double target,
+                                         double *out,
+                                         struct ItofinError *error);
+
+/**
+ * Arithmetic Sharpe ratio using scalar per-period risk-free return, sample
+ * deviation (`N-1`) and mandatory `sqrt(periods_per_year)` scaling.
+ * Requires two finite observations and nonzero dispersion. Failure preserves `out`.
+ *
+ * # Safety
+ * `returns` holds `len` readable doubles and `out` one writable double.
+ * All pointers follow the crate-level alignment and non-overlap contract.
+ */
+int32_t itofin_sharpe_ratio(const double *returns,
+                            size_t len,
+                            double risk_free_return,
+                            double periods_per_year,
+                            double *out,
+                            struct ItofinError *error);
+
+/**
+ * Arithmetic Sortino ratio using scalar per-period MAR, all-observation
+ * downside (`N`) and mandatory `sqrt(periods_per_year)` scaling.
+ * Requires two finite observations and nonzero downside. Failure preserves `out`.
+ *
+ * # Safety
+ * `returns` holds `len` readable doubles and `out` one writable double.
+ * All pointers follow the crate-level alignment and non-overlap contract.
+ */
+int32_t itofin_sortino_ratio(const double *returns,
+                             size_t len,
+                             double minimum_acceptable_return,
+                             double periods_per_year,
+                             double *out,
+                             struct ItofinError *error);
 
 /**
  * Construct a Poisson sequence. Dimension one also supplies scalar draws.

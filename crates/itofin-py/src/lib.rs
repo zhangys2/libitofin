@@ -6,6 +6,7 @@
 //! tickets (#485-#487).
 
 mod bates;
+mod benchmark_beta;
 mod blackformula;
 mod bma;
 mod bootstrap;
@@ -16,10 +17,12 @@ mod capfloortermvol;
 mod caphelper;
 mod cashflows;
 mod chart;
+mod chart_adx;
 mod chart_garch;
 mod chart_ohlc_overnight;
 mod chart_ohlc_volatility;
 mod chart_prices;
+mod chart_williams;
 mod convergence_statistics;
 mod credit;
 mod creditdensity;
@@ -29,6 +32,7 @@ mod cubicsmile;
 mod currency;
 mod curve;
 mod discrepancy_statistics;
+mod drawdown;
 mod fdengine;
 mod forward;
 mod fra;
@@ -58,6 +62,7 @@ mod option;
 mod optionletvol;
 mod ou_simulation;
 mod overnightfuture;
+mod performance_ratios;
 mod poissonrng;
 mod randomnumbers;
 mod results;
@@ -480,6 +485,12 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     results.add_class::<Results>()?;
 
     let statistics = PyModule::new(py, "statistics")?;
+    statistics.add_class::<drawdown::PyDrawdownResult>()?;
+    statistics.add_function(wrap_pyfunction!(drawdown::maximum_drawdown, &statistics)?)?;
+    statistics.add_function(wrap_pyfunction!(
+        benchmark_beta::benchmark_beta,
+        &statistics
+    )?)?;
     statistics.add_class::<convergence_statistics::PyConvergenceStatistics>()?;
     statistics.add_function(wrap_pyfunction!(
         convergence_statistics::convergence_table,
@@ -491,6 +502,18 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     statistics.add_class::<general_statistics::PyGeneralStatistics>()?;
     statistics.add_class::<incremental_statistics::PyIncrementalStatistics>()?;
+    statistics.add_function(wrap_pyfunction!(
+        performance_ratios::target_downside_deviation,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        performance_ratios::sharpe_ratio,
+        &statistics
+    )?)?;
+    statistics.add_function(wrap_pyfunction!(
+        performance_ratios::sortino_ratio,
+        &statistics
+    )?)?;
     statistics.add_function(wrap_pyfunction!(statistics::mean, &statistics)?)?;
     statistics.add_function(wrap_pyfunction!(statistics::variance, &statistics)?)?;
     statistics.add_function(wrap_pyfunction!(
@@ -556,6 +579,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let chart = PyModule::new(py, "chart")?;
     chart.add_class::<chart::PyChartSeries>()?;
+    chart.add_class::<chart_adx::PyAdx>()?;
+    chart.add_function(wrap_pyfunction!(chart_adx::adx, &chart)?)?;
     chart.add_class::<chart_garch::PyGarch11Result>()?;
     chart.add_class::<chart_garch::PyGarch11FitResult>()?;
     chart.add_class::<chart::PyVolumeBars>()?;
@@ -572,6 +597,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     chart.add_function(wrap_pyfunction!(chart::obv, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::true_range, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::atr, &chart)?)?;
+    chart.add_function(wrap_pyfunction!(chart_williams::williams_r, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::volume_bars, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::bollinger_bands, &chart)?)?;
     chart.add_function(wrap_pyfunction!(chart::keltner_channels, &chart)?)?;

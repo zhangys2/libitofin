@@ -13,17 +13,21 @@ use crate::fail;
 use crate::types::{Real, Size};
 
 mod batch;
+mod benchmark_beta;
 mod convergence;
 mod discrepancy;
+mod drawdown;
 mod gaussianstatistics;
 mod generalstatistics;
 mod histogram;
 mod incrementalstatistics;
+mod performance_ratios;
 mod riskstatistics;
 mod sequence;
 mod sequence_shape;
 
 pub use batch::{BatchStatistic, evaluate_batch};
+pub use benchmark_beta::benchmark_beta;
 pub use convergence::{
     ConvergencePoint, ConvergenceStatistics, DoublingConvergenceSteps, MAX_CONVERGENCE_SAMPLES,
     evaluate_convergence_batch, validate_convergence_length,
@@ -32,10 +36,12 @@ pub use discrepancy::{
     DiscrepancyStatistics, MAX_DISCREPANCY_ROWS, MAX_DISCREPANCY_WORK, evaluate_discrepancy_batch,
     validate_discrepancy_shape,
 };
+pub use drawdown::{DrawdownResult, maximum_drawdown};
 pub use gaussianstatistics::{GaussianStatistics, StatsHolder};
 pub use generalstatistics::GeneralStatistics;
 pub use histogram::{Histogram, HistogramAlgorithm};
 pub use incrementalstatistics::IncrementalStatistics;
+pub use performance_ratios::{sharpe_ratio, sortino_ratio, target_downside_deviation};
 pub use riskstatistics::RiskStatistics;
 pub use sequence::{SequenceStatistics, evaluate_sequence_batch};
 pub use sequence_shape::{

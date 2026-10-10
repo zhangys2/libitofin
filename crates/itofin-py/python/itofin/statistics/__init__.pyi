@@ -5,9 +5,11 @@ import builtins
 import typing
 __all__ = [
     "ConvergenceStatistics",
+    "DrawdownResult",
     "GeneralStatistics",
     "IncrementalStatistics",
     "average_shortfall",
+    "benchmark_beta",
     "convergence_table",
     "correlation_matrix",
     "covariance_matrix",
@@ -15,6 +17,7 @@ __all__ = [
     "downside_deviation",
     "downside_variance",
     "expected_shortfall",
+    "maximum_drawdown",
     "mean",
     "percentile",
     "potential_upside",
@@ -27,8 +30,11 @@ __all__ = [
     "sequence_minimum",
     "sequence_standard_deviation",
     "sequence_variance",
+    "sharpe_ratio",
     "shortfall",
+    "sortino_ratio",
     "standard_deviation",
+    "target_downside_deviation",
     "top_percentile",
     "value_at_risk",
     "variance",
@@ -70,6 +76,27 @@ class ConvergenceStatistics:
     def convergence_table(self) -> builtins.list[tuple[builtins.int, builtins.float]]:
         r"""
         Return a fresh list of immutable sample-count and cumulative-mean tuples.
+        """
+
+@typing.final
+class DrawdownResult:
+    r"""
+    Immutable fractional maximum loss and zero-based ordered NAV indices.
+    """
+    @property
+    def drawdown(self) -> builtins.float:
+        r"""
+        Nonnegative fractional loss, not a signed return or percentage.
+        """
+    @property
+    def peak_index(self) -> builtins.int:
+        r"""
+        Earliest equal running peak before the winning trough.
+        """
+    @property
+    def trough_index(self) -> builtins.int:
+        r"""
+        First trough attaining the greatest computed fractional loss.
         """
 
 @typing.final
@@ -206,6 +233,18 @@ def average_shortfall(observations: typing.Sequence[builtins.float], target: bui
     Weighted mean of target minus observations strictly below target.
     """
 
+def benchmark_beta(asset_returns: typing.Sequence[builtins.float], benchmark_returns: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
+    r"""
+    Weighted covariance / benchmark variance for 2-100000 aligned return pairs.
+
+    No annualization, data feed or risk-free adjustment. Weights are optional,
+    finite and nonnegative with finite positive total. Both moments apply the
+    same observation-count correction, counting zero-weight rows. All samples
+    must be finite; zero benchmark variance or nonfinite moments/beta raise
+    ItofinError. Caller owns date/frequency alignment. Inputs are unchanged;
+    no native handle or context needs closing.
+    """
+
 def convergence_table(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.list[tuple[builtins.int, builtins.float]]:
     r"""
     Cumulative weighted means at checkpoints 1, 3, 7, 15, and so on.
@@ -245,6 +284,16 @@ def downside_variance(observations: typing.Sequence[builtins.float], *, weights:
 def expected_shortfall(observations: typing.Sequence[builtins.float], confidence: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
     r"""
     Weighted mean loss strictly below the VaR threshold, as a positive magnitude.
+    """
+
+def maximum_drawdown(values: typing.Sequence[builtins.float]) -> DrawdownResult:
+    r"""
+    Maximum drawdown of ordered finite strictly positive equity/NAV values.
+
+    Empty input errors. One NAV or no decline returns zero with indices (0, 0).
+    Equal peaks retain their earliest index; equal computed losses retain the
+    first trough. Extreme positive ratios may round the fractional loss to one.
+    This is not meaningful for unordered return samples. Results own no handles.
     """
 
 def mean(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
@@ -307,14 +356,31 @@ def sequence_variance(samples: typing.Sequence[typing.Sequence[builtins.float]],
     Component variances with row-count correction n/(n-1), including zero-weight rows.
     """
 
+def sharpe_ratio(returns: typing.Sequence[builtins.float], risk_free_return: builtins.float, *, periods_per_year: builtins.float) -> builtins.float:
+    r"""
+    Arithmetic excess mean/sample std (N-1), scaled by sqrt(periods_per_year).
+    Risk-free return is per period. Frequency is required; zero dispersion is an error.
+    """
+
 def shortfall(observations: typing.Sequence[builtins.float], target: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
     r"""
     Weighted probability of observations strictly below a finite target.
     """
 
+def sortino_ratio(returns: typing.Sequence[builtins.float], minimum_acceptable_return: builtins.float, *, periods_per_year: builtins.float) -> builtins.float:
+    r"""
+    Arithmetic mean minus per-period MAR/all-N downside, scaled by sqrt(periods_per_year).
+    Frequency is required; no downside is an error, not infinity.
+    """
+
 def standard_deviation(observations: typing.Sequence[builtins.float], *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
     r"""
     Square root of weighted sample variance.
+    """
+
+def target_downside_deviation(returns: typing.Sequence[builtins.float], target: builtins.float) -> builtins.float:
+    r"""
+    All-observation RMS shortfall below the scalar per-period target, without annualization.
     """
 
 def top_percentile(observations: typing.Sequence[builtins.float], probability: builtins.float, *, weights: typing.Optional[typing.Sequence[builtins.float]] = None) -> builtins.float:
