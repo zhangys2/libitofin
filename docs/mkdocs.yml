@@ -120,10 +120,21 @@ nav:
   - Quanto term structure: quanto-term-structure.md
   - ABCD math and volatility: abcd.md
   - Householder utilities: householder.md
+  - Zero-coupon bonds: zero-coupon-bonds.md
+  - Floating-rate bonds: floating-rate-bonds.md
+  - Par asset swaps: asset-swaps.md
+  - Cross-currency basis swaps: cross-currency-basis-swaps.md
+  - MF state process: mf-state-process.md
+  - Asset-or-nothing payoff: asset-or-nothing-payoff.md
+  - Gap payoff: gap-payoff.md
+  - Cap/floor optionlets: capfloor-optionlets.md
   - Rust API: rust.md
   - Project:
+      - Release recovery: release-recovery.md
       - Repository index: https://github.com/benbenbang/libitofin#readme
       - Status and scope: https://github.com/benbenbang/libitofin/blob/main/wiki/status.md
       - Development: https://github.com/benbenbang/libitofin/blob/main/wiki/development.md
       - Design: https://github.com/benbenbang/libitofin/blob/main/wiki/design.md
       - QuantLib compatibility: https://github.com/benbenbang/libitofin/blob/main/wiki/compatibility.md
+  - Constant GSR process: gsr-process.md
+  - Plain float-float swaps: float-float-swaps.md

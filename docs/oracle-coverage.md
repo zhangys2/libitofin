@@ -103,8 +103,8 @@ credit.
 | Swaption vol matrix | `SwaptionVolatilityMatrix` | `swaptionvolatilitymatrix.cpp` | five constructors; 120 nodes @ 1e-16; live-input observability + handle relink |
 | SABR cube backward-flat | `SabrSwaptionVolatilityCube` | `swaptionvolatilitycube.cpp` sparse/dense | 72 QL 1.43 rows, both flags, @ 1e-6; live quote/date; ZABR deferred |
 | Swaps / OIS / swaptions / caps | instruments + engines | swap/swaption/capfloor suites | Core done |
-| Float-float swap | `FloatFloatSwap` | `ql/instruments/floatfloatswap` | Two-Ibor-leg slice; identity-verified (identical legs, fair spread) |
-| XCCY basis swap | `XccyBasisSwap` | `ql/instruments/` (cross-currency) | Float-float w/ notional exchange; identity-verified (degenerate, FX view, fair spread) |
+| Float-float swap | `FloatFloatSwap` | `floatfloatswap.cpp` via QuantLib 1.43 `native.csv` | Signed PV/BPS and fair spreads (`medium4_floatfloat`); remaining suite cases still a gap |
+| XCCY basis swap | `XccyBasisSwap` | QuantLib 1.43 `native.csv` | Whole-swap PV in both currencies and fair spread (`medium3_xccy_basis`); const-notional cross-currency swaps remain a separate gap |
 | Fixed-rate bonds (cached) | `FixedRateBond` + `DiscountingBondEngine` | `bonds.cpp` `testCachedFixed` | bond1–3 @ 1e-6 (plain / varying coupons / next-to-last stub) |
 | Fixed-rate bonds (given dates) | `FixedRateBond` + `Schedule::with_metadata` | `bonds.cpp` `testFixedBondWithGivenDates` | schedule ≡ date-vector copy @ 1e-6 (plain / varying / stub Actual360) |
 | Callable / puttable fixed bonds (cached) | `CallableFixedRateBond` + `TreeCallableFixedRateBondEngine` | `callablebonds.cpp` `testCached` | HW tree call/put/both @ 1e-8 |
@@ -169,7 +169,7 @@ credit.
 | FRA | `ForwardRateAgreement` + `FraRateHelper` | `ratehelpers.cpp`, FRA examples | Instrument + helper |
 | CMS / digital coupons | `CmsCoupon`, `DigitalIborCoupon` | CMS/digital suites | Raw-rate / cash-or-nothing slice |
 | CMS swap | `CmsSwap` | `ql/instruments/*cms*` | Fixed-vs-CMS (raw rate); identity-verified (fair rate) |
-| Asset swap | `AssetSwap` | `ql/instruments/assetswap` | Par asset swap; leg construction per `assetswap.cpp`; identity-verified |
+| Asset swap | `AssetSwap` | `assetswap.cpp` via QuantLib 1.43 `prices.csv` | Par/dirty/upfront prices, redemption, and signs (`medium3_asset_swap`); Z-spread still a gap |
 | Barrier / Asian | `BarrierOption` + Haug `AnalyticBarrierEngine`, geometric Asian | `barrieroption.cpp`, `asianoptions.cpp` | Haug continuous with rebate; geometric Asian slice |
 | Continuous geometric Asian | `AnalyticContinuousGeometricAveragePriceAsianEngine` | `asianoptions.cpp` `testAnalyticContinuousGeometricAveragePrice` / `testAnalyticContinuousGeometricAveragePriceGreeks` / `testContinuousSeasonedAsianOptions` | Haug put NPV 4.6922 @ 1e-4; δ/γ/θ/ρ/divρ/ν vs FD @ 1e-5 rel. to spot; seasoned continuous geometric rejects |
 | Continuous geometric Asian (Heston) | `AnalyticContinuousGeometricAveragePriceAsianHestonEngine` | `asianoptions.cpp` `testAnalyticContinuousGeometricAveragePriceHeston` | Kim–Wee Tables 1/4 @ 1e-2; Kim–Kim–Kim–Wee continuous @ QL tols |

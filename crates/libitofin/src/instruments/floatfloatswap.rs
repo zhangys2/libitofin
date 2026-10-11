@@ -1,49 +1,45 @@
-//! A swap exchanging two floating (Ibor) legs.
+//! Plain same-currency swap exchanging two constant-notional Ibor coupon legs.
 //!
-//! `FloatFloatSwap` pays one Ibor leg and receives another, each with its own
-//! schedule, index, spread and day count. It reuses the generic [`Swap`] base
-//! and prices through any swap engine (e.g. `DiscountingSwapEngine`), mirroring
-//! how [`VanillaSwap`](crate::instruments::VanillaSwap) wraps the swap
-//! machinery. QuantLib's `FloatFloatSwap` adds caps/floors and per-leg
-//! gearing/notional structuring; this first slice covers the plain
-//! two-floating-leg swap.
-//!
-//! Leg 0 is paid and leg 1 is received, so the swap NPV is
-//! `PV(leg 1) − PV(leg 0)`.
-
+//! This slice has no principal exchanges, caps, floors, gearing or CMS coupons.
+//! Pricing uses the existing generic swap engine contract.
 use crate::cashflows::IborLeg;
 use crate::errors::QlResult;
-use crate::indexes::IborIndex;
+use crate::indexes::{IborIndex, InterestRateIndex};
 use crate::instrument::{Instrument, InstrumentBase};
 use crate::instruments::Swap;
 use crate::pricingengine::{Arguments, Results};
 use crate::settings::Settings;
 use crate::shared::Shared;
-use crate::time::businessdayconvention::BusinessDayConvention;
-use crate::time::date::Date;
-use crate::time::daycounter::DayCounter;
-use crate::time::schedule::Schedule;
+use crate::time::{
+    businessdayconvention::BusinessDayConvention, date::Date, daycounter::DayCounter,
+    schedule::Schedule, timeunit::TimeUnit,
+};
 use crate::types::{Real, Spread};
 
-const BASIS_POINT: Real = 1.0e-4;
-
-/// A two-floating-leg swap (pay leg 0, receive leg 1).
+/// Pays the first floating leg and receives the second, in one currency.
+///
+/// Both legs have the same constant positive nominal. Signed NPV and BPS follow
+/// `DiscountingSwapEngine`: paid values are negative, received values positive.
+/// Queries respect the engine cache and freeze state. Non-notifying Settings flags
+/// invalidate the cache silently when changed.
+/// The engine must use the same Settings as the supplied indexes and swap.
 pub struct FloatFloatSwap {
     swap: Swap,
-    spread1: Spread,
+    spreads: [Spread; 2],
+    settings: Shared<Settings<Date>>,
+    settings_flags: (bool, Option<bool>, bool, bool),
 }
 
 impl FloatFloatSwap {
-    /// Builds a float-float swap on a single `nominal`.
+    /// Builds uncapped Ibor legs without exchanging principal.
     ///
-    /// Leg 1 (`schedule1`/`index1`/`spread1`/`day_count1`) is paid and leg 2
-    /// (`schedule2`/`index2`/`spread2`/`day_count2`) is received. A `None`
-    /// `payment_convention` leaves each leg builder's default.
-    ///
+    /// An omitted payment convention uses each schedule's own convention,
+    /// matching native FloatFloatSwap rather than the IborLeg default.
+    /// Empty forwarding handles are accepted for later linking.
     /// # Errors
-    ///
-    /// Propagates any [`IborLeg`] build error (e.g. an empty schedule or a
-    /// zero gearing) and any [`Swap`] construction error.
+    /// Rejects non-positive/non-finite nominal, non-finite spreads, malformed
+    /// schedules, different/blank currencies, mismatched Settings and day-tenor
+    /// indexes. Coupon-building errors are propagated.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         nominal: Real,
@@ -57,83 +53,144 @@ impl FloatFloatSwap {
         day_count2: DayCounter,
         payment_convention: Option<BusinessDayConvention>,
         settings: Shared<Settings<Date>>,
-    ) -> QlResult<FloatFloatSwap> {
-        let leg1 = Self::build_leg(
-            nominal,
-            schedule1,
-            index1,
-            spread1,
-            day_count1,
-            payment_convention,
-        )?;
-        let leg2 = Self::build_leg(
-            nominal,
-            schedule2,
-            index2,
-            spread2,
-            day_count2,
-            payment_convention,
-        )?;
-        let swap = Swap::two_leg(leg1, leg2, settings);
-        Ok(FloatFloatSwap { swap, spread1 })
-    }
-
-    fn build_leg(
-        nominal: Real,
-        schedule: Schedule,
-        index: Shared<IborIndex>,
-        spread: Spread,
-        day_count: DayCounter,
-        payment_convention: Option<BusinessDayConvention>,
-    ) -> QlResult<crate::cashflow::Leg> {
-        let mut builder = IborLeg::new(schedule, index)
-            .with_notionals(vec![nominal])
-            .with_payment_day_counter(day_count)
-            .with_spreads(vec![spread]);
-        if let Some(convention) = payment_convention {
-            builder = builder.with_payment_adjustment(convention);
+    ) -> QlResult<Self> {
+        crate::require!(
+            nominal.is_finite() && nominal > 0.0,
+            "nominal must be finite and positive"
+        );
+        crate::require!(
+            spread1.is_finite() && spread2.is_finite(),
+            "spreads must be finite"
+        );
+        crate::require!(
+            index1.currency() == index2.currency(),
+            "indexes must have the same currency"
+        );
+        crate::require!(
+            !index1.currency().code().trim().is_empty()
+                && !index1.currency().name().trim().is_empty(),
+            "currency must not be blank"
+        );
+        for index in [&index1, &index2] {
+            crate::require!(
+                Shared::ptr_eq(index.base().settings(), &settings),
+                "indexes must share swap settings"
+            );
+            crate::require!(
+                index.tenor().units() != TimeUnit::Days,
+                "day-tenor and overnight indexes are not supported"
+            );
         }
-        builder.build()
+        for schedule in [&schedule1, &schedule2] {
+            crate::require!(
+                schedule.len() >= 2,
+                "schedule must contain at least two dates"
+            );
+            crate::require!(
+                schedule
+                    .dates()
+                    .iter()
+                    .all(|date| *date >= Date::min_date() && *date <= Date::max_date()),
+                "schedule dates must be valid and non-null"
+            );
+            crate::require!(
+                schedule.dates().windows(2).all(|pair| pair[0] < pair[1]),
+                "schedule dates must increase"
+            );
+        }
+        let build = |schedule: Schedule, index, spread, day_count| {
+            let convention =
+                payment_convention.unwrap_or_else(|| schedule.business_day_convention());
+            IborLeg::new(schedule, index)
+                .with_notional(nominal)
+                .with_spread(spread)
+                .with_payment_day_counter(day_count)
+                .with_payment_adjustment(convention)
+                .build()
+        };
+        let first = build(schedule1, index1, spread1, day_count1)?;
+        let second = build(schedule2, index2, spread2, day_count2)?;
+        let swap = Swap::new(vec![first, second], vec![true, false], settings.clone())?;
+        Ok(Self {
+            swap,
+            spreads: [spread1, spread2],
+            settings_flags: Self::flags(&settings),
+            settings,
+        })
     }
 
-    /// The generic swap this wraps.
+    fn flags(settings: &Settings<Date>) -> (bool, Option<bool>, bool, bool) {
+        (
+            settings.include_reference_date_events(),
+            settings.include_todays_cash_flows(),
+            settings.enforces_todays_historic_fixings(),
+            settings.using_at_par_coupons(),
+        )
+    }
+
+    /// The embedded swap, for inspecting its immutable coupon legs.
     pub fn swap(&self) -> &Swap {
         &self.swap
     }
 
-    /// The paid leg's NPV.
-    pub fn pay_leg_npv(&mut self) -> QlResult<Real> {
-        self.swap.leg_npv(0)
-    }
-
-    /// The received leg's NPV.
-    pub fn receive_leg_npv(&mut self) -> QlResult<Real> {
-        self.swap.leg_npv(1)
-    }
-
-    /// The paid leg's BPS.
-    pub fn pay_leg_bps(&mut self) -> QlResult<Real> {
-        self.swap.leg_bps(0)
-    }
-
-    /// The received leg's BPS.
-    pub fn receive_leg_bps(&mut self) -> QlResult<Real> {
-        self.swap.leg_bps(1)
-    }
-
-    /// The spread on the paid leg that zeroes the swap NPV.
-    ///
-    /// Uses the same first-order relation the discounting swap engine's
-    /// `FixedVsFloatingSwap` fallback does: `spread - NPV / (legBPS / 1bp)`.
-    ///
-    /// # Errors
-    ///
-    /// The engine must have priced the swap and provided the paid leg's BPS.
-    pub fn fair_pay_spread(&mut self) -> QlResult<Spread> {
+    fn leg_measure(&mut self, leg: usize, bps: bool) -> QlResult<Real> {
         self.calculate()?;
+        let value = if bps {
+            self.swap.leg_bps(leg)?
+        } else {
+            self.swap.leg_npv(leg)?
+        };
+        crate::require!(value.is_finite(), "leg result must be finite");
+        Ok(value)
+    }
+
+    /// Signed paid-leg present value.
+    /// # Errors
+    /// Propagates missing-engine, curve-domain, fixing and non-finite errors.
+    pub fn pay_leg_npv(&mut self) -> QlResult<Real> {
+        self.leg_measure(0, false)
+    }
+    /// Signed received-leg present value.
+    /// # Errors
+    /// Propagates valuation errors.
+    pub fn receive_leg_npv(&mut self) -> QlResult<Real> {
+        self.leg_measure(1, false)
+    }
+    /// Signed paid-leg sensitivity for a one-basis-point spread increase.
+    /// # Errors
+    /// Propagates valuation errors.
+    pub fn pay_leg_bps(&mut self) -> QlResult<Real> {
+        self.leg_measure(0, true)
+    }
+    /// Signed received-leg sensitivity for a one-basis-point spread increase.
+    /// # Errors
+    /// Propagates valuation errors.
+    pub fn receive_leg_bps(&mut self) -> QlResult<Real> {
+        self.leg_measure(1, true)
+    }
+
+    fn fair_spread(&mut self, leg: usize) -> QlResult<Spread> {
         let npv = self.npv()?;
-        let bps = self.swap.leg_bps(0)?;
-        Ok(self.spread1 - npv / (bps / BASIS_POINT))
+        let annuity = self.swap.leg_bps(leg)? / 1e-4;
+        crate::require!(
+            annuity.is_finite() && annuity != 0.0,
+            "null or non-finite spread sensitivity"
+        );
+        let fair = self.spreads[leg] - npv / annuity;
+        crate::require!(fair.is_finite(), "fair spread must be finite");
+        Ok(fair)
+    }
+    /// Absolute paid spread that zeroes NPV while the received spread is held fixed.
+    /// # Errors
+    /// Propagates valuation errors; zero/non-finite sensitivity is rejected.
+    pub fn fair_pay_spread(&mut self) -> QlResult<Spread> {
+        self.fair_spread(0)
+    }
+    /// Absolute received spread that zeroes NPV while the paid spread is held fixed.
+    /// # Errors
+    /// Propagates valuation errors; zero/non-finite sensitivity is rejected.
+    pub fn fair_receive_spread(&mut self) -> QlResult<Spread> {
+        self.fair_spread(1)
     }
 }
 
@@ -141,216 +198,36 @@ impl Instrument for FloatFloatSwap {
     fn base(&self) -> &InstrumentBase {
         self.swap.base()
     }
-
     fn base_mut(&mut self) -> &mut InstrumentBase {
         self.swap.base_mut()
     }
-
     fn is_expired(&self) -> QlResult<bool> {
         self.swap.is_expired()
     }
-
     fn setup_expired(&mut self) {
         self.swap.setup_expired();
     }
-
     fn setup_arguments(&self, arguments: &mut dyn Arguments) -> QlResult<()> {
         self.swap.setup_arguments(arguments)
     }
-
     fn fetch_results(&mut self, results: &dyn Results) -> QlResult<()> {
         self.swap.fetch_results(results)
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::handle::Handle;
-    use crate::indexes::ibor::Euribor;
-    use crate::interestrate::Compounding;
-    use crate::pricingengine::PricingEngine;
-    use crate::pricingengines::swap::DiscountingSwapEngine;
-    use crate::shared::{SharedMut, shared, shared_mut};
-    use crate::termstructures::yields::FlatForward;
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
-    use crate::time::calendars::target::Target;
-    use crate::time::date::Month;
-    use crate::time::daycounters::actual360::Actual360;
-    use crate::time::frequency::Frequency;
-    use crate::time::schedule::MakeSchedule;
-    use crate::time::timeunit::TimeUnit;
-
-    const NOMINAL: Real = 1_000_000.0;
-
-    fn today() -> Date {
-        Date::new(15, Month::January, 2020)
-    }
-
-    fn settings() -> Shared<Settings<Date>> {
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(today());
-        settings
-    }
-
-    fn curve(rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            today(),
-            rate,
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    fn schedule() -> Schedule {
-        let calendar = Target::new();
-        // Anchor at the T+2 settlement so the first floating fixing is a
-        // forecast (after the evaluation date), not a required historical one.
-        let settlement = calendar.advance(
-            today(),
-            2,
-            TimeUnit::Days,
-            BusinessDayConvention::Following,
-            false,
+    fn calculate(&mut self) -> QlResult<()> {
+        let date = self.settings.evaluation_date().ok_or_else(|| {
+            crate::errors::QlError::new("evaluation date is unset", file!(), line!())
+        })?;
+        crate::require!(
+            date >= Date::min_date() && date <= Date::max_date(),
+            "evaluation date must be valid and non-null"
         );
-        let maturity = calendar.advance(
-            settlement,
-            5,
-            TimeUnit::Years,
-            BusinessDayConvention::Following,
-            false,
-        );
-        MakeSchedule::new()
-            .from(settlement)
-            .to(maturity)
-            .with_frequency(Frequency::Semiannual)
-            .with_calendar(calendar)
-            .with_convention(BusinessDayConvention::ModifiedFollowing)
-            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
-            .forwards()
-            .end_of_month(false)
-            .build()
-    }
-
-    fn attach_engine(
-        swap: &mut FloatFloatSwap,
-        discount: Handle<dyn YieldTermStructure>,
-        s: &Shared<Settings<Date>>,
-    ) {
-        let engine = shared_mut(DiscountingSwapEngine::new(
-            discount,
-            None,
-            None,
-            None,
-            Shared::clone(s),
-        ));
-        swap.base_mut()
-            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
-    }
-
-    #[test]
-    fn identical_legs_net_to_zero() {
-        let settings = settings();
-        let c = curve(0.03);
-        let index = shared(Euribor::six_months(c.clone(), Shared::clone(&settings)));
-        let mut swap = FloatFloatSwap::new(
-            NOMINAL,
-            schedule(),
-            Shared::clone(&index),
-            0.0,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            0.0,
-            Actual360::new(),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&settings),
-        )
-        .unwrap();
-        attach_engine(&mut swap, c, &settings);
-
-        assert!(
-            swap.npv().unwrap().abs() < 1e-6,
-            "npv={}",
-            swap.npv().unwrap()
-        );
-        // Pay and receive legs offset exactly.
-        assert!((swap.pay_leg_npv().unwrap() + swap.receive_leg_npv().unwrap()).abs() < 1e-6);
-    }
-
-    #[test]
-    fn a_positive_receive_spread_makes_the_swap_positive() {
-        let settings = settings();
-        let c = curve(0.03);
-        let index = shared(Euribor::six_months(c.clone(), Shared::clone(&settings)));
-        // Receive leg (leg 1) carries +50bp; identical pay leg otherwise.
-        let mut swap = FloatFloatSwap::new(
-            NOMINAL,
-            schedule(),
-            Shared::clone(&index),
-            0.0,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            0.005,
-            Actual360::new(),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&settings),
-        )
-        .unwrap();
-        attach_engine(&mut swap, c, &settings);
-
-        assert!(
-            swap.npv().unwrap() > 0.0,
-            "receiving extra spread should be positive: {}",
-            swap.npv().unwrap()
-        );
-    }
-
-    #[test]
-    fn the_fair_pay_spread_zeroes_the_npv() {
-        let settings = settings();
-        let c = curve(0.03);
-        let index = shared(Euribor::six_months(c.clone(), Shared::clone(&settings)));
-        // Pay leg starts with 0 spread, receive leg with +30bp, so the swap is
-        // off-market; the fair pay spread should rebalance it.
-        let mut swap = FloatFloatSwap::new(
-            NOMINAL,
-            schedule(),
-            Shared::clone(&index),
-            0.0,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            0.003,
-            Actual360::new(),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&settings),
-        )
-        .unwrap();
-        attach_engine(&mut swap, c.clone(), &settings);
-        let fair = swap.fair_pay_spread().unwrap();
-
-        let mut repriced = FloatFloatSwap::new(
-            NOMINAL,
-            schedule(),
-            Shared::clone(&index),
-            fair,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            0.003,
-            Actual360::new(),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&settings),
-        )
-        .unwrap();
-        attach_engine(&mut repriced, c, &settings);
-        assert!(
-            repriced.npv().unwrap().abs() < 1e-6,
-            "npv at the fair pay spread should vanish, got {}",
-            repriced.npv().unwrap()
-        );
+        let flags = Self::flags(&self.settings);
+        if flags != self.settings_flags {
+            self.swap.base().invalidate_silently();
+            self.settings_flags = flags;
+        }
+        self.swap.calculate()?;
+        crate::require!(self.swap.npv()?.is_finite(), "NPV must be finite");
+        Ok(())
     }
 }
