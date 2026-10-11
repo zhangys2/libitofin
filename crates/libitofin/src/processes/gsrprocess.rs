@@ -241,3 +241,81 @@ fn finite(value: Real) -> QlResult<Real> {
     );
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hull–White forward E with flat zero curve (independent of GSR algebra).
+    fn hw_forward_expectation(
+        a: Real,
+        sigma: Real,
+        t_m: Time,
+        w: Time,
+        xw: Real,
+        dt: Time,
+    ) -> Real {
+        let t = w + dt;
+        let alpha = |u: Time| {
+            let x = (sigma / a) * (1.0 - (-a * u).exp());
+            0.5 * x * x
+        };
+        let c = (sigma * sigma) / (a * a);
+        let m_t = c * (1.0 - (-a * dt).exp())
+            - 0.5 * c * ((-a * (t_m - t)).exp() - (-a * (t_m + t - 2.0 * w)).exp());
+        xw * (-a * dt).exp() + alpha(t) - alpha(w) * (-a * dt).exp() - m_t
+    }
+
+    fn hw_forward_variance(a: Real, sigma: Real, dt: Time) -> Real {
+        0.5 * sigma * sigma / a * (1.0 - (-2.0 * a * dt).exp())
+    }
+
+    /// `gsr.cpp` `testGsrProcess`: constant a/σ GSR vs Hull–White forward.
+    #[test]
+    fn gsr_process_matches_hull_white_forward_constant_case() {
+        let reversion = 0.01;
+        let modelvol = 0.01;
+        let tol = 1.0e-8;
+        let mut t_measure = 10.0;
+        while t_measure <= 30.0 {
+            let gsr = GsrProcess::new(vec![], vec![modelvol], vec![reversion], t_measure).unwrap();
+            let step_times: Vec<Real> = (1..60)
+                .map(|i| i as Real * 0.5)
+                .filter(|&t| t < t_measure)
+                .collect();
+            let n = step_times.len() + 1;
+            let gsr2 =
+                GsrProcess::new(step_times, vec![modelvol; n], vec![reversion; n], t_measure)
+                    .unwrap();
+            let mut t = 0.5;
+            while t <= t_measure - 0.1 {
+                let mut w = 0.0;
+                while w <= t - 0.1 {
+                    let mut xw = -0.1;
+                    while xw <= 0.1 {
+                        let dt = t - w;
+                        let hw_e =
+                            hw_forward_expectation(reversion, modelvol, t_measure, w, xw, dt);
+                        let hw_v = hw_forward_variance(reversion, modelvol, dt);
+                        for (label, p) in [("gsr", &gsr), ("gsr2", &gsr2)] {
+                            let e = p.expectation(w, xw, dt).unwrap();
+                            let v = p.variance(w, xw, dt).unwrap();
+                            assert!(
+                                (hw_e - e).abs() <= tol,
+                                "E {label} T={t_measure} t={t} w={w} x={xw}: HW={hw_e} got={e}"
+                            );
+                            assert!(
+                                (hw_v - v).abs() <= tol,
+                                "V {label} T={t_measure} t={t} w={w} x={xw}: HW={hw_v} got={v}"
+                            );
+                        }
+                        xw += 0.01;
+                    }
+                    w += t / 5.0;
+                }
+                t += t_measure / 20.0;
+            }
+            t_measure += 10.0;
+        }
+    }
+}

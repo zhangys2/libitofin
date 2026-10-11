@@ -33,14 +33,14 @@ reclassified 2026-09-26 against `main` after the upstream sync through benbenban
 | Rates | Bermudan OIS swaption (HW/G2) | OIS-underlying `Swaption` | `bermudanswaption.cpp` OIS cases | true | partial | HW + G2 FDM OIS Bermudan pinned (+ Simple/Compound feature pins); lockout deferred |
 | Rates | Vanilla IRS fixed-tenor inference | `MakeVanillaSwap` currency defaults after `withTerminationDate` | `swap.cpp` `testFixedTenorInferenceWithTerminationDate` | partial | none | EUR/USD defaults exist; GBP/JPY/AUD length-dependent tenor and day-count branches are still deferred |
 | Rates | OIS bootstrap / cached NPV | `OvernightIndexedSwap`, `MakeOIS` | `overnightindexedswap.cpp` | true | partial | Compound bootstrap pinned; arithmetic/lookback siblings + type-level cached NPV deferred |
-| Rates | Float–float basis swap | `FloatFloatSwap` | `floatfloatswap.cpp` | true | partial | Identity/fair-spread only |
+| Rates | Float–float basis swap | `FloatFloatSwap` | `floatfloatswap.cpp` | true | partial | QuantLib 1.43 `native.csv` signed PV/BPS and fair spreads pinned (`medium4_floatfloat`); remaining suite cases still open |
 | Rates | Const-notional XCCY swaps | `ConstNotionalCrossCurrency*` | `constnotionalcrosscurrency*.cpp` | false | none | `XccyBasisSwap` ≠ this family |
 | Rates | CMS swap (cached/parity) | `CmsSwap`, CMS pricers | `cms.cpp` | true | partial | Fair-rate identity only |
 | Rates | MakeCMS / CMS leg builders | `MakeCms` | `cms.cpp` | false | none | |
 | Rates | CMS spread coupons | `CmsSpreadCoupon`, experimental pricers | `cmsspread.cpp` / `cmsspreadcoupon.cpp` | false | none | Plain CMS only |
 | Rates | Capped/floored CMS coupon | CMS `CappedFlooredCoupon` | `capflooredcoupon.cpp` | false | none | Deferred in cashflows |
 | Rates | Digital / capped Ibor coupons | `DigitalIborCoupon`, `CappedFlooredIborCoupon` | `digitalcoupon.cpp`, `capflooredcoupon.cpp` | true | partial | Raw-rate / cash-or-nothing slice; deep ITM/parity open |
-| Rates | Asset swap (market ASW / Z-spread) | `AssetSwap` | `assetswap.cpp` | true | partial | Par construction identity only |
+| Rates | Asset swap (market ASW / Z-spread) | `AssetSwap` | `assetswap.cpp` | true | partial | QuantLib 1.43 `prices.csv` par/dirty/upfront fixture pinned (`medium3_asset_swap`); Z-spread and the rest of the suite still open |
 | Rates | Multiple-resets / averaged OIS legs | `MultipleResetsSwap` | `multipleresetsswap.cpp` | false | none | |
 | Rates | Zero-coupon swap | `ZeroCouponSwap` | `zerocouponswap.cpp` | false | none | |
 | Rates | Amortizing bonds (fixed/float/CMS) | `Amortizing*Bond` | `amortizingbond.cpp` | false | none | Only amortizing payment helper |
