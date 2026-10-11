@@ -273,7 +273,7 @@ mod tests {
             NullCalendar::new(),
             ex_coupon_convention,
             false,
-            None,
+            BusinessDayConvention::Preceding,
             Shared::clone(settings),
         )
         .unwrap()

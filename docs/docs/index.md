@@ -1,5 +1,7 @@
 # itofin
 
+For interrupted publication, see [release recovery](release-recovery.md).
+
 [`libitofin`](https://crates.io/crates/libitofin) is a ground-up port of
 [QuantLib](https://www.quantlib.org/) into idiomatic Rust, with Python and Go
 bindings. All three language surfaces share the Rust numerical core.
@@ -30,7 +32,7 @@ bindings. All three language surfaces share the Rust numerical core.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.39.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.41.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
@@ -89,3 +91,23 @@ links to the language guides and project documentation.
 - [ABCD math and volatility](abcd.md): coefficient validation, volatility shape and integrated variance/covariance.
 
 - [Householder utilities](householder.md): checked reflections, orthogonal matrices and explicit native application conventions.
+
+- [Zero-coupon bonds](zero-coupon-bonds.md): single-redemption contract and payment dates.
+
+- [Floating-rate bonds](floating-rate-bonds.md): Ibor coupons, gearing, caps/floors and ex-coupon schedules.
+
+- [Par asset swaps](asset-swaps.md): bullet-bond dirty upfront and floating fair spread.
+
+- [Cross-currency basis swaps](cross-currency-basis-swaps.md): plain non-resettable Ibor legs and explicit FX valuation.
+
+- [MF state process](mf-state-process.md): standalone Gaussian state law and checked piecewise variance.
+
+- [Asset-or-nothing payoff](asset-or-nothing-payoff.md): strict digital asset payment.
+
+- [Gap payoff](gap-payoff.md): separate trigger and payment strikes.
+
+- [Cap/floor optionlets](capfloor-optionlets.md): shared coupon extraction and pricing decomposition.
+
+- [Constant GSR process](gsr-process.md): exact Gaussian forward-measure dynamics and checked constant grids.
+
+- [Plain float-float swaps](float-float-swaps.md): two-Ibor-leg signed valuation and fair spreads.

@@ -528,7 +528,7 @@ impl ConvertibleFloatingRateBond {
             ex_coupon_calendar,
             ex_coupon_convention,
             ex_coupon_end_of_month,
-            None,
+            BusinessDayConvention::Preceding,
             Shared::clone(&settings),
         )?;
         let inner = ConvertibleBondBase::new(

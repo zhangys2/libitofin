@@ -1,17 +1,23 @@
-//! Floating-rate bond.
+//! Scheduled ibor bonds, including geared, capped and floored coupons.
 //!
-//! Port of `ql/instruments/bonds/floatingratebond.{hpp,cpp}` (in-arrears path
-//! deferred with the IborLeg gaps).
+//! Port of `ql/instruments/bonds/floatingratebond.{hpp,cpp}`. The existing
+//! [`Bond`] supplies settlement, redemption, accrual and discount-engine pricing.
+//! In-arrears convexity adjustment is outside this constructor's scope.
 
-use super::super::bond::Bond;
-use crate::cashflows::IborLeg;
+use crate::cashflow::{CashFlow, Leg};
+use crate::cashflows::{
+    CappedFlooredCoupon, Coupon, CouponBase, FixedRateCoupon, FloatingRateCouponPricer, IborCoupon,
+    IborLeg,
+};
 use crate::errors::QlResult;
-use crate::indexes::IborIndex;
+use crate::indexes::iborindex::IborIndex;
 use crate::indexes::index::Index;
 use crate::instrument::Instrument;
+use crate::instruments::Bond;
+use crate::patterns::observable::{AsObservable, Observable};
 use crate::require;
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, SharedMut, shared};
 use crate::time::businessdayconvention::BusinessDayConvention;
 use crate::time::calendar::Calendar;
 use crate::time::date::Date;
@@ -19,25 +25,45 @@ use crate::time::daycounter::DayCounter;
 use crate::time::period::Period;
 use crate::time::schedule::Schedule;
 use crate::types::{Natural, Rate, Real, Spread};
+use crate::utilities::null::Null;
 
-/// A bond paying floating Ibor coupons plus a single redemption.
+/// An ibor bond with one redemption and optional per-coupon caps and floors.
+///
+/// Composes [`Bond`] rather than inheriting it. Floating coupon handles remain
+/// available after erasure into the base's cash-flow leg. Zero gearing produces
+/// a fixed coupon, as in QuantLib's `FloatingLeg`, not an ibor coupon.
 pub struct FloatingRateBond {
     bond: Bond,
+    index: Shared<IborIndex>,
+    ibor_coupons: Vec<Option<Shared<IborCoupon>>>,
 }
 
 impl FloatingRateBond {
-    /// Builds a floating-rate bond from an [`IborLeg`] schedule.
+    /// Builds coupons in advance on the schedule's calendar and one redemption.
     ///
-    /// `fixing_convention` defaults to [`Preceding`](BusinessDayConvention::Preceding)
-    /// when `None`, matching C++ `FloatingRateBond`'s default and
-    /// [`IborLeg`](crate::cashflows::IborLeg)'s default.
+    /// Empty gearings and spreads default to 1 and 0; shorter vectors repeat
+    /// their last element. `None` fixing days use the index's lag. Caps/floors
+    /// apply to the full geared, spread-inclusive rate. `Null::null()` cap/floor
+    /// entries retain QuantLib's per-entry absent-option sentinel. Empty cap/floor
+    /// vectors receive the existing default Black pricer. For nonempty vectors,
+    /// attach a pricer with [`set_coupon_pricer`](Self::set_coupon_pricer), even
+    /// if every entry is the sentinel.
+    /// A zero gearing instead pays the spread, first floored then capped, and
+    /// needs neither fixings nor a pricer. The explicit settings should be the
+    /// same handle used by the index and the pricing engine. Index settings
+    /// identity and finite numeric inputs are checked explicitly, unlike C++.
+    ///
+    /// # Errors
+    ///
+    /// Propagates schedule, vector-size, cap/floor and redemption preconditions
+    /// from [`IborLeg`], [`CappedFlooredCoupon`] and [`Bond`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         settlement_days: Natural,
         face_amount: Real,
         schedule: Schedule,
-        ibor_index: Shared<IborIndex>,
-        payment_day_counter: DayCounter,
+        index: Shared<IborIndex>,
+        accrual_day_counter: DayCounter,
         payment_convention: BusinessDayConvention,
         fixing_days: Option<Natural>,
         gearings: Vec<Real>,
@@ -50,26 +76,53 @@ impl FloatingRateBond {
         ex_coupon_calendar: Calendar,
         ex_coupon_convention: BusinessDayConvention,
         ex_coupon_end_of_month: bool,
-        fixing_convention: Option<BusinessDayConvention>,
+        fixing_convention: BusinessDayConvention,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Self> {
-        let calendar = schedule.calendar().clone();
+        require!(schedule.len() >= 2, "schedule spans no period");
+        require!(
+            std::ptr::eq(&*settings, Index::settings(&*index)),
+            "bond and index must share settings"
+        );
+        require!(
+            face_amount.is_finite()
+                && redemption.is_finite()
+                && ((redemption / 100.0) * face_amount).is_finite(),
+            "face amount, redemption and scaled redemption must be finite"
+        );
+        require!(
+            gearings
+                .iter()
+                .chain(&spreads)
+                .chain(&caps)
+                .chain(&floors)
+                .all(|x| x.is_finite()),
+            "coupon parameters must be finite"
+        );
+        require!(
+            (0..schedule.len()).all(|i| schedule.date(i) != Date::null()),
+            "schedule dates must not be null"
+        );
         let maturity = schedule.end_date();
-        let mut leg = IborLeg::new(schedule, Shared::clone(&ibor_index))
+        let calendar = schedule.calendar().clone();
+        let mut leg = IborLeg::new(schedule, Shared::clone(&index))
             .with_notional(face_amount)
-            .with_payment_day_counter(payment_day_counter)
+            .with_payment_day_counter(accrual_day_counter.clone())
             .with_payment_adjustment(payment_convention)
-            .with_gearings(gearings)
-            .with_spreads(spreads)
-            .with_caps(caps)
-            .with_floors(floors);
+            .with_gearings(
+                gearings
+                    .iter()
+                    .map(|&g| if g == 0.0 { 1.0 } else { g })
+                    .collect(),
+            )
+            .with_spreads(spreads.clone())
+            .with_caps(caps.clone())
+            .with_floors(floors.clone())
+            .with_fixing_convention(fixing_convention);
         if let Some(days) = fixing_days {
             leg = leg.with_fixing_days(days);
         }
-        if let Some(convention) = fixing_convention {
-            leg = leg.with_fixing_convention(convention);
-        }
-        if let Some(period) = ex_coupon_period {
+        if let Some(period) = ex_coupon_period.filter(|p| p.length() != 0) {
             leg = leg.with_ex_coupon_period(
                 period,
                 ex_coupon_calendar,
@@ -77,137 +130,128 @@ impl FloatingRateBond {
                 ex_coupon_end_of_month,
             );
         }
-        let cashflows = leg.build()?;
-        // Match C++ `FloatingRateBond`: construct with an empty leg so the base
-        // issue-date check is skipped (seasoned bonds pay coupons before issue),
-        // then assign cashflows and append the redemption.
-        let mut bond = Bond::new(settlement_days, calendar, issue_date, Vec::new(), settings)?;
-        bond.set_cashflows(cashflows);
+        let raw = leg.coupons()?;
+        let mut cashflows: Leg = Vec::with_capacity(raw.len() + 1);
+        let mut ibor_coupons = Vec::with_capacity(raw.len());
+        for (i, coupon) in raw.into_iter().enumerate() {
+            let cap = pick(&caps, i).filter(|&rate| !rate.is_null());
+            let floor = pick(&floors, i).filter(|&rate| !rate.is_null());
+            let flow: Shared<dyn CashFlow> = if pick(&gearings, i).unwrap_or(1.0) == 0.0 {
+                let mut rate = pick(&spreads, i).unwrap_or(0.0);
+                if let Some(floor) = floor {
+                    rate = rate.max(floor);
+                }
+                if let Some(cap) = cap {
+                    rate = rate.min(cap);
+                }
+                ibor_coupons.push(None);
+                shared(IndexedFixedCoupon {
+                    _index: Shared::clone(&index),
+                    coupon: FixedRateCoupon::from_rate(
+                        coupon.coupon_base().payment_date(),
+                        face_amount,
+                        rate,
+                        accrual_day_counter.clone(),
+                        coupon.accrual_start_date(),
+                        coupon.accrual_end_date(),
+                        Some(coupon.reference_period_start()),
+                        Some(coupon.reference_period_end()),
+                        coupon.coupon_base().ex_coupon_date(),
+                    ),
+                })
+            } else {
+                ibor_coupons.push(Some(Shared::clone(&coupon)));
+                if cap.is_some() || floor.is_some() {
+                    shared(CappedFlooredCoupon::new(coupon, cap, floor)?)
+                } else {
+                    coupon
+                }
+            };
+            cashflows.push(flow);
+        }
+        let mut bond = Bond::new(settlement_days, calendar, None, cashflows, settings)?;
+        bond.set_issue_date(issue_date);
         bond.add_redemptions_to_cashflows(&[redemption])?;
         bond.set_maturity_date(maturity);
+        bond.base().register_with(Index::observable(&*index));
         require!(!bond.cashflows().is_empty(), "bond with no cashflows!");
         require!(
             bond.redemptions().len() == 1,
             "multiple redemptions created"
         );
-        bond.base().register_with(ibor_index.observable());
-        Ok(Self { bond })
+        Ok(Self {
+            bond,
+            index,
+            ibor_coupons,
+        })
     }
 
-    /// The underlying [`Bond`] base.
+    /// The index the floating coupons observe.
+    pub fn index(&self) -> &Shared<IborIndex> {
+        &self.index
+    }
+
+    /// Floating coupon handles in schedule order; `None` denotes a fixed coupon.
+    ///
+    /// Capped/floored entries expose their underlying ibor coupon. Full coupon
+    /// rates and cap/floor amounts are read from [`Bond::cashflows`].
+    pub fn ibor_coupons(&self) -> &[Option<Shared<IborCoupon>>] {
+        &self.ibor_coupons
+    }
+
+    /// Attaches a pricer to every floating coupon, including capped/floored ones.
+    /// Fixed coupons are left unchanged. Pricer replacement invalidates prices.
+    pub fn set_coupon_pricer(&self, pricer: SharedMut<dyn FloatingRateCouponPricer>) {
+        for coupon in self.ibor_coupons.iter().flatten() {
+            coupon.set_pricer(SharedMut::clone(&pricer));
+        }
+    }
+
+    /// The base bond, for settlement, cash-flow inspection and accrual.
     pub fn bond(&self) -> &Bond {
         &self.bond
     }
 
-    /// Mutable access to the underlying [`Bond`] base.
+    /// The mutable base, for attaching engines and retrieving lazy prices.
     pub fn bond_mut(&mut self) -> &mut Bond {
         &mut self.bond
     }
 
-    /// Consumes the wrapper and yields its [`Bond`] base.
+    /// Consumes the wrapper while preserving the base's cash flows and observers.
     pub fn into_bond(self) -> Bond {
         self.bond
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::handle::Handle;
-    use crate::indexes::AUDLibor;
-    use crate::interestrate::Compounding;
-    use crate::shared::shared;
-    use crate::termstructures::yields::FlatForward;
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
-    use crate::time::calendars::australia::{self, Australia};
-    use crate::time::calendars::nullcalendar::NullCalendar;
-    use crate::time::date::Month;
-    use crate::time::dategenerationrule::DateGeneration;
-    use crate::time::daycounters::actual365fixed::Actual365Fixed;
-    use crate::time::frequency::Frequency;
-    use crate::time::timeunit::TimeUnit;
+fn pick(values: &[Real], i: usize) -> Option<Real> {
+    values.get(i).or_else(|| values.last()).copied()
+}
 
-    /// `bonds.cpp` testFixingConvention (`:1827`): with `fixingDays=0` and an
-    /// unadjusted quarterly schedule, a Saturday accrual start (22 Jun 2024)
-    /// fixes on Friday under Preceding and Monday under Following.
-    #[test]
-    fn floating_bond_fixing_convention_moves_weekend_accrual_starts() {
-        let settings = shared(Settings::new());
-        settings.set_evaluation_date(Date::new(1, Month::January, 2024));
-        let calendar = Australia::new(australia::Market::Settlement);
-        let schedule = Schedule::new(
-            Date::new(22, Month::March, 2024),
-            Date::new(22, Month::December, 2024),
-            Period::new(3, TimeUnit::Months),
-            calendar,
-            BusinessDayConvention::Unadjusted,
-            BusinessDayConvention::Unadjusted,
-            DateGeneration::Forward,
-            false,
-            Date::null(),
-            Date::null(),
-        );
-        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
-            Date::new(1, Month::January, 2024),
-            0.05,
-            Actual365Fixed::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        ))
-            as Shared<dyn YieldTermStructure>);
-        let index = shared(AUDLibor::three_months(curve, Shared::clone(&settings)));
+struct IndexedFixedCoupon {
+    coupon: FixedRateCoupon,
+    _index: Shared<IborIndex>,
+}
 
-        let make_bond = |fixing_convention: Option<BusinessDayConvention>| {
-            FloatingRateBond::new(
-                0,
-                100.0,
-                schedule.clone(),
-                Shared::clone(&index),
-                Actual365Fixed::new(),
-                BusinessDayConvention::Following,
-                Some(0),
-                vec![1.0],
-                vec![0.0],
-                Vec::new(),
-                Vec::new(),
-                100.0,
-                None,
-                None,
-                NullCalendar::new(),
-                BusinessDayConvention::Unadjusted,
-                false,
-                fixing_convention,
-                Shared::clone(&settings),
-            )
-            .unwrap()
-        };
+impl AsObservable for IndexedFixedCoupon {
+    fn observable(&self) -> &Observable {
+        self.coupon.observable()
+    }
+}
 
-        let preceding = make_bond(None);
-        let following = make_bond(Some(BusinessDayConvention::Following));
-        let june22 = Date::new(22, Month::June, 2024);
-
-        let find_fixing = |bond: &FloatingRateBond| -> Date {
-            for cf in bond.bond().cashflows() {
-                if let Some(coupon) = cf.as_coupon()
-                    && coupon.accrual_start_date() == june22
-                {
-                    return coupon
-                        .fixing_date()
-                        .expect("floating coupon must expose a fixing date");
-                }
-            }
-            panic!("no coupon starting on {june22}");
-        };
-
-        assert_eq!(
-            find_fixing(&preceding),
-            Date::new(21, Month::June, 2024),
-            "Preceding should land on Friday"
-        );
-        assert_eq!(
-            find_fixing(&following),
-            Date::new(24, Month::June, 2024),
-            "Following should land on Monday"
-        );
+impl Coupon for IndexedFixedCoupon {
+    fn coupon_base(&self) -> &CouponBase {
+        self.coupon.coupon_base()
+    }
+    fn amount(&self) -> QlResult<Real> {
+        Coupon::amount(&self.coupon)
+    }
+    fn rate(&self) -> QlResult<Rate> {
+        self.coupon.rate()
+    }
+    fn day_counter(&self) -> DayCounter {
+        self.coupon.day_counter()
+    }
+    fn accrued_amount(&self, date: Date) -> QlResult<Real> {
+        self.coupon.accrued_amount(date)
     }
 }

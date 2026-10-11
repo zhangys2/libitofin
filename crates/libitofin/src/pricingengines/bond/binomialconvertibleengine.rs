@@ -603,7 +603,7 @@ mod tests {
             NullCalendar::new(),
             BusinessDayConvention::Unadjusted,
             false,
-            None,
+            BusinessDayConvention::Preceding,
             Shared::clone(&v.settings),
         )
         .unwrap();

@@ -1,83 +1,121 @@
-//! Cross-currency floating-floating basis swap.
+//! Plain constant-notional, pay-base/receive-quote Ibor basis swap.
 //!
-//! An [`XccyBasisSwap`] pays a floating (Ibor) leg in a base currency and
-//! receives a floating (Ibor) leg, plus a basis spread, in a quote currency.
-//! Each leg carries an initial and final exchange of its own notional. Each leg
-//! is discounted on its own currency's curve and the quote leg is converted to
-//! the base currency at the spot FX rate, so it prices analytically off two
-//! curves and a spot [`ExchangeRate`](crate::exchangerate::ExchangeRate),
-//! mirroring the value-type approach of
-//! [`FxForward`](crate::fxforward::FxForward).
-//!
-//! With `B` the base-leg present value (base ccy), `Q` the quote-leg present
-//! value (quote ccy) and `S` the spot rate (quote per base), the value of a
-//! pay-base / receive-quote position is `Q/S − B` in the base currency, or
-//! `Q − S·B` in the quote currency. This is the first plain-basis slice;
-//! QuantLib's `CrossCurrencyBasisSwap*` resettable/mark-to-market variants are
-//! follow-ups. There is no single cached `test-suite` oracle, so the behaviour
-//! is pinned by the identities in the tests (a degenerate same-rate swap nets
-//! to zero, the two currency views agree through the spot, and the fair basis
-//! spread zeroes the value).
-
+//! The Ibor slice follows native constant-notional swap and engine laws.
 use crate::cashflow::{CashFlow, Leg};
 use crate::cashflows::{CashFlows, IborLeg, SimpleCashFlow};
 use crate::errors::QlResult;
 use crate::exchangerate::ExchangeRate;
 use crate::handle::Handle;
-use crate::indexes::IborIndex;
+use crate::indexes::{IborIndex, InterestRateIndex};
 use crate::money::Money;
 use crate::settings::Settings;
 use crate::shared::{Shared, shared};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
-use crate::time::businessdayconvention::BusinessDayConvention;
-use crate::time::date::Date;
-use crate::time::daycounter::DayCounter;
-use crate::time::schedule::Schedule;
-use crate::types::{Real, Spread};
-
-const BASIS_POINT: Real = 1.0e-4;
-
-/// A pay-base / receive-quote cross-currency floating-floating basis swap.
+use crate::time::{
+    businessdayconvention::BusinessDayConvention, date::Date, daycounter::DayCounter,
+    schedule::Schedule,
+};
+/// Pay base coupons and final principal, receive quote coupons and final principal.
+/// Initial exchanges have the opposite signs. Both notionals remain constant.
+///
+/// Each query rereads curves, fixings and settings without a cached engine.
+/// The immutable spot snapshot is quote units per base unit at the discount
+/// curve reference date, or an explicit spot settlement date. Curves must be supplied in the corresponding currencies; yield curves
+/// themselves carry no currency metadata. Arbitrary positive notionals are
+/// supported, including notionals not matched by the spot rate. Both discount curves must
+/// have the same reference date, matching the native cross-currency engine.
 pub struct XccyBasisSwap {
     base_leg: Leg,
-    base_curve: Handle<dyn YieldTermStructure>,
     quote_leg: Leg,
+    base_curve: Handle<dyn YieldTermStructure>,
     quote_curve: Handle<dyn YieldTermStructure>,
     spot: ExchangeRate,
-    quote_basis_spread: Spread,
+    quote_basis_spread: f64,
     settings: Shared<Settings<Date>>,
+    valuation: Option<(Date, Date, bool)>,
+    spot_settlement: Option<Date>,
 }
-
 impl XccyBasisSwap {
-    /// Builds a cross-currency basis swap.
+    /// Builds two Ibor legs with mandatory initial and final notional exchanges.
+    /// Exchanges use the earliest accrual start and latest coupon accrual maturity across
+    /// both legs, adjusted on each schedule calendar/convention.
+    /// Payment adjustment defaults to Following, matching native IborLeg.
     ///
-    /// The base leg (paid) forecasts off `base_index` and discounts on
-    /// `base_curve`; the quote leg (received) forecasts off `quote_index`,
-    /// carries `quote_basis_spread`, and discounts on `quote_curve`. `spot` is
-    /// the base→quote exchange rate (quote units per base unit). Each leg
-    /// exchanges its notional at the schedule's start and end.
-    ///
+    /// Empty curve handles are accepted for later linking. By default both the
+    /// settlement cutoff and common NPV date follow the evaluation date; inclusion
+    /// follows Settings. Spot must be refreshed by rebuilding for a new market date.
     /// # Errors
-    ///
-    /// Propagates any leg-building error.
+    /// Rejects invalid spot direction, identical/blank currencies, non-positive
+    /// or non-finite notionals/spot, non-finite spread, mismatched settings and
+    /// invalid legs. Leg-building errors are propagated.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         base_schedule: Schedule,
         base_index: Shared<IborIndex>,
         base_curve: Handle<dyn YieldTermStructure>,
-        base_notional: Real,
+        base_notional: f64,
         base_day_count: DayCounter,
         quote_schedule: Schedule,
         quote_index: Shared<IborIndex>,
         quote_curve: Handle<dyn YieldTermStructure>,
-        quote_notional: Real,
+        quote_notional: f64,
         quote_day_count: DayCounter,
-        quote_basis_spread: Spread,
+        quote_basis_spread: f64,
         spot: ExchangeRate,
         payment_convention: Option<BusinessDayConvention>,
         settings: Shared<Settings<Date>>,
-    ) -> QlResult<XccyBasisSwap> {
-        let base_leg = Self::build_leg(
+    ) -> QlResult<Self> {
+        for index in [&base_index, &quote_index] {
+            crate::require!(
+                index.tenor().units() != crate::time::timeunit::TimeUnit::Days,
+                "day-tenor and overnight indexes are not supported"
+            );
+        }
+        crate::require!(spot.source() != spot.target(), "currencies must differ");
+        for currency in [spot.source(), spot.target()] {
+            crate::require!(
+                !currency.code().trim().is_empty() && !currency.name().trim().is_empty(),
+                "currencies must not be blank"
+            );
+        }
+        crate::require!(
+            base_index.currency() == spot.source() && quote_index.currency() == spot.target(),
+            "spot source/target must match base/quote index currencies"
+        );
+        crate::require!(
+            Shared::ptr_eq(base_index.base().settings(), &settings)
+                && Shared::ptr_eq(quote_index.base().settings(), &settings),
+            "indexes must share swap settings"
+        );
+        for value in [base_notional, quote_notional, spot.rate()] {
+            crate::require!(
+                value.is_finite() && value > 0.0,
+                "notionals and spot must be finite and positive"
+            );
+        }
+        crate::require!(
+            quote_basis_spread.is_finite(),
+            "basis spread must be finite"
+        );
+        for schedule in [&base_schedule, &quote_schedule] {
+            crate::require!(
+                schedule.len() >= 2,
+                "schedule must contain at least two dates"
+            );
+            for date in schedule.dates() {
+                Self::valid_date(*date)?;
+            }
+            crate::require!(
+                schedule.dates().windows(2).all(|pair| pair[0] < pair[1]),
+                "schedule dates must increase"
+            );
+        }
+        let base_calendar = base_schedule.calendar().clone();
+        let quote_calendar = quote_schedule.calendar().clone();
+        let base_convention = base_schedule.business_day_convention();
+        let quote_convention = quote_schedule.business_day_convention();
+        let start = base_schedule.start_date().min(quote_schedule.start_date());
+        let mut base_leg = Self::build_leg(
             base_schedule,
             base_index,
             base_notional,
@@ -85,7 +123,7 @@ impl XccyBasisSwap {
             base_day_count,
             payment_convention,
         )?;
-        let quote_leg = Self::build_leg(
+        let mut quote_leg = Self::build_leg(
             quote_schedule,
             quote_index,
             quote_notional,
@@ -93,287 +131,217 @@ impl XccyBasisSwap {
             quote_day_count,
             payment_convention,
         )?;
-        Ok(XccyBasisSwap {
+        let end = CashFlows::maturity_date(&base_leg)?.max(CashFlows::maturity_date(&quote_leg)?);
+        for (leg, calendar, convention, notional) in [
+            (&mut base_leg, base_calendar, base_convention, base_notional),
+            (
+                &mut quote_leg,
+                quote_calendar,
+                quote_convention,
+                quote_notional,
+            ),
+        ] {
+            leg.insert(
+                0,
+                shared(SimpleCashFlow::new(
+                    -notional,
+                    calendar.adjust(start, convention),
+                )?) as Shared<dyn CashFlow>,
+            );
+            leg.push(shared(SimpleCashFlow::new(
+                notional,
+                calendar.adjust(end, convention),
+            )?) as Shared<dyn CashFlow>);
+        }
+        Ok(Self {
             base_leg,
-            base_curve,
             quote_leg,
+            base_curve,
             quote_curve,
             spot,
             quote_basis_spread,
             settings,
+            valuation: None,
+            spot_settlement: None,
         })
     }
-
     fn build_leg(
         schedule: Schedule,
         index: Shared<IborIndex>,
-        notional: Real,
-        spread: Spread,
+        notional: f64,
+        spread: f64,
         day_count: DayCounter,
-        payment_convention: Option<BusinessDayConvention>,
+        convention: Option<BusinessDayConvention>,
     ) -> QlResult<Leg> {
-        let start = schedule.start_date();
-        let end = schedule.end_date();
-        let mut builder = IborLeg::new(schedule, index)
-            .with_notionals(vec![notional])
+        let leg = IborLeg::new(schedule, index)
+            .with_notional(notional)
+            .with_spread(spread)
             .with_payment_day_counter(day_count)
-            .with_spreads(vec![spread]);
-        if let Some(convention) = payment_convention {
-            builder = builder.with_payment_adjustment(convention);
-        }
-        let coupons = builder.build()?;
-
-        let mut leg: Leg = Vec::with_capacity(coupons.len() + 2);
-        leg.push(shared(SimpleCashFlow::new(-notional, start)?) as Shared<dyn CashFlow>);
-        leg.extend(coupons);
-        leg.push(shared(SimpleCashFlow::new(notional, end)?) as Shared<dyn CashFlow>);
+            .with_payment_adjustment(convention.unwrap_or(BusinessDayConvention::Following))
+            .build()?;
+        crate::require!(!leg.is_empty(), "empty coupon leg");
         Ok(leg)
     }
-
-    /// The present value of the (paid) base leg, in the base currency.
-    pub fn base_leg_pv(&self) -> QlResult<Real> {
-        let curve = self.base_curve.current_link()?;
-        CashFlows::npv(&self.base_leg, &*curve, &self.settings, None, None, None)
-    }
-
-    /// The present value of the (received) quote leg, in the quote currency.
-    pub fn quote_leg_pv(&self) -> QlResult<Real> {
-        let curve = self.quote_curve.current_link()?;
-        CashFlows::npv(&self.quote_leg, &*curve, &self.settings, None, None, None)
-    }
-
-    /// The present value in the base currency: `Q/S − B`.
-    pub fn npv(&self) -> QlResult<Money> {
-        let value = self.quote_leg_pv()? / self.spot.rate() - self.base_leg_pv()?;
-        Ok(Money::new(self.spot.source().clone(), value))
-    }
-
-    /// The present value in the quote currency: `Q − S·B`.
-    pub fn npv_in_quote(&self) -> QlResult<Money> {
-        let value = self.quote_leg_pv()? - self.spot.rate() * self.base_leg_pv()?;
-        Ok(Money::new(self.spot.target().clone(), value))
-    }
-
-    /// The basis spread on the quote leg that zeroes the swap value.
-    ///
+    /// Uses fixed settlement/NPV dates and a settlement-flow inclusion flag.
+    /// Settings' today-cashflow override still takes precedence on evaluation day.
     /// # Errors
-    ///
-    /// The quote leg must have a non-zero spread sensitivity (a priced,
-    /// non-expired swap).
-    pub fn fair_quote_basis_spread(&self) -> QlResult<Spread> {
-        let curve = self.quote_curve.current_link()?;
-        let annuity = CashFlows::bps(&self.quote_leg, &*curve, &self.settings, None, None, None)?
-            / BASIS_POINT;
-        let npv_in_quote = self.npv_in_quote()?.value();
-        Ok(self.quote_basis_spread - npv_in_quote / annuity)
+    /// Rejects null or invalid dates. Curve-domain checks occur when pricing.
+    pub fn with_valuation_dates(
+        mut self,
+        settlement: Date,
+        npv_date: Date,
+        include: bool,
+    ) -> QlResult<Self> {
+        Self::valid_date(settlement)?;
+        Self::valid_date(npv_date)?;
+        self.valuation = Some((settlement, npv_date, include));
+        Ok(self)
     }
 
-    /// The spot exchange rate (quote per base).
+    /// Interprets spot at a fixed settlement date instead of the curve reference.
+    /// Conversion uses `spot * quote_discount(date) / base_discount(date)`.
+    /// # Errors
+    /// Rejects invalid dates; curve-domain errors occur on valuation.
+    pub fn with_spot_settlement_date(mut self, date: Date) -> QlResult<Self> {
+        Self::valid_date(date)?;
+        self.spot_settlement = Some(date);
+        Ok(self)
+    }
+
+    fn effective_spot(&self) -> QlResult<f64> {
+        let base = self.base_curve.current_link()?;
+        let quote = self.quote_curve.current_link()?;
+        let reference = base.reference_date()?;
+        Self::valid_date(reference)?;
+        crate::require!(
+            reference == quote.reference_date()?,
+            "discount curves must share a reference date"
+        );
+        let date = self.spot_settlement.unwrap_or(reference);
+        Self::valid_date(date)?;
+        crate::require!(
+            date >= reference,
+            "spot settlement precedes curve reference date"
+        );
+        let mut discounts = [0.0; 2];
+        for (i, curve) in [&base, &quote].iter().enumerate() {
+            discounts[i] = curve.discount_date(date, false)?;
+            crate::require!(
+                discounts[i].is_finite() && discounts[i] > 0.0,
+                "spot settlement discounts must be finite and positive"
+            );
+        }
+        let rate = self.spot.rate() * discounts[1] / discounts[0];
+        crate::require!(
+            rate.is_finite() && rate > 0.0,
+            "effective spot must be finite and positive"
+        );
+        Ok(rate)
+    }
+
+    fn valid_date(date: Date) -> QlResult<()> {
+        crate::require!(
+            date >= Date::min_date() && date <= Date::max_date(),
+            "date must be valid and non-null"
+        );
+        Ok(())
+    }
+
+    fn measure(&self, leg: &Leg, handle: &Handle<dyn YieldTermStructure>) -> QlResult<(f64, f64)> {
+        let (settlement, npv_date, include) = match self.valuation {
+            Some((s, n, i)) => (s, n, Some(i)),
+            None => {
+                let date = self.settings.evaluation_date().ok_or_else(|| {
+                    crate::errors::QlError::new("evaluation date is unset", file!(), line!())
+                })?;
+                (date, date, None)
+            }
+        };
+        Self::valid_date(settlement)?;
+        Self::valid_date(npv_date)?;
+        self.effective_spot()?;
+        let curve = handle.current_link()?;
+        crate::require!(
+            curve.reference_date()? <= settlement && curve.reference_date()? <= npv_date,
+            "curve reference date follows valuation dates"
+        );
+        let discount = curve.discount_date(npv_date, false)?;
+        crate::require!(
+            discount.is_finite() && discount > 0.0,
+            "NPV date discount must be finite and positive"
+        );
+        let result = CashFlows::npvbps(
+            leg,
+            &*curve,
+            &self.settings,
+            include,
+            Some(settlement),
+            Some(npv_date),
+        )?;
+        crate::require!(
+            result.0.is_finite() && result.1.is_finite(),
+            "leg NPV and BPS must be finite"
+        );
+        Ok(result)
+    }
+
+    /// Unsigned contractual base-leg PV in base currency, including exchanges.
+    /// # Errors
+    /// Propagates curve-domain, missing-fixing and non-finite valuation errors.
+    pub fn base_leg_pv(&self) -> QlResult<f64> {
+        Ok(self.measure(&self.base_leg, &self.base_curve)?.0)
+    }
+    /// Unsigned contractual quote-leg PV in quote currency, including exchanges.
+    /// # Errors
+    /// Propagates curve-domain, missing-fixing and non-finite valuation errors.
+    pub fn quote_leg_pv(&self) -> QlResult<f64> {
+        Ok(self.measure(&self.quote_leg, &self.quote_curve)?.0)
+    }
+    /// Quote-currency spread sensitivity per basis point, excluding principal.
+    /// # Errors
+    /// Propagates valuation errors.
+    pub fn quote_leg_bps(&self) -> QlResult<f64> {
+        Ok(self.measure(&self.quote_leg, &self.quote_curve)?.1)
+    }
+    /// Base-currency NPV: quote PV divided by spot, minus base PV.
+    /// # Errors
+    /// Propagates valuation errors and rejects non-finite conversion.
+    pub fn npv(&self) -> QlResult<Money> {
+        let converted = self.quote_leg_pv()? / self.effective_spot()?;
+        crate::require!(converted.is_finite(), "converted leg PV must be finite");
+        Money::checked_new(self.spot.source().clone(), converted - self.base_leg_pv()?)
+    }
+    /// Quote-currency NPV: quote PV minus base PV multiplied by spot.
+    /// # Errors
+    /// Propagates valuation errors and rejects non-finite conversion.
+    pub fn npv_in_quote(&self) -> QlResult<Money> {
+        let converted = self.base_leg_pv()? * self.effective_spot()?;
+        crate::require!(converted.is_finite(), "converted leg PV must be finite");
+        Money::checked_new(self.spot.target().clone(), self.quote_leg_pv()? - converted)
+    }
+    /// Absolute quote spread which reprices the swap to zero, not a spread shift.
+    /// # Errors
+    /// Rejects zero/non-finite sensitivity and propagates valuation errors.
+    pub fn fair_quote_basis_spread(&self) -> QlResult<f64> {
+        let annuity = self.quote_leg_bps()? / 1e-4;
+        crate::require!(
+            annuity.is_finite() && annuity != 0.0,
+            "null or non-finite quote spread sensitivity"
+        );
+        let fair = self.quote_basis_spread - self.npv_in_quote()?.value() / annuity;
+        crate::require!(fair.is_finite(), "fair spread must be finite");
+        Ok(fair)
+    }
+    /// Immutable quote-per-base snapshot at reference or explicit spot settlement.
     pub fn spot(&self) -> &ExchangeRate {
         &self.spot
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::currency::Currency;
-    use crate::indexes::ibor::Euribor;
-    use crate::interestrate::Compounding;
-    use crate::termstructures::yields::FlatForward;
-    use crate::time::businessdayconvention::BusinessDayConvention;
-    use crate::time::calendars::target::Target;
-    use crate::time::date::Month;
-    use crate::time::daycounters::actual360::Actual360;
-    use crate::time::frequency::Frequency;
-    use crate::time::schedule::MakeSchedule;
-    use crate::time::timeunit::TimeUnit;
-
-    const N: Real = 1_000_000.0;
-
-    fn today() -> Date {
-        Date::new(15, Month::January, 2020)
+    /// Base flows before the paid-leg sign is applied.
+    pub fn base_leg(&self) -> &Leg {
+        &self.base_leg
     }
-
-    fn settings() -> Shared<Settings<Date>> {
-        let s = shared(Settings::new());
-        s.set_evaluation_date(today());
-        s
-    }
-
-    fn curve(rate: Real) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            today(),
-            rate,
-            Actual360::new(),
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    fn schedule() -> Schedule {
-        let calendar = Target::new();
-        let settlement = calendar.advance(
-            today(),
-            2,
-            TimeUnit::Days,
-            BusinessDayConvention::Following,
-            false,
-        );
-        let maturity = calendar.advance(
-            settlement,
-            5,
-            TimeUnit::Years,
-            BusinessDayConvention::Following,
-            false,
-        );
-        MakeSchedule::new()
-            .from(settlement)
-            .to(maturity)
-            .with_frequency(Frequency::Semiannual)
-            .with_calendar(calendar)
-            .with_convention(BusinessDayConvention::ModifiedFollowing)
-            .with_termination_date_convention(BusinessDayConvention::ModifiedFollowing)
-            .forwards()
-            .end_of_month(false)
-            .build()
-    }
-
-    #[test]
-    fn a_degenerate_same_rate_swap_nets_to_zero() {
-        let s = settings();
-        let c = curve(0.03);
-        let index = shared(Euribor::six_months(c.clone(), Shared::clone(&s)));
-        // Same curve/index/notional both sides, spot = 1, zero basis: identical
-        // legs with opposite signs must cancel exactly.
-        let swap = XccyBasisSwap::new(
-            schedule(),
-            Shared::clone(&index),
-            c.clone(),
-            N,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            c.clone(),
-            N,
-            Actual360::new(),
-            0.0,
-            ExchangeRate::new(Currency::eur(), Currency::usd(), 1.0),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&s),
-        )
-        .unwrap();
-        assert!(
-            swap.npv().unwrap().value().abs() < 1e-6,
-            "npv={}",
-            swap.npv().unwrap().value()
-        );
-    }
-
-    #[test]
-    fn each_leg_prices_near_par() {
-        // A floating leg with notional exchange, discounted on its forecasting
-        // curve, is worth roughly par (net ~0) - a sanity check on the notional
-        // exchange signs.
-        let s = settings();
-        let c = curve(0.03);
-        let index = shared(Euribor::six_months(c.clone(), Shared::clone(&s)));
-        let swap = XccyBasisSwap::new(
-            schedule(),
-            Shared::clone(&index),
-            c.clone(),
-            N,
-            Actual360::new(),
-            schedule(),
-            Shared::clone(&index),
-            c.clone(),
-            N,
-            Actual360::new(),
-            0.0,
-            ExchangeRate::new(Currency::eur(), Currency::usd(), 1.0),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&s),
-        )
-        .unwrap();
-        assert!(
-            swap.base_leg_pv().unwrap().abs() < 0.02 * N,
-            "base leg not near par: {}",
-            swap.base_leg_pv().unwrap()
-        );
-    }
-
-    #[test]
-    fn the_two_currency_views_agree_through_the_spot() {
-        let s = settings();
-        let base_c = curve(0.02);
-        let quote_c = curve(0.05);
-        let base_index = shared(Euribor::six_months(base_c.clone(), Shared::clone(&s)));
-        let quote_index = shared(Euribor::six_months(quote_c.clone(), Shared::clone(&s)));
-        let spot_rate = 1.25;
-        let swap = XccyBasisSwap::new(
-            schedule(),
-            base_index,
-            base_c,
-            N,
-            Actual360::new(),
-            schedule(),
-            quote_index,
-            quote_c,
-            N * spot_rate,
-            Actual360::new(),
-            0.004,
-            ExchangeRate::new(Currency::eur(), Currency::usd(), spot_rate),
-            Some(BusinessDayConvention::ModifiedFollowing),
-            Shared::clone(&s),
-        )
-        .unwrap();
-
-        let npv_base = swap.npv().unwrap();
-        let npv_quote = swap.npv_in_quote().unwrap();
-        assert_eq!(npv_base.currency().code(), "EUR");
-        assert_eq!(npv_quote.currency().code(), "USD");
-        assert!(
-            (npv_quote.value() - spot_rate * npv_base.value()).abs() < 1e-9,
-            "quote {} vs spot*base {}",
-            npv_quote.value(),
-            spot_rate * npv_base.value()
-        );
-    }
-
-    #[test]
-    fn the_fair_basis_spread_zeroes_the_value() {
-        let s = settings();
-        let base_c = curve(0.02);
-        let quote_c = curve(0.05);
-        let spot_rate = 1.25;
-
-        let make = |basis: Spread| {
-            XccyBasisSwap::new(
-                schedule(),
-                shared(Euribor::six_months(base_c.clone(), Shared::clone(&s))),
-                base_c.clone(),
-                N,
-                Actual360::new(),
-                schedule(),
-                shared(Euribor::six_months(quote_c.clone(), Shared::clone(&s))),
-                quote_c.clone(),
-                N * spot_rate,
-                Actual360::new(),
-                basis,
-                ExchangeRate::new(Currency::eur(), Currency::usd(), spot_rate),
-                Some(BusinessDayConvention::ModifiedFollowing),
-                Shared::clone(&s),
-            )
-            .unwrap()
-        };
-
-        let off_market = make(0.005);
-        let fair = off_market.fair_quote_basis_spread().unwrap();
-        let repriced = make(fair);
-        assert!(
-            repriced.npv().unwrap().value().abs() < 1e-6,
-            "npv at the fair basis spread should vanish, got {}",
-            repriced.npv().unwrap().value()
-        );
+    /// Quote flows before the received-leg sign is applied.
+    pub fn quote_leg(&self) -> &Leg {
+        &self.quote_leg
     }
 }

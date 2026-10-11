@@ -26,11 +26,12 @@
 //!   solver-backed through `BondFunctions`. Yield-based
 //!   [`BondFunctions::clean_price_at_yield`] /
 //!   [`BondFunctions::dirty_price_at_yield`] cover the free-function
-//!   `cleanPrice`/`dirtyPrice` path; the engine-priced
+//!   `cleanPrice`/`dirtyPrice` path. Derived bonds use the crate-private
+//!   `set_single_redemption` helper. The engine-priced
 //!   `Bond::yield(dayCounter, ...)` overload, instance
 //!   `Bond::cleanPrice`/`dirtyPrice` from yield, the coupon-rate and
-//!   cash-flow-date inspectors, `setSingleRedemption` and the `faceAmount`
-//!   constructor remain follow-up work.
+//!   cash-flow-date inspectors, and the `faceAmount` constructor remain
+//!   follow-up work.
 
 use std::any::Any;
 
@@ -311,17 +312,9 @@ impl Bond {
         self.maturity_date = Some(date);
     }
 
-    /// Assigns the coupon leg after an empty [`Bond::new`] (the C++ pattern in
-    /// `FloatingRateBond` / `FixedRateBond`: construct with no coupons so the
-    /// issue-date-vs-first-payment check is skipped, then assign `cashflows_`).
-    ///
-    /// Seasoned floaters can have payment dates before the issue date; C++
-    /// relies on that empty-constructor path rather than relaxing the check.
-    pub(crate) fn set_cashflows(&mut self, cashflows: Leg) {
-        for cashflow in &cashflows {
-            self.base.register_with(cashflow.observable());
-        }
-        self.cashflows = cashflows;
+    /// Sets the issue date after constructing a derived bond's coupon leg.
+    pub(crate) fn set_issue_date(&mut self, date: Option<Date>) {
+        self.issue_date = date;
     }
 
     /// The payment date of the next cash flow after `settlement` (the evaluation
