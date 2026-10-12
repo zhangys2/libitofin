@@ -70,6 +70,16 @@ plugins:
             filters: ["!^_"]
 
 nav:
+  - Bare-factor G2 process: g2-process.md
+  - Callable bond sensitivities: callable-bond-sensitivities.md
+  - Callable OAS: callable-oas.md
+  - Callable implied volatility: callable-implied-volatility.md
+  - Black callable bonds: black-callable-bonds.md
+  - Callable zero-coupon bonds: callable-zero-coupon-bonds.md
+  - Floating-type payoff: floating-type-payoff.md
+  - Percentage-strike payoff: percentage-strike-payoff.md
+  - Bachelier asset ITM: normal-itm.md
+  - OIS payer and receiver: ois-side.md
   - Home: index.md
   - Getting started: getting-started.md
   - Go SDK: go.md
@@ -120,6 +130,8 @@ nav:
   - Quanto term structure: quanto-term-structure.md
   - ABCD math and volatility: abcd.md
   - Householder utilities: householder.md
+  - Go/Python bond bindings: bond-bindings.md
+  - Bond yield and Z-spread analytics: bond-analytics.md
   - Zero-coupon bonds: zero-coupon-bonds.md
   - Floating-rate bonds: floating-rate-bonds.md
   - Par asset swaps: asset-swaps.md

@@ -1,17 +1,19 @@
-//! Black-formula engine for European callable bonds.
+//! Black valuation of a single European call or put on a fixed-rate bond.
 //!
-//! Port of QuantLib's
-//! `ql/experimental/callablebonds/blackcallablebondengine.{hpp,cpp}`: the
-//! embedded European call/put is priced as a Hull Ch.20 bond option. Quoted
-//! forward yield volatility is converted to forward price volatility via
-//! modified duration, then fed to [`black_formula`].
-//!
-//! Only the constant yield-vol (`Handle<Quote>`) constructor is ported; the
-//! full `CallableBondVolatilityStructure` surface is deferred.
+//! Constant forward-yield volatility follows QuantLib's callable Black engine,
+//! with settlement PV converted back to the curve reference date before
+//! forming the forward price. This corrects QuantLib's missing settlement
+//! discount factor when settlement follows the curve reference date. This is not
+//! a callable volatility surface or a multiple-exercise model.
 
+#[path = "blackcallablebondyield.rs"]
+mod yieldconversion;
+
+use yieldconversion::solve_forward_yield;
+
+use crate::cashflow::Leg;
 use crate::cashflows::{CashFlows, Duration};
 use crate::errors::QlResult;
-use crate::fail;
 use crate::handle::Handle;
 use crate::instruments::{BondResults, CallabilityType, CallableBondArguments};
 use crate::interestrate::{Compounding, InterestRate};
@@ -28,120 +30,161 @@ use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::daycounters::actual365fixed::Actual365Fixed;
 use crate::time::frequency::Frequency;
-use crate::types::{Real, Time, Volatility};
+use crate::types::Real;
 
-type CallableBondEngineBase = GenericEngine<CallableBondArguments, BondResults>;
+/// The additional inputs needed by the single-exercise Black bond engine.
+///
+/// The existing [`CallableBondArguments`] layout remains unchanged. Both
+/// callable fixed-rate and zero-coupon products populate this bundle.
+pub struct BlackCallableBondArguments {
+    /// Existing settlement and exercise inputs.
+    pub bond: CallableBondArguments,
+    /// Full cash-flow leg, including flows before settlement.
+    pub cashflows: Leg,
+    /// Day counter for the forward compounded yield and modified duration.
+    pub payment_day_counter: Option<DayCounter>,
+    /// Coupon frequency; once/no-frequency are interpreted as annual.
+    pub frequency: Frequency,
+    /// Number of exercise rights in the original, unfiltered schedule.
+    pub callability_count: usize,
+}
 
-/// Black-formula engine for a European callable / puttable fixed-rate bond.
+impl Default for BlackCallableBondArguments {
+    fn default() -> Self {
+        Self {
+            bond: CallableBondArguments::default(),
+            cashflows: Vec::new(),
+            payment_day_counter: None,
+            frequency: Frequency::NoFrequency,
+            callability_count: 0,
+        }
+    }
+}
+
+impl Arguments for BlackCallableBondArguments {
+    fn validate(&self) -> QlResult<()> {
+        self.bond.validate()?;
+        require!(
+            self.callability_count == 1 && self.bond.callability_dates.len() == 1,
+            "Black callable engine requires exactly one unexpired call/put"
+        );
+        require!(
+            self.payment_day_counter.is_some(),
+            "missing payment day counter"
+        );
+        require!(
+            !self.cashflows.is_empty(),
+            "empty Black callable cash flows"
+        );
+        require!(
+            self.cashflows
+                .windows(2)
+                .all(|pair| pair[0].date() <= pair[1].date()),
+            "Black callable cash flows must be ordered"
+        );
+        for flow in &self.cashflows {
+            require!(
+                flow.date() != Date::null(),
+                "null Black callable cash-flow date"
+            );
+            require!(
+                flow.amount()?.is_finite(),
+                "nonfinite Black callable cash flow"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Black engine for a single hard European call or put on a callable bond.
+///
+/// The quoted volatility is relative forward-yield volatility, not price
+/// volatility. Its exercise clock is Actual/365 Fixed from the evaluation date.
+/// Negative forward yields with positive volatility cannot use this lognormal
+/// model. Discounting, yield conversion and settlement follow QuantLib's engine.
+/// Quote, curve-handle and evaluation-date changes invalidate attached bonds.
 pub struct BlackCallableFixedRateBondEngine {
-    base: CallableBondEngineBase,
-    yield_vol: Handle<dyn Quote>,
-    vol_day_counter: DayCounter,
+    base: GenericEngine<BlackCallableBondArguments, BondResults>,
+    yield_volatility: Handle<dyn Quote>,
     discount_curve: Handle<dyn YieldTermStructure>,
     settings: Shared<Settings<Date>>,
 }
 
 impl BlackCallableFixedRateBondEngine {
-    /// Builds the engine from a constant forward yield volatility quote.
+    /// Creates a constant forward-yield-volatility engine.
     ///
-    /// Matches QuantLib's `Handle<Quote>` constructor, which wraps the quote in
-    /// a `CallableBondConstantVolatility(0, NullCalendar(), …, Actual365Fixed)`.
+    /// Empty handles and invalid market inputs are rejected at calculation.
     pub fn new(
-        fwd_yield_vol: Handle<dyn Quote>,
+        yield_volatility: Handle<dyn Quote>,
         discount_curve: Handle<dyn YieldTermStructure>,
         settings: Shared<Settings<Date>>,
-    ) -> BlackCallableFixedRateBondEngine {
-        let base =
-            CallableBondEngineBase::new(CallableBondArguments::default(), BondResults::default());
-        fwd_yield_vol.register_observer(&base.observer());
+    ) -> Self {
+        let base = GenericEngine::new(
+            BlackCallableBondArguments::default(),
+            BondResults::default(),
+        );
+        yield_volatility.register_observer(&base.observer());
         discount_curve.register_observer(&base.observer());
-        BlackCallableFixedRateBondEngine {
+        settings.register_eval_date_observer(&base.observer());
+        Self {
             base,
-            yield_vol: fwd_yield_vol,
-            vol_day_counter: Actual365Fixed::new(),
+            yield_volatility,
             discount_curve,
             settings,
         }
     }
 
-    /// Present value of coupons paid between settlement and the exercise date,
-    /// rebased to settlement (`BlackCallableFixedRateBondEngine::spotIncome`).
-    fn spot_income(
-        args: &CallableBondArguments,
-        curve: &dyn YieldTermStructure,
-        settings: &Settings<Date>,
-    ) -> QlResult<Real> {
-        let settlement = args.settlement_date.expect("validated settlement date");
-        let option_maturity = args.callability_dates[0];
-        let mut income = 0.0;
-        let count = args.cashflows.len();
-        require!(count > 0, "empty cash-flow leg");
-        for flow in &args.cashflows[..count - 1] {
-            if !flow.has_occurred(settings, Some(settlement), Some(false))? {
-                if flow.has_occurred(settings, Some(option_maturity), Some(false))? {
-                    income += flow.amount()? * curve.discount_date(flow.date(), true)?;
-                } else {
-                    break;
-                }
-            }
-        }
-        Ok(income / curve.discount_date(settlement, true)?)
-    }
-
-    /// Converts quoted forward yield vol into forward cash-price vol
-    /// (`BlackCallableFixedRateBondEngine::forwardPriceVolatility`).
     fn forward_price_volatility(
         &self,
-        args: &CallableBondArguments,
         curve: &dyn YieldTermStructure,
-    ) -> QlResult<Volatility> {
-        let exercise_date = args.callability_dates[0];
-        let fwd_npv = CashFlows::npv(
+        exercise: Date,
+        volatility: Real,
+    ) -> QlResult<Real> {
+        let args = self.base.arguments();
+        let day_counter = args.payment_day_counter.clone().ok_or_else(|| {
+            crate::errors::QlError::new("missing payment day counter", file!(), line!())
+        })?;
+        let frequency = match args.frequency {
+            Frequency::Once | Frequency::NoFrequency => Frequency::Annual,
+            other => other,
+        };
+        let forward_npv = CashFlows::npv(
             &args.cashflows,
             curve,
             &self.settings,
             Some(false),
-            Some(exercise_date),
-            Some(exercise_date),
+            Some(exercise),
+            Some(exercise),
         )?;
-
-        let Some(day_counter) = args.payment_day_counter.clone() else {
-            fail!("null payment day counter");
-        };
-        let mut frequency = args.frequency;
-        if matches!(frequency, Frequency::NoFrequency | Frequency::Once) {
-            frequency = Frequency::Annual;
-        }
-
-        let fwd_ytm = CashFlows::solve_yield(
+        require!(
+            forward_npv.is_finite() && forward_npv > 0.0,
+            "invalid forward bond NPV"
+        );
+        let yield_rate = solve_forward_yield(
             &args.cashflows,
-            fwd_npv,
+            forward_npv,
+            args.bond.face_amount,
             day_counter.clone(),
-            Compounding::Compounded,
             frequency,
             &self.settings,
-            Some(false),
-            Some(exercise_date),
-            Some(exercise_date),
-            None,
-            None,
-            None,
+            exercise,
         )?;
-        let fwd_rate = InterestRate::new(fwd_ytm, day_counter, Compounding::Compounded, frequency)?;
-        let fwd_dur = CashFlows::duration(
+        let rate = InterestRate::new(yield_rate, day_counter, Compounding::Compounded, frequency)?;
+        let duration = CashFlows::duration(
             &args.cashflows,
-            &fwd_rate,
+            &rate,
             Duration::Modified,
             &self.settings,
             Some(false),
-            Some(exercise_date),
-            Some(exercise_date),
+            Some(exercise),
+            Some(exercise),
         )?;
-
-        // Constant yield vol: `CallableBondConstantVolatility` ignores option
-        // time / bond length / strike, so only the quote value is needed.
-        let yield_vol = self.yield_vol.current_link()?.value()?;
-        Ok(yield_vol * fwd_dur * fwd_ytm)
+        let price_volatility = volatility * duration * yield_rate;
+        require!(
+            price_volatility.is_finite() && price_volatility >= 0.0,
+            "invalid lognormal forward-price volatility"
+        );
+        Ok(price_volatility)
     }
 }
 
@@ -155,104 +198,126 @@ impl PricingEngine for BlackCallableFixedRateBondEngine {
     fn arguments_mut(&mut self) -> &mut dyn Arguments {
         self.base.arguments_mut()
     }
-
     fn results(&self) -> &dyn Results {
         self.base.results()
     }
-
     fn reset(&mut self) {
         self.base.reset();
     }
 
     fn calculate(&mut self) -> QlResult<()> {
-        require!(
-            !self.discount_curve.is_empty(),
-            "discounting term structure handle is empty"
-        );
-        require!(
-            self.base.arguments().callability_dates.len() == 1,
-            "Must have exactly one call/put date to use Black Engine"
-        );
-
-        let settle = self
-            .base
-            .arguments()
-            .settlement_date
-            .expect("validated settlement date");
-        let exercise_date = self.base.arguments().callability_dates[0];
-        require!(
-            exercise_date >= settle,
-            "must have exercise Date >= settlement Date"
-        );
-
+        self.base.reset();
+        self.base.arguments().validate()?;
+        let evaluation = self.settings.evaluation_date().ok_or_else(|| {
+            crate::errors::QlError::new("evaluation date is unset", file!(), line!())
+        })?;
+        require!(evaluation != Date::null(), "null evaluation date");
         let curve = self.discount_curve.current_link()?;
-        let reference_date = curve.reference_date()?;
-
+        let volatility = self.yield_volatility.current_link()?.value()?;
+        require!(
+            volatility.is_finite() && volatility >= 0.0,
+            "invalid forward-yield volatility"
+        );
+        let args = self.base.arguments();
+        let settlement = args
+            .bond
+            .settlement_date
+            .ok_or_else(|| crate::errors::QlError::new("null settlement date", file!(), line!()))?;
+        let reference = curve.reference_date()?;
+        let exercise = args.bond.callability_dates[0];
+        require!(
+            settlement >= reference,
+            "settlement before curve reference date"
+        );
+        require!(
+            exercise >= evaluation,
+            "exercise before volatility reference date"
+        );
+        let settlement_discount = curve.discount_date(settlement, false)?;
+        let exercise_discount = curve.discount_date(exercise, false)?;
+        require!(
+            settlement_discount.is_finite()
+                && settlement_discount > 0.0
+                && exercise_discount.is_finite()
+                && exercise_discount > 0.0,
+            "invalid Black callable discount"
+        );
+        for flow in &args.cashflows {
+            if flow.date() >= reference {
+                let discount = curve.discount_date(flow.date(), false)?;
+                require!(
+                    discount.is_finite() && discount > 0.0,
+                    "invalid cash-flow discount"
+                );
+            }
+        }
         let value = CashFlows::npv(
-            &self.base.arguments().cashflows,
+            &args.cashflows,
             &*curve,
             &self.settings,
             Some(false),
-            Some(settle),
-            Some(settle),
+            Some(settlement),
+            Some(settlement),
         )?;
         let npv = CashFlows::npv(
-            &self.base.arguments().cashflows,
+            &args.cashflows,
             &*curve,
             &self.settings,
             Some(false),
-            Some(reference_date),
-            Some(reference_date),
+            Some(reference),
+            Some(reference),
         )?;
-
-        let spot_income = Self::spot_income(self.base.arguments(), &*curve, &self.settings)?;
-        let fwd_cash_price = (value - spot_income) / curve.discount_date(exercise_date, true)?;
-        let cash_strike =
-            self.base.arguments().callability_prices[0] * self.base.arguments().face_amount / 100.0;
-
-        let option_type = match self.base.arguments().callability_types[0] {
+        let mut income = 0.0;
+        for flow in args.cashflows.iter().take(args.cashflows.len() - 1) {
+            if flow.date() > settlement
+                && flow.date() <= exercise
+                && !flow.trading_ex_coupon(&self.settings, Some(settlement))?
+            {
+                income += flow.amount()? * curve.discount_date(flow.date(), false)?;
+            }
+        }
+        income /= settlement_discount;
+        let forward = (value - income) * settlement_discount / exercise_discount;
+        let strike = (args.bond.callability_prices[0] / 100.0) * args.bond.face_amount;
+        require!(
+            forward.is_finite() && forward > 0.0 && strike.is_finite() && strike >= 0.0,
+            "invalid Black callable forward or strike"
+        );
+        let price_volatility = self.forward_price_volatility(&*curve, exercise, volatility)?;
+        let exercise_time = Actual365Fixed::new().year_fraction(evaluation, exercise);
+        let standard_deviation = price_volatility * exercise_time.sqrt();
+        require!(
+            standard_deviation.is_finite(),
+            "Black callable standard deviation overflow"
+        );
+        let option_type = match args.bond.callability_types[0] {
             CallabilityType::Call => OptionType::Call,
             CallabilityType::Put => OptionType::Put,
         };
-
-        let price_vol = self.forward_price_volatility(self.base.arguments(), &*curve)?;
-        let Some(vol_ref) = self.settings.evaluation_date() else {
-            fail!("null evaluation date for yield volatility");
+        let option = black_formula(option_type, strike, forward, standard_deviation, 1.0, 0.0)?;
+        let sign = if option_type == OptionType::Call {
+            -1.0
+        } else {
+            1.0
         };
-        let exercise_time: Time = self.vol_day_counter.year_fraction(vol_ref, exercise_date);
-
-        let discount = curve.discount_date(exercise_date, true)?;
-        let discount_to_settlement = discount / curve.discount_date(settle, true)?;
-
-        let embedded_option_value = black_formula(
-            option_type,
-            cash_strike,
-            fwd_cash_price,
-            price_vol * exercise_time.sqrt(),
-            1.0,
-            0.0,
-        )?;
-
-        let (value_out, settlement_out) = match option_type {
-            OptionType::Call => (
-                npv - embedded_option_value * discount,
-                value - embedded_option_value * discount_to_settlement,
-            ),
-            OptionType::Put => (
-                npv + embedded_option_value * discount,
-                value + embedded_option_value * discount_to_settlement,
-            ),
-        };
-
+        let result = npv + sign * option * exercise_discount;
+        let settlement_value = value + sign * option * exercise_discount / settlement_discount;
+        require!(
+            result.is_finite() && settlement_value.is_finite(),
+            "Black callable value overflow"
+        );
         let results = self.base.results_mut();
-        results.instrument.value = Some(value_out);
-        results.settlement_value = Some(settlement_out);
+        results.instrument.value = Some(result);
+        results.instrument.valuation_date = Some(reference);
+        results.settlement_value = Some(settlement_value);
         Ok(())
     }
 }
 
-/// Black-formula engine for a European callable zero-coupon bond.
-///
+#[cfg(test)]
+#[path = "blackcallablebondengine_tests.rs"]
+mod tests;
+
 /// QuantLib's `BlackCallableZeroCouponBondEngine` is a thin alias of
 /// [`BlackCallableFixedRateBondEngine`].
 pub type BlackCallableZeroCouponBondEngine = BlackCallableFixedRateBondEngine;

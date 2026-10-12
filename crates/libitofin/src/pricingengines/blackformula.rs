@@ -605,13 +605,35 @@ pub fn bachelier_black_formula_std_dev_derivative(
     Ok(discount * phi.derivative(d1))
 }
 
-/// Risk-neutral probability of exercise in the asset martingale measure under
-/// the normal model, `N(h)` with `h = (forward - strike) * sign / std_dev`
-/// (`bachelierBlackFormulaAssetItmProbability`, `blackformula.cpp:950-963`).
+/// QuantLib's Bachelier asset ITM helper (`blackformula.cpp:950`).
 ///
-/// At `std_dev == 0` the C++ reference returns `max((forward - strike) * sign,
-/// 0)` (a moneyness, not a probability); the port matches that quirk. Cap/floor
-/// engines leave δ=0 when `sqrtTime == 0`, so the live FD oracles never hit it.
+/// For positive `std_dev`, returns `Phi(sign * (forward - strike) / std_dev)`.
+/// At exactly zero, preserves QuantLib's intrinsic-value convention instead:
+/// `max(sign * (forward - strike), 0)`. That branch is not a probability and
+/// can exceed one; its at-the-money value is zero, not the positive-volatility
+/// limit of one half. Negative forwards and strikes are supported.
+///
+/// Divergence: rejects non-finite inputs and an unrepresentable intrinsic value.
+/// For positive volatility, an overflowing difference is divided before
+/// subtraction, retaining a representable standardized distance. An infinite
+/// standardized distance legitimately yields a normal-CDF endpoint.
+///
+/// # Errors
+///
+/// Returns an error for non-finite inputs, negative `std_dev`, or a zero-volatility
+/// intrinsic value larger than the representable finite range.
+///
+/// # Examples
+///
+/// ```
+/// use libitofin::option::OptionType;
+/// use libitofin::pricingengines::blackformula::bachelier_black_formula_asset_itm_probability;
+/// let value = bachelier_black_formula_asset_itm_probability(
+///     OptionType::Call, -0.01, -0.01, 0.005,
+/// )?;
+/// assert_eq!(value, 0.5);
+/// # Ok::<(), libitofin::errors::QlError>(())
+/// ```
 pub fn bachelier_black_formula_asset_itm_probability(
     option_type: OptionType,
     strike: Real,
@@ -619,14 +641,26 @@ pub fn bachelier_black_formula_asset_itm_probability(
     std_dev: Real,
 ) -> QlResult<Real> {
     check_std_dev(std_dev)?;
-
-    let d = (forward - strike) * sign_of(option_type);
-    if std_dev == 0.0 {
-        return Ok(d.max(0.0));
+    if !strike.is_finite() || !forward.is_finite() {
+        fail!("strike ({strike}) and forward ({forward}) must be finite");
     }
-    let h = d / std_dev;
-    let phi = CumulativeNormalDistribution::standard();
-    Ok(phi.value(h))
+
+    let sign = sign_of(option_type);
+    let difference = forward - strike;
+    if std_dev == 0.0 {
+        let intrinsic = (difference * sign).max(0.0);
+        if !intrinsic.is_finite() {
+            fail!("zero-volatility intrinsic value must be finite");
+        }
+        return Ok(intrinsic);
+    }
+
+    let h = if difference.is_finite() {
+        difference / std_dev
+    } else {
+        forward / std_dev - strike / std_dev
+    };
+    Ok(CumulativeNormalDistribution::standard().value(sign * h))
 }
 
 #[cfg(test)]

@@ -127,6 +127,87 @@ typedef struct ItofinBmaHelperConfig {
   uint64_t libor_index;
 } ItofinBmaHelperConfig;
 
+typedef struct ItofinBondYieldAnalyticsConfig {
+  uint64_t day_counter;
+  /**
+   * Simple=0, Compounded=1, Continuous=2, SimpleThenCompounded=3, CompoundedThenSimple=4.
+   */
+  int32_t compounding;
+  /**
+   * Annual=0, Semiannual=1, Quarterly=2, Monthly=3.
+   */
+  int32_t frequency;
+  /**
+   * Zero uses the bond's checked default settlement. Nonzero is actual settlement.
+   */
+  int32_t settlement;
+} ItofinBondYieldAnalyticsConfig;
+
+typedef struct ItofinAnalyticsSolverConfig {
+  /**
+   * Presence bits: accuracy=1, max_evaluations=2, guess=4. Omitted values use core defaults.
+   */
+  uint32_t flags;
+  double accuracy;
+  uint64_t max_evaluations;
+  double guess;
+} ItofinAnalyticsSolverConfig;
+
+typedef struct ItofinBondZSpreadAnalyticsConfig {
+  uint64_t discount;
+  int32_t compounding;
+  int32_t frequency;
+  int32_t settlement;
+} ItofinBondZSpreadAnalyticsConfig;
+
+typedef struct ItofinCashFlowsZSpreadConfig {
+  uint64_t discount;
+  uint64_t settings;
+  /**
+   * -1 unset, 0 false, 1 true.
+   */
+  int32_t include_settlement;
+  /**
+   * Zero means omitted; nonzero dates are actual dates without adjustment.
+   */
+  int32_t settlement;
+  int32_t npv_date;
+  int32_t compounding;
+  int32_t frequency;
+} ItofinCashFlowsZSpreadConfig;
+
+typedef struct ItofinBondConfig {
+  uint32_t settlement_days;
+  double face_amount;
+  double redemption;
+  uint64_t settings;
+  /**
+   * Zero means no issue date.
+   */
+  int32_t issue_date;
+  int32_t payment_convention;
+  /**
+   * Required for zero-coupon bonds; zero selects the schedule calendar for fixed bonds.
+   */
+  uint64_t calendar;
+} ItofinBondConfig;
+
+typedef struct ItofinFixedBondConfig {
+  struct ItofinBondConfig bond;
+  uint64_t schedule;
+  uint64_t day_counter;
+  /**
+   * Zero means no first-period override.
+   */
+  uint64_t first_period_day_counter;
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  int32_t ex_coupon_convention;
+  uint8_t has_ex_coupon;
+  uint8_t ex_coupon_end_of_month;
+} ItofinFixedBondConfig;
+
 /**
  * Borrowed arrays valid only during a penalty callback; consumers must copy them.
  */
@@ -156,6 +237,39 @@ typedef struct ItofinBootstrapCallbacks {
                    struct ItofinError*);
   void (*release)(size_t);
 } ItofinBootstrapCallbacks;
+
+typedef struct ItofinFloatingBondConfig {
+  struct ItofinBondConfig bond;
+  uint64_t schedule;
+  uint64_t index;
+  uint64_t day_counter;
+  uint32_t fixing_days;
+  uint8_t has_fixing_days;
+  int32_t fixing_convention;
+  /**
+   * Zero selects NullCalendar when an ex-coupon period is present.
+   */
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  int32_t ex_coupon_convention;
+  uint8_t has_ex_coupon;
+  uint8_t ex_coupon_end_of_month;
+} ItofinFloatingBondConfig;
+
+/**
+ * Each vector has its own length. Caps/floors use f32::MAX promoted to double for absence.
+ */
+typedef struct ItofinFloatingBondVectors {
+  const double *gearings;
+  size_t gearings_count;
+  const double *spreads;
+  size_t spreads_count;
+  const double *caps;
+  size_t caps_count;
+  const double *floors;
+  size_t floors_count;
+} ItofinFloatingBondVectors;
 
 /**
  * Scalar annualized Merton parameters and seeded path dimensions.
@@ -1740,6 +1854,211 @@ int32_t itofin_bma_helper_new(struct ItofinContext *ctx,
                               struct ItofinError *error);
 
 /**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_clean_price_from_curve(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           uint64_t discount,
+                                           int32_t serial,
+                                           double *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_dirty_price_from_curve(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           uint64_t discount,
+                                           int32_t serial,
+                                           double *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_clean_price_from_yield(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           double rate,
+                                           struct ItofinBondYieldAnalyticsConfig a,
+                                           double *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_dirty_price_from_yield(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           double rate,
+                                           struct ItofinBondYieldAnalyticsConfig a,
+                                           double *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_yield_rate(struct ItofinContext *ctx,
+                               uint64_t id,
+                               double target,
+                               int32_t price_type,
+                               struct ItofinBondYieldAnalyticsConfig a,
+                               struct ItofinAnalyticsSolverConfig solve,
+                               double *out,
+                               struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_clean_price_at_z_spread(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            double spread,
+                                            struct ItofinBondZSpreadAnalyticsConfig a,
+                                            double *out,
+                                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_dirty_price_at_z_spread(struct ItofinContext *ctx,
+                                            uint64_t id,
+                                            double spread,
+                                            struct ItofinBondZSpreadAnalyticsConfig a,
+                                            double *out,
+                                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_z_spread(struct ItofinContext *ctx,
+                             uint64_t id,
+                             double target,
+                             int32_t price_type,
+                             struct ItofinBondZSpreadAnalyticsConfig a,
+                             struct ItofinAnalyticsSolverConfig solve,
+                             double *out,
+                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_cashflows_npv_at_z_spread(struct ItofinContext *ctx,
+                                         uint64_t id,
+                                         double value,
+                                         struct ItofinCashFlowsZSpreadConfig a,
+                                         double *out,
+                                         struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_cashflows_z_spread(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  double value,
+                                  struct ItofinCashFlowsZSpreadConfig a,
+                                  struct ItofinAnalyticsSolverConfig solve,
+                                  double *out,
+                                  struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_zero_coupon_bond_new(struct ItofinContext *ctx,
+                                    struct ItofinBondConfig a,
+                                    int32_t maturity,
+                                    uint64_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_fixed_rate_bond_new(struct ItofinContext *ctx,
+                                   struct ItofinFixedBondConfig a,
+                                   const double *coupons,
+                                   size_t count,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * include_flows is -1 for settings default, 0 false or 1 true.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_discounting_bond_engine_new(struct ItofinContext *ctx,
+                                           uint64_t discount,
+                                           uint64_t settings_id,
+                                           int32_t include_flows,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_set_engine(struct ItofinContext *ctx,
+                               uint64_t id,
+                               uint64_t engine,
+                               struct ItofinError *error);
+
+/**
+ * Fields: 0 NPV, 1 settlement value, 2 clean price, 3 dirty price, 4 accrual, 5 notional.
+ * Date zero selects current settlement for accrual/notional.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_real(struct ItofinContext *ctx,
+                         uint64_t id,
+                         int32_t field,
+                         int32_t serial,
+                         double *out,
+                         struct ItofinError *error);
+
+/**
+ * Fields: 0 settlement days, 1 settlement date (reference date or zero), 2 maturity,
+ * 3 issue date (zero means absent), 4 expired, 5 calculated, 6 fixed frequency.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_integer(struct ItofinContext *ctx,
+                            uint64_t id,
+                            int32_t field,
+                            int32_t serial,
+                            int32_t *out,
+                            struct ItofinError *error);
+
+/**
+ * Fields: 0 calendar, 1 cashflows, 2 redemptions, 3 fixed day counter,
+ * 4 fixed first-period day counter (zero means absent).
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_handle(struct ItofinContext *ctx,
+                           uint64_t id,
+                           int32_t field,
+                           uint64_t *out,
+                           struct ItofinError *error);
+
+/**
+ * Actions: 0 recalculate, 1 freeze, 2 unfreeze.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_action(struct ItofinContext *ctx,
+                           uint64_t id,
+                           int32_t action,
+                           struct ItofinError *error);
+
+/**
  * Construct a global discount curve, kind 0 log-linear or 1 linear.
  * Callback ownership transfers exactly when `adopted` becomes true, including
  * failed construction; the last native curve owner releases the callbacks.
@@ -2051,6 +2370,48 @@ int32_t itofin_chart_volume_bars(const ItofinReal *open,
                                  int8_t *out_direction,
                                  size_t capacity,
                                  struct ItofinError *error);
+
+/**
+ * Construct without requiring coupon histories or a cap/floor pricer.
+ * The common calendar field must be zero: floating bonds use their schedule calendar.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_floating_rate_bond_new(struct ItofinContext *ctx,
+                                      struct ItofinFloatingBondConfig a,
+                                      struct ItofinFloatingBondVectors v,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * Volatility zero creates the existing no-volatility Black coupon pricer.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_black_ibor_coupon_pricer_new(struct ItofinContext *ctx,
+                                            uint64_t volatility,
+                                            uint64_t *out,
+                                            struct ItofinError *error);
+
+/**
+ * Install/replace one retained pricer on every nonzero-gearing coupon.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_floating_bond_set_pricer(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        uint64_t pricer,
+                                        struct ItofinError *error);
+
+/**
+ * Return an independent handle retaining the original index and calendar metadata.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_floating_bond_index(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
 
 /**
  * Generate exact constant-parameter paths, preserving outputs on any error.
@@ -6712,6 +7073,24 @@ int32_t itofin_settings_include_todays_cash_flows(struct ItofinContext *ctx,
                                                   uint64_t id,
                                                   int32_t *out,
                                                   struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_settings_include_reference_date_events(struct ItofinContext *ctx,
+                                                      uint64_t id,
+                                                      bool *out,
+                                                      struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_settings_set_include_reference_date_events(struct ItofinContext *ctx,
+                                                          uint64_t id,
+                                                          uint8_t value,
+                                                          struct ItofinError *error);
 
 /**
  * # Safety

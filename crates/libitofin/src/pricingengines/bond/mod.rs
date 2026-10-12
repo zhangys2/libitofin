@@ -15,7 +15,7 @@ mod treecallablebondengine;
 
 pub use binomialconvertibleengine::BinomialConvertibleEngine;
 pub use blackcallablebondengine::{
-    BlackCallableFixedRateBondEngine, BlackCallableZeroCouponBondEngine,
+    BlackCallableBondArguments, BlackCallableFixedRateBondEngine, BlackCallableZeroCouponBondEngine,
 };
 pub use bondfunctions::BondFunctions;
 pub use discountingbondengine::DiscountingBondEngine;

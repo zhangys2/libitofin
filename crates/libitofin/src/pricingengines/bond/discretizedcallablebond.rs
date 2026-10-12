@@ -44,6 +44,7 @@ impl DiscretizedCallableFixedRateBond {
     pub fn new(
         args: &CallableBondArguments,
         curve: &dyn YieldTermStructure,
+        model_spread: Real,
     ) -> QlResult<DiscretizedCallableFixedRateBond> {
         args.validate()?;
         let reference_date = curve.reference_date()?;
@@ -72,7 +73,7 @@ impl DiscretizedCallableFixedRateBond {
                 {
                     call_time = coupon_time;
                     coupon_adjustments[j] = CouponAdjustment::Pre;
-                    let spread = args.spread;
+                    let spread = model_spread;
                     let df_incl_spread = |date| -> QlResult<Real> {
                         let t = curve.time_from_reference(date)?;
                         let z = curve

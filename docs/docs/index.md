@@ -12,6 +12,11 @@ bindings. All three language surfaces share the Rust numerical core.
 - **Typed and introspectable.** Every class ships hand-written `.pyi` stubs with Google-style
   docstrings, so editors autocomplete and this site renders the full signature.
 
+Go and Python expose fixed/zero/floating bond instruments, retained discounting
+engines and [yield/Z-spread analytics](bond-analytics.md):
+[bond binding guide](bond-bindings.md). Existing bootstrap helpers remain
+separate; callable bonds and analytical risk measures are not bound here.
+
 ## Install
 
 === "Python"
@@ -32,7 +37,7 @@ bindings. All three language surfaces share the Rust numerical core.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.41.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.42.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
@@ -111,3 +116,23 @@ links to the language guides and project documentation.
 - [Constant GSR process](gsr-process.md): exact Gaussian forward-measure dynamics and checked constant grids.
 
 - [Plain float-float swaps](float-float-swaps.md): two-Ibor-leg signed valuation and fair spreads.
+
+- [OIS payer and receiver](ois-side.md): explicit swap side with the existing payer default.
+
+- [Bachelier asset ITM](normal-itm.md): normal-model helper and its zero-volatility convention.
+
+- [Percentage-strike payoff](percentage-strike-payoff.md): dimensionless moneyness and exact multiplication order.
+
+- [Floating-type payoff](floating-type-payoff.md): a supplied strike at each scalar evaluation.
+
+- [Callable zero-coupon bonds](callable-zero-coupon-bonds.md): hard calls/puts and Hull-White lattice quotes.
+
+- [Black callable bonds](black-callable-bonds.md).
+
+- [Callable implied volatility](callable-implied-volatility.md).
+
+- [Callable OAS](callable-oas.md).
+
+- [Callable bond sensitivities](callable-bond-sensitivities.md).
+
+- [Bare-factor G2 process](g2-process.md).
