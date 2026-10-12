@@ -174,8 +174,9 @@ impl Payoff for FloatingTypePayoff {
 
     fn value(&self, _price: Real) -> Real {
         // QuantLib's single-argument `operator()` raises
-        // (`FloatingTypePayoff::operator()(Real)`); use `value_with_strike`.
-        unimplemented!("floating payoff not handled")
+        // `QL_FAIL("floating payoff not handled")`. `unimplemented!` would
+        // prefix that message, which the native contract does not.
+        panic!("floating payoff not handled")
     }
 }
 

@@ -298,23 +298,27 @@ impl FloatingRateCouponPricer for BlackIborCouponPricer {
         // (`IborCouponPricer::initializeCachedData`): fixing-calendar advance
         // off the fixing (not `value_date`, which for Libor joint-adjusts),
         // natural maturity, and the year fraction between them — same sequence
-        // as `IborCoupon::forecast_fixing_dates`.
+        // as `IborCoupon::forecast_fixing_dates`. A determined coupon never
+        // reads this window, and the maturity advance can leave the supported
+        // year range when the fixing sits at the 2199 horizon.
         let index = coupon.index();
         let fixing_date = coupon.fixing_date();
         let fixing_days = InterestRateIndex::fixing_days(&**index);
-        self.convexity_window = Some((|| -> QlResult<(Date, Real)> {
-            let fixing_value_date = coupon.fixing_calendar().advance(
-                fixing_date,
-                fixing_days as Integer,
-                TimeUnit::Days,
-                BusinessDayConvention::Following,
-                false,
-            );
-            let maturity = InterestRateIndex::maturity_date(&**index, fixing_value_date)?;
-            let tau =
-                InterestRateIndex::day_counter(&**index).year_fraction(fixing_value_date, maturity);
-            Ok((maturity, tau))
-        })());
+        self.convexity_window = coupon.is_in_arrears().then(|| {
+            (|| -> QlResult<(Date, Real)> {
+                let fixing_value_date = coupon.fixing_calendar().advance(
+                    fixing_date,
+                    fixing_days as Integer,
+                    TimeUnit::Days,
+                    BusinessDayConvention::Following,
+                    false,
+                );
+                let maturity = InterestRateIndex::maturity_date(&**index, fixing_value_date)?;
+                let tau = InterestRateIndex::day_counter(&**index)
+                    .year_fraction(fixing_value_date, maturity);
+                Ok((maturity, tau))
+            })()
+        });
     }
 
     fn swaplet_rate(&self) -> QlResult<Rate> {
