@@ -1,119 +1,232 @@
-//! G2++ two-factor Gaussian short-rate process.
+//! Bare-factor two-dimensional Gaussian G2 process with exact OU transitions.
 //!
-//! Port of `ql/processes/g2process.{hpp,cpp}`: [`G2Process`] is the
-//! multi-factor [`StochasticProcess`] for the state `(x, y)` in
-//!
-//! ```text
-//! dx = -a x dt + σ dW¹
-//! dy = -b y dt + η dW²
-//! dW¹ dW² = ρ dt
-//! ```
-//!
-//! Each factor is an exact [`OrnsteinUhlenbeckProcess`] (level 0). Instantaneous
-//! diffusion uses the lower-triangular correlation root
-//!
-//! ```text
-//! | σ           0                 |
-//! | ρ σ   √(1-ρ²) η               |
-//! ```
-//!
-//! while `std_deviation` / `covariance` use the exact OU transition stdevs and
-//! the integrated correlation `newRho = H / (σ₁ σ₂)` from `g2process.cpp`.
-//!
-//! ## Deferred (omitted, not stubbed)
-//!
-//! - [`G2ForwardProcess`](https://www.quantlib.org/reference/class_quant_lib_1_1_g2_forward_process.html)
-//!   (needs `ForwardMeasureProcess`).
-//! - Optional term-structure / `φ(t)` state shift present on some upstream
-//!   tips; the classic process keeps bare `(x, y)` and leaves `φ` on
-//!   [`G2`](crate::models::shortrate::G2).
+//! State is `(x,y)`, not a shifted short rate. No curve fitting or forward measure
+//! is provided. Instantaneous diffusion uses `rho * eta` in its lower-left entry,
+//! correcting the unequal-volatility inconsistency in QuantLib's G2 diffusion.
 
 use crate::errors::QlResult;
-use crate::math::array::Array;
-use crate::math::matrix::Matrix;
+use crate::math::{array::Array, matrix::Matrix};
 use crate::patterns::observable::{AsObservable, Observable};
-use crate::processes::OrnsteinUhlenbeckProcess;
 use crate::require;
-use crate::shared::{Shared, shared};
-use crate::stochasticprocess::{StochasticProcess, StochasticProcess1D};
+use crate::stochasticprocess::StochasticProcess;
 use crate::types::{Real, Size, Time};
 
-/// Two-factor Gaussian G2++ process (`g2process.hpp:34`).
+/// Two correlated zero-level OU factors `dx=-a*x*dt+sigma*dW1`,
+/// `dy=-b*y*dt+eta*dW2`, with instantaneous correlation `rho`.
+///
+/// Both factors initially equal zero. Signed finite reversion is supported.
+/// Dynamics require finite two-element state vectors, finite nonnegative times
+/// and steps, and finite results. The exact transition root maps two independent
+/// standard normals to correlated Gaussian increments. Date conversion is not
+/// supported, and the process never emits input-change notifications.
+///
+/// # Examples
+/// ```
+/// use libitofin::{math::array::Array, processes::G2Process,
+///     stochasticprocess::StochasticProcess};
+/// let process = G2Process::new(0.1, 0.01, 0.2, 0.008, -0.75)?;
+/// let next = process.evolve(0.0, &process.initial_values()?, 0.25,
+///     &Array::from([0.5, -0.3]))?;
+/// assert_eq!(next.len(), 2);
+/// # Ok::<(), libitofin::errors::QlError>(())
+/// ```
 pub struct G2Process {
-    x0: Real,
-    y0: Real,
     a: Real,
     sigma: Real,
     b: Real,
     eta: Real,
     rho: Real,
-    x_process: OrnsteinUhlenbeckProcess,
-    y_process: OrnsteinUhlenbeckProcess,
-    observable: Shared<Observable>,
+    observable: Observable,
 }
 
 impl G2Process {
-    /// `G2Process(a, sigma, b, eta, rho)` (`g2process.cpp`): factors start at
-    /// `(0, 0)` with OU levels 0, matching the classic QuantLib constructor.
+    /// Constructs the bare-factor process, without a term-structure handle.
     ///
     /// # Errors
-    ///
-    /// Fails when `|ρ| > 1` (so `√(1-ρ²)` is real) or when either factor
-    /// volatility is negative (OU constructor).
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    pub fn new(a: Real, sigma: Real, b: Real, eta: Real, rho: Real) -> QlResult<G2Process> {
+    /// Rejects nonfinite parameters, negative volatility, or correlation outside
+    /// `[-1,1]`. Zero volatility and zero reversion are supported.
+    pub fn new(a: Real, sigma: Real, b: Real, eta: Real, rho: Real) -> QlResult<Self> {
         require!(
-            (-1.0..=1.0).contains(&rho),
-            "rho ({rho}) must be in [-1, 1]"
+            [a, sigma, b, eta, rho].iter().all(|v| v.is_finite()),
+            "G2 parameters must be finite"
         );
-        Ok(G2Process {
-            x0: 0.0,
-            y0: 0.0,
+        require!(
+            sigma >= 0.0 && eta >= 0.0,
+            "G2 volatility must be nonnegative"
+        );
+        require!((-1.0..=1.0).contains(&rho), "G2 rho must be in [-1,1]");
+        Ok(Self {
             a,
             sigma,
             b,
             eta,
             rho,
-            x_process: OrnsteinUhlenbeckProcess::new(a, sigma, 0.0, 0.0)?,
-            y_process: OrnsteinUhlenbeckProcess::new(b, eta, 0.0, 0.0)?,
-            observable: shared(Observable::new()),
+            observable: Observable::new(),
         })
     }
 
-    /// Initial value of the first factor.
+    /// Initial first factor value, always zero.
     pub fn x0(&self) -> Real {
-        self.x0
+        0.0
     }
-
-    /// Initial value of the second factor.
+    /// Initial second factor value, always zero.
     pub fn y0(&self) -> Real {
-        self.y0
+        0.0
     }
-
-    /// Mean-reversion speed of `x`.
+    /// First factor signed mean reversion.
     pub fn a(&self) -> Real {
         self.a
     }
-
-    /// Volatility of `x`.
+    /// First factor volatility.
     pub fn sigma(&self) -> Real {
         self.sigma
     }
-
-    /// Mean-reversion speed of `y`.
+    /// Second factor signed mean reversion.
     pub fn b(&self) -> Real {
         self.b
     }
-
-    /// Volatility of `y`.
+    /// Second factor volatility.
     pub fn eta(&self) -> Real {
         self.eta
     }
-
     /// Instantaneous factor correlation.
     pub fn rho(&self) -> Real {
         self.rho
     }
+
+    fn state(t: Time, x: &Array) -> QlResult<()> {
+        require!(
+            t.is_finite() && t >= 0.0,
+            "G2 time must be finite and nonnegative"
+        );
+        require!(
+            x.len() == 2 && x.iter().all(|v| v.is_finite()),
+            "G2 state must contain two finite values"
+        );
+        Ok(())
+    }
+
+    fn step(t: Time, x: &Array, dt: Time) -> QlResult<()> {
+        Self::state(t, x)?;
+        require!(
+            dt.is_finite() && dt >= 0.0 && (t + dt).is_finite(),
+            "G2 step and endpoint must be finite and nonnegative"
+        );
+        Ok(())
+    }
+
+    fn transition_root(&self, dt: Time) -> QlResult<Matrix> {
+        if dt == 0.0 {
+            return Ok(Matrix::with_size(2, 2));
+        }
+        let lx = log_kernel(self.a, dt);
+        let ly = log_kernel(self.b, dt);
+        let sx = scaled_root(self.sigma, lx)?;
+        let sy = scaled_root(self.eta, ly)?;
+        let (loading, residual) = if sx == 0.0 || sy == 0.0 || self.rho == 0.0 {
+            (0.0, 1.0)
+        } else {
+            let lc = log_kernel(self.a * 0.5 + self.b * 0.5, dt);
+            let log_corr = integrated_log_correlation(self.a, self.b, dt, lc - lx * 0.5 - ly * 0.5);
+            require!(
+                log_corr.is_finite() && log_corr <= 32.0 * f64::EPSILON,
+                "G2 transition correlation is invalid"
+            );
+            let log_corr = log_corr.min(0.0);
+            let c = self.rho * log_corr.exp();
+            let residual = (1.0 - self.rho) * (1.0 + self.rho)
+                + self.rho * self.rho * (-(2.0 * log_corr).exp_m1());
+            let loading = if c == 0.0 || c.is_subnormal() {
+                finite(
+                    self.rho.signum()
+                        * (self.eta.ln() + ly * 0.5 + self.rho.abs().ln() + log_corr).exp(),
+                )?
+            } else {
+                sy * c
+            };
+            (loading, residual)
+        };
+        Ok(Matrix::from([[sx, 0.0], [loading, sy * residual.sqrt()]]))
+    }
+}
+
+fn finite(v: Real) -> QlResult<Real> {
+    require!(v.is_finite(), "G2 result is not finite");
+    Ok(v)
+}
+
+fn log_kernel(r: Real, dt: Time) -> Real {
+    let z = (-r * dt) * 2.0;
+    if r == 0.0 || z == 0.0 {
+        dt.ln()
+    } else if r > 0.0 {
+        (-z.exp_m1()).ln() - r.ln() - 2.0_f64.ln()
+    } else {
+        z + (-(-z).exp_m1()).ln() - (-r).ln() - 2.0_f64.ln()
+    }
+}
+
+fn integrated_log_correlation(a: Real, b: Real, dt: Time, fallback: Real) -> Real {
+    let x = a * dt;
+    let y = b * dt;
+    if x.abs().max(y.abs()) <= 0.125 {
+        let m2 = (x * 0.5 + y * 0.5).powi(2);
+        let d2 = (x * 0.5 - y * 0.5).powi(2);
+        d2 * (-1.0 / 6.0 + (6.0 * m2 + d2) / 180.0
+            - (15.0 * m2 * m2 + 15.0 * m2 * d2 + d2 * d2) / 2835.0
+            + (28.0 * m2.powi(3) + 70.0 * m2 * m2 * d2 + 28.0 * m2 * d2 * d2 + d2.powi(3))
+                / 37800.0
+            - (45.0 * m2.powi(4)
+                + 210.0 * m2.powi(3) * d2
+                + 210.0 * m2 * m2 * d2 * d2
+                + 45.0 * m2 * d2.powi(3)
+                + d2.powi(4))
+                / 467775.0
+            + 691.0
+                * (66.0 * m2.powi(5)
+                    + 495.0 * m2.powi(4) * d2
+                    + 924.0 * m2.powi(3) * d2 * d2
+                    + 495.0 * m2 * m2 * d2.powi(3)
+                    + 66.0 * m2 * d2.powi(4)
+                    + d2.powi(5))
+                / 3831077250.0)
+    } else {
+        let m = x * 0.5 + y * 0.5;
+        let d = x * 0.5 - y * 0.5;
+        if m.is_finite() && d.is_finite() && m != 0.0 && (d / m).abs() <= 0.5 {
+            let log_ratio = 2.0 * (log_sinhc(d) - log_sinhc(m));
+            let ratio = (d / m).powi(2);
+            let residual = ratio * (-log_ratio.exp_m1()) / (1.0 - ratio * log_ratio.exp());
+            0.5 * (-residual).ln_1p()
+        } else if x.abs().max(y.abs()) <= 16.0 {
+            log_sinhc(m) - 0.5 * log_sinhc(x) - 0.5 * log_sinhc(y)
+        } else if a > 0.0 && b > 0.0 && x.is_infinite() && y.is_infinite() {
+            let ratio = ((a * 0.5 - b * 0.5) / (a * 0.5 + b * 0.5)).powi(2);
+            0.5 * (-ratio).ln_1p()
+        } else {
+            fallback
+        }
+    }
+}
+
+fn log_sinhc(x: Real) -> Real {
+    let v = x.abs();
+    if v <= 0.125 {
+        let z = v * v;
+        z * (1.0 / 6.0
+            + z * (-1.0 / 180.0
+                + z * (1.0 / 2835.0
+                    + z * (-1.0 / 37800.0 + z * (1.0 / 467775.0 - z * 691.0 / 3831077250.0)))))
+    } else {
+        v - 2.0_f64.ln() - v.ln() + (-(-2.0 * v).exp_m1()).ln()
+    }
+}
+
+fn scaled_root(vol: Real, log_integral: Real) -> QlResult<Real> {
+    if vol == 0.0 {
+        return Ok(0.0);
+    }
+    finite((vol.ln() + 0.5 * log_integral).exp())
 }
 
 impl AsObservable for G2Process {
@@ -128,183 +241,83 @@ impl StochasticProcess for G2Process {
     }
 
     fn initial_values(&self) -> QlResult<Array> {
-        Ok(Array::from([self.x0, self.y0]))
+        Ok(Array::from([0.0, 0.0]))
     }
 
     fn drift(&self, t: Time, x: &Array) -> QlResult<Array> {
+        Self::state(t, x)?;
         Ok(Array::from([
-            self.x_process.drift(t, x[0])?,
-            self.y_process.drift(t, x[1])?,
+            finite(-self.a * x[0])?,
+            finite(-self.b * x[1])?,
         ]))
     }
 
-    /// Instantaneous diffusion root (`g2process.cpp`): Cholesky of the
-    /// correlation matrix scaled by `(σ, η)`.
-    fn diffusion(&self, _t: Time, _x: &Array) -> QlResult<Matrix> {
+    fn diffusion(&self, t: Time, x: &Array) -> QlResult<Matrix> {
+        Self::state(t, x)?;
         Ok(Matrix::from([
             [self.sigma, 0.0],
             [
-                self.rho * self.sigma,
-                (1.0 - self.rho * self.rho).sqrt() * self.eta,
+                self.rho * self.eta,
+                self.eta * ((1.0 - self.rho) * (1.0 + self.rho)).sqrt(),
             ],
         ]))
     }
 
-    fn expectation(&self, t0: Time, x0: &Array, dt: Time) -> QlResult<Array> {
-        Ok(Array::from([
-            self.x_process.expectation(t0, x0[0], dt)?,
-            self.y_process.expectation(t0, x0[1], dt)?,
-        ]))
+    fn expectation(&self, t: Time, x: &Array, dt: Time) -> QlResult<Array> {
+        Self::step(t, x, dt)?;
+        let mean = |v: Real, r: Real| {
+            if v == 0.0 {
+                Ok(v)
+            } else {
+                let z = -r * dt;
+                let result = v * z.exp();
+                if result.is_finite() {
+                    Ok(result)
+                } else {
+                    finite(v.signum() * (v.abs().ln() + z).exp())
+                }
+            }
+        };
+        Ok(Array::from([mean(x[0], self.a)?, mean(x[1], self.b)?]))
     }
 
-    /// Exact transition std-deviation matrix (`g2process.cpp`).
-    fn std_deviation(&self, t0: Time, x0: &Array, dt: Time) -> QlResult<Matrix> {
-        let sigma1 = self.x_process.std_deviation(t0, x0[0], dt)?;
-        let sigma2 = self.y_process.std_deviation(t0, x0[1], dt)?;
-        let expa = (-self.a * dt).exp();
-        let expb = (-self.b * dt).exp();
-        let h = (self.rho * self.sigma * self.eta) / (self.a + self.b) * (1.0 - expa * expb);
-        let den = (0.5 * self.sigma * self.eta)
-            * ((1.0 - expa * expa) * (1.0 - expb * expb) / (self.a * self.b)).sqrt();
-        let new_rho = h / den;
-        Ok(Matrix::from([
-            [sigma1, 0.0],
-            [new_rho * sigma2, (1.0 - new_rho * new_rho).sqrt() * sigma2],
-        ]))
+    fn std_deviation(&self, t: Time, x: &Array, dt: Time) -> QlResult<Matrix> {
+        Self::step(t, x, dt)?;
+        self.transition_root(dt)
     }
 
-    fn covariance(&self, t0: Time, x0: &Array, dt: Time) -> QlResult<Matrix> {
-        let sigma = self.std_deviation(t0, x0, dt)?;
-        Ok(&sigma * &sigma.transpose())
+    fn covariance(&self, t: Time, x: &Array, dt: Time) -> QlResult<Matrix> {
+        let s = self.std_deviation(t, x, dt)?;
+        let xx = finite(s[(0, 0)] * s[(0, 0)])?;
+        let yy = finite(s[(1, 0)] * s[(1, 0)] + s[(1, 1)] * s[(1, 1)])?;
+        let gram_xy = s[(0, 0)] * s[(1, 0)];
+        let xy = if dt == 0.0 || self.rho == 0.0 || self.sigma == 0.0 || self.eta == 0.0 {
+            0.0
+        } else if s[(1, 0)].is_normal() && gram_xy.is_normal() {
+            gram_xy
+        } else {
+            finite(
+                self.rho.signum()
+                    * (self.rho.abs().ln()
+                        + self.sigma.ln()
+                        + self.eta.ln()
+                        + log_kernel(self.a * 0.5 + self.b * 0.5, dt))
+                    .exp(),
+            )?
+        };
+        Ok(Matrix::from([[xx, xy], [xy, yy]]))
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const A: Real = 0.1;
-    const SIGMA: Real = 0.01;
-    const B: Real = 0.2;
-    const ETA: Real = 0.008;
-    const RHO: Real = -0.75;
-    const DT: Time = 0.25;
-    const TOL: Real = 1e-12;
-
-    fn process() -> G2Process {
-        G2Process::new(A, SIGMA, B, ETA, RHO).unwrap()
-    }
-
-    fn assert_close(actual: Real, expected: Real) {
-        assert!(
-            (actual - expected).abs() < TOL,
-            "{actual} != {expected} (tol {TOL})"
+    fn evolve(&self, t: Time, x: &Array, dt: Time, dw: &Array) -> QlResult<Array> {
+        require!(
+            dw.len() == 2 && dw.iter().all(|v| v.is_finite()),
+            "G2 noise must contain two finite values"
         );
-    }
-
-    #[test]
-    fn accessors_and_shape() {
-        let p = process();
-        assert_eq!(p.size(), 2);
-        assert_eq!(p.factors(), 2);
-        assert_eq!(p.a(), A);
-        assert_eq!(p.sigma(), SIGMA);
-        assert_eq!(p.b(), B);
-        assert_eq!(p.eta(), ETA);
-        assert_eq!(p.rho(), RHO);
-        assert_eq!(p.x0(), 0.0);
-        assert_eq!(p.y0(), 0.0);
-        let x0 = p.initial_values().unwrap();
-        assert_eq!(x0[0], 0.0);
-        assert_eq!(x0[1], 0.0);
-    }
-
-    #[test]
-    fn drift_is_mean_reverting_ou() {
-        let p = process();
-        let x = Array::from([0.02, -0.01]);
-        let d = p.drift(0.0, &x).unwrap();
-        assert_close(d[0], -A * x[0]);
-        assert_close(d[1], -B * x[1]);
-    }
-
-    #[test]
-    fn diffusion_is_cholesky_scaled_by_factor_vols() {
-        let p = process();
-        let d = p.diffusion(0.0, &Array::from([0.0, 0.0])).unwrap();
-        assert_close(d[(0, 0)], SIGMA);
-        assert_close(d[(0, 1)], 0.0);
-        assert_close(d[(1, 0)], RHO * SIGMA);
-        assert_close(d[(1, 1)], (1.0 - RHO * RHO).sqrt() * ETA);
-    }
-
-    #[test]
-    fn expectation_matches_exact_ou_transition() {
-        let p = process();
-        let x0 = Array::from([0.015, -0.007]);
-        let e = p.expectation(0.0, &x0, DT).unwrap();
-        assert_close(e[0], x0[0] * (-A * DT).exp());
-        assert_close(e[1], x0[1] * (-B * DT).exp());
-    }
-
-    #[test]
-    fn covariance_matches_exact_ou_variances_and_integrated_cov() {
-        let p = process();
-        let x0 = Array::from([0.0, 0.0]);
-        let c = p.covariance(0.0, &x0, DT).unwrap();
-
-        let var_x = 0.5 * SIGMA * SIGMA / A * (1.0 - (-2.0 * A * DT).exp());
-        let var_y = 0.5 * ETA * ETA / B * (1.0 - (-2.0 * B * DT).exp());
-        let cov_xy = (RHO * SIGMA * ETA) / (A + B) * (1.0 - (-(A + B) * DT).exp());
-
-        assert_close(c[(0, 0)], var_x);
-        assert_close(c[(1, 1)], var_y);
-        assert_close(c[(0, 1)], cov_xy);
-        assert_close(c[(1, 0)], cov_xy);
-    }
-
-    #[test]
-    fn zero_correlation_diagonalises_covariance() {
-        let p = G2Process::new(A, SIGMA, B, ETA, 0.0).unwrap();
-        let c = p.covariance(0.0, &Array::from([0.0, 0.0]), DT).unwrap();
-        assert_close(c[(0, 1)], 0.0);
-        assert_close(c[(1, 0)], 0.0);
-        assert!(c[(0, 0)] > 0.0 && c[(1, 1)] > 0.0);
-    }
-
-    #[test]
-    fn evolve_with_zero_correlation_is_independent_ou() {
-        let p = G2Process::new(A, SIGMA, B, ETA, 0.0).unwrap();
-        let x0 = Array::from([0.01, -0.02]);
-        let dw = Array::from([0.5, -0.3]);
-        let out = p.evolve(0.0, &x0, DT, &dw).unwrap();
-
-        let ex = x0[0] * (-A * DT).exp();
-        let ey = x0[1] * (-B * DT).exp();
-        let sx = (0.5 * SIGMA * SIGMA / A * (1.0 - (-2.0 * A * DT).exp())).sqrt();
-        let sy = (0.5 * ETA * ETA / B * (1.0 - (-2.0 * B * DT).exp())).sqrt();
-        assert_close(out[0], ex + sx * dw[0]);
-        assert_close(out[1], ey + sy * dw[1]);
-    }
-
-    #[test]
-    fn rejects_rho_outside_unit_interval() {
-        let err = G2Process::new(A, SIGMA, B, ETA, 1.1).err().unwrap();
-        assert!(err.message().contains("rho"));
-        let err = G2Process::new(A, SIGMA, B, ETA, -1.1).err().unwrap();
-        assert!(err.message().contains("rho"));
-    }
-
-    #[test]
-    fn rejects_negative_factor_volatility() {
-        let err = G2Process::new(A, -1e-9, B, ETA, RHO).err().unwrap();
-        assert_eq!(err.message(), "negative volatility given");
-    }
-
-    #[test]
-    fn trait_is_object_safe() {
-        let p = process();
-        let dynamic: &dyn StochasticProcess = &p;
-        assert_eq!(dynamic.size(), 2);
+        let e = self.expectation(t, x, dt)?;
+        let s = self.std_deviation(t, x, dt)?;
+        Ok(Array::from([
+            finite(e[0] + s[(0, 0)] * dw[0])?,
+            finite(e[1] + s[(1, 0)] * dw[0] + s[(1, 1)] * dw[1])?,
+        ]))
     }
 }

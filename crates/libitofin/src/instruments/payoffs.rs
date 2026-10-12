@@ -110,7 +110,7 @@ impl Payoff for PercentageStrikePayoff {
 
     fn description(&self) -> String {
         format!(
-            "{} {}, {} moneyness",
+            "{} {}, {} strike",
             self.name(),
             self.option_type,
             self.moneyness
@@ -118,10 +118,14 @@ impl Payoff for PercentageStrikePayoff {
     }
 
     fn value(&self, price: Real) -> Real {
-        match self.option_type {
-            OptionType::Call => price * (1.0 - self.moneyness).max(0.0),
-            OptionType::Put => price * (self.moneyness - 1.0).max(0.0),
-        }
+        // `payoffs.cpp` uses `std::max(factor, 0)`, which keeps a NaN factor.
+        // `f64::max` would replace that NaN with 0.
+        let factor = match self.option_type {
+            OptionType::Call => 1.0 - self.moneyness,
+            OptionType::Put => self.moneyness - 1.0,
+        };
+        let clipped = if factor < 0.0 { 0.0 } else { factor };
+        price * clipped
     }
 }
 
@@ -174,8 +178,9 @@ impl Payoff for FloatingTypePayoff {
 
     fn value(&self, _price: Real) -> Real {
         // QuantLib's single-argument `operator()` raises
-        // (`FloatingTypePayoff::operator()(Real)`); use `value_with_strike`.
-        unimplemented!("floating payoff not handled")
+        // `QL_FAIL("floating payoff not handled")`. `unimplemented!` would
+        // prefix that message, which the native contract does not.
+        panic!("floating payoff not handled")
     }
 }
 

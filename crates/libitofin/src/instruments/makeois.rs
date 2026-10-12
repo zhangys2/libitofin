@@ -18,6 +18,7 @@
 //!
 //! The builder exposes the overrides [`OISRateHelper::initialize_dates`] and the
 //! swap oracles use:
+//! [`with_type`](MakeOis::with_type),
 //! [`with_effective_date`](MakeOis::with_effective_date),
 //! [`with_overnight_leg_spread`](MakeOis::with_overnight_leg_spread),
 //! [`with_nominal`](MakeOis::with_nominal),
@@ -188,16 +189,21 @@ impl MakeOis {
         }
     }
 
+    /// Sets which leg is paid (`MakeOIS::withType`): a [`SwapType::Payer`]
+    /// pays fixed and receives overnight; a [`SwapType::Receiver`] does the
+    /// opposite. The default remains [`SwapType::Payer`].
+    ///
+    /// This also applies to the temporary swap used when filling a missing
+    /// fixed rate. Repeated calls use the last supplied type.
+    pub fn with_type(mut self, swap_type: SwapType) -> MakeOis {
+        self.swap_type = swap_type;
+        self
+    }
+
     /// Sets the fixed-leg day count, overriding the default (the overnight
     /// index's own day count) (`makeois.hpp` `withFixedLegDayCount`).
     pub fn with_fixed_leg_day_count(mut self, day_count: DayCounter) -> MakeOis {
         self.fixed_day_count = Some(day_count);
-        self
-    }
-
-    /// Sets payer/receiver (`makeois.hpp` `withType`).
-    pub fn with_type(mut self, swap_type: SwapType) -> MakeOis {
-        self.swap_type = swap_type;
         self
     }
 

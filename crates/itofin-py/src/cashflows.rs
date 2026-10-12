@@ -15,7 +15,8 @@ use crate::inflation::{
 };
 use crate::settings::PySettings;
 use crate::time::{
-    PyBusinessDayConvention, PyCalendar, PyDate, PyDayCounter, PyPeriod, PySchedule,
+    PyBusinessDayConvention, PyCalendar, PyCompounding, PyDate, PyDayCounter, PyFrequency,
+    PyPeriod, PySchedule,
 };
 use libitofin::cashflow::{CashFlow, Leg};
 use libitofin::cashflows::{
@@ -624,6 +625,7 @@ impl PyYoYInflationLeg {
     fn build(&self) -> PyResult<PyLeg> {
         Ok(PyLeg {
             inner: self.leg().build().map_err(PyQlError::from)?,
+            guard: None,
         })
     }
 }
@@ -851,6 +853,8 @@ impl PyIborLeg {
 #[pyclass(name = "CashFlow", unsendable, module = "itofin.cashflows")]
 pub struct PyCashFlow {
     inner: Shared<dyn CashFlow>,
+    guard: Option<CashFlowGuard>,
+    position: usize,
 }
 
 #[gen_stub_pymethods]
@@ -866,7 +870,15 @@ impl PyCashFlow {
     ///         resolving its fixing reports - a missing history entry, or a
     ///         forecast off an index with no curve linked.
     fn amount(&self) -> PyResult<f64> {
-        Ok(self.inner.amount().map_err(PyQlError::from)?)
+        if let Some(guard) = &self.guard {
+            guard(Some(self.position))?;
+        }
+        let amount = self.inner.amount().map_err(PyQlError::from)?;
+        if self.guard.is_some() {
+            crate::bonds::finite(amount)
+        } else {
+            Ok(amount)
+        }
     }
 
     /// Return the date the flow pays on.
@@ -886,6 +898,7 @@ impl PyCashFlow {
 #[pyclass(name = "Leg", unsendable, module = "itofin.cashflows")]
 pub struct PyLeg {
     inner: Leg,
+    guard: Option<CashFlowGuard>,
 }
 
 #[gen_stub_pymethods]
@@ -919,6 +932,8 @@ impl PyLeg {
         }
         Ok(PyCashFlow {
             inner: Shared::clone(&self.inner[resolved as usize]),
+            guard: self.guard.clone(),
+            position: resolved as usize,
         })
     }
 }
@@ -960,7 +975,24 @@ pub(crate) fn npv(
         .current_link()
         .map_err(PyQlError::from)?;
     let settings = settings.inner();
-    Ok(CashFlows::npv(
+    if let Some(guard) = &leg.guard {
+        for (i, flow) in leg.inner.iter().enumerate() {
+            if !flow
+                .has_occurred(
+                    &settings,
+                    settlement_date.map(PyDate::inner),
+                    include_settlement_date_flows,
+                )
+                .map_err(PyQlError::from)?
+                && !flow
+                    .trading_ex_coupon(&settings, settlement_date.map(PyDate::inner))
+                    .map_err(PyQlError::from)?
+            {
+                guard(Some(i))?;
+            }
+        }
+    }
+    let value = CashFlows::npv(
         &leg.inner,
         &*curve,
         &settings,
@@ -968,5 +1000,237 @@ pub(crate) fn npv(
         settlement_date.map(PyDate::inner),
         npv_date.map(PyDate::inner),
     )
-    .map_err(PyQlError::from)?)
+    .map_err(PyQlError::from)?;
+    if leg.guard.is_some() {
+        crate::bonds::finite(value)
+    } else {
+        Ok(value)
+    }
+}
+
+impl PyLeg {
+    pub(crate) fn from_inner(inner: Leg) -> Self {
+        Self { inner, guard: None }
+    }
+    pub(crate) fn with_guard(inner: Leg, guard: Option<CashFlowGuard>) -> Self {
+        let mut leg = Self::from_inner(inner);
+        leg.guard = guard;
+        leg
+    }
+}
+
+pub(crate) type CashFlowGuard = Shared<dyn Fn(Option<usize>) -> PyResult<()>>;
+
+/// Black or normal ibor coupon pricer using an optional retained optionlet surface.
+#[gen_stub_pyclass]
+#[pyclass(
+    name = "BlackIborCouponPricer",
+    unsendable,
+    module = "itofin.cashflows"
+)]
+pub struct PyBlackIborCouponPricer {
+    pub(crate) inner: SharedMut<dyn libitofin::cashflows::FloatingRateCouponPricer>,
+    pub(crate) moving: Option<Shared<crate::optionletvol::MovingOptionletMetadata>>,
+}
+#[gen_stub_pymethods]
+#[pymethods]
+impl PyBlackIborCouponPricer {
+    #[new]
+    #[pyo3(signature=(volatility=None))]
+    fn new(volatility: Option<&crate::optionletvol::PyOptionletVolatilityStructure>) -> Self {
+        let pricer = volatility
+            .map_or_else(libitofin::cashflows::BlackIborCouponPricer::new, |vol| {
+                libitofin::cashflows::BlackIborCouponPricer::with_vol(vol.handle())
+            });
+        Self {
+            inner: shared_mut(pricer),
+            moving: volatility.and_then(|vol| vol.moving_metadata()),
+        }
+    }
+}
+
+impl PyLeg {
+    fn guard_analytics(
+        &self,
+        settings: &libitofin::settings::Settings<libitofin::time::date::Date>,
+        include: Option<bool>,
+        settlement: Option<libitofin::time::date::Date>,
+    ) -> PyResult<()> {
+        if let Some(guard) = &self.guard {
+            for (i, flow) in self.inner.iter().enumerate() {
+                if !flow
+                    .has_occurred(settings, settlement, include)
+                    .map_err(PyQlError::from)?
+                    && !flow
+                        .trading_ex_coupon(settings, settlement)
+                        .map_err(PyQlError::from)?
+                {
+                    guard(Some(i))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Currency NPV of the surviving leg discounted with a parallel zero-rate spread.
+#[gen_stub_pyfunction(module = "itofin.cashflows")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature=(leg, discount_curve, z_spread, compounding, frequency, settings, *, include_settlement_date_flows=None, settlement_date=None, npv_date=None))]
+pub(crate) fn npv_at_z_spread(
+    leg: &PyLeg,
+    discount_curve: &PyYieldTermStructure,
+    z_spread: f64,
+    compounding: PyCompounding,
+    frequency: &PyFrequency,
+    settings: &PySettings,
+    include_settlement_date_flows: Option<bool>,
+    settlement_date: Option<&PyDate>,
+    npv_date: Option<&PyDate>,
+) -> PyResult<f64> {
+    crate::bonds::finite(z_spread)?;
+    let settlement = crate::bonds::analytical_date(settlement_date)?;
+    let npv_date = crate::bonds::analytical_date(npv_date)?;
+    let curve = discount_curve.handle();
+    curve.current_link().map_err(PyQlError::from)?;
+    let settings = settings.inner();
+    leg.guard_analytics(&settings, include_settlement_date_flows, settlement)?;
+    crate::bonds::finite(
+        CashFlows::npv_at_z_spread(
+            &leg.inner,
+            curve,
+            z_spread,
+            compounding.inner(),
+            frequency.inner(),
+            &settings,
+            include_settlement_date_flows,
+            settlement,
+            npv_date,
+        )
+        .map_err(PyQlError::from)?,
+    )
+}
+
+/// Solve the parallel zero-rate spread repricing a leg's currency NPV.
+#[gen_stub_pyfunction(module = "itofin.cashflows")]
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+#[pyo3(signature=(leg, npv, discount_curve, compounding, frequency, settings, *, include_settlement_date_flows=None, settlement_date=None, npv_date=None, accuracy=1e-10, max_evaluations=100, guess=0.0))]
+pub(crate) fn z_spread(
+    leg: &PyLeg,
+    npv: f64,
+    discount_curve: &PyYieldTermStructure,
+    compounding: PyCompounding,
+    frequency: &PyFrequency,
+    settings: &PySettings,
+    include_settlement_date_flows: Option<bool>,
+    settlement_date: Option<&PyDate>,
+    npv_date: Option<&PyDate>,
+    accuracy: f64,
+    max_evaluations: usize,
+    guess: f64,
+) -> PyResult<f64> {
+    crate::bonds::finite(npv)?;
+    crate::bonds::analytical_solver(accuracy, max_evaluations, guess)?;
+    let settlement = crate::bonds::analytical_date(settlement_date)?;
+    let npv_date = crate::bonds::analytical_date(npv_date)?;
+    let curve = discount_curve.handle();
+    curve.current_link().map_err(PyQlError::from)?;
+    let settings = settings.inner();
+    leg.guard_analytics(&settings, include_settlement_date_flows, settlement)?;
+    crate::bonds::finite(
+        CashFlows::z_spread(
+            &leg.inner,
+            npv,
+            curve,
+            compounding.inner(),
+            frequency.inner(),
+            &settings,
+            include_settlement_date_flows,
+            settlement,
+            npv_date,
+            Some(accuracy),
+            Some(max_evaluations),
+            Some(guess),
+        )
+        .map_err(PyQlError::from)?,
+    )
+}
+
+#[cfg(test)]
+mod analytics_tests {
+    use super::*;
+    use libitofin::interestrate::Compounding;
+    use libitofin::shared::shared;
+    use libitofin::termstructures::yields::FlatForward;
+    use libitofin::time::date::{Date, Month};
+    use libitofin::time::daycounters::actual360::Actual360;
+    use libitofin::time::frequency::Frequency;
+
+    #[test]
+    fn empty_spread_npv_needs_no_evaluation_date_but_validates_finite_inputs() {
+        Python::initialize();
+        Python::attach(|py| {
+            let settings_object = py.get_type::<PySettings>().call0().expect("valid settings");
+            let settings = settings_object
+                .extract::<PyRef<'_, PySettings>>()
+                .expect("settings facade");
+            let curve = shared(FlatForward::with_rate(
+                Date::new(1, Month::January, 2026),
+                0.025,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            ));
+            let curve = PyYieldTermStructure::from_inner(Handle::new(
+                curve as Shared<dyn YieldTermStructure>,
+            ));
+            let leg = PyLeg::from_inner(Vec::new());
+            assert_eq!(
+                npv_at_z_spread(
+                    &leg,
+                    &curve,
+                    0.007,
+                    PyCompounding::Compounded,
+                    &PyFrequency::Semiannual,
+                    &settings,
+                    None,
+                    None,
+                    None
+                )
+                .expect("empty NPV"),
+                0.0
+            );
+            assert!(
+                npv_at_z_spread(
+                    &leg,
+                    &curve,
+                    f64::NAN,
+                    PyCompounding::Compounded,
+                    &PyFrequency::Semiannual,
+                    &settings,
+                    None,
+                    None,
+                    None
+                )
+                .is_err()
+            );
+            let null = PyDate::from_inner(Date::null());
+            assert!(
+                npv_at_z_spread(
+                    &leg,
+                    &curve,
+                    0.007,
+                    PyCompounding::Compounded,
+                    &PyFrequency::Semiannual,
+                    &settings,
+                    None,
+                    Some(&null),
+                    None
+                )
+                .is_err()
+            );
+        });
+    }
 }

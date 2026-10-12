@@ -9,6 +9,7 @@ mod bates;
 mod benchmark_beta;
 mod blackformula;
 mod bma;
+mod bonds;
 mod bootstrap;
 mod calibration;
 mod capfloor;
@@ -34,6 +35,7 @@ mod curve;
 mod discrepancy_statistics;
 mod drawdown;
 mod fdengine;
+mod floating_bonds;
 mod forward;
 mod fra;
 mod general_statistics;
@@ -167,8 +169,8 @@ use swaptionvol::{
     PyVolatilityType,
 };
 use time::{
-    PyBusinessDayConvention, PyCalendar, PyDate, PyDateGeneration, PyDayCounter, PyFrequency,
-    PyPeriod, PySchedule,
+    PyBusinessDayConvention, PyCalendar, PyCompounding, PyDate, PyDateGeneration, PyDayCounter,
+    PyFrequency, PyPeriod, PySchedule,
 };
 use treeswaption::{PyBermudanExercise, PyTreeSwaptionEngine};
 use vol::{
@@ -241,6 +243,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     time.add_class::<PyCalendar>()?;
     time.add_class::<PyDayCounter>()?;
     time.add_class::<PyFrequency>()?;
+    time.add_class::<PyCompounding>()?;
     time.add_class::<PyBusinessDayConvention>()?;
     time.add_class::<PyDateGeneration>()?;
     time.add_class::<PySchedule>()?;
@@ -368,9 +371,16 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     cashflows.add_class::<bma::PyAverageBMACoupon>()?;
     cashflows.add_class::<PyCashFlow>()?;
     cashflows.add_class::<PyLeg>()?;
+    cashflows.add_class::<cashflows::PyBlackIborCouponPricer>()?;
     cashflows.add_function(wrap_pyfunction!(cashflows::npv, &cashflows)?)?;
+    cashflows.add_function(wrap_pyfunction!(cashflows::npv_at_z_spread, &cashflows)?)?;
+    cashflows.add_function(wrap_pyfunction!(cashflows::z_spread, &cashflows)?)?;
 
     let instruments = PyModule::new(py, "instruments")?;
+    instruments.add_class::<bonds::PyBond>()?;
+    instruments.add_class::<floating_bonds::PyFloatingRateBond>()?;
+    instruments.add_class::<bonds::PyFixedRateBond>()?;
+    instruments.add_class::<bonds::PyZeroCouponBond>()?;
     instruments.add_class::<variance_swap::PyVarianceSwap>()?;
     instruments.add_class::<PyOptionType>()?;
     instruments.add_class::<PyVanillaOption>()?;
@@ -410,6 +420,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     models.add_class::<PyCalibrationErrorType>()?;
 
     let pricingengines = PyModule::new(py, "pricingengines")?;
+    pricingengines.add_class::<bonds::PyDiscountingBondEngine>()?;
     pricingengines.add_class::<variance_swap::PyReplicatingVarianceSwapEngine>()?;
     pricingengines.add_class::<mc_variance_swap::PyMCVarianceSwapEngine>()?;
     pricingengines.add_class::<PyCashAnnuityModel>()?;
