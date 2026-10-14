@@ -16,6 +16,7 @@ credit.
 | Domain | libitofin surface | QuantLib oracle(s) | Status |
 |--------|-------------------|--------------------|--------|
 | European vanilla | `AnalyticEuropeanEngine`, FDM/MC European | `europeanoption.cpp` | Done (Milestone 1) |
+| Analytic European digital/gap greeks | `AnalyticEuropeanEngine` | `europeanoption.cpp` `testGreeks` kk==1..3 | cash-or-nothing (cash 100), asset-or-nothing, and gap (second strike 100) δ/γ/θ/ρ/divRho/vega vs moving-curve central differences @ 1e-5 relative to spot |
 | QMC European | `MakeMcEuropeanEngine::<LowDiscrepancy>` | `europeanoption.cpp` `testQmcEngines` | 108 call/put grid, 1 step, 4095 samples; abs(QMC−analytic)/spot ≤ 0.01 |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
