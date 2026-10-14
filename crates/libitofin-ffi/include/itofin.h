@@ -238,6 +238,27 @@ typedef struct ItofinBootstrapCallbacks {
   void (*release)(size_t);
 } ItofinBootstrapCallbacks;
 
+typedef struct ItofinCallableImpliedVolatilityConfig {
+  /**
+   * Presence bits: accuracy=1, max_evaluations=2, min_vol=4, max_vol=8.
+   */
+  uint32_t flags;
+  double accuracy;
+  uint64_t max_evaluations;
+  double min_vol;
+  double max_vol;
+} ItofinCallableImpliedVolatilityConfig;
+
+/**
+ * An immutable exercise quote per 100. Clean=0/dirty=1; call=0/put=1.
+ */
+typedef struct ItofinCallability {
+  double price;
+  int32_t price_type;
+  int32_t call_type;
+  int32_t date;
+} ItofinCallability;
+
 typedef struct ItofinFloatingBondConfig {
   struct ItofinBondConfig bond;
   uint64_t schedule;
@@ -2133,6 +2154,123 @@ int32_t itofin_context_free(struct ItofinContext *ctx, struct ItofinError *error
 int32_t itofin_handle_release(struct ItofinContext *ctx,
                               uint64_t handle,
                               struct ItofinError *error);
+
+/**
+ * Construct with live quote/curve graphs, without eager market valuation.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_black_callable_bond_engine_new(struct ItofinContext *ctx,
+                                              uint64_t yield_volatility,
+                                              uint64_t discount,
+                                              uint64_t settings_id,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Install only on actual callable products sharing the original Settings.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_set_black_engine(struct ItofinContext *ctx,
+                                              uint64_t id,
+                                              uint64_t engine,
+                                              struct ItofinError *error);
+
+/**
+ * Invert a settlement quote per 100 without changing the installed engine or cache.
+ * Price types are Clean=0 and Dirty=1; absent controls use 1e-10, 100, 0, 1.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_implied_volatility(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                double target,
+                                                int32_t price_type,
+                                                uint64_t discount,
+                                                struct ItofinCallableImpliedVolatilityConfig a,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
+ * Validate and copy a callability value. Every bond constructor also validates all records.
+ * # Safety
+ * Pointers must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callability_new(struct ItofinCallability a,
+                               struct ItofinCallability *out,
+                               struct ItofinError *error);
+
+/**
+ * The common calendar and first-period day-counter fields must be zero.
+ * Zero ex-coupon calendar selects NullCalendar when an ex-coupon period is present.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_fixed_rate_bond_new(struct ItofinContext *ctx,
+                                            struct ItofinFixedBondConfig a,
+                                            const double *coupons,
+                                            size_t count,
+                                            const struct ItofinCallability *calls,
+                                            size_t call_count,
+                                            uint64_t *out,
+                                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_zero_coupon_bond_new(struct ItofinContext *ctx,
+                                             struct ItofinBondConfig a,
+                                             int32_t maturity,
+                                             uint64_t counter,
+                                             const struct ItofinCallability *calls,
+                                             size_t call_count,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
+
+/**
+ * Copy schedule in original order. Capacity zero queries required length.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_callability(struct ItofinContext *ctx,
+                                         uint64_t id,
+                                         struct ItofinCallability *out,
+                                         size_t capacity,
+                                         size_t *required,
+                                         struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_zero_bond_day_counter(struct ItofinContext *ctx,
+                                              uint64_t id,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Construct without eager valuation. Time steps must be positive and fit usize.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_tree_callable_bond_engine_new(struct ItofinContext *ctx,
+                                             uint64_t model,
+                                             uint64_t time_steps,
+                                             uint64_t settings_id,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
+
+/**
+ * Install only on an actual callable product sharing the exact engine Settings.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_set_tree_engine(struct ItofinContext *ctx,
+                                             uint64_t id,
+                                             uint64_t engine,
+                                             struct ItofinError *error);
 
 /**
  * Compute Wilder +DI, -DI, DX and ADX in channel-major order.

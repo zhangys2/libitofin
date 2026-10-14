@@ -15,7 +15,9 @@ bindings. All three language surfaces share the Rust numerical core.
 Go and Python expose fixed/zero/floating bond instruments, retained discounting
 engines and [yield/Z-spread analytics](bond-analytics.md):
 [bond binding guide](bond-bindings.md). Existing bootstrap helpers remain
-separate; callable bonds and analytical risk measures are not bound here.
+separate. [Callable bonds, Hull-White tree and single-European Black pricing/IV](callable-bond-bindings.md)
+share the retained Bond interface. OAS and effective risk measures remain
+separate binding work.
 
 ## Install
 
@@ -37,7 +39,7 @@ separate; callable bonds and analytical risk measures are not bound here.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.42.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.43.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
