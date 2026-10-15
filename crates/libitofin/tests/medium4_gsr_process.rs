@@ -107,14 +107,12 @@ fn forward_measure_updates_change_drift_and_mean_and_notify() {
 }
 
 #[test]
-fn constructor_rejects_bad_lengths_grids_and_varying_parameters() {
+fn constructor_rejects_bad_lengths_and_grids() {
     for (times, vols, reversions) in [
         (vec![], vec![], vec![]),
         (vec![1.0], vec![0.01], vec![0.03]),
         (vec![], vec![0.01], vec![]),
         (vec![], vec![0.01], vec![0.03; 2]),
-        (vec![1.0], vec![0.01, 0.02], vec![0.03]),
-        (vec![1.0], vec![0.01; 2], vec![0.03, 0.04]),
         (vec![-1.0], vec![0.01; 2], vec![0.03]),
         (vec![f64::NAN], vec![0.01; 2], vec![0.03]),
         (vec![f64::INFINITY], vec![0.01; 2], vec![0.03]),
@@ -130,6 +128,43 @@ fn constructor_rejects_bad_lengths_grids_and_varying_parameters() {
     for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert!(GsrProcess::new(vec![], vec![0.01], vec![bad], 10.0).is_err());
     }
+}
+
+/// A transition that stays inside one piecewise bucket matches the constant
+/// process for that bucket. Across the knot, `y` and `G` follow the two-interval
+/// sum in `gsrprocesscore.cpp`.
+#[test]
+fn piecewise_core_matches_single_bucket_and_crosses_the_knot() {
+    let horizon = 10.0;
+    let same_reversion =
+        GsrProcess::new(vec![1.0], vec![0.2, 0.3], vec![0.5, 0.5], horizon).unwrap();
+    let first = GsrProcess::new(vec![], vec![0.2], vec![0.5], horizon).unwrap();
+    close(
+        same_reversion.expectation(0.0, 0.1, 0.5).unwrap(),
+        first.expectation(0.0, 0.1, 0.5).unwrap(),
+    );
+    close(
+        same_reversion.variance(0.0, 0.1, 0.5).unwrap(),
+        first.variance(0.0, 0.1, 0.5).unwrap(),
+    );
+
+    let varying = GsrProcess::new(vec![1.0], vec![0.2, 0.3], vec![0.5, 0.8], horizon).unwrap();
+    assert_eq!(varying.sigma(0.5).unwrap(), 0.2);
+    assert_eq!(varying.sigma(1.0).unwrap(), 0.3);
+    assert_eq!(varying.reversion(0.5).unwrap(), 0.5);
+    assert_eq!(varying.reversion(1.0).unwrap(), 0.8);
+
+    let y_left = 0.2 * 0.2 / (2.0 * 0.5) * (1.0 - (-2.0_f64 * 0.5 * 0.5).exp());
+    close(varying.y(0.5).unwrap(), y_left);
+    let full_left = 0.2 * 0.2 / (2.0 * 0.5) * (1.0 - (-2.0_f64 * 0.5 * 1.0).exp());
+    let decay = (-2.0_f64 * 0.8 * 0.5).exp();
+    let right = 0.3 * 0.3 / (2.0 * 0.8) * (1.0 - (-2.0_f64 * 0.8 * 0.5).exp());
+    close(varying.y(1.5).unwrap(), full_left * decay + right);
+
+    let g_left = (1.0 - (-0.5_f64 * 0.5).exp()) / 0.5;
+    let bridge = (-0.5_f64 * 0.5).exp();
+    let g_right = (1.0 - (-0.8_f64 * 0.5).exp()) / 0.8;
+    close(varying.g(0.5, 1.5).unwrap(), g_left + bridge * g_right);
 }
 
 #[test]

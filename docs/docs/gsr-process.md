@@ -1,8 +1,9 @@
 # Constant GSR state process
 
-`GsrProcess` provides the additive Rust-core, constant-parameter subset of
-QuantLib's Gaussian short-rate state process under a `T`-forward measure.
-It is a state process, not a calibrated interest-rate model.
+`GsrProcess` provides the additive Rust-core Gaussian short-rate state process
+under a `T`-forward measure. Constant parameters use a closed form. Varying
+volatility or reversion uses QuantLib's piecewise core. It is a state process,
+not a calibrated interest-rate model.
 
 ```rust
 use libitofin::processes::{ForwardMeasureProcess1D, GsrProcess};
@@ -25,7 +26,7 @@ process.set_forward_measure_time(20.0)?;
 | Time domain | `0 <= t <= T`; transition start and end must lie in this range |
 | Transition | Exact Gaussian mean, variance, standard deviation and evolution |
 | Grid shape | `vols.len() = times.len()+1`; reversion count one or volatility count |
-| Grid parameters | Repeated identical constants only; varying vectors are rejected |
+| Grid parameters | Repeated identical constants use the closed form. Varying finite nonnegative volatilities and finite reversions use the piecewise core |
 | Grid times | Finite, nonnegative and strictly increasing; redundant for constants |
 | Date conversion | Unsupported; pass process-year times directly |
 
@@ -60,7 +61,6 @@ constant grids, horizon updates, invalid domains, and extreme variance scaling.
 
 ## Not included
 
-- Piecewise-changing volatility or reversion.
 - GSR model fitting, term structures, calibration, numeraires or pricing engines.
 - Reference-date/day-counter conversion or new C, Go and Python binding APIs.
 

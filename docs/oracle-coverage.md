@@ -76,7 +76,8 @@ credit.
 | Heston FD spurious oscillations | `FdmHestonSolver::gamma_at` 6×200×13 | `fdheston.cpp` `testSpuriousOscillations` | CS/HS/mod-HS/Douglas max \|Δγ\| > 0.01 on S∈[99,101]; Implicit/TrBDF2/CN still #636 |
 | Heston FD UpOut barrier NPV | `FdHestonBarrierEngine` 50×400×100 | `fdheston.cpp` `testFdmHestonBarrier` | UpOut call 9.1530 @ 1e-2 (δ/γ deferred) |
 | Hull–White / short rate | calibration, tree swaption | `shortratemodels.cpp`, swaption suite | Core done |
-| GSR process (constant a/σ) | `GsrProcess` + `ForwardMeasureProcess1D` | `gsr.cpp` `testGsrProcess` | E/V vs Hull–White forward (f≡0) @ 1e-8; flat≡stepwise-equal; piecewise core deferred |
+| GSR process (constant a/σ) | `GsrProcess` + `ForwardMeasureProcess1D` | `gsr.cpp` `testGsrProcess` | E/V vs Hull–White forward (f≡0) @ 1e-8; flat≡stepwise-equal |
+| GSR piecewise core | `GsrProcessCore` | `gsrprocesscore.cpp` `y` / `G` / single-bucket transition | Inside one bucket, E/V match the constant process. Across a knot, `y` and `G` match the two-interval sum. `|a|<1e-4` uses QuantLib's zero-reversion cutoff. `Gsr` model and engines remain a gap |
 | LMM simple covariance | `LmExponentialCorrelationModel` + `LmLinearExponentialVolatilityModel` + `LfmCovarianceProxy` | `libormarketmodel.cpp` `testSimpleCovarianceModels` | corr/covar reconstr. @ 1e-14; lin-exp vol formula; process/engines deferred |
 | Abcd market-model vol | `AbcdFunction` + `AbcdSquared` + `AbcdMathFunction` | `marketmodel.cpp` `testAbcdDegenerateCases`, `testAbcdVolatilityIntegration` | covar @ 1e-14 (degenerate); analytical vs SegmentIntegral @ 1e-4; evolvers/products deferred |
 | MF state process | `MfStateProcess` | `markovfunctional.cpp` `testMfStateProcess` | diffusion buckets + variance (a=0 / a=0.01) @ 1e-10; MarkovFunctional model/engines deferred |
