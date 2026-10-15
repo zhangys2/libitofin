@@ -165,6 +165,27 @@ fn piecewise_core_matches_single_bucket_and_crosses_the_knot() {
     let bridge = (-0.5_f64 * 0.5).exp();
     let g_right = (1.0 - (-0.8_f64 * 0.5).exp()) / 0.8;
     close(varying.g(0.5, 1.5).unwrap(), g_left + bridge * g_right);
+
+    let stub = GsrProcess::new(
+        vec![1.0, 2.0],
+        vec![0.2, 0.3, 0.4],
+        vec![0.5, 0.8, 1.3],
+        horizon,
+    )
+    .unwrap();
+    assert_eq!(stub.sigma(0.5).unwrap(), 0.2);
+    assert_eq!(stub.sigma(1.0).unwrap(), 0.3);
+    assert_eq!(stub.sigma(2.0).unwrap(), 0.4);
+    // Crosses the knot, so the l<k and l>k integral arms both run.
+    close(varying.expectation(0.5, 0.1, 1.0).unwrap(), 1.097_052_632_583_638e-2);
+    close(varying.variance(0.5, 0.1, 1.0).unwrap(), 3.804_713_261_173_464_6e-2);
+    close(varying.drift(1.5, 0.1).unwrap(), -1.500_382_514_916_357_7e-1);
+    // QuantLib `testGsrProcess` stub: times 1,2; vols 0.2,0.3,0.4; reversions 0.5,0.8,1.3.
+    close(stub.expectation(0.5, 0.1, 2.0).unwrap(), -2.305_974_964_631_538e-2);
+    close(stub.variance(0.5, 0.1, 2.0).unwrap(), 5.786_812_950_866_354_6e-2);
+
+    let cutoff = GsrProcess::new(vec![1.0], vec![0.2, 0.3], vec![1.0e-5, 0.5], horizon).unwrap();
+    close(cutoff.y(0.5).unwrap(), 0.2 * 0.2 * 0.5);
 }
 
 #[test]
