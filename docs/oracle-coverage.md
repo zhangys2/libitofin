@@ -20,6 +20,7 @@ credit.
 | QMC European | `MakeMcEuropeanEngine::<LowDiscrepancy>` | `europeanoption.cpp` `testQmcEngines` | 108 call/put grid, 1 step, 4095 samples; abs(QMC−analytic)/spot ≤ 0.01 |
 | European asset-or-nothing | `AssetOrNothingPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testAssetOrNothingEuropeanValues` | Haug p.90 put 20.2069 @ 1e-4; call+put ≡ S e^{-qT} |
 | European gap | `GapPayoff` + `BlackCalculator` visitor | `digitaloption.cpp` `testGapEuropeanValues` | Haug p.88 call −0.0053 @ 1e-4; gap ≡ vanilla ± cash-or-nothing |
+| Superfund and supershare | `SuperFundPayoff`, `SuperSharePayoff` | `payoffs.cpp` `operator()` | Corridor `[K1, K2)`: superfund pays `S/K1`, supershare pays cash. No QuantLib suite case. `BlackCalculator` rejects both, matching QuantLib |
 | American digital at-hit | `AnalyticDigitalAmericanEngine` | `digitaloption.cpp` `testCashAtHitOrNothingAmericanValues` / `testAssetAtHitOrNothingAmericanValues` | Haug p.95 cash+asset at-hit @ 1e-4 (ITM @ 1e-16) |
 | American digital at-expiry (knock-in) | `AnalyticDigitalAmericanEngine` + `AmericanPayoffAtExpiry` | `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` / `testAssetAtExpiryOrNothingAmericanValues` | Haug p.95 knock-in cash+asset at-expiry @ 1e-4 (ITM discounted @ 1e-12) |
 | American digital at-expiry (knock-out) | `AnalyticDigitalAmericanKOEngine` | `digitaloption.cpp` `testCashAtExpiryOrNothingAmericanValues` / `testAssetAtExpiryOrNothingAmericanValues` | Haug p.95 KO cash 4.9081/3.0461 + asset 40.1574/17.2983 @ 1e-4; out-of-bonds 0; KI+KO ≡ prepaid |

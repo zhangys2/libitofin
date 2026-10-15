@@ -113,6 +113,8 @@ links to the language guides and project documentation.
 
 - [Gap payoff](gap-payoff.md): separate trigger and payment strikes.
 
+- [Superfund and supershare payoffs](super-payoffs.md): call-only corridors. QuantLib's analytic visitor does not price them.
+
 - [Cap/floor optionlets](capfloor-optionlets.md): shared coupon extraction and pricing decomposition.
 
 - [Constant GSR process](gsr-process.md): exact Gaussian forward-measure dynamics and checked constant grids.

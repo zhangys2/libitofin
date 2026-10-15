@@ -147,7 +147,8 @@ pub use partialtimebarrieroption::{
 };
 pub use payoffs::{
     AssetOrNothingPayoff, CashOrNothingPayoff, FloatingTypePayoff, GapPayoff, NullPayoff,
-    PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, TypePayoff,
+    PercentageStrikePayoff, PlainVanillaPayoff, StrikedTypePayoff, SuperFundPayoff,
+    SuperSharePayoff, TypePayoff,
 };
 pub use protection::ProtectionSide;
 pub use quantovanillaoption::{
