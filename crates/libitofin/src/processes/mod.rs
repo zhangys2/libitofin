@@ -16,6 +16,7 @@ mod g2process;
 mod geometricbrownianprocess;
 mod gjrgarchprocess;
 mod gsrprocess;
+mod gsrprocesscore;
 mod hestonprocess;
 mod hestonslvprocess;
 mod hullwhiteprocess;
