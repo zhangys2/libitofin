@@ -1,0 +1,51 @@
+name: .NET bindings
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - crates/libitofin-ffi/**
+      - sdk/dotnet/**
+      - scripts/gen_dotnet_bindings.py
+      - scripts/stage_dotnet_native.sh
+      - .github/workflows/dotnet-bindings.yml
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+
+permissions:
+  contents: read
+
+jobs:
+  bindings:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Check generated P/Invoke bindings
+        run: |
+          python3 scripts/gen_dotnet_bindings.py
+          git diff --exit-code -- sdk/dotnet/Itofin/Native/NativeMethods.g.cs
+      - name: Build native cdylib
+        run: cargo build -p libitofin-ffi --release
+      - name: Stage native library
+        id: native
+        run: echo "rel=$(bash scripts/stage_dotnet_native.sh)" >> "$GITHUB_OUTPUT"
+      - name: Test
+        run: dotnet test sdk/dotnet/Itofin.Tests/Itofin.Tests.csproj -c Release --nologo
+      - name: Pack includes the staged runtime
+        run: |
+          dotnet pack sdk/dotnet/Itofin/Itofin.csproj -c Release -o "$RUNNER_TEMP/nupkg" --nologo
+          pkg=$(find "$RUNNER_TEMP/nupkg" -name '*.nupkg' -print -quit)
+          unzip -l "$pkg" | grep -F "${{ steps.native.outputs.rel }}"

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Itofin</RootNamespace>
+    <Version>0.43.0</Version>
+    <Description>C# bindings for libitofin over its C ABI.</Description>
+    <PackageId>Itofin</PackageId>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/zhangys2/libitofin</RepositoryUrl>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="\" />
+    <Content Include="runtimes/**/native/*" Pack="true" PackagePath="%(Identity)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

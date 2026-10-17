@@ -70,6 +70,7 @@ jobs:
       itofin_py: ${{ steps.check-changes.outputs.itofin_py_any_modified }}
       libitofin_ffi: ${{ steps.check-changes.outputs.libitofin_ffi_any_modified }}
       go: ${{ steps.check-changes.outputs.go_any_modified }}
+      dotnet: ${{ steps.check-changes.outputs.dotnet_any_modified }}
       docs: ${{ steps.check-changes.outputs.docs_any_modified }}
     runs-on: ubuntu-latest
     permissions:
@@ -130,6 +131,20 @@ jobs:
               - .github/workflows/go-bindings.yml
               - .github/workflows/go-package.yml
               - .github/workflows/go-release.yml
+
+            # C ABI surface the .NET P/Invoke allowlist calls. Align with
+            # dotnet-bindings.yml on.push.paths. rust-ci compiles the cdylib;
+            # it does not run dotnet test.
+            dotnet:
+              - crates/libitofin-ffi/**
+              - sdk/dotnet/**
+              - scripts/gen_dotnet_bindings.py
+              - scripts/stage_dotnet_native.sh
+              - Cargo.toml
+              - Cargo.lock
+              - rust-toolchain.toml
+              - .github/workflows/pre-commit.yml
+              - .github/workflows/dotnet-bindings.yml
 
             docs:
               - README.md
@@ -364,6 +379,11 @@ jobs:
     if: needs.check-change-files.outputs.go == 'true'
     uses: ./.github/workflows/go-bindings.yml
 
+  dotnet-bindings:
+    needs: check-change-files
+    if: needs.check-change-files.outputs.dotnet == 'true'
+    uses: ./.github/workflows/dotnet-bindings.yml
+
   go-package:
     needs: check-change-files
     if: needs.check-change-files.outputs.go == 'true'
@@ -384,7 +404,7 @@ jobs:
 
   workflow-success:
     name: workflow-success
-    needs: [check-change-files, pre-commit, rust-ci, python-bindings, go-bindings, go-package, docs]
+    needs: [check-change-files, pre-commit, rust-ci, python-bindings, go-bindings, go-package, dotnet-bindings, docs]
     # Skip when the workflow itself is cancelled (e.g. superseded by a newer
     # synchronize/edited run under cancel-in-progress). Otherwise `always()`
     # leaves a failing workflow-success check on the commit that blocks merge
@@ -403,7 +423,7 @@ jobs:
 
           needs = json.loads(os.environ["NEEDS_JSON"])
           paths = needs["check-change-files"]["outputs"]
-          conditional = {"rust-ci": "rust", "go-bindings": "go", "go-package": "go", "docs": "docs"}
+          conditional = {"rust-ci": "rust", "go-bindings": "go", "go-package": "go", "dotnet-bindings": "dotnet", "docs": "docs"}
           failed = False
           for job, details in needs.items():
               result = details["result"]
