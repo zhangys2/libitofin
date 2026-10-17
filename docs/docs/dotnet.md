@@ -1,0 +1,1 @@
+--8<-- "sdk/dotnet/README.md"
