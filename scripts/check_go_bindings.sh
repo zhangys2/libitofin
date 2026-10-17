@@ -82,6 +82,36 @@ cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/chart_adx.c -Ltarget/release -litofin_ffi -o target/cpp-chart-adx
 ./target/cpp-chart-adx
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/callable_oas.c -Ltarget/release -litofin_ffi -o target/c-callable-oas
+./target/c-callable-oas
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/callable_oas.c -Ltarget/release -litofin_ffi -o target/cpp-callable-oas
+./target/cpp-callable-oas
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/callable_risk.c -Ltarget/release -litofin_ffi -o target/c-callable-risk
+./target/c-callable-risk
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/callable_risk.c -Ltarget/release -litofin_ffi -o target/cpp-callable-risk
+./target/cpp-callable-risk
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/bond_forward.c -Ltarget/release -litofin_ffi -o target/c-bond-forward
+./target/c-bond-forward
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/bond_forward.c -Ltarget/release -litofin_ffi -o target/cpp-bond-forward
+./target/cpp-bond-forward
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/float_float_swap.c -Ltarget/release -litofin_ffi -o target/c-float-float-swap
+./target/c-float-float-swap
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/float_float_swap.c -Ltarget/release -litofin_ffi -o target/cpp-float-float-swap
+./target/cpp-float-float-swap
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/c-g2-process
+./target/c-g2-process
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/cpp-g2-process
+./target/cpp-g2-process
 cargo build -p libitofin-ffi --release --features optimization-method-oracle
 cd sdk/go
 go vet ./...
@@ -90,9 +120,18 @@ go test -tags optimization_oracle -race -count=1 -run "^TestOptimizationMethodsQ
 go test -race -count=1 -coverprofile=../../target/go-coverage.out ./...
 go run ./examples/european_option
 go run ./examples/portfolio
+go run ./examples/g2_process
 
 go run ./examples/drawdown
 go run ./examples/benchmark_beta
 
 go run ./examples/performance_ratios
 go run ./examples/chart_adx
+
+go run ./examples/callable-oas
+
+go run ./examples/callable-risk
+
+go run ./examples/bond-forward
+
+go run ./examples/float-float-swap

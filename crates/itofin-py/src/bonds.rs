@@ -262,6 +262,18 @@ pub struct PyBond {
     frozen: Cell<bool>,
 }
 impl PyBond {
+    pub(crate) fn forward_plain(&self) -> PyResult<SharedMut<Bond>> {
+        if self.guard.is_some() {
+            return Err(ItofinError::new_err("fixed or zero plain bond required"));
+        }
+        match &self.inner {
+            BondBacking::Plain(bond) => Ok(bond.clone()),
+            _ => Err(ItofinError::new_err("fixed or zero plain bond required")),
+        }
+    }
+    pub(crate) fn prepare_forward(&mut self, force: bool) -> PyResult<()> {
+        self.prepare(force)
+    }
     pub(crate) fn from_inner(inner: Bond, calendar: PyCalendar) -> Self {
         Self::from_backing(BondBacking::Plain(shared_mut(inner)), calendar)
     }
@@ -287,6 +299,16 @@ impl PyBond {
         base.flags.2 = Some(base.inner.borrow().settings().using_at_par_coupons());
         base.guard = Some(guard);
         base
+    }
+    pub(crate) fn callable_probe_settlement(
+        &self,
+        settlement: Option<&PyDate>,
+    ) -> PyResult<Option<Date>> {
+        let actual = analytical_date(settlement)?;
+        if actual.is_none() {
+            self.settlement_date(None)?;
+        }
+        Ok(actual)
     }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn callable_implied_volatility(
@@ -380,8 +402,7 @@ impl PyBond {
         }
         Ok(())
     }
-    fn prepare(&mut self, force: bool) -> PyResult<()> {
-        let settlement = self.settlement_date(None)?.inner();
+    pub(crate) fn refresh_forward(&mut self) {
         let flags = {
             let bond = self.inner.borrow();
             (
@@ -408,6 +429,10 @@ impl PyBond {
             }
             self.flags = flags;
         }
+    }
+    fn prepare(&mut self, force: bool) -> PyResult<()> {
+        let settlement = self.settlement_date(None)?.inner();
+        self.refresh_forward();
         if let (Some(guard), Some((curve, include))) = (&self.guard, &self.engine_inputs) {
             let bond = self.inner.borrow();
             if !(force || !self.frozen.get() && !bond.base().is_calculated())

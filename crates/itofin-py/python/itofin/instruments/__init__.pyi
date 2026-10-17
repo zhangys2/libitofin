@@ -17,6 +17,7 @@ __all__ = [
     "BMASwap",
     "BermudanExercise",
     "Bond",
+    "BondForward",
     "Callability",
     "CallabilityType",
     "CallableFixedRateBond",
@@ -26,6 +27,7 @@ __all__ = [
     "CreditDefaultSwap",
     "EuropeanExercise",
     "FixedRateBond",
+    "FloatFloatSwap",
     "FloatingRateBond",
     "ForwardRateAgreement",
     "MakeCreditDefaultSwap",
@@ -189,6 +191,25 @@ class Bond:
     def recalculate(self) -> None: ...
 
 @typing.final
+class BondForward:
+    r"""
+    Live plain fixed/zero bond forward with a dirty delivery strike.
+    """
+    def __new__(cls, bond: Bond, value_date: time.Date, delivery_date: time.Date, position: Position, strike: builtins.float, settlement_days: builtins.int, day_counter: time.DayCounter, calendar: time.Calendar, convention: time.BusinessDayConvention, discount: termstructures.YieldTermStructure, income_discount: typing.Optional[termstructures.YieldTermStructure] = None) -> BondForward: ...
+    def npv(self) -> builtins.float: ...
+    def fair_forward_price(self) -> builtins.float: ...
+    def clean_forward_price(self) -> builtins.float: ...
+    def settlement_date(self) -> time.Date: ...
+    def delivery_date(self) -> time.Date: ...
+    def value_date(self) -> time.Date: ...
+    def strike(self) -> builtins.float: ...
+    def position(self) -> Position: ...
+    def is_expired(self) -> builtins.bool: ...
+    def freeze(self) -> None: ...
+    def unfreeze(self) -> None: ...
+    def recalculate(self) -> None: ...
+
+@typing.final
 class Callability:
     r"""
     Immutable hard exercise right with a clean or dirty per-100 price.
@@ -213,9 +234,25 @@ class CallableFixedRateBond(Bond):
         r"""
         Attach a retained single-European Black engine sharing this bond's settings.
         """
+    def clean_price_oas(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Clean settlement quote per 100 from a conventional decimal OAS and explicit tree.
+        """
+    def oas(self, clean_price: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, settlement: typing.Optional[time.Date] = None, *, accuracy: builtins.float = 1e-10, max_evaluations: builtins.int = 100, guess: builtins.float = 0.0) -> builtins.float:
+        r"""
+        Solve conventional decimal OAS; accuracy and guess are continuous shift units.
+        """
     def implied_volatility(self, target_price: builtins.float, discount_curve: termstructures.YieldTermStructure, *, price_type: termstructures.BondPriceType = termstructures.BondPriceType.Clean, accuracy: builtins.float = 1e-10, max_evaluations: builtins.int = 100, min_vol: builtins.float = 0.0, max_vol: builtins.float = 1.0) -> builtins.float:
         r"""
         Solve relative forward-yield volatility without changing installed pricing state.
+        """
+    def effective_duration(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
+        r"""
+        Effective conventional-OAS clean-price duration, without changing installed pricing state.
+        """
+    def effective_convexity(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
+        r"""
+        Effective conventional-OAS clean-price convexity, without changing installed pricing state.
         """
     def callability(self) -> builtins.list[Callability]: ...
     def frequency(self) -> time.Frequency: ...
@@ -235,9 +272,25 @@ class CallableZeroCouponBond(Bond):
         r"""
         Attach a retained single-European Black engine sharing this bond's settings.
         """
+    def clean_price_oas(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Clean settlement quote per 100 from a conventional decimal OAS and explicit tree.
+        """
+    def oas(self, clean_price: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, settlement: typing.Optional[time.Date] = None, *, accuracy: builtins.float = 1e-10, max_evaluations: builtins.int = 100, guess: builtins.float = 0.0) -> builtins.float:
+        r"""
+        Solve conventional decimal OAS; accuracy and guess are continuous shift units.
+        """
     def implied_volatility(self, target_price: builtins.float, discount_curve: termstructures.YieldTermStructure, *, price_type: termstructures.BondPriceType = termstructures.BondPriceType.Clean, accuracy: builtins.float = 1e-10, max_evaluations: builtins.int = 100, min_vol: builtins.float = 0.0, max_vol: builtins.float = 1.0) -> builtins.float:
         r"""
         Solve relative forward-yield volatility without changing installed pricing state.
+        """
+    def effective_duration(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
+        r"""
+        Effective conventional-OAS clean-price duration, without changing installed pricing state.
+        """
+    def effective_convexity(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
+        r"""
+        Effective conventional-OAS clean-price convexity, without changing installed pricing state.
         """
     def callability(self) -> builtins.list[Callability]: ...
     def day_counter(self) -> time.DayCounter: ...
@@ -732,6 +785,73 @@ class FixedRateBond(Bond):
     def frequency(self) -> time.Frequency: ...
     def day_counter(self) -> time.DayCounter: ...
     def first_period_day_counter(self) -> typing.Optional[time.DayCounter]: ...
+
+@typing.final
+class FloatFloatSwap:
+    r"""
+    Plain same-currency swap paying the first Ibor leg and receiving the second.
+    Both legs share one positive constant nominal; no principal is exchanged.
+    """
+    def __init__(self, nominal: builtins.float, pay_schedule: time.Schedule, pay_index: indexes.IborIndex, pay_spread: builtins.float, pay_day_count: time.DayCounter, receive_schedule: time.Schedule, receive_index: indexes.IborIndex, receive_spread: builtins.float, receive_day_count: time.DayCounter, settings: itofin.Settings, *, payment_convention: typing.Optional[time.BusinessDayConvention] = None) -> None:
+        r"""
+        Build plain Ibor legs; omitted payment convention uses each schedule's convention.
+        """
+    def set_engine(self, curve: termstructures.YieldTermStructure, settings: itofin.Settings) -> None:
+        r"""
+        Attach a retained live curve with native defaults; Settings must be the same object.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Signed present value under the retained engine.
+        """
+    def pay_leg_npv(self) -> builtins.float:
+        r"""
+        Signed paid-leg present value.
+        """
+    def receive_leg_npv(self) -> builtins.float:
+        r"""
+        Signed received-leg present value.
+        """
+    def pay_leg_bps(self) -> builtins.float:
+        r"""
+        Signed paid-leg sensitivity for one basis point of spread.
+        """
+    def receive_leg_bps(self) -> builtins.float:
+        r"""
+        Signed received-leg sensitivity for one basis point of spread.
+        """
+    def fair_pay_spread(self) -> builtins.float:
+        r"""
+        Absolute paid spread zeroing NPV while holding the received spread fixed.
+        """
+    def fair_receive_spread(self) -> builtins.float:
+        r"""
+        Absolute received spread zeroing NPV while holding the paid spread fixed.
+        """
+    def calculate(self) -> None:
+        r"""
+        Populate native cached results if needed.
+        """
+    def recalculate(self) -> None:
+        r"""
+        Force native repricing, including while frozen.
+        """
+    def freeze(self) -> None:
+        r"""
+        Pin native cached results until unfreeze or explicit recalculate.
+        """
+    def unfreeze(self) -> None:
+        r"""
+        Resume native observer-driven repricing.
+        """
+    def is_calculated(self) -> builtins.bool:
+        r"""
+        Read the native cache flag without calculating.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Test native expiry without calculating.
+        """
 
 @typing.final
 class FloatingRateBond(Bond):
