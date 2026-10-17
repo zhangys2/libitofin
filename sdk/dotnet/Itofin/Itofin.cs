@@ -9,13 +9,16 @@ using Itofin.Native;
 
 namespace Itofin;
 
-// SafeHandle ownership over the C ABI. ReleaseHandle runs on the context's
-// owner thread; libitofin rejects cross-thread use and destruction.
+// SafeHandle ownership over the C ABI. Explicit Dispose posts destruction to
+// the context's owner thread. ReleaseHandle does not hop or join: a finalizer
+// never touches thread-confined native state.
 
 public sealed class ItofinException(int code, string message) : Exception($"itofin ({code}): {message}")
 {
     public int Code { get; } = code;
 }
+
+public sealed class SessionMismatchException() : Exception("itofin: objects belong to different sessions");
 
 public enum OptionType { Call = 0, Put = 1 }
 
@@ -70,8 +73,9 @@ public sealed class Session : IDisposable
         }
         catch
         {
-            if (context.IsInvalid) gate.Shutdown();
-            else context.Dispose();
+            try { gate.Close(); }
+            catch { /* Keep the original open failure. */ }
+            context.Dispose();
             throw;
         }
         return new Session(gate, context);
@@ -81,17 +85,9 @@ public sealed class Session : IDisposable
 
     public void Dispose()
     {
-        if (_context.IsClosed) return;
-        if (!_context.IsInvalid && !_gate.Freed)
-        {
-            _gate.BeginClose();
-            _gate.RunUnchecked(() =>
-            {
-                if (_gate.Freed) return;
-                Calls.ContextFree(_gate.Context);
-                _gate.MarkFreed();
-            });
-        }
+        // Close is idempotent and is the only path that frees the context.
+        // A finalizer may already have closed the SafeHandle without freeing.
+        _gate.Close();
         _context.Dispose();
     }
 
@@ -120,7 +116,7 @@ public sealed class Session : IDisposable
 
     void Same(NativeObject other)
     {
-        if (!ReferenceEquals(other.Owner, this)) throw new ItofinException(2, "objects belong to different sessions");
+        if (!ReferenceEquals(other.Owner, this)) throw new SessionMismatchException();
     }
 
     ulong Alloc(Func<nint, ulong> create)
@@ -152,7 +148,7 @@ public sealed class VanillaOption(Session session, ulong id) : NativeObject(sess
 {
     public void SetBlackScholesEngine(BlackScholesProcess process)
     {
-        if (!ReferenceEquals(Owner, process.Owner)) throw new ItofinException(2, "objects belong to different sessions");
+        if (!ReferenceEquals(Owner, process.Owner)) throw new SessionMismatchException();
         Call(ctx => Calls.SetEngine(ctx, Id, process.Id));
     }
 
@@ -183,13 +179,37 @@ public abstract class NativeObject : IDisposable
     private protected NativeObject(Session session, ulong id)
     {
         Owner = session;
-        _handle = new ObjectHandle(session.Gate, id);
+        _handle = new ObjectHandle(id);
     }
 
     internal Session Owner { get; }
     internal ulong Id => _handle.Id;
     private protected void Call(Action<nint> body) => Owner.Call(body);
-    public void Dispose() => _handle.Dispose();
+
+    public void Dispose()
+    {
+        if (_handle.IsClosed) return;
+        try { ReleaseId(); }
+        finally { _handle.Dispose(); }
+    }
+
+    void ReleaseId()
+    {
+        if (_handle.IsInvalid || Owner.Gate.Freed) return;
+        var id = _handle.RawId;
+        try
+        {
+            Owner.Gate.RunUnchecked(() =>
+            {
+                if (Owner.Gate.Freed) return;
+                Calls.HandleRelease(Owner.Gate.Context, id);
+            });
+        }
+        catch (Exception ex) when (ex is ObjectDisposedException or InvalidOperationException)
+        {
+            // The session already dropped the native graph.
+        }
+    }
 }
 
 static class NativeBootstrap
@@ -229,9 +249,11 @@ sealed class NativeGate
     readonly Thread _thread;
     readonly BlockingCollection<Action> _queue = new();
     int _closed;
+    int _freeRequested;
     int _freed;
 
     internal nint Context;
+    internal Thread OwnerThread => _thread;
     internal bool Freed => Volatile.Read(ref _freed) != 0;
     internal void MarkFreed() => Volatile.Write(ref _freed, 1);
 
@@ -263,23 +285,96 @@ sealed class NativeGate
             work();
             return;
         }
-        Exception? error = null;
-        using var done = new ManualResetEventSlim(false);
+        Admission admission;
         lock (_sync)
         {
             if (rejectIfClosed && _closed != 0) throw new ObjectDisposedException(nameof(Session));
-            _queue.Add(() =>
-            {
-                try { work(); }
-                catch (Exception ex) { error = ex; }
-                finally { done.Set(); }
-            });
+            if (_queue.IsAddingCompleted) throw new ObjectDisposedException(nameof(Session));
+            admission = Admit(work);
         }
-        if (!done.Wait(TimeSpan.FromSeconds(30))) throw new TimeoutException("itofin native call timed out");
-        if (error is not null) ExceptionDispatchInfo.Capture(error).Throw();
+        admission.Wait();
     }
 
-    internal void BeginClose() { lock (_sync) _closed = 1; }
+    // Claims the single context_free, waits until it finishes, then joins.
+    // Admitted work is waited on without a timeout so a disposed wait handle
+    // cannot race the owner thread. A second caller finds the claim taken.
+    internal void Close()
+    {
+        if (Thread.CurrentThread == _thread)
+        {
+            try
+            {
+                if (TryClaimFree(out var ptr)) Free(ptr);
+            }
+            finally { Shutdown(); }
+            return;
+        }
+        Admission? admission = null;
+        lock (_sync)
+        {
+            _closed = 1;
+            if (_freeRequested == 0 && !_queue.IsAddingCompleted)
+            {
+                _freeRequested = 1;
+                var ptr = Context;
+                admission = Admit(() => Free(ptr));
+            }
+        }
+        try
+        {
+            admission?.Wait();
+        }
+        finally
+        {
+            Shutdown();
+        }
+    }
+
+    bool TryClaimFree(out nint ptr)
+    {
+        lock (_sync)
+        {
+            ptr = Context;
+            if (_freeRequested != 0) return false;
+            _freeRequested = 1;
+            _closed = 1;
+            return true;
+        }
+    }
+
+    // Caller is already on the owner thread. Never hops or joins.
+    internal bool TryFreeOnOwner(nint ptr)
+    {
+        if (Thread.CurrentThread != _thread) return true;
+        if (!TryClaimFree(out var claimed)) return true;
+        try
+        {
+            Free(claimed != 0 ? claimed : ptr);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    void Free(nint ptr)
+    {
+        if (Freed) return;
+        if (ptr != 0) Calls.ContextFree(ptr);
+        MarkFreed();
+    }
+
+    // Caller holds _sync. The free claim and the enqueue share that lock so
+    // Shutdown cannot complete the queue between them.
+    Admission Admit(Action work)
+    {
+        var admission = new Admission();
+        _queue.Add(() =>
+        {
+            try { work(); }
+            catch (Exception ex) { admission.Fail(ex); }
+            finally { admission.Signal(); }
+        });
+        return admission;
+    }
 
     internal void Shutdown()
     {
@@ -289,6 +384,27 @@ sealed class NativeGate
             if (!_queue.IsAddingCompleted) _queue.CompleteAdding();
         }
         if (Thread.CurrentThread != _thread) _thread.Join();
+    }
+
+    sealed class Admission
+    {
+        readonly ManualResetEventSlim _done = new(false);
+        Exception? _error;
+        internal void Fail(Exception ex) => _error = ex;
+        internal void Signal()
+        {
+            try { _done.Set(); }
+            catch (ObjectDisposedException) { }
+        }
+        internal void Wait()
+        {
+            try
+            {
+                _done.Wait();
+                if (_error is not null) ExceptionDispatchInfo.Capture(_error).Throw();
+            }
+            finally { _done.Dispose(); }
+        }
     }
 }
 
@@ -300,62 +416,31 @@ sealed class ContextHandle : SafeHandleZeroOrMinusOneIsInvalid
 
     protected override bool ReleaseHandle()
     {
+        // Critical finalizer and Dispose both land here. Never wait or join.
+        // Session.Dispose frees on the owner thread before this runs; if this
+        // is only the finalizer, the context is left for process exit.
         if (Environment.HasShutdownStarted) return true;
-        if (_gate.Freed)
-        {
-            _gate.Shutdown();
-            return true;
-        }
-        var ptr = handle;
-        try
-        {
-            _gate.BeginClose();
-            _gate.RunUnchecked(() =>
-            {
-                if (_gate.Freed) return;
-                Calls.ContextFree(ptr);
-                _gate.MarkFreed();
-            });
-            return true;
-        }
-        catch { return false; }
-        finally { _gate.Shutdown(); }
+        if (Thread.CurrentThread != _gate.OwnerThread) return true;
+        return _gate.TryFreeOnOwner(handle);
     }
 }
 
 sealed class ObjectHandle : SafeHandleZeroOrMinusOneIsInvalid
 {
-    readonly NativeGate _gate;
-    internal ObjectHandle(NativeGate gate, ulong id) : base(true)
-    {
-        _gate = gate;
-        SetHandle(unchecked((nint)id));
-    }
+    internal ObjectHandle(ulong id) : base(true) => SetHandle(unchecked((nint)id));
+
+    internal ulong RawId => unchecked((ulong)DangerousGetHandle());
 
     internal ulong Id
     {
         get
         {
             if (IsClosed || IsInvalid) throw new ObjectDisposedException(nameof(NativeObject));
-            return unchecked((ulong)DangerousGetHandle());
+            return RawId;
         }
     }
 
-    protected override bool ReleaseHandle()
-    {
-        if (Environment.HasShutdownStarted) return true;
-        var id = unchecked((ulong)handle);
-        try
-        {
-            _gate.RunUnchecked(() =>
-            {
-                if (_gate.Freed) return;
-                Calls.HandleRelease(_gate.Context, id);
-            });
-            return true;
-        }
-        catch { return true; }
-    }
+    protected override bool ReleaseHandle() => true;
 }
 
 static class Calls

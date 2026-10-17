@@ -14,8 +14,8 @@ public class PricingTests
         settings.SetEvaluationDate(today);
         using var dc = session.Actual360();
         Assert.Equal("Actual/360", dc.Name());
-        Near(Price(session, settings, dc, today, OptionType.Call, 65, 60, 0, 0.08, 0.30, 90), 2.1333684449161985);
-        Near(Price(session, settings, dc, today, OptionType.Put, 95, 100, 0.05, 0.10, 0.20, 180), 2.4647876467558127);
+        Quote(session, settings, dc, today, OptionType.Call, 65, 60, 0, 0.08, 0.30, 90, 2.1333684449161985, 0.3724827979619727);
+        Quote(session, settings, dc, today, OptionType.Put, 95, 100, 0.05, 0.10, 0.20, 180, 2.4647876467558127, -0.2641815996360725);
         var error = Assert.Throws<ItofinException>(() => session.NewEuropean((OptionType)99, 65, today, settings));
         Assert.Equal(1, error.Code);
     }
@@ -50,9 +50,27 @@ public class PricingTests
     {
         var session = Session.Open();
         var dc = session.Actual360();
-        await Task.Run(() => session.Dispose());
+        await Task.Run(() =>
+        {
+            session.Dispose();
+            session.Dispose();
+        });
         Assert.Throws<ObjectDisposedException>(() => dc.Name());
         dc.Dispose();
+    }
+
+    [Fact]
+    public void ObjectsFromDifferentSessionsAreRejected()
+    {
+        using var left = Session.Open();
+        using var right = Session.Open();
+        using var settings = left.NewSettings();
+        var today = Date.Create(15, 6, 2026);
+        Assert.Throws<SessionMismatchException>(() => right.NewEuropean(OptionType.Call, 65, today, settings));
+        using var dayCount = right.Actual360();
+        using var foreign = right.NewBlackScholes(60, 0.08, 0, 0.30, today, dayCount);
+        using var option = left.NewEuropean(OptionType.Call, 65, today, settings);
+        Assert.Throws<SessionMismatchException>(() => option.SetBlackScholesEngine(foreign));
     }
 
     [Fact]
@@ -62,14 +80,13 @@ public class PricingTests
         Assert.False(string.IsNullOrEmpty(ItofinLibrary.Version));
     }
 
-    static double Price(Session session, Settings settings, DayCounter dc, Date today, OptionType kind, double strike, double spot, double dividend, double riskFree, double vol, long days)
+    static void Quote(Session session, Settings settings, DayCounter dc, Date today, OptionType kind, double strike, double spot, double dividend, double riskFree, double vol, long days, double wantNpv, double wantDelta)
     {
         using var process = session.NewBlackScholes(spot, riskFree, dividend, vol, today, dc);
         using var option = session.NewEuropean(kind, strike, today.AddDays(days), settings);
         option.SetBlackScholesEngine(process);
-        var npv = option.Npv();
-        Assert.False(double.IsNaN(option.Delta()));
-        return npv;
+        Near(option.Npv(), wantNpv);
+        Near(option.Delta(), wantDelta);
     }
 
     static void Near(double got, double want, double tol = 1e-10) =>

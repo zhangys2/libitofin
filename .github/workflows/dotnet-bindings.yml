@@ -3,16 +3,6 @@ name: .NET bindings
 on:
   workflow_dispatch:
   workflow_call:
-  pull_request:
-    paths:
-      - crates/libitofin-ffi/**
-      - sdk/dotnet/**
-      - scripts/gen_dotnet_bindings.py
-      - scripts/stage_dotnet_native.sh
-      - .github/workflows/dotnet-bindings.yml
-      - Cargo.toml
-      - Cargo.lock
-      - rust-toolchain.toml
   push:
     branches: [main]
     paths:
