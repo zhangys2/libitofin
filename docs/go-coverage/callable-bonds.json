@@ -415,6 +415,122 @@
         "TestCallableBlackImpliedVolatilityPreservesInstalledState",
         "TestCallableBlackConcurrentCallers"
       ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_clean_price_oas"
+      ],
+      "go": [
+        "CallableFixedRateBond.CleanPriceOAS"
+      ],
+      "python": "itofin.instruments.CallableFixedRateBond.clean_price_oas",
+      "status": "implemented",
+      "tests": [
+        "TestCallableOASQuantLibOracles",
+        "TestCallableOASContractsAndSessions"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_oas"
+      ],
+      "go": [
+        "CallableFixedRateBond.OAS"
+      ],
+      "python": "itofin.instruments.CallableFixedRateBond.oas",
+      "status": "implemented",
+      "tests": [
+        "TestCallableOASQuantLibOracles",
+        "TestCallableOASContractsAndSessions"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_clean_price_oas"
+      ],
+      "go": [
+        "CallableZeroCouponBond.CleanPriceOAS"
+      ],
+      "python": "itofin.instruments.CallableZeroCouponBond.clean_price_oas",
+      "status": "implemented",
+      "tests": [
+        "TestCallableOASQuantLibOracles",
+        "TestCallableOASContractsAndSessions"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_oas"
+      ],
+      "go": [
+        "CallableZeroCouponBond.OAS"
+      ],
+      "python": "itofin.instruments.CallableZeroCouponBond.oas",
+      "status": "implemented",
+      "tests": [
+        "TestCallableOASQuantLibOracles",
+        "TestCallableOASContractsAndSessions"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_effective_duration"
+      ],
+      "go": [
+        "CallableFixedRateBond.EffectiveDuration"
+      ],
+      "python": "itofin.instruments.CallableFixedRateBond.effective_duration",
+      "status": "implemented",
+      "tests": [
+        "TestCallableRiskQuantLib143NativeCleanNormalization",
+        "TestCallableRiskTypedBoundariesSessionsAndRetention",
+        "TestCallableRiskConcurrentCallers"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_effective_convexity"
+      ],
+      "go": [
+        "CallableFixedRateBond.EffectiveConvexity"
+      ],
+      "python": "itofin.instruments.CallableFixedRateBond.effective_convexity",
+      "status": "implemented",
+      "tests": [
+        "TestCallableRiskQuantLib143NativeCleanNormalization",
+        "TestCallableRiskTypedBoundariesSessionsAndRetention",
+        "TestCallableRiskConcurrentCallers"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_effective_duration"
+      ],
+      "go": [
+        "CallableZeroCouponBond.EffectiveDuration"
+      ],
+      "python": "itofin.instruments.CallableZeroCouponBond.effective_duration",
+      "status": "implemented",
+      "tests": [
+        "TestCallableRiskQuantLib143NativeCleanNormalization",
+        "TestCallableRiskTypedBoundariesSessionsAndRetention",
+        "TestCallableRiskConcurrentCallers"
+      ]
+    },
+    {
+      "c": [
+        "itofin_callable_bond_effective_convexity"
+      ],
+      "go": [
+        "CallableZeroCouponBond.EffectiveConvexity"
+      ],
+      "python": "itofin.instruments.CallableZeroCouponBond.effective_convexity",
+      "status": "implemented",
+      "tests": [
+        "TestCallableRiskQuantLib143NativeCleanNormalization",
+        "TestCallableRiskTypedBoundariesSessionsAndRetention",
+        "TestCallableRiskConcurrentCallers"
+      ]
     }
   ]
 }

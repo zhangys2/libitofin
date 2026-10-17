@@ -9,6 +9,7 @@ mod bates;
 mod benchmark_beta;
 mod blackformula;
 mod bma;
+mod bond_forward;
 mod bonds;
 mod bootstrap;
 mod calibration;
@@ -36,9 +37,11 @@ mod curve;
 mod discrepancy_statistics;
 mod drawdown;
 mod fdengine;
+mod float_float_swap;
 mod floating_bonds;
 mod forward;
 mod fra;
+mod g2_process;
 mod general_statistics;
 mod geometric_brownian;
 mod gjr;
@@ -343,6 +346,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     processes.add_class::<merton::PyMerton76Process>()?;
     processes.add_class::<geometric_brownian::PyGeometricBrownianMotionProcess>()?;
     processes.add_class::<gjr::PyGjrGarchProcess>()?;
+    processes.add_class::<g2_process::PyG2Process>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
     indexes.add_class::<overnightfuture::PySofr>()?;
@@ -379,6 +383,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let instruments = PyModule::new(py, "instruments")?;
     instruments.add_class::<bonds::PyBond>()?;
+    instruments.add_class::<bond_forward::PyBondForward>()?;
     instruments.add_class::<callable_bonds::PyCallabilityType>()?;
     instruments.add_class::<callable_bonds::PyCallability>()?;
     instruments.add_class::<callable_bonds::PyCallableFixedRateBond>()?;
@@ -391,6 +396,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<PyVanillaOption>()?;
     instruments.add_class::<PySwapType>()?;
     instruments.add_class::<PyVanillaSwap>()?;
+    instruments.add_class::<float_float_swap::PyFloatFloatSwap>()?;
     instruments.add_class::<bma::PyBMASwap>()?;
     instruments.add_class::<PyMakeVanillaSwap>()?;
     instruments.add_class::<makeswaption::PyMakeSwaption>()?;
