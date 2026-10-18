@@ -3,14 +3,15 @@
 //! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
 //! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], [`PercentageStrikePayoff`],
-//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], [`GapPayoff`], and
-//! [`NullPayoff`]. [`SuperFundPayoff`] and [`SuperSharePayoff`] remain
-//! follow-up work.
+//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], [`GapPayoff`],
+//! [`SuperFundPayoff`], [`SuperSharePayoff`], and [`NullPayoff`].
 
 use std::any::Any;
 
+use crate::errors::QlResult;
 use crate::option::OptionType;
 use crate::payoff::Payoff;
+use crate::require;
 use crate::types::Real;
 
 /// Intermediate contract for put/call payoffs (QuantLib's `TypePayoff`).
@@ -395,6 +396,153 @@ impl StrikedTypePayoff for GapPayoff {
     }
 }
 
+/// Binary superfund payoff: `price / strike` while `strike <= price < second_strike`,
+/// otherwise zero.
+///
+/// Ports `SuperFundPayoff` (`ql/instruments/payoffs.hpp:207`,
+/// `payoffs.cpp:197-199`). The option type is always call. The lower strike is
+/// inclusive and the upper strike is exclusive. QuantLib's `BlackCalculator`
+/// visitor does not handle this payoff.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SuperFundPayoff {
+    strike: Real,
+    second_strike: Real,
+}
+
+impl SuperFundPayoff {
+    /// Builds a superfund payoff.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-positive strike, and a second strike that is not strictly
+    /// above the first (`payoffs.hpp:213-218`).
+    pub fn new(strike: Real, second_strike: Real) -> QlResult<Self> {
+        require!(strike > 0.0, "strike ({strike}) must be positive");
+        require!(
+            second_strike > strike,
+            "second strike ({second_strike}) must be higher than first strike ({strike})"
+        );
+        Ok(Self {
+            strike,
+            second_strike,
+        })
+    }
+
+    /// The exclusive upper strike (`payoffs.hpp:226`).
+    pub fn second_strike(&self) -> Real {
+        self.second_strike
+    }
+}
+
+impl Payoff for SuperFundPayoff {
+    fn name(&self) -> String {
+        "SuperFund".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!("{} Call, {} strike", self.name(), self.strike)
+    }
+
+    fn value(&self, price: Real) -> Real {
+        if price >= self.strike && price < self.second_strike {
+            price / self.strike
+        } else {
+            0.0
+        }
+    }
+}
+
+impl TypePayoff for SuperFundPayoff {
+    fn option_type(&self) -> OptionType {
+        OptionType::Call
+    }
+}
+
+impl StrikedTypePayoff for SuperFundPayoff {
+    fn strike(&self) -> Real {
+        self.strike
+    }
+}
+
+/// Binary supershare payoff: a fixed cash amount while
+/// `strike <= price < second_strike`, otherwise zero.
+///
+/// Ports `SuperSharePayoff` (`ql/instruments/payoffs.hpp:232`,
+/// `payoffs.cpp:208-216`). The option type is always call. QuantLib's
+/// `BlackCalculator` visitor does not handle this payoff.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SuperSharePayoff {
+    strike: Real,
+    second_strike: Real,
+    cash_payoff: Real,
+}
+
+impl SuperSharePayoff {
+    /// Builds a supershare payoff.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a second strike that is not strictly above the first
+    /// (`payoffs.hpp:240-242`).
+    pub fn new(strike: Real, second_strike: Real, cash_payoff: Real) -> QlResult<Self> {
+        require!(
+            second_strike > strike,
+            "second strike ({second_strike}) must be higher than first strike ({strike})"
+        );
+        Ok(Self {
+            strike,
+            second_strike,
+            cash_payoff,
+        })
+    }
+
+    /// The exclusive upper strike (`payoffs.hpp:251`).
+    pub fn second_strike(&self) -> Real {
+        self.second_strike
+    }
+
+    /// The cash amount paid inside the corridor (`payoffs.hpp:252`).
+    pub fn cash_payoff(&self) -> Real {
+        self.cash_payoff
+    }
+}
+
+impl Payoff for SuperSharePayoff {
+    fn name(&self) -> String {
+        "SuperShare".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!(
+            "{} Call, {} strike, {} second strike, {} amount",
+            self.name(),
+            self.strike,
+            self.second_strike,
+            self.cash_payoff
+        )
+    }
+
+    fn value(&self, price: Real) -> Real {
+        if price >= self.strike && price < self.second_strike {
+            self.cash_payoff
+        } else {
+            0.0
+        }
+    }
+}
+
+impl TypePayoff for SuperSharePayoff {
+    fn option_type(&self) -> OptionType {
+        OptionType::Call
+    }
+}
+
+impl StrikedTypePayoff for SuperSharePayoff {
+    fn strike(&self) -> Real {
+        self.strike
+    }
+}
+
 /// Dummy payoff (`ql/instruments/payoffs.hpp:56`). Margrabe constructs this
 /// internally. [`Payoff::value`] panics like [`FloatingTypePayoff::value`]
 /// (QuantLib `operator()` raises `QL_FAIL("dummy payoff given")`).
@@ -542,5 +690,63 @@ mod tests {
         assert_eq!(put.name(), "Gap");
         assert_eq!(put.description(), "Gap Put, 100 strike, 90 strike payoff");
         assert_eq!(put.second_strike(), 90.0);
+    }
+
+    /// `payoffs.cpp:197-199`: inclusive lower strike, exclusive upper strike,
+    /// payment `price / strike`.
+    #[test]
+    fn superfund_pays_spot_over_strike_inside_the_corridor() {
+        let payoff = SuperFundPayoff::new(100.0, 120.0).unwrap();
+        assert_eq!(payoff.value(100.0), 1.0);
+        assert_eq!(payoff.value(110.0), 1.1);
+        assert_eq!(payoff.value(119.999), 1.19999);
+        assert_eq!(payoff.value(120.0), 0.0);
+        assert_eq!(payoff.value(90.0), 0.0);
+        assert_eq!(payoff.value(Real::NAN), 0.0);
+        assert_eq!(payoff.option_type(), OptionType::Call);
+        assert_eq!(payoff.strike(), 100.0);
+        assert_eq!(payoff.second_strike(), 120.0);
+        assert_eq!(payoff.name(), "SuperFund");
+        assert_eq!(payoff.description(), "SuperFund Call, 100 strike");
+    }
+
+    #[test]
+    fn superfund_rejects_a_non_positive_or_unordered_strike() {
+        let non_positive = SuperFundPayoff::new(0.0, 10.0).unwrap_err();
+        assert_eq!(non_positive.message(), "strike (0) must be positive");
+        let inverted = SuperFundPayoff::new(100.0, 100.0).unwrap_err();
+        assert_eq!(
+            inverted.message(),
+            "second strike (100) must be higher than first strike (100)"
+        );
+    }
+
+    /// `payoffs.cpp:214-216`: the same corridor pays the fixed cash amount.
+    #[test]
+    fn supershare_pays_cash_inside_the_corridor() {
+        let payoff = SuperSharePayoff::new(90.0, 110.0, 15.0).unwrap();
+        assert_eq!(payoff.value(90.0), 15.0);
+        assert_eq!(payoff.value(109.0), 15.0);
+        assert_eq!(payoff.value(110.0), 0.0);
+        assert_eq!(payoff.value(80.0), 0.0);
+        assert_eq!(payoff.value(Real::NAN), 0.0);
+        assert_eq!(payoff.option_type(), OptionType::Call);
+        assert_eq!(payoff.strike(), 90.0);
+        assert_eq!(payoff.second_strike(), 110.0);
+        assert_eq!(payoff.cash_payoff(), 15.0);
+        assert_eq!(payoff.name(), "SuperShare");
+        assert_eq!(
+            payoff.description(),
+            "SuperShare Call, 90 strike, 110 second strike, 15 amount"
+        );
+    }
+
+    #[test]
+    fn supershare_rejects_an_unordered_strike() {
+        let error = SuperSharePayoff::new(10.0, 10.0, 1.0).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "second strike (10) must be higher than first strike (10)"
+        );
     }
 }

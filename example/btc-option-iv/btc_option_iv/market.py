@@ -36,6 +36,7 @@ MODEL = "Black-76"
 PRICE_UNIT = "USD present value"
 FORWARD_SOURCE_MARK = "Deribit dated future mark_price"
 FORWARD_SOURCE_MID = "Deribit dated future mid"
+FORWARD_SOURCE_PARITY = "Option implied put-call parity"
 TIME_BASIS = "Actual/365 Fixed"
 STALE_AFTER_MS = 5_000
 _MS_PER_YEAR = 365 * 24 * 60 * 60 * 1000
@@ -273,6 +274,28 @@ def forward_from_future_quote(quote: FutureQuote) -> tuple[float, str] | None:
         and bid <= ask
     ):
         return (bid + ask) / 2.0, FORWARD_SOURCE_MID
+    return None
+
+
+def forward_from_option_quotes(
+    quotes: list[tuple[float, float, float, float, float]],
+    expiry_years: float,
+    spot: float | None = None,
+) -> tuple[float, str] | None:
+    """Derive forward price from coin-margined option quotes using itofin.implied_forward."""
+    try:
+        from itofin import implied_forward
+
+        res = implied_forward(
+            quotes=quotes,
+            expiry_years=max(expiry_years, 1e-4),
+            convention="crypto_inverse",
+            spot=spot,
+        )
+        if res is not None and res.is_valid:
+            return res.forward, FORWARD_SOURCE_PARITY
+    except Exception:
+        pass
     return None
 
 

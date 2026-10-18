@@ -502,6 +502,7 @@ fn elasticity_from(value: Real, delta: Real, underlying: Real) -> Real {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instruments::{SuperFundPayoff, SuperSharePayoff};
     use crate::payoff::Payoff;
     use crate::pricingengines::blackformula::black_formula;
 
@@ -719,6 +720,16 @@ mod tests {
         let error = BlackCalculator::with_striked_payoff(&payoff, FORWARD, STD_DEV, DISCOUNT)
             .expect_err("the visitor does not handle this payoff");
         assert_eq!(error.message(), "unsupported payoff type: PercentageStrike");
+
+        let superfund = SuperFundPayoff::new(90.0, 110.0).unwrap();
+        let error = BlackCalculator::with_striked_payoff(&superfund, FORWARD, STD_DEV, DISCOUNT)
+            .expect_err("QuantLib does not visit SuperFundPayoff");
+        assert_eq!(error.message(), "unsupported payoff type: SuperFund");
+
+        let supershare = SuperSharePayoff::new(90.0, 110.0, 10.0).unwrap();
+        let error = BlackCalculator::with_striked_payoff(&supershare, FORWARD, STD_DEV, DISCOUNT)
+            .expect_err("QuantLib does not visit SuperSharePayoff");
+        assert_eq!(error.message(), "unsupported payoff type: SuperShare");
     }
 
     /// Stands in for `PercentageStrikePayoff`, a striked payoff the C++

@@ -1379,19 +1379,21 @@ mod test_gap {
 #[cfg(test)]
 mod test_greeks {
     //! The `testGreeks` oracle of `test-suite/europeanoption.cpp`: analytic
-    //! greeks against central finite differences over the full plain-vanilla
-    //! grid, on curves moving off the evaluation date. The C++ test also
-    //! sweeps cash-or-nothing, asset-or-nothing and gap payoffs; those NPV +
-    //! δ/γ pins live in `test_cash_or_nothing`, `test_asset_or_nothing` and
-    //! `test_gap`. The full `europeanoption.cpp` kk==1..3 moving-curve grids
-    //! remain deferred.
+    //! greeks against central finite differences on curves moving off the
+    //! evaluation date. The sweep is QuantLib's `kk == 0..3`: plain vanilla,
+    //! cash-or-nothing (cash 100), asset-or-nothing, and gap (second strike
+    //! 100). Haug NPV pins for the digital and gap payoffs stay in
+    //! `test_cash_or_nothing`, `test_asset_or_nothing`, and `test_gap`.
 
     use super::AnalyticEuropeanEngine;
     use super::test_market::{quote_handle, time_to_days, today};
-    use crate::exercise::EuropeanExercise;
+    use crate::exercise::{EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
-    use crate::instruments::{EuropeanOption, PlainVanillaPayoff};
+    use crate::instruments::{
+        AssetOrNothingPayoff, CashOrNothingPayoff, EuropeanOption, GapPayoff, PlainVanillaPayoff,
+        StrikedTypePayoff,
+    };
     use crate::interestrate::Compounding;
     use crate::option::OptionType;
     use crate::pricingengine::PricingEngine;
@@ -1486,96 +1488,116 @@ mod test_greeks {
             for strike in strikes {
                 for residual_time in residual_times {
                     let expiry = today() + time_to_days(residual_time);
-                    let payoff = shared(PlainVanillaPayoff::new(option_type, strike));
-                    let exercise = shared(EuropeanExercise::new(expiry));
-                    let mut option =
-                        EuropeanOption::new(payoff, exercise, Shared::clone(&market.settings));
-                    let engine =
-                        shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&market.process)));
-                    option
-                        .base_mut()
-                        .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+                    let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+                    let payoffs: [(&str, Shared<dyn StrikedTypePayoff>); 4] = [
+                        (
+                            "vanilla",
+                            shared(PlainVanillaPayoff::new(option_type, strike)),
+                        ),
+                        (
+                            "cash-or-nothing",
+                            shared(CashOrNothingPayoff::new(option_type, strike, 100.0)),
+                        ),
+                        (
+                            "asset-or-nothing",
+                            shared(AssetOrNothingPayoff::new(option_type, strike)),
+                        ),
+                        ("gap", shared(GapPayoff::new(option_type, strike, 100.0))),
+                    ];
+                    for (payoff_name, payoff) in payoffs {
+                        let mut option = EuropeanOption::new(
+                            payoff,
+                            Shared::clone(&exercise),
+                            Shared::clone(&market.settings),
+                        );
+                        let engine =
+                            shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&market.process)));
+                        option
+                            .base_mut()
+                            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
 
-                    for q in q_rates {
-                        for r in r_rates {
-                            for vol in vols {
-                                let u = UNDERLYING;
-                                market.spot.set_value(u);
-                                market.q_rate.set_value(q);
-                                market.r_rate.set_value(r);
-                                market.vol.set_value(vol);
+                        for q in q_rates {
+                            for r in r_rates {
+                                for vol in vols {
+                                    let u = UNDERLYING;
+                                    market.spot.set_value(u);
+                                    market.q_rate.set_value(q);
+                                    market.r_rate.set_value(r);
+                                    market.vol.set_value(vol);
 
-                                let value = option.npv().unwrap();
-                                let delta = option.delta().unwrap();
-                                let gamma = option.gamma().unwrap();
-                                let theta = option.theta().unwrap();
-                                let rho = option.rho().unwrap();
-                                let dividend_rho = option.dividend_rho().unwrap();
-                                let vega = option.vega().unwrap();
+                                    let value = option.npv().unwrap();
+                                    let delta = option.delta().unwrap();
+                                    let gamma = option.gamma().unwrap();
+                                    let theta = option.theta().unwrap();
+                                    let rho = option.rho().unwrap();
+                                    let dividend_rho = option.dividend_rho().unwrap();
+                                    let vega = option.vega().unwrap();
 
-                                if value <= u * 1.0e-5 {
-                                    continue;
-                                }
+                                    if value <= u * 1.0e-5 {
+                                        continue;
+                                    }
 
-                                let du = u * 1.0e-4;
-                                market.spot.set_value(u + du);
-                                let value_p = option.npv().unwrap();
-                                let delta_p = option.delta().unwrap();
-                                market.spot.set_value(u - du);
-                                let value_m = option.npv().unwrap();
-                                let delta_m = option.delta().unwrap();
-                                market.spot.set_value(u);
-                                let expected_delta = (value_p - value_m) / (2.0 * du);
-                                let expected_gamma = (delta_p - delta_m) / (2.0 * du);
+                                    let du = u * 1.0e-4;
+                                    market.spot.set_value(u + du);
+                                    let value_p = option.npv().unwrap();
+                                    let delta_p = option.delta().unwrap();
+                                    market.spot.set_value(u - du);
+                                    let value_m = option.npv().unwrap();
+                                    let delta_m = option.delta().unwrap();
+                                    market.spot.set_value(u);
+                                    let expected_delta = (value_p - value_m) / (2.0 * du);
+                                    let expected_gamma = (delta_p - delta_m) / (2.0 * du);
 
-                                let dr = r * 1.0e-4;
-                                market.r_rate.set_value(r + dr);
-                                let value_p = option.npv().unwrap();
-                                market.r_rate.set_value(r - dr);
-                                let value_m = option.npv().unwrap();
-                                market.r_rate.set_value(r);
-                                let expected_rho = (value_p - value_m) / (2.0 * dr);
+                                    let dr = r * 1.0e-4;
+                                    market.r_rate.set_value(r + dr);
+                                    let value_p = option.npv().unwrap();
+                                    market.r_rate.set_value(r - dr);
+                                    let value_m = option.npv().unwrap();
+                                    market.r_rate.set_value(r);
+                                    let expected_rho = (value_p - value_m) / (2.0 * dr);
 
-                                let dq = q * 1.0e-4;
-                                market.q_rate.set_value(q + dq);
-                                let value_p = option.npv().unwrap();
-                                market.q_rate.set_value(q - dq);
-                                let value_m = option.npv().unwrap();
-                                market.q_rate.set_value(q);
-                                let expected_dividend_rho = (value_p - value_m) / (2.0 * dq);
+                                    let dq = q * 1.0e-4;
+                                    market.q_rate.set_value(q + dq);
+                                    let value_p = option.npv().unwrap();
+                                    market.q_rate.set_value(q - dq);
+                                    let value_m = option.npv().unwrap();
+                                    market.q_rate.set_value(q);
+                                    let expected_dividend_rho = (value_p - value_m) / (2.0 * dq);
 
-                                let dv = vol * 1.0e-4;
-                                market.vol.set_value(vol + dv);
-                                let value_p = option.npv().unwrap();
-                                market.vol.set_value(vol - dv);
-                                let value_m = option.npv().unwrap();
-                                market.vol.set_value(vol);
-                                let expected_vega = (value_p - value_m) / (2.0 * dv);
+                                    let dv = vol * 1.0e-4;
+                                    market.vol.set_value(vol + dv);
+                                    let value_p = option.npv().unwrap();
+                                    market.vol.set_value(vol - dv);
+                                    let value_m = option.npv().unwrap();
+                                    market.vol.set_value(vol);
+                                    let expected_vega = (value_p - value_m) / (2.0 * dv);
 
-                                let dt = day_counter.year_fraction(today() - 1, today() + 1);
-                                market.settings.set_evaluation_date(today() - 1);
-                                let value_m = option.npv().unwrap();
-                                market.settings.set_evaluation_date(today() + 1);
-                                let value_p = option.npv().unwrap();
-                                market.settings.set_evaluation_date(today());
-                                let expected_theta = (value_p - value_m) / dt;
+                                    let dt = day_counter.year_fraction(today() - 1, today() + 1);
+                                    market.settings.set_evaluation_date(today() - 1);
+                                    let value_m = option.npv().unwrap();
+                                    market.settings.set_evaluation_date(today() + 1);
+                                    let value_p = option.npv().unwrap();
+                                    market.settings.set_evaluation_date(today());
+                                    let expected_theta = (value_p - value_m) / dt;
 
-                                let checks = [
-                                    ("delta", expected_delta, delta),
-                                    ("gamma", expected_gamma, gamma),
-                                    ("theta", expected_theta, theta),
-                                    ("rho", expected_rho, rho),
-                                    ("divRho", expected_dividend_rho, dividend_rho),
-                                    ("vega", expected_vega, vega),
-                                ];
-                                for (name, expected, calculated) in checks {
-                                    let error = relative_error(expected, calculated, u);
-                                    assert!(
-                                        error <= TOLERANCE,
-                                        "{name} of {option_type:?} K={strike} T={residual_time} \
-                                         q={q} r={r} v={vol}: analytic {calculated} vs finite \
-                                         difference {expected} (relative error {error})"
-                                    );
+                                    let checks = [
+                                        ("delta", expected_delta, delta),
+                                        ("gamma", expected_gamma, gamma),
+                                        ("theta", expected_theta, theta),
+                                        ("rho", expected_rho, rho),
+                                        ("divRho", expected_dividend_rho, dividend_rho),
+                                        ("vega", expected_vega, vega),
+                                    ];
+                                    for (name, expected, calculated) in checks {
+                                        let error = relative_error(expected, calculated, u);
+                                        assert!(
+                                            error <= TOLERANCE,
+                                            "{name} of {payoff_name} {option_type:?} K={strike} \
+                                         T={residual_time} q={q} r={r} v={vol}: analytic \
+                                         {calculated} vs finite difference {expected} \
+                                         (relative error {error})"
+                                        );
+                                    }
                                 }
                             }
                         }

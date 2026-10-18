@@ -139,6 +139,7 @@ nav:
   - MF state process: mf-state-process.md
   - Asset-or-nothing payoff: asset-or-nothing-payoff.md
   - Gap payoff: gap-payoff.md
+  - Superfund and supershare payoffs: super-payoffs.md
   - Cap/floor optionlets: capfloor-optionlets.md
   - Rust API: rust.md
   - Project:

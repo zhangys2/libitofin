@@ -3,11 +3,18 @@
 //! This is the standalone process, not a GSR model or calibration engine.
 
 use crate::errors::QlResult;
+use crate::fail;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::processes::forwardmeasureprocess::{ForwardMeasureProcess1D, ForwardMeasureTime};
+use crate::processes::gsrprocesscore::GsrProcessCore;
 use crate::require;
 use crate::stochasticprocess::StochasticProcess1D;
 use crate::types::{Real, Time};
+
+enum Law {
+    Constant { a: Real, sigma: Real },
+    Piecewise(GsrProcessCore),
+}
 
 /// Constant-volatility, constant-reversion GSR process under a `T`-forward measure.
 ///
@@ -15,11 +22,11 @@ use crate::types::{Real, Time};
 /// `y(t) = sigma² (1-exp(-2at))/(2a)` and `G(t,T) = (1-exp(-a(T-t)))/a`.
 /// Zero reversion uses the continuous limits, without a small-reversion cutoff.
 /// All dynamics require finite state and times in `[0,T]`. Date conversion is
-/// unsupported. Parameter grids must be constant; changing the horizon through
+/// unsupported. Constant grids keep the closed form. Varying volatility or
+/// reversion uses the piecewise core. Changing the horizon through
 /// [`ForwardMeasureProcess1D`] immediately changes drift and transition mean.
 pub struct GsrProcess {
-    a: Real,
-    sigma: Real,
+    law: Law,
     measure: ForwardMeasureTime,
     observable: Observable,
 }
@@ -27,13 +34,15 @@ pub struct GsrProcess {
 impl GsrProcess {
     /// Constructs the constant-parameter subset of QuantLib's grid-shaped API.
     ///
-    /// Repeated identical parameters are accepted. Redundant grid boundaries do
-    /// not restrict subsequent horizon changes, including changes to zero.
+    /// Repeated identical parameters use the constant closed form. Varying
+    /// finite nonnegative volatilities and finite reversions use the piecewise
+    /// core. Redundant constant-grid boundaries do not restrict subsequent
+    /// horizon changes, including changes to zero.
     ///
     /// # Errors
     /// Rejects invalid grid lengths, nonfinite/negative or non-increasing times,
-    /// nonfinite/negative volatility, nonfinite reversion, varying parameters,
-    /// and nonfinite/negative measure maturity. Signed reversion is supported.
+    /// nonfinite/negative volatility, nonfinite reversion, and a nonfinite or
+    /// negative measure maturity. Signed reversion is supported.
     pub fn new(
         times: Vec<Time>,
         vols: Vec<Real>,
@@ -56,16 +65,21 @@ impl GsrProcess {
         let sigma = vols[0];
         let a = reversions[0];
         require!(
-            sigma.is_finite() && sigma >= 0.0 && vols.iter().all(|v| *v == sigma),
-            "only finite nonnegative constant volatility is supported"
+            vols.iter().all(|v| v.is_finite() && *v >= 0.0),
+            "volatility must be finite and nonnegative"
         );
         require!(
-            a.is_finite() && reversions.iter().all(|v| *v == a),
-            "only finite constant reversion is supported"
+            reversions.iter().all(|v| v.is_finite()),
+            "reversion must be finite"
         );
+        let constant = vols.iter().all(|v| *v == sigma) && reversions.iter().all(|v| *v == a);
+        let law = if constant {
+            Law::Constant { a, sigma }
+        } else {
+            Law::Piecewise(GsrProcessCore::new(times, vols, reversions))
+        };
         Ok(Self {
-            a,
-            sigma,
+            law,
             measure: ForwardMeasureTime::new(t_measure)?,
             observable: Observable::new(),
         })
@@ -77,16 +91,22 @@ impl GsrProcess {
     /// Rejects time outside the finite interval `[0,T]`.
     pub fn sigma(&self, t: Time) -> QlResult<Real> {
         self.check_t(t)?;
-        Ok(self.sigma)
+        Ok(match &self.law {
+            Law::Constant { sigma, .. } => *sigma,
+            Law::Piecewise(core) => core.sigma(t),
+        })
     }
 
-    /// Returns constant signed mean reversion.
+    /// Returns signed mean reversion, piecewise when the grid varies.
     ///
     /// # Errors
     /// Rejects time outside the finite interval `[0,T]`.
     pub fn reversion(&self, t: Time) -> QlResult<Real> {
         self.check_t(t)?;
-        Ok(self.a)
+        Ok(match &self.law {
+            Law::Constant { a, .. } => *a,
+            Law::Piecewise(core) => core.reversion(t),
+        })
     }
 
     /// Returns the auxiliary variance `y(t)`.
@@ -95,7 +115,10 @@ impl GsrProcess {
     /// Rejects invalid time or a nonfinite result.
     pub fn y(&self, t: Time) -> QlResult<Real> {
         self.check_t(t)?;
-        self.integrated_variance(t)
+        match &self.law {
+            Law::Constant { .. } => self.integrated_variance(t),
+            Law::Piecewise(core) => finite(core.y(t, self.measure.get())),
+        }
     }
 
     /// Returns the affine kernel `G(t,end)` independently of state.
@@ -109,7 +132,10 @@ impl GsrProcess {
             end.partial_cmp(&t).is_some_and(|order| order.is_ge()),
             "G requires ordered endpoints"
         );
-        finite(kernel(self.a, end - t))
+        match &self.law {
+            Law::Constant { a, .. } => finite(kernel(*a, end - t)),
+            Law::Piecewise(core) => finite(core.g(t, end, self.measure.get())),
+        }
     }
 
     fn check_t(&self, t: Time) -> QlResult<()> {
@@ -137,28 +163,38 @@ impl GsrProcess {
         Ok(end)
     }
 
+    fn constant(&self) -> Option<(Real, Real)> {
+        match &self.law {
+            Law::Constant { a, sigma } => Some((*a, *sigma)),
+            Law::Piecewise(_) => None,
+        }
+    }
+
     fn integrated_variance(&self, dt: Time) -> QlResult<Real> {
-        if dt == 0.0 || self.sigma == 0.0 {
+        let Some((a, sigma)) = self.constant() else {
+            fail!("integrated variance is only the constant closed form");
+        };
+        if dt == 0.0 || sigma == 0.0 {
             return Ok(0.0);
         }
-        let z = (-self.a * dt) * 2.0;
-        let log_integral = if self.a == 0.0 || z == 0.0 {
+        let z = (-a * dt) * 2.0;
+        let log_integral = if a == 0.0 || z == 0.0 {
             dt.ln()
-        } else if self.a > 0.0 {
-            (-z.exp_m1()).ln() - self.a.ln() - 2.0_f64.ln()
+        } else if a > 0.0 {
+            (-z.exp_m1()).ln() - a.ln() - 2.0_f64.ln()
         } else {
-            z + (-(-z).exp_m1()).ln() - (-self.a).ln() - 2.0_f64.ln()
+            z + (-(-z).exp_m1()).ln() - (-a).ln() - 2.0_f64.ln()
         };
         let integral = if z == 0.0 {
             dt
         } else {
-            (-z.exp_m1() / self.a) * 0.5
+            (-z.exp_m1() / a) * 0.5
         };
-        let value = self.sigma * (self.sigma * integral);
-        if value.is_normal() && integral.is_normal() && (self.sigma * integral).is_normal() {
+        let value = sigma * (sigma * integral);
+        if value.is_normal() && integral.is_normal() && (sigma * integral).is_normal() {
             return Ok(value);
         }
-        finite((2.0 * self.sigma.ln() + log_integral).exp())
+        finite((2.0 * sigma.ln() + log_integral).exp())
     }
 }
 
@@ -172,6 +208,14 @@ impl ForwardMeasureProcess1D for GsrProcess {
     fn forward_measure_state(&self) -> &ForwardMeasureTime {
         &self.measure
     }
+    fn set_forward_measure_time(&mut self, t: Time) -> QlResult<()> {
+        self.measure.set(t)?;
+        if let Law::Piecewise(core) = &self.law {
+            core.flush_cache();
+        }
+        self.observable.notify_observers();
+        Ok(())
+    }
 }
 
 impl StochasticProcess1D for GsrProcess {
@@ -181,38 +225,61 @@ impl StochasticProcess1D for GsrProcess {
 
     fn drift(&self, t: Time, x: Real) -> QlResult<Real> {
         self.state(t, x)?;
-        let adjustment = if self.sigma == 0.0 {
-            0.0
-        } else {
-            self.sigma * (self.sigma * self.g(t, self.measure.get())?)
-        };
-        finite(self.y(t)? - adjustment - self.a * x)
+        let horizon = self.measure.get();
+        match &self.law {
+            Law::Constant { a, sigma } => {
+                let adjustment = if *sigma == 0.0 {
+                    0.0
+                } else {
+                    sigma * (sigma * self.g(t, horizon)?)
+                };
+                finite(self.y(t)? - adjustment - a * x)
+            }
+            Law::Piecewise(core) => {
+                let sigma = core.sigma(t);
+                finite(
+                    core.y(t, horizon)
+                        - sigma * sigma * core.g(t, horizon, horizon)
+                        - core.reversion(t) * x,
+                )
+            }
+        }
     }
 
     fn diffusion(&self, t: Time, x: Real) -> QlResult<Real> {
         self.state(t, x)?;
-        Ok(self.sigma)
+        self.sigma(t)
     }
 
     fn expectation(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
-        let end = self.step(t, x, dt)?;
+        self.step(t, x, dt)?;
         if dt == 0.0 {
             return Ok(x);
         }
-        let decay = (-self.a * dt).exp();
-        let initial = if x == 0.0 { 0.0 } else { x * decay };
-        if self.sigma == 0.0 {
-            return finite(initial);
+        let horizon = self.measure.get();
+        match &self.law {
+            Law::Constant { a, sigma } => {
+                let decay = (-a * dt).exp();
+                let initial = if x == 0.0 { 0.0 } else { x * decay };
+                if *sigma == 0.0 {
+                    return finite(initial);
+                }
+                let end = t + dt;
+                let duration = kernel(*a, dt);
+                let remaining = self.g(end, horizon)?;
+                let adjustment = (sigma * duration) * (sigma * remaining) * (0.5 + 0.5 * decay);
+                finite(initial + duration * (decay * self.y(t)?) - adjustment)
+            }
+            Law::Piecewise(core) => finite(core.expectation(t, x, dt, horizon)),
         }
-        let duration = kernel(self.a, dt);
-        let remaining = self.g(end, self.measure.get())?;
-        let adjustment = (self.sigma * duration) * (self.sigma * remaining) * (0.5 + 0.5 * decay);
-        finite(initial + duration * (decay * self.y(t)?) - adjustment)
     }
 
     fn variance(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
         self.step(t, x, dt)?;
-        self.integrated_variance(dt)
+        match &self.law {
+            Law::Constant { .. } => self.integrated_variance(dt),
+            Law::Piecewise(core) => finite(core.variance(t, dt, self.measure.get())),
+        }
     }
 
     fn std_deviation(&self, t: Time, x: Real, dt: Time) -> QlResult<Real> {
