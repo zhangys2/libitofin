@@ -21,9 +21,7 @@ use crate::methods::finitedifferences::meshers::{
 };
 use crate::methods::finitedifferences::operators::{FdmBlackScholesOp, FdmLinearOpComposite};
 use crate::methods::finitedifferences::solvers::{FdmBackwardSolver, FdmSchemeDesc};
-use crate::methods::finitedifferences::{
-    BoundarySide, DirichletBoundary, TimeDependentDirichletBoundary,
-};
+use crate::methods::finitedifferences::{BoundarySide, TimeDependentDirichletBoundary};
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, GenericEngine, PricingEngine, Results};
 use crate::processes::GeneralizedBlackScholesProcess;
@@ -67,8 +65,9 @@ enum Credit {
 
 struct SolvedGrid {
     log_spots: Vec<Real>,
-    layers: Vec<(Time, Vec<Real>)>,
-    coupons: Vec<(Time, Real)>,
+    /// Ex-coupon total value. A coupon still sitting in the induction state is
+    /// removed here and recorded in `coupon_kept`.
+    layers: Vec<(Time, Vec<Real>, Vec<Real>)>,
     spot: Real,
     dividend_yield: Real,
     maturity: Time,
@@ -85,6 +84,7 @@ struct Frozen {
     spot_quote: Handle<dyn Quote>,
 }
 
+#[derive(Clone)]
 struct Schedule {
     exercise: ExerciseType,
     exercise_times: Vec<Time>,
@@ -261,7 +261,7 @@ impl FdConvertibleEngine {
         let (value, delta, gamma) = grid.greeks_at(0.0, spot)?;
         let later = grid.value_at(dt, spot_prime)?;
         let theta = self.theta()?;
-        let coupon = grid.coupon_between(0.0, dt);
+        let coupon = grid.coupon_received(0.0, dt, spot, spot_prime)?;
         let move_s = spot_prime - spot;
         let carry = (r_rebate - grid.dividend_yield) * delta * spot * dt;
         let wealth = (later - value) - delta * move_s + coupon + carry - r_fund * value * dt;
@@ -544,24 +544,6 @@ fn time_layers(maturity: Time, steps: Size, events: &[Time]) -> Vec<Time> {
     merged
 }
 
-fn straight_bond(
-    time: Time,
-    rate: Real,
-    spread: Real,
-    coupons: &[(Time, Real)],
-    redemption: Real,
-    maturity: Time,
-) -> Real {
-    let yield_rate = rate + spread;
-    let mut value = redemption * (-yield_rate * (maturity - time)).exp();
-    for &(coupon_time, amount) in coupons {
-        if coupon_time > time && !same_time(coupon_time, time) {
-            value += amount * (-yield_rate * (coupon_time - time)).exp();
-        }
-    }
-    value
-}
-
 fn coupon_at(coupons: &[(Time, Real)], time: Time) -> Real {
     coupons
         .iter()
@@ -624,32 +606,116 @@ fn project(schedule: &Schedule, spots: &[Real], time: Time, equity: &mut Array, 
     }
 }
 
-struct LowerBoundary {
+/// Cash claim at `time`, with calls, puts, and coupons and no conversion.
+///
+/// The value is cum-coupon on a coupon date. Equity exercise is applied by
+/// [`edge_state`] on top of this floor.
+fn cash_floor(schedule: &Schedule, rate: Real, spread: Real, maturity: Time, time: Time) -> Real {
+    let mut events = vec![maturity];
+    if !same_time(time, maturity) {
+        events.push(time);
+    }
+    for &(event, _) in schedule
+        .calls
+        .iter()
+        .chain(schedule.puts.iter())
+        .chain(schedule.coupons.iter())
+    {
+        if event + TIME_MATCH >= time && event < maturity && !same_time(event, maturity) {
+            events.push(event);
+        }
+    }
+    events.sort_by(Real::total_cmp);
+    events.dedup_by(|left, right| same_time(*left, *right));
+
+    let mut cash = schedule.redemption;
+    apply_cash_events(schedule, maturity, &mut cash);
+    let mut cursor = maturity;
+    for &event in events.iter().rev() {
+        if same_time(event, cursor) {
+            continue;
+        }
+        let dt = cursor - event;
+        if dt > 0.0 {
+            cash *= (-(rate + spread) * dt).exp();
+        }
+        apply_cash_events(schedule, event, &mut cash);
+        cursor = event;
+    }
+    cash
+}
+
+fn apply_cash_events(schedule: &Schedule, time: Time, cash: &mut Real) {
+    for &(call_time, price) in &schedule.calls {
+        if same_time(call_time, time) && *cash > price {
+            *cash = price;
+        }
+    }
+    for &(put_time, price) in &schedule.puts {
+        if same_time(put_time, time) && price > *cash {
+            *cash = price;
+        }
+    }
+    *cash += coupon_at(&schedule.coupons, time);
+}
+
+/// Post-exercise boundary state. Conversion replaces the cash floor only when
+/// parity is at least that floor; otherwise the edge stays the cash claim,
+/// including a put that is still worth more than the straight bond.
+fn edge_state(
+    schedule: &Schedule,
     rate: Real,
     spread: Real,
     maturity: Time,
+    spot: Real,
+    time: Time,
+) -> (Real, Real) {
+    let floor = cash_floor(schedule, rate, spread, maturity, time);
+    let parity = schedule.ratio * spot;
+    if schedule.conversion_alive(time) && parity >= floor && parity > 0.0 {
+        (parity, 0.0)
+    } else {
+        (0.0, floor)
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn enforce_boundaries(
     schedule: &Schedule,
     spots: &[Real],
     time: Time,
-    lower: &LowerBoundary,
+    rate: Real,
+    spread_low: Real,
+    spread_high: Real,
+    maturity: Time,
     equity: &mut Array,
     cash: &mut Array,
 ) {
+    let (equity_low, cash_low) = edge_state(schedule, rate, spread_low, maturity, spots[0], time);
     let last = spots.len() - 1;
-    equity[0] = 0.0;
-    cash[0] = straight_bond(
-        time,
-        lower.rate,
-        lower.spread,
-        &schedule.coupons,
-        schedule.redemption,
-        lower.maturity,
-    ) + coupon_at(&schedule.coupons, time);
-    equity[last] = schedule.ratio * spots[last];
-    cash[last] = 0.0;
+    let (equity_high, cash_high) =
+        edge_state(schedule, rate, spread_high, maturity, spots[last], time);
+    equity[0] = equity_low;
+    cash[0] = cash_low;
+    equity[last] = equity_high;
+    cash[last] = cash_high;
+}
+
+/// Ex-coupon value, and the coupon kept on nodes that did not convert.
+fn ex_coupon_layer(equity: &Array, cash: &Array, coupon: Real) -> (Vec<Real>, Vec<Real>) {
+    let mut values = Vec::with_capacity(equity.size());
+    let mut kept = Vec::with_capacity(equity.size());
+    for i in 0..equity.size() {
+        let total = equity[i] + cash[i];
+        let kept_i = if coupon > 0.0 && cash[i] + 1.0e-9 >= coupon {
+            coupon
+        } else {
+            0.0
+        };
+        values.push(total - kept_i);
+        kept.push(kept_i);
+    }
+    (values, kept)
 }
 
 fn flat_curve(
@@ -763,26 +829,46 @@ fn solve(
     };
 
     let spread_low = engine.cash_spread(spots[0], quoted_spread);
-    let ratio = schedule.ratio;
-    let upper_spot = spots[spots.len() - 1];
-    let coupons = schedule.coupons.clone();
-    let redemption = schedule.redemption;
+    let spread_high = engine.cash_spread(spots[spots.len() - 1], quoted_spread);
+    let spot_low = spots[0];
+    let spot_high = spots[spots.len() - 1];
     let maturity = frozen.maturity;
     let rate = frozen.rate;
+    let low_schedule = schedule.clone();
+    let high_schedule = schedule.clone();
     let equity_bc: Vec<Shared<dyn crate::methods::finitedifferences::BoundaryCondition>> = vec![
-        shared(DirichletBoundary::new(BoundarySide::Lower, 0.0))
-            as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
-        shared(DirichletBoundary::new(
-            BoundarySide::Upper,
-            ratio * upper_spot,
-        )) as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
+        TimeDependentDirichletBoundary::new(BoundarySide::Lower, move |time| {
+            edge_state(&low_schedule, rate, spread_low, maturity, spot_low, time).0
+        }) as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
+        TimeDependentDirichletBoundary::new(BoundarySide::Upper, move |time| {
+            edge_state(&high_schedule, rate, spread_high, maturity, spot_high, time).0
+        }) as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
     ];
+    let low_cash_schedule = schedule.clone();
+    let high_cash_schedule = schedule.clone();
     let cash_bc: Vec<Shared<dyn crate::methods::finitedifferences::BoundaryCondition>> = vec![
         TimeDependentDirichletBoundary::new(BoundarySide::Lower, move |time| {
-            straight_bond(time, rate, spread_low, &coupons, redemption, maturity)
+            edge_state(
+                &low_cash_schedule,
+                rate,
+                spread_low,
+                maturity,
+                spot_low,
+                time,
+            )
+            .1
         }) as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
-        shared(DirichletBoundary::new(BoundarySide::Upper, 0.0))
-            as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
+        TimeDependentDirichletBoundary::new(BoundarySide::Upper, move |time| {
+            edge_state(
+                &high_cash_schedule,
+                rate,
+                spread_high,
+                maturity,
+                spot_high,
+                time,
+            )
+            .1
+        }) as Shared<dyn crate::methods::finitedifferences::BoundaryCondition>,
     ];
 
     let mut equity_solver =
@@ -791,15 +877,21 @@ fn solve(
 
     let mut equity = Array::filled(spots.len(), 0.0);
     let mut cash = Array::filled(spots.len(), schedule.redemption);
-    let lower = LowerBoundary {
-        rate: frozen.rate,
-        spread: spread_low,
-        maturity,
-    };
     project(schedule, &spots, maturity, &mut equity, &mut cash);
-    enforce_boundaries(schedule, &spots, maturity, &lower, &mut equity, &mut cash);
+    enforce_boundaries(
+        schedule,
+        &spots,
+        maturity,
+        rate,
+        spread_low,
+        spread_high,
+        maturity,
+        &mut equity,
+        &mut cash,
+    );
 
-    let mut layers = vec![(maturity, total_value(&equity, &cash))];
+    let (values, kept) = ex_coupon_layer(&equity, &cash, coupon_at(&schedule.coupons, maturity));
+    let mut layers = vec![(maturity, values, kept)];
     let times = time_layers(maturity, time_steps, &schedule.mandatory_times(maturity));
     for window in times.windows(2).rev() {
         let from = window[1];
@@ -810,27 +902,29 @@ fn solve(
         equity_solver.rollback(&mut equity, from, to, 1, 0)?;
         cash_solver.rollback(&mut cash, from, to, 1, 0)?;
         project(schedule, &spots, to, &mut equity, &mut cash);
-        enforce_boundaries(schedule, &spots, to, &lower, &mut equity, &mut cash);
-        layers.push((to, total_value(&equity, &cash)));
+        enforce_boundaries(
+            schedule,
+            &spots,
+            to,
+            rate,
+            spread_low,
+            spread_high,
+            maturity,
+            &mut equity,
+            &mut cash,
+        );
+        let (values, kept) = ex_coupon_layer(&equity, &cash, coupon_at(&schedule.coupons, to));
+        layers.push((to, values, kept));
     }
     layers.sort_by(|left, right| left.0.total_cmp(&right.0));
 
     Ok(SolvedGrid {
         log_spots,
         layers,
-        coupons: schedule.coupons.clone(),
         spot: frozen.spot,
         dividend_yield: frozen.dividend,
         maturity,
     })
-}
-
-fn total_value(equity: &Array, cash: &Array) -> Vec<Real> {
-    equity
-        .iter()
-        .zip(cash.iter())
-        .map(|(equity_i, cash_i)| equity_i + cash_i)
-        .collect()
 }
 
 impl SolvedGrid {
@@ -854,12 +948,12 @@ impl SolvedGrid {
         if time >= self.layers[last].0 || same_time(time, self.layers[last].0) {
             return interpolate(&self.log_spots, &self.layers[last].1, spot.ln());
         }
-        let upper = self.layers.partition_point(|(layer, _)| *layer < time);
+        let upper = self.layers.partition_point(|(layer, _, _)| *layer < time);
         if same_time(self.layers[upper].0, time) {
             return interpolate(&self.log_spots, &self.layers[upper].1, spot.ln());
         }
-        let (earlier_time, earlier) = &self.layers[upper - 1];
-        let (later_time, later) = &self.layers[upper];
+        let (earlier_time, earlier, _) = &self.layers[upper - 1];
+        let (later_time, later, _) = &self.layers[upper];
         let weight = (time - earlier_time) / (later_time - earlier_time);
         let left = interpolate(&self.log_spots, earlier, spot.ln())?;
         let right = interpolate(&self.log_spots, later, spot.ln())?;
@@ -882,7 +976,7 @@ impl SolvedGrid {
     fn layer_near(&self, time: Time) -> QlResult<Vec<Real>> {
         require!(!self.layers.is_empty(), "the convertible grid is empty");
         let mut best = 0usize;
-        for (i, (layer, _)) in self.layers.iter().enumerate() {
+        for (i, (layer, _, _)) in self.layers.iter().enumerate() {
             if (layer - time).abs() < (self.layers[best].0 - time).abs() {
                 best = i;
             }
@@ -890,12 +984,27 @@ impl SolvedGrid {
         Ok(self.layers[best].1.clone())
     }
 
-    fn coupon_between(&self, start: Time, end: Time) -> Real {
-        self.coupons
-            .iter()
-            .filter(|(time, _)| *time > start && (*time < end || same_time(*time, end)))
-            .map(|(_, amount)| *amount)
-            .sum()
+    /// Coupon kept on the reported grid. A converted node has already forfeited
+    /// it, so it is not added again on top of an ex-coupon value.
+    fn coupon_received(
+        &self,
+        start: Time,
+        end: Time,
+        spot_start: Real,
+        spot_end: Real,
+    ) -> QlResult<Real> {
+        let mut sum = 0.0;
+        for (time, _, kept) in &self.layers {
+            if *time > start && (*time < end || same_time(*time, end)) {
+                let spot = if same_time(*time, end) {
+                    spot_end
+                } else {
+                    spot_start
+                };
+                sum += interpolate(&self.log_spots, kept, spot.ln())?;
+            }
+        }
+        Ok(sum)
     }
 }
 
@@ -910,12 +1019,13 @@ mod tests {
     use crate::exercise::{AmericanExercise, EuropeanExercise, Exercise};
     use crate::instrument::Instrument;
     use crate::instruments::{
-        ConvertibleFixedCouponBond, ConvertibleZeroCouponBond, FixedRateBond, PlainVanillaPayoff,
-        StrikedTypePayoff, VanillaOption, ZeroCouponBond,
+        BondPrice, Callability, CallabilityType, ConvertibleFixedCouponBond,
+        ConvertibleZeroCouponBond, FixedRateBond, PlainVanillaPayoff, StrikedTypePayoff,
+        VanillaOption, ZeroCouponBond,
     };
     use crate::option::OptionType;
     use crate::pricingengine::PricingEngine;
-    use crate::pricingengines::bond::DiscountingBondEngine;
+    use crate::pricingengines::bond::{BinomialConvertibleEngine, DiscountingBondEngine};
     use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::SimpleQuote;
@@ -945,6 +1055,10 @@ mod tests {
     }
 
     fn market() -> Market {
+        market_at(50.0)
+    }
+
+    fn market_at(spot: Real) -> Market {
         let today = Date::new(15, Month::January, 2020);
         let settings = shared(Settings::new());
         settings.set_evaluation_date(today);
@@ -974,7 +1088,6 @@ mod tests {
             false,
         );
 
-        let spot = 50.0;
         let spot_quote = shared(SimpleQuote::new(spot));
         let dividend_quote = shared(SimpleQuote::new(0.02));
         let rate_quote = shared(SimpleQuote::new(0.05));
@@ -1477,6 +1590,153 @@ mod tests {
             report.wealth,
             report.continuation,
             report.coupon
+        );
+    }
+
+    #[test]
+    fn coupon_is_added_once_when_the_layer_is_ex_coupon() {
+        let market = market();
+        let spread = Handle::new(shared(SimpleQuote::new(0.0)) as Shared<dyn Quote>);
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(market.maturity_date));
+        let (_, engine) = price_convertible(
+            &market,
+            exercise,
+            1.0e-8,
+            vec![0.05],
+            Frequency::Annual,
+            0,
+            (81, 80, spread),
+        )
+        .unwrap();
+        let engine = engine.borrow();
+        let t = engine
+            .grid()
+            .unwrap()
+            .layers
+            .iter()
+            .find_map(|(time, _, kept)| kept.iter().any(|amount| *amount > 0.0).then_some(*time))
+            .expect("a coupon layer");
+        let spot = market.spot;
+        let report = engine.cash_gamma(t, spot, 0.02, 0.0).unwrap();
+        let now = engine.value_at(0.0, spot).unwrap();
+        let at_coupon = engine.value_at(t, spot).unwrap();
+        let cum_move = (at_coupon + report.coupon) - now;
+        assert!(
+            report.coupon > 1.0,
+            "the coupon layer should keep a coupon, got {}",
+            report.coupon
+        );
+        assert!(
+            (report.wealth - cum_move).abs() < 1.0e-6,
+            "wealth {} vs cum move {cum_move} (ex {at_coupon}, coupon {})",
+            report.wealth,
+            report.coupon
+        );
+
+        let later_t = t + 0.05;
+        let later = engine.cash_gamma(later_t, spot, 0.02, 0.0).unwrap();
+        let later_value = engine.value_at(later_t, spot).unwrap();
+        let expected = (later_value - now) + later.coupon;
+        assert!(
+            (later.wealth - expected).abs() < 1.0e-4,
+            "wealth past the coupon {} vs ex revaluation plus coupon {expected}",
+            later.wealth
+        );
+    }
+
+    #[test]
+    fn off_spot_value_keeps_the_put_and_the_bond_floor() {
+        let spread = Handle::new(shared(SimpleQuote::new(0.0)) as Shared<dyn Quote>);
+        let center = market_at(50.0);
+        let today = Date::new(15, Month::January, 2020);
+        let put_date = Target::new().advance(
+            today,
+            1,
+            TimeUnit::Years,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let put =
+            || Callability::new(BondPrice::Dirty(100.0), CallabilityType::Put, put_date).unwrap();
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(center.maturity_date));
+
+        let price_fd = |spot: Real, ratio: Real, with_put: bool| {
+            let market = market_at(spot);
+            let engine = shared_mut(
+                FdConvertibleEngine::new(Shared::clone(&market.process), 81, 60, spread.clone())
+                    .unwrap(),
+            );
+            let mut bond = ConvertibleZeroCouponBond::new(
+                Shared::clone(&exercise),
+                ratio,
+                if with_put { vec![put()] } else { Vec::new() },
+                market.issue_date,
+                0,
+                Actual360::new(),
+                MakeSchedule::new()
+                    .from(market.issue_date)
+                    .to(market.maturity_date)
+                    .with_frequency(Frequency::Once)
+                    .with_calendar(Target::new())
+                    .backwards()
+                    .build(),
+                market.redemption,
+                Shared::clone(&market.settings),
+            )
+            .unwrap();
+            bond.base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>);
+            let npv = bond.npv().unwrap();
+            (npv, engine)
+        };
+        let price_tree = |spot: Real, ratio: Real, with_put: bool| {
+            let market = market_at(spot);
+            let engine = shared_mut(
+                BinomialConvertibleEngine::new(
+                    Shared::clone(&market.process),
+                    200,
+                    spread.clone(),
+                    Vec::new(),
+                )
+                .unwrap(),
+            );
+            let mut bond = ConvertibleZeroCouponBond::new(
+                Shared::clone(&exercise),
+                ratio,
+                if with_put { vec![put()] } else { Vec::new() },
+                market.issue_date,
+                0,
+                Actual360::new(),
+                MakeSchedule::new()
+                    .from(market.issue_date)
+                    .to(market.maturity_date)
+                    .with_frequency(Frequency::Once)
+                    .with_calendar(Target::new())
+                    .backwards()
+                    .build(),
+                market.redemption,
+                Shared::clone(&market.settings),
+            )
+            .unwrap();
+            bond.base_mut()
+                .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+            bond.npv().unwrap()
+        };
+
+        let (_, grid) = price_fd(50.0, 1.0e-8, true);
+        let low = grid.borrow().value_at(0.0, 8.0).unwrap();
+        let low_tree = price_tree(8.0, 1.0e-8, true);
+        assert!(
+            (low - low_tree).abs() < 0.5,
+            "put value at spot 8 is {low}, tree {low_tree}"
+        );
+
+        let (_, high_grid) = price_fd(50.0, 0.05, false);
+        let high = high_grid.borrow().value_at(0.0, 400.0).unwrap();
+        let high_tree = price_tree(400.0, 0.05, false);
+        assert!(
+            (high - high_tree).abs() < 1.0,
+            "bond floor at spot 400 is {high}, tree {high_tree}"
         );
     }
 }
