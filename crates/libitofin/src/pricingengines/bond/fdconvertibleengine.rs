@@ -96,6 +96,11 @@ struct Schedule {
 }
 
 /// One-dimensional finite-difference engine for a convertible bond.
+///
+/// `r`, `q`, and `σ` are frozen at the conversion exercise's last date, the
+/// same sample `BinomialConvertibleEngine` uses, and then held flat for the
+/// whole solve. A sloped yield curve or a strike-dependent volatility on the
+/// process is not read.
 pub struct FdConvertibleEngine {
     base: GenericEngine<ConvertibleBondArguments, BondResults>,
     process: Shared<GeneralizedBlackScholesProcess>,

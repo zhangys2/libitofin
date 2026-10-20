@@ -154,13 +154,18 @@ impl FdmBlackScholesOp {
     ///
     /// # Errors
     ///
-    /// Returns an error when `extra_discount` does not match the mesh length.
+    /// Returns an error when `extra_discount` does not match the mesh length
+    /// or contains a non-finite entry.
     pub fn with_extra_discount(mut self, extra_discount: Array) -> QlResult<Self> {
         require!(
             extra_discount.size() == self.mesher.layout().size(),
             "extra discount must have one entry per mesh node, got {} for {}",
             extra_discount.size(),
             self.mesher.layout().size()
+        );
+        require!(
+            extra_discount.iter().all(|value| value.is_finite()),
+            "extra discount entries must be finite"
         );
         self.extra_discount = Some(extra_discount);
         Ok(self)
@@ -411,6 +416,55 @@ mod tests {
             .collect();
 
         assert_close(&operator.apply(&u), &expected);
+    }
+
+    /// A zero extra discount is the plain operator. That pins the `None`
+    /// reaction, a length-1 array, against the full-mesh path.
+    #[test]
+    fn zero_extra_discount_matches_the_plain_operator() {
+        let mesher = mesher();
+        let mut plain = black_scholes_op(&mesher);
+        let zeros = Array::filled(mesher.layout().size(), 0.0);
+        let mut shifted = black_scholes_op(&mesher)
+            .with_extra_discount(zeros)
+            .unwrap();
+        plain.set_time(T1, T2).unwrap();
+        shifted.set_time(T1, T2).unwrap();
+        assert_close(
+            &shifted.apply(&probe(&mesher)),
+            &plain.apply(&probe(&mesher)),
+        );
+    }
+
+    /// A constant extra discount is added to `r` in the reaction term only.
+    #[test]
+    fn extra_discount_is_added_to_the_reaction() {
+        let mesher = mesher();
+        let mut plain = black_scholes_op(&mesher);
+        let extra = Array::filled(mesher.layout().size(), 0.01);
+        let mut shifted = black_scholes_op(&mesher)
+            .with_extra_discount(extra)
+            .unwrap();
+        plain.set_time(T1, T2).unwrap();
+        shifted.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            expected[i] -= 0.01 * u[i];
+        }
+        assert_close(&shifted.apply(&u), &expected);
+    }
+
+    #[test]
+    fn extra_discount_rejects_a_non_finite_entry() {
+        let mesher = mesher();
+        let mut extra = Array::filled(mesher.layout().size(), 0.0);
+        extra[0] = Real::NAN;
+        assert!(
+            black_scholes_op(&mesher)
+                .with_extra_discount(extra)
+                .is_err()
+        );
     }
 
     /// The curves reject a step that runs backwards, and `set_time` carries
