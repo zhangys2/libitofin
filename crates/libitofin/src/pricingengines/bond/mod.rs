@@ -11,6 +11,7 @@ mod bondfunctions;
 mod discountingbondengine;
 mod discretizedcallablebond;
 pub(crate) mod discretizedconvertible;
+mod fdconvertibleengine;
 mod treecallablebondengine;
 
 pub use binomialconvertibleengine::BinomialConvertibleEngine;
@@ -21,6 +22,7 @@ pub use bondfunctions::BondFunctions;
 pub use discountingbondengine::DiscountingBondEngine;
 pub use discretizedcallablebond::DiscretizedCallableFixedRateBond;
 pub use discretizedconvertible::DividendSchedule;
+pub use fdconvertibleengine::{ConvertibleCashGamma, FdConvertibleEngine};
 pub use treecallablebondengine::TreeCallableFixedRateBondEngine;
 
 /// Lattice engine for callable zero-coupon bonds.

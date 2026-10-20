@@ -9,6 +9,7 @@ use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
 use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::GeneralizedBlackScholesProcess;
+use crate::require;
 use crate::shared::Shared;
 use crate::termstructures::volatility::{BlackVolTermStructure, LocalVolTermStructure};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
@@ -55,6 +56,9 @@ pub struct FdmBlackScholesOp {
     illegal_local_vol_overwrite: Real,
     direction: Size,
     quanto: Option<Shared<FdmQuantoHelper>>,
+    /// Added to the discount rate, one entry per node. `None` keeps the
+    /// process rate `r`. Drift and diffusion are unchanged.
+    extra_discount: Option<Array>,
 }
 
 impl FdmBlackScholesOp {
@@ -139,7 +143,38 @@ impl FdmBlackScholesOp {
             illegal_local_vol_overwrite,
             direction,
             quanto,
+            extra_discount: None,
         })
+    }
+
+    /// Discounts node `i` at `r + extra_discount[i]` instead of `r`.
+    ///
+    /// The drift and diffusion stencil are left on the process. `extra_discount`
+    /// has one entry per mesh node and does not depend on time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `extra_discount` does not match the mesh length.
+    pub fn with_extra_discount(mut self, extra_discount: Array) -> QlResult<Self> {
+        require!(
+            extra_discount.size() == self.mesher.layout().size(),
+            "extra discount must have one entry per mesh node, got {} for {}",
+            extra_discount.size(),
+            self.mesher.layout().size()
+        );
+        self.extra_discount = Some(extra_discount);
+        Ok(self)
+    }
+
+    fn reaction(&self, rate: Real) -> Array {
+        let Some(extra) = &self.extra_discount else {
+            return Array::filled(1, -rate);
+        };
+        let mut reaction = Array::filled(extra.size(), -rate);
+        for (node, extra_i) in reaction.iter_mut().zip(extra.iter()) {
+            *node -= extra_i;
+        }
+        reaction
     }
 }
 
@@ -196,8 +231,9 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
                 drift = &drift - &adj;
             }
             let diffusion = self.dxx_map.mult(&(0.5 * &v));
+            let reaction = self.reaction(r);
             self.map_t
-                .axpyb(&drift, &self.dx_map, &diffusion, &Array::filled(1, -r));
+                .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
         } else {
             let v = self
                 .vol_ts
@@ -212,8 +248,9 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
             let diffusion = self
                 .dxx_map
                 .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
+            let reaction = self.reaction(r);
             self.map_t
-                .axpyb(&drift, &self.dx_map, &diffusion, &Array::filled(1, -r));
+                .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
         }
 
         Ok(())
