@@ -10,7 +10,7 @@ import statistics
 import time
 from zoneinfo import ZoneInfo
 
-from itofin import ItofinError
+from itofin import ItofinError, implied_forward
 from itofin.instruments import OptionType
 from itofin.pricingengines import black_formula_implied_volatility
 
@@ -26,7 +26,12 @@ PARITY_STRIKES = 7  # strikes (nearest spot) subscribed on both rights
 PARITY_MAX_PAIRS = 5  # tightest pairs combined by median
 PARITY_MIN_PAIRS = 2
 PARITY_MAX_DEVIATION = 0.02  # reject a parity forward >2% away from spot
-MARKET_DATA_TYPES = {1: "Live", 2: "Frozen", 3: "Delayed (~15 min)", 4: "Delayed frozen"}
+MARKET_DATA_TYPES = {
+    1: "Live",
+    2: "Frozen",
+    3: "Delayed (~15 min)",
+    4: "Delayed frozen",
+}
 
 
 def _load_ib():
@@ -36,9 +41,9 @@ def _load_ib():
     exists at import time (a different one from marimo's async cells), and would
     make ``pytest`` collection require the optional notebook dependency.
     """
-    from ib_async import IB, Index, Option
+    from ib_async import IB, Index, Option, Stock
 
-    return IB, Index, Option
+    return IB, Index, Option, Stock
 
 
 @dataclass(frozen=True)
@@ -100,34 +105,44 @@ def _two_sided(ticker) -> tuple[float, float] | None:
     return (bid, ask) if bid is not None and ask is not None and ask >= bid else None
 
 
-def parity_forward(pairs, spot: float) -> tuple[float, int] | None:
-    """Forward implied by put-call parity, as ``(forward, pairs_used)`` or None.
+def parity_forward(
+    pairs, spot: float, expiry_years: float = 0.01
+) -> tuple[float, int] | None:
+    """Forward implied by put-call parity using ``itofin.implied_forward``.
 
     ``pairs`` holds ``(strike, call_bid, call_ask, put_bid, put_ask)`` in index
-    points. With discount = 1 (as the IV inversion uses), ``C - P = F - K`` so
-    each pair gives ``F = K + C_mid - P_mid``. The tightest pairs (smallest
-    combined spread) are combined by median, which is robust to a stale quote.
-    Returns None when too few usable pairs exist or the result is implausible,
-    so the caller can fall back to spot.
+    points. Uses itofin's unified weighted least squares and arbitrage diagnostic
+    engine. Returns (forward, pairs_used) or None if parity cannot be established.
     """
-    estimates = []
-    for strike, call_bid, call_ask, put_bid, put_ask in pairs:
-        call_mid, put_mid = (call_bid + call_ask) / 2.0, (put_bid + put_ask) / 2.0
-        # Near-ATM premiums are a small fraction of spot; anything else is a bad quote.
-        if not (0 < call_mid < 0.1 * spot and 0 < put_mid < 0.1 * spot):
-            continue
-        spread = (call_ask - call_bid) + (put_ask - put_bid)
-        estimates.append((spread, strike + call_mid - put_mid))
-    estimates.sort(key=lambda e: e[0])
-    used = [f for _, f in estimates[:PARITY_MAX_PAIRS]]
-    if len(used) < PARITY_MIN_PAIRS:
+    pairs_list = [
+        p
+        for p in pairs
+        if 0 < (p[1] + p[2]) * 0.5 < 0.1 * spot and 0 < (p[3] + p[4]) * 0.5 < 0.1 * spot
+    ]
+    if len(pairs_list) < PARITY_MIN_PAIRS:
         return None
-    forward = statistics.median(used)
-    if not math.isfinite(forward) or forward <= 0:
+
+    try:
+        res = implied_forward(
+            quotes=pairs_list,
+            expiry_years=max(expiry_years, 1e-4),
+            convention="european",
+            spot=spot,
+            max_spot_deviation=PARITY_MAX_DEVIATION,
+            discount_factor=1.0,
+            min_pairs=PARITY_MIN_PAIRS,
+            max_pairs=PARITY_MAX_PAIRS,
+        )
+    except Exception:
         return None
-    if abs(forward / spot - 1.0) > PARITY_MAX_DEVIATION:
+
+    if res is None:
         return None
-    return forward, len(used)
+    if not math.isfinite(res.forward) or res.forward <= 0:
+        return None
+    if abs(res.forward / spot - 1.0) > PARITY_MAX_DEVIATION:
+        return None
+    return res.forward, res.pairs_used
 
 
 def _parity_pairs(quotes, strikes):
@@ -142,6 +157,18 @@ def select_spxw_chain(chains):
     """SPXW chain on SMART (else any SPXW chain); never the monthly SPX chain."""
     spxw = [c for c in chains if c.tradingClass == "SPXW"]
     return next((c for c in spxw if c.exchange == "SMART"), spxw[0] if spxw else None)
+
+
+def select_chain(chains, symbol: str = "SPX"):
+    """Select the appropriate 0DTE-capable chain for SPX (SPXW) or SPY."""
+    if symbol == "SPY":
+        smart = [c for c in chains if c.exchange == "SMART" and c.tradingClass == "SPY"]
+        return (
+            smart[0]
+            if smart
+            else next((c for c in chains if c.tradingClass == "SPY"), None)
+        )
+    return select_spxw_chain(chains)
 
 
 def select_live_expiry(expirations, now_ms: int) -> tuple[str, int] | None:
@@ -170,18 +197,23 @@ class SpxFeedController:
         host: str = "127.0.0.1",
         port: int = 4002,
         client_id: int = 42,
+        symbol: str = "SPX",
         **kwargs,
     ):
         self.publish = publish
         self.host = host
         self.port = port
         self.client_id = kwargs.get("client_id", client_id)
-        self.strike_radius = 80.0
-        self.market_data_type = 1  # live; 3 = delayed (free) fallback
+        self.symbol = symbol.upper()
+        self.strike_radius = 8.0 if self.symbol == "SPY" else 80.0
+        self.market_data_type = 1  # live; 3 = delayed, only when the caller asks for it
+        self._connection = (self.host, self.port, self.market_data_type)
         self.ingest_errors = 0
+        self.recorder = kwargs.get("recorder")
         self.task: asyncio.Task | None = None
         self.filters = FilterManager()
         self.snapshot = {
+            "symbol": self.symbol,
             "status": "Feed stopped. Switch on to connect to IB Gateway.",
             "connected": False,
             "spot_price": None,
@@ -194,6 +226,8 @@ class SpxFeedController:
             "feed_running": False,
             "published_ms": int(time.time() * 1000),
         }
+        self._desired_enabled = False
+        self._lifecycle_lock = asyncio.Lock()
 
     def configure(self, config: FilterConfig):
         running = self.task is not None and not self.task.done()
@@ -208,6 +242,51 @@ class SpxFeedController:
         self.filters.reset_all(now_ms=now_ms, now=now)
         self._republish()
 
+    async def set_symbol(self, symbol: str):
+        sym = symbol.upper()
+        async with self._lifecycle_lock:
+            if sym == self.symbol:
+                return
+            task = self.task
+            was_running = task is not None and not task.done()
+            if was_running:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                if self.task is task:
+                    self.task = None
+            self.symbol = sym
+            self.strike_radius = 8.0 if sym == "SPY" else 80.0
+            now_ms, now = int(time.time() * 1000), time.monotonic()
+            self.filters.reset_all(now_ms=now_ms, now=now)
+            should_restart = was_running and self._desired_enabled
+            self.snapshot = {
+                "symbol": self.symbol,
+                "status": f"Switched to {self.symbol}. "
+                + (
+                    "Reconnecting..."
+                    if should_restart
+                    else "Switch on to connect to IB Gateway."
+                ),
+                "connected": False,
+                "spot_price": None,
+                "expiry_str": None,
+                "expiry_timestamp_ms": None,
+                "time_to_close_hours": None,
+                "latest_quotes": {},
+                "kalman_views": {},
+                "filter_config": self.filters.config,
+                "feed_running": should_restart,
+                "published_ms": now_ms,
+            }
+            self.publish(self.snapshot)
+            if should_restart:
+                self.task = asyncio.create_task(
+                    self._run(), name=f"{sym.lower()}-0dte-live-feed"
+                )
+
     def set_port(self, port: int):
         self.port = port
 
@@ -219,6 +298,9 @@ class SpxFeedController:
     def set_strike_radius(self, radius: float):
         self.strike_radius = radius
 
+    def set_recorder(self, recorder):
+        self.recorder = recorder
+
     def _republish(self):
         self.snapshot = {
             **self.snapshot,
@@ -229,26 +311,50 @@ class SpxFeedController:
         }
         self.publish(self.snapshot)
 
+    def _connection_key(self) -> tuple:
+        return (self.host, self.port, self.market_data_type)
+
     async def set_enabled(self, enabled: bool):
-        if enabled:
-            if self.task is None or self.task.done():
-                self.task = asyncio.create_task(self._run(), name="spx-0dte-live-feed")
-            return
-        if self.task is not None and not self.task.done():
-            self.task.cancel()
-            try:
-                await self.task
-            except asyncio.CancelledError:
-                pass
-        self.task = None
-        self.snapshot = {
-            **self.snapshot,
-            "status": "Feed stopped — view frozen until resumed.",
-            "connected": False,
-            "feed_running": False,
-            "published_ms": int(time.time() * 1000),
-        }
-        self.publish(self.snapshot)
+        self._desired_enabled = enabled
+        async with self._lifecycle_lock:
+            if enabled:
+                current = self._connection_key()
+                running = self.task is not None and not self.task.done()
+                if running and current == self._connection:
+                    return
+                if running:
+                    task = self.task
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    if self.task is task:
+                        self.task = None
+                self._connection = current
+                self.task = asyncio.create_task(
+                    self._run(), name=f"{self.symbol.lower()}-0dte-live-feed"
+                )
+                return
+            task = self.task
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            if self.task is task:
+                self.task = None
+            if self.recorder is not None:
+                await self.recorder.flush_async()
+            self.snapshot = {
+                **self.snapshot,
+                "status": "Feed stopped — view frozen until resumed.",
+                "connected": False,
+                "feed_running": False,
+                "published_ms": int(time.time() * 1000),
+            }
+            self.publish(self.snapshot)
 
     def _status_prefix(self) -> str:
         label = MARKET_DATA_TYPES[self.market_data_type]
@@ -257,10 +363,13 @@ class SpxFeedController:
     async def _run(self):
         ib = None
         try:
-            IB, Index, Option = _load_ib()
+            ib_items = _load_ib()
+            IB, Index, Option = ib_items[:3]
+            Stock = ib_items[3] if len(ib_items) > 3 else Index
             ib = IB()
             self.snapshot = {
                 **self.snapshot,
+                "symbol": self.symbol,
                 "status": f"Connecting to IB Gateway on {self.host}:{self.port}...",
                 "feed_running": True,
             }
@@ -269,12 +378,17 @@ class SpxFeedController:
             connected = False
             for cid in range(self.client_id, self.client_id + 15):
                 try:
-                    await ib.connectAsync(self.host, self.port, clientId=cid, timeout=6)
+                    await ib.connectAsync(
+                        self.host, self.port, clientId=cid, timeout=6, readonly=True
+                    )
                     self.client_id = cid
                     connected = True
                     break
                 except Exception as e:
-                    if "already in use" in str(e).lower() or "peer closed" in str(e).lower():
+                    if (
+                        "already in use" in str(e).lower()
+                        or "peer closed" in str(e).lower()
+                    ):
                         continue
                     raise
             if not connected:
@@ -282,57 +396,94 @@ class SpxFeedController:
             # 1 = live (needs an OPRA subscription), 3 = delayed (~15 min stale).
             ib.reqMarketDataType(self.market_data_type)
 
-            # Qualify SPX Underlying Index
-            spx = Index("SPX", "CBOE")
-            await ib.qualifyContractsAsync(spx)
-            ticker_spx = ib.reqMktData(spx)
+            # Qualify Underlying Contract
+            if self.symbol == "SPY":
+                underlying = Stock("SPY", "SMART", "USD")
+                sec_type = "STK"
+            else:
+                underlying = Index("SPX", "CBOE")
+                sec_type = "IND"
 
-            # Wait for a finite spot price; marketPrice() and close are NaN
+            await ib.qualifyContractsAsync(underlying)
+            ticker_underlying = ib.reqMktData(underlying)
+
+            # Wait for a finite spot price; marketPrice(), last, and close are NaN
             # (which is truthy) until data arrives.
             spot = None
-            for _ in range(10):
+            for attempt in range(10):
                 await asyncio.sleep(1.0)
-                spot = _finite_positive(ticker_spx.marketPrice()) or _finite_positive(
-                    ticker_spx.close
+                spot = (
+                    _finite_positive(ticker_underlying.marketPrice())
+                    or _finite_positive(getattr(ticker_underlying, "last", None))
+                    or _finite_positive(ticker_underlying.close)
                 )
                 if spot:
                     break
-            if not spot:
-                raise RuntimeError("No SPX spot price received from IBKR")
 
-            # Request SPX Option Parameters
-            chains = await ib.reqSecDefOptParamsAsync("SPX", "", "IND", spx.conId)
-            chain = select_spxw_chain(chains)
+            if not spot:
+                raise RuntimeError(
+                    f"No {self.symbol} spot price received from IBKR. Check that market data is enabled or gateway is open"
+                )
+
+            # Request Option Parameters
+            chains = await ib.reqSecDefOptParamsAsync(
+                self.symbol, "", sec_type, underlying.conId
+            )
+            chain = select_chain(chains, self.symbol)
             if not chain:
-                raise RuntimeError("No SPXW option chains found from IBKR")
+                msg = (
+                    "No SPXW option chains found from IBKR"
+                    if self.symbol == "SPX"
+                    else f"No {self.symbol} option chains found from IBKR"
+                )
+                raise RuntimeError(msg)
 
             live_expiry = select_live_expiry(chain.expirations, int(time.time() * 1000))
             if live_expiry is None:
-                raise RuntimeError("No unexpired SPXW expirations (market closed?)")
+                raise RuntimeError(
+                    f"No unexpired {self.symbol} expirations (market closed?)"
+                )
             expiry_str, expiry_ms = live_expiry
             # Only the subscribed session may own a filter (leftovers from an
             # earlier connection would otherwise show up in the reader).
             self.filters.retire({expiry_ms}, now_ms=int(time.time() * 1000))
 
             # Select strikes around spot
-            strikes = [
-                s for s in sorted(chain.strikes)
-                if abs(s - spot) <= self.strike_radius and s % 5 == 0
-            ]
+            effective_radius = (
+                self.strike_radius
+                if (self.symbol != "SPY" or self.strike_radius <= 25.0)
+                else max(5.0, round(self.strike_radius / 10.0))
+            )
+            if self.symbol == "SPY":
+                strikes = [
+                    s
+                    for s in sorted(chain.strikes)
+                    if abs(s - spot) <= effective_radius
+                ]
+            else:
+                strikes = [
+                    s
+                    for s in sorted(chain.strikes)
+                    if abs(s - spot) <= effective_radius and s % 5 == 0
+                ]
             if not strikes:
                 strikes = sorted(chain.strikes, key=lambda s: abs(s - spot))[:20]
 
             # Both rights at the strikes nearest the money (for put-call parity
             # and a tighter-spread choice at those strikes); the OTM right
             # elsewhere. The filter combines same-strike quotes itself.
-            atm_strikes = set(sorted(strikes, key=lambda k: abs(k - spot))[:PARITY_STRIKES])
+            atm_strikes = set(
+                sorted(strikes, key=lambda k: abs(k - spot))[:PARITY_STRIKES]
+            )
             contracts = []
             for s in strikes:
-                rights = ("C", "P") if s in atm_strikes else (("P" if s < spot else "C"),)
+                rights = (
+                    ("C", "P") if s in atm_strikes else (("P" if s < spot else "C"),)
+                )
                 for right in rights:
                     contracts.append(
                         Option(
-                            "SPX",
+                            self.symbol,
                             expiry_str,
                             s,
                             right,
@@ -342,15 +493,19 @@ class SpxFeedController:
                     )
 
             await ib.qualifyContractsAsync(*contracts)
-            tickers = [ib.reqMktData(c, genericTickList="100,101,106") for c in contracts]
+            tickers = [
+                ib.reqMktData(c, genericTickList="100,101,106") for c in contracts
+            ]
 
             self.snapshot = {
                 **self.snapshot,
+                "symbol": self.symbol,
                 "status": (
                     f"{self._status_prefix()}Subscribed to {len(contracts)} "
-                    f"SPX 0DTE contracts ({expiry_str})"
+                    f"{self.symbol} 0DTE contracts ({expiry_str})"
                 ),
                 "connected": True,
+                "spot_price": spot,
                 "expiry_str": expiry_str,
                 "expiry_timestamp_ms": expiry_ms,
                 "market_data_type": self.market_data_type,
@@ -362,8 +517,9 @@ class SpxFeedController:
                 await asyncio.sleep(2.0)
                 now_ms, now = int(time.time() * 1000), time.monotonic()
                 spot = (
-                    _finite_positive(ticker_spx.marketPrice())
-                    or _finite_positive(ticker_spx.close)
+                    _finite_positive(ticker_underlying.marketPrice())
+                    or _finite_positive(getattr(ticker_underlying, "last", None))
+                    or _finite_positive(ticker_underlying.close)
                     or spot
                 )
 
@@ -372,8 +528,9 @@ class SpxFeedController:
                     self.filters.retire(set(), now_ms=now_ms)
                     self.snapshot = {
                         **self.snapshot,
+                        "symbol": self.symbol,
                         "status": (
-                            f"SPX {expiry_str} session closed (4:00 PM ET) — "
+                            f"{self.symbol} {expiry_str} session closed (4:00 PM ET) — "
                             "feed stopped, no quotes are being priced."
                         ),
                         "connected": True,
@@ -393,7 +550,10 @@ class SpxFeedController:
 
                 # Forward from put-call parity on the near-ATM strikes; fall back
                 # to spot (and say so) when there are too few clean pairs.
-                quotes = {(c.strike, c.right): _two_sided(t) for c, t in zip(contracts, tickers)}
+                quotes = {
+                    (c.strike, c.right): _two_sided(t)
+                    for c, t in zip(contracts, tickers)
+                }
                 parity = parity_forward(_parity_pairs(quotes, atm_strikes), spot)
                 if parity is not None:
                     forward, forward_source = (
@@ -407,13 +567,30 @@ class SpxFeedController:
 
                 for c, t in zip(contracts, tickers):
                     if quotes[(c.strike, c.right)] is not None:
+                        if self.recorder is not None:
+                            await self.recorder.record_quote_async(
+                                symbol=self.symbol,
+                                expiry=expiry_str,
+                                strike=c.strike,
+                                right=c.right,
+                                bid=t.bid,
+                                ask=t.ask,
+                                bid_size=getattr(t, "bidSize", 0),
+                                ask_size=getattr(t, "askSize", 0),
+                                underlying_spot=spot,
+                                timestamp_ns=now_ms * 1_000_000,
+                            )
                         mid = (t.bid + t.ask) / 2.0
                         opt_type = OptionType.Put if c.right == "P" else OptionType.Call
                         # Invert bid/ask/mid with Black-76. A quote whose bid or ask
                         # cannot be inverted is skipped, never filled with a
                         # made-up spread (it would set the filter's precision).
-                        bid_iv = _implied_vol(opt_type, c.strike, forward, t_years, t.bid)
-                        ask_iv = _implied_vol(opt_type, c.strike, forward, t_years, t.ask)
+                        bid_iv = _implied_vol(
+                            opt_type, c.strike, forward, t_years, t.bid
+                        )
+                        ask_iv = _implied_vol(
+                            opt_type, c.strike, forward, t_years, t.ask
+                        )
                         if bid_iv is None or ask_iv is None:
                             continue
                         mid_iv = _implied_vol(opt_type, c.strike, forward, t_years, mid)
@@ -423,7 +600,10 @@ class SpxFeedController:
                             bid_iv, ask_iv = ask_iv, bid_iv
                         mid_iv = max(bid_iv, min(ask_iv, mid_iv))
 
-                        name = f"SPX_{expiry_str}_{int(c.strike)}_{c.right}"
+                        strike_str = (
+                            int(c.strike) if c.strike == int(c.strike) else c.strike
+                        )
+                        name = f"{self.symbol}_{expiry_str}_{strike_str}_{c.right}"
                         inst = SpxInstrumentMeta(
                             instrument_name=name,
                             expiration_timestamp_ms=expiry_ms,
@@ -462,8 +642,9 @@ class SpxFeedController:
                     f", {self.ingest_errors} rejected" if self.ingest_errors else ""
                 )
                 self.snapshot = {
+                    "symbol": self.symbol,
                     "status": (
-                        f"{self._status_prefix()}Streaming 0DTE quotes "
+                        f"{self._status_prefix()}Streaming {self.symbol} 0DTE quotes "
                         f"({len(latest_quotes)} active strikes{rejects})"
                     ),
                     "connected": True,

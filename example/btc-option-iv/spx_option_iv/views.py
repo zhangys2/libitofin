@@ -13,15 +13,16 @@ from btc_option_iv.reference import butterfly_report, reference_vol
 
 def make_spx_smile_reader(snapshot: dict):
     """Read an immutable SPX snapshot; never mutate or advance filter state."""
+    symbol = snapshot.get("symbol", "SPX")
     kalman_views = snapshot.get("kalman_views", {})
     if not kalman_views:
-        return None, snapshot.get("status", "Waiting for SPX 0DTE options data...")
+        return None, snapshot.get("status", f"Waiting for {symbol} 0DTE options data...")
 
     # Only the subscribed session's filter is shown; never an arbitrary expiry.
     expiry_ms = snapshot.get("expiry_timestamp_ms")
     view = kalman_views.get(expiry_ms)
     if view is None:
-        return None, snapshot.get("status", "Waiting for the subscribed SPX expiry...")
+        return None, snapshot.get("status", f"Waiting for the subscribed {symbol} expiry...")
     if view.knot_ivs is None or view.context is None:
         return None, "Kalman filter is waiting for sufficient two-sided quotes to bootstrap..."
 
@@ -102,6 +103,7 @@ def make_spx_smile_reader(snapshot: dict):
 
     return {
         "view": view,
+        "symbol": symbol,
         "expiry_timestamp_ms": expiry_ms,
         "expiry_str": snapshot.get("expiry_str", ""),
         "spot_price": spot,
@@ -128,7 +130,7 @@ def make_spx_smile_figure(analysis: dict | None, error: str | None = None):
 
     if analysis is None or "view" not in analysis:
         figure.add_annotation(
-            text=error or "Awaiting SPX 0DTE market quotes...",
+            text=error or "Awaiting 0DTE market quotes...",
             xref="paper",
             yref="paper",
             x=0.5,
@@ -151,10 +153,12 @@ def make_spx_smile_figure(analysis: dict | None, error: str | None = None):
     # Determine plot strike range: from lowest observation to highest observation
     strikes_obs = np.asarray([o.strike for o in view.observations])
     if len(strikes_obs):
-        k_min = max(spot * 0.95, float(strikes_obs.min()) - 10)
-        k_max = min(spot * 1.05, float(strikes_obs.max()) + 10)
+        pad = 2.0 if spot < 1500 else 10.0
+        k_min = max(spot * 0.95, float(strikes_obs.min()) - pad)
+        k_max = min(spot * 1.05, float(strikes_obs.max()) + pad)
     else:
-        k_min, k_max = spot - 80, spot + 80
+        span = spot * 0.02
+        k_min, k_max = spot - span, spot + span
 
     k_dense = np.linspace(k_min, k_max, 250)
     x_dense = context.coordinates(k_dense)
@@ -232,9 +236,10 @@ def make_spx_smile_figure(analysis: dict | None, error: str | None = None):
         annotation_position="top left",
     )
 
+    symbol = analysis.get("symbol", "SPX")
     figure.update_layout(
         title={
-            "text": f"<b>SPX 0DTE Volatility Smile Calibration</b> — Expiry {analysis.get('expiry_str', '')} ({analysis.get('time_to_close_hours', 0.0):.2f} hrs to close)",
+            "text": f"<b>{symbol} 0DTE Volatility Smile Calibration</b> — Expiry {analysis.get('expiry_str', '')} ({analysis.get('time_to_close_hours', 0.0):.2f} hrs to close)",
             "x": 0.5,
             "xanchor": "center",
         },

@@ -25,6 +25,7 @@ from spx_option_iv.feed import (
     compute_0dte_expiry_ms,
     select_live_expiry,
     select_spxw_chain,
+    select_chain,
 )
 from btc_option_iv.reference import butterfly_markdown, butterfly_report, reference_vol
 from spx_option_iv.views import make_spx_smile_figure, make_spx_smile_reader
@@ -155,7 +156,9 @@ def _black76(opt, strike, forward, t, vol):
 
 
 class _FakeTicker:
-    def __init__(self, market_price=float("nan"), close=float("nan"), bid=None, ask=None):
+    def __init__(
+        self, market_price=float("nan"), close=float("nan"), bid=None, ask=None
+    ):
         self._market_price = market_price
         self.close = close
         self.bid, self.ask = bid, ask
@@ -191,7 +194,7 @@ class _FakeIB:
         return self.chains
 
     def reqMktData(self, contract, *args, **kwargs):
-        if isinstance(contract, _FakeIndex):
+        if isinstance(contract, (_FakeIndex, _FakeStock)):
             return self.spot_ticker
         self.option_contracts.append(contract)
         return self.option_ticker(contract)
@@ -207,8 +210,16 @@ class _FakeIndex:
         pass
 
 
+class _FakeStock:
+    conId = 756733
+
+    def __init__(self, *args):
+        pass
+
+
 class _FakeOption:
     def __init__(self, symbol, expiry, strike, right, exchange, tradingClass=None):
+        self.symbol = symbol
         self.strike, self.right = float(strike), right
         self.exchange, self.tradingClass = exchange, tradingClass
 
@@ -226,7 +237,7 @@ def _spxw_chain():
     )
 
 
-def _run_feed(monkeypatch, fake_ib, *, now_ms, loops, market_data_type=1):
+def _run_feed(monkeypatch, fake_ib, *, now_ms, loops, market_data_type=1, symbol="SPX"):
     """Run the feed with a fake IB at a frozen wall clock for ``loops`` polls."""
     sleeps = {"n": 0}
 
@@ -239,10 +250,10 @@ def _run_feed(monkeypatch, fake_ib, *, now_ms, loops, market_data_type=1):
     monkeypatch.setattr(feed.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(feed.time, "time", lambda: now_ms / 1000.0)
     monkeypatch.setattr(
-        feed, "_load_ib", lambda: (lambda: fake_ib, _FakeIndex, _FakeOption)
+        feed, "_load_ib", lambda: (lambda: fake_ib, _FakeIndex, _FakeOption, _FakeStock)
     )
     published = []
-    controller = SpxFeedController(published.append)
+    controller = SpxFeedController(published.append, symbol=symbol)
     controller.set_market_data_type(market_data_type)
     asyncio.run(controller._run())
     return controller, published
@@ -312,7 +323,10 @@ def test_feed_inverts_with_real_remaining_time_and_builds_from_chain(monkeypatch
     assert near_atm
     for row in near_atm:
         assert row.mid_iv == pytest.approx(0.2, abs=5e-3)
-    assert all(c.tradingClass == "SPXW" and c.exchange == "SMART" for c in fake.option_contracts)
+    assert all(
+        c.tradingClass == "SPXW" and c.exchange == "SMART"
+        for c in fake.option_contracts
+    )
     assert controller.snapshot["time_to_close_hours"] == pytest.approx(10 / 60)
     # Only the subscribed expiry owns a filter.
     assert set(controller.snapshot["kalman_views"]) <= {CLOSE_MS}
@@ -374,17 +388,30 @@ def test_reader_shows_only_the_subscribed_expiry():
             name = f"SPX_{days}_{s}_C"
             inst = SpxInstrumentMeta(name, expiry_ms, "c", float(s))
             row = SpxIvRow(
-                instrument_name=name, timestamp_ms=now_ms, strike=float(s),
-                mid_iv=mid_iv, bid_iv=mid_iv - 0.005, ask_iv=mid_iv + 0.005,
-                forward=fwd, expiry=t_years, bid_premium_btc=5.0, ask_premium_btc=5.2,
-                bid_usd=5.0, ask_usd=5.2, right="C",
+                instrument_name=name,
+                timestamp_ms=now_ms,
+                strike=float(s),
+                mid_iv=mid_iv,
+                bid_iv=mid_iv - 0.005,
+                ask_iv=mid_iv + 0.005,
+                forward=fwd,
+                expiry=t_years,
+                bid_premium_btc=5.0,
+                ask_premium_btc=5.2,
+                bid_usd=5.0,
+                ask_usd=5.2,
+                right="C",
             )
             manager.ingest(row, inst, now_ms=now_ms, now=now)
     views = manager.snapshots(now=now)
     assert set(views) == set(expiries.values())
     base = {
-        "status": "Streaming", "spot_price": fwd, "expiry_str": "x",
-        "time_to_close_hours": 4.0, "latest_quotes": {}, "kalman_views": views,
+        "status": "Streaming",
+        "spot_price": fwd,
+        "expiry_str": "x",
+        "time_to_close_hours": 4.0,
+        "latest_quotes": {},
+        "kalman_views": views,
     }
     # The later expiry is inserted second; the reader must follow the snapshot's expiry.
     near, _ = make_spx_smile_reader({**base, "expiry_timestamp_ms": expiries[0]})
@@ -399,8 +426,15 @@ def _parity_pairs(forward, strikes, t=1.0 / 8766, vol=0.2, rel_spread=0.01):
     pairs = []
     for k in strikes:
         c, p = _black76("C", k, forward, t, vol), _black76("P", k, forward, t, vol)
-        pairs.append((k, c * (1 - rel_spread), c * (1 + rel_spread),
-                      p * (1 - rel_spread), p * (1 + rel_spread)))
+        pairs.append(
+            (
+                k,
+                c * (1 - rel_spread),
+                c * (1 + rel_spread),
+                p * (1 - rel_spread),
+                p * (1 + rel_spread),
+            )
+        )
     return pairs
 
 
@@ -426,7 +460,10 @@ def test_parity_forward_returns_none_when_unusable():
     # Implausible forward (>2% from spot) is rejected.
     assert parity_forward(_parity_pairs(8000.0, [7980.0, 7990.0, 8000.0]), spot) is None
     # Premiums that are not near-ATM option prices (bad quotes) are ignored.
-    bad = [(7740.0, 9000.0, 9100.0, 9000.0, 9100.0), (7750.0, 9000.0, 9100.0, 9000.0, 9100.0)]
+    bad = [
+        (7740.0, 9000.0, 9100.0, 9000.0, 9100.0),
+        (7750.0, 9000.0, 9100.0, 9000.0, 9100.0),
+    ]
     assert parity_forward(bad, spot) is None
 
 
@@ -469,3 +506,145 @@ def test_feed_falls_back_to_spot_when_parity_is_unavailable(monkeypatch):
     snap = controller.snapshot
     assert snap["forward"] == 7740.0
     assert "spot" in snap["forward_source"]
+
+
+def _spy_chain():
+    return SimpleNamespace(
+        tradingClass="SPY",
+        exchange="SMART",
+        expirations=[EXPIRY_STR],
+        strikes=[float(k) for k in range(765, 786)],
+    )
+
+
+def test_select_chain_handles_spx_and_spy():
+    spy_smart = SimpleNamespace(tradingClass="SPY", exchange="SMART")
+    mini_spy = SimpleNamespace(tradingClass="2SPY", exchange="SMART")
+    spy_cboe = SimpleNamespace(tradingClass="SPY", exchange="CBOE")
+    spxw_smart = SimpleNamespace(tradingClass="SPXW", exchange="SMART")
+    spx_monthly = SimpleNamespace(tradingClass="SPX", exchange="SMART")
+
+    # SPY chain selection prefers SMART with tradingClass SPY, ignores 2SPY
+    assert select_chain([mini_spy, spy_cboe, spy_smart], symbol="SPY") is spy_smart
+    assert select_chain([mini_spy, spy_cboe], symbol="SPY") is spy_cboe
+    assert select_chain([mini_spy], symbol="SPY") is None
+
+    # SPX chain selection prefers SPXW on SMART
+    assert select_chain([spx_monthly, spxw_smart], symbol="SPX") is spxw_smart
+    assert select_chain([spx_monthly], symbol="SPX") is None
+
+
+def test_feed_spy_streams_and_calibrates(monkeypatch):
+    now_ms = CLOSE_MS - 3_600_000
+    fake = _FakeIB(
+        _FakeTicker(market_price=774.50),
+        _smart_option_ticker(now_ms, forward=774.50, vol=0.2),
+        [_spy_chain()],
+    )
+    controller, _ = _run_feed(monkeypatch, fake, now_ms=now_ms, loops=1, symbol="SPY")
+    snap = controller.snapshot
+    assert snap["symbol"] == "SPY"
+    assert snap["spot_price"] == 774.50
+    assert "SPY" in snap["status"]
+    assert all(c.symbol == "SPY" for c in fake.option_contracts)
+    assert all(c.tradingClass == "SPY" for c in fake.option_contracts)
+    # Step $1 strikes around 774.50 within radius 8.0:
+    strikes = {c.strike for c in fake.option_contracts}
+    assert all(abs(s - 774.50) <= 8.0 for s in strikes)
+    assert 774.0 in strikes and 775.0 in strikes
+
+    analysis, error = make_spx_smile_reader(snap)
+    assert error is None
+    assert analysis["symbol"] == "SPY"
+    assert analysis["spot_price"] == 774.50
+    assert analysis["atm_vol"] == pytest.approx(0.2, abs=0.01)
+
+    fig = make_spx_smile_figure(analysis)
+    assert "SPY 0DTE Volatility Smile Calibration" in fig.layout.title.text
+
+
+def test_feed_refuses_non_spy_chain(monkeypatch):
+    mini_spy = SimpleNamespace(
+        tradingClass="2SPY", exchange="SMART", expirations=[EXPIRY_STR], strikes=[774.0]
+    )
+    fake = _FakeIB(_FakeTicker(market_price=774.0), None, [mini_spy])
+    controller, _ = _run_feed(
+        monkeypatch, fake, now_ms=CLOSE_MS - 3_600_000, loops=1, symbol="SPY"
+    )
+    assert "No SPY option chains" in controller.snapshot["status"]
+    assert fake.option_contracts == []
+
+
+def test_feed_dynamic_symbol_switch(monkeypatch):
+    """Switching symbol while running flushes old state, resets filters, and connects new symbol."""
+    now_ms = CLOSE_MS - 3_600_000
+
+    class _MultiFakeIB:
+        def __init__(self):
+            self.option_contracts = []
+            self.market_data_type = None
+
+        async def connectAsync(self, *args, **kwargs):
+            pass
+
+        def reqMarketDataType(self, kind):
+            self.market_data_type = kind
+
+        async def qualifyContractsAsync(self, *contracts):
+            pass
+
+        async def reqSecDefOptParamsAsync(self, symbol, *args):
+            return [_spy_chain()] if symbol == "SPY" else [_spxw_chain()]
+
+        def reqMktData(self, contract, *args, **kwargs):
+            if isinstance(contract, _FakeStock):
+                return _FakeTicker(market_price=774.50)
+            if isinstance(contract, _FakeIndex):
+                return _FakeTicker(market_price=7740.0)
+            self.option_contracts.append(contract)
+            return _FakeTicker(bid=2.0, ask=2.2)
+
+        def isConnected(self):
+            return False
+
+    fake = _MultiFakeIB()
+    monkeypatch.setattr(
+        feed, "_load_ib", lambda: (lambda: fake, _FakeIndex, _FakeOption, _FakeStock)
+    )
+    _real_sleep = asyncio.sleep
+    monkeypatch.setattr(feed.asyncio, "sleep", lambda d: _real_sleep(0.001))
+    monkeypatch.setattr(feed.time, "time", lambda: now_ms / 1000.0)
+
+    controller = SpxFeedController(lambda s: None, symbol="SPX")
+
+    async def scenario():
+        await controller.set_enabled(True)
+        for _ in range(50):
+            await _real_sleep(0.005)
+            if controller.snapshot.get("connected") and controller.snapshot.get(
+                "spot_price"
+            ):
+                break
+        assert controller.snapshot["symbol"] == "SPX"
+        assert controller.snapshot["spot_price"] == 7740.0
+
+        # Switch to SPY on the live instance
+        await controller.set_symbol("SPY")
+        assert controller.snapshot["symbol"] == "SPY"
+        # Old SPX spot and quotes are immediately cleared
+        assert controller.snapshot["spot_price"] is None
+        assert controller.snapshot["latest_quotes"] == {}
+
+        # Wait for SPY reconnection
+        for _ in range(50):
+            await _real_sleep(0.005)
+            if controller.snapshot.get("connected") and controller.snapshot.get(
+                "spot_price"
+            ):
+                break
+        assert controller.snapshot["symbol"] == "SPY"
+        assert controller.snapshot["spot_price"] == 774.50
+        assert any(c.symbol == "SPY" for c in fake.option_contracts)
+        await controller.set_enabled(False)
+
+    asyncio.run(scenario())
