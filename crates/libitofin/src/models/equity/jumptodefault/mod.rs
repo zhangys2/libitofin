@@ -6,8 +6,11 @@
 //! (working-paper eq. 1).
 
 mod callsurface;
+mod hazardcalibration;
 mod powerhazard;
 mod powermoments;
+
+pub use hazardcalibration::calibrate_power_hazard;
 
 #[cfg(test)]
 pub(crate) use callsurface::ConstantHazardCallSurface;
