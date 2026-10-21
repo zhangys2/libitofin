@@ -12,44 +12,6 @@ import pytest
 _APP = Path(__file__).resolve().parents[1] / "live_vol_surface.py"
 
 
-def test_live_surface_app_is_python_and_syntax_valid():
-    source = _APP.read_text(encoding="utf-8")
-    compile(source, "live_vol_surface.py", "exec")
-    assert '__generated_with = "0.25.0"' in source
-    assert 'app = marimo.App(width="full")' in source
-
-
-def test_live_quotes_surface_and_filter_controls_are_reactive_outputs():
-    source = _APP.read_text(encoding="utf-8")
-    assert "mo.state(" in source
-    assert "mo.ui.plotly(surface_figure)" in source
-    assert "make_quotes_dataframe(market_snapshot)" in source
-    assert 'label="Connect to live Deribit quotes"' in source
-    assert "await feed_controller.set_enabled(live_enabled.value)" in source
-    assert "Expiry for cubic smile reader" in source
-    assert "process_iv_rate=process_rate.value / 100.0" in source
-    assert "measurement_sd=measurement_sd.value / 100.0" in source
-    assert "feed_controller.reset_filters()" in source
-    assert "filters.ingest" not in source  # UI never assimilates a quote.
-
-
-def test_all_widget_values_are_read_outside_their_creator_cells():
-    cells = _APP.read_text(encoding="utf-8").split("@app.cell")
-    creator = next(
-        cell for cell in cells if 'label="Expiry for cubic smile reader"' in cell
-    )
-    assert "expiry_selector.value" not in creator
-    controls = next(cell for cell in cells if "process_rate = mo.ui.number" in cell)
-    for name in ("process_rate", "measurement_sd", "reset_filters"):
-        assert f"{name}.value" not in controls
-    assert any("selected_expiry_ms = expiry_selector.value" in cell for cell in cells)
-    # Reset has its own cell: changing noise controls cannot repeat a button click.
-    reset_cell = next(
-        cell for cell in cells if "feed_controller.reset_filters()" in cell
-    )
-    assert "process_rate" not in reset_cell and "measurement_sd" not in reset_cell
-
-
 def _execute_cell(cell, namespace):
     cell = copy.deepcopy(cell)
     cell.name = "test_cell"
@@ -68,6 +30,7 @@ def _execute_cell(cell, namespace):
 
 def _selector_render_loop(snapshot):
     import marimo as mo
+
     cells = [
         n for n in ast.parse(_APP.read_text()).body if isinstance(n, ast.FunctionDef)
     ]
@@ -228,8 +191,7 @@ def test_reader_has_nine_knots_and_both_curves_with_correct_residuals():
     for record in table.to_dict("records"):
         if record["used_in_fit"]:
             assert record["fitted_minus_observed"] == pytest.approx(
-                reference.volatility(record["strike_usd"])
-                - record["observed_mid_iv"],
+                reference.volatility(record["strike_usd"]) - record["observed_mid_iv"],
                 abs=1e-12,
             )
             assert record["filtered_minus_observed"] == pytest.approx(

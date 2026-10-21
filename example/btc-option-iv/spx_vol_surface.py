@@ -48,6 +48,7 @@ def _():
 def _(mo):
     get_spx_snapshot, set_spx_snapshot = mo.state(
         {
+            "symbol": "SPX",
             "status": "Feed stopped. Switch on to connect to IB Gateway.",
             "connected": False,
             "spot_price": None,
@@ -103,7 +104,7 @@ def _(
 def _(mo):
     mo.md("""
     # ⚡ Real-Time Volatility Surface & Smile Platform
-    Simultaneous calibration of **SPX 0DTE Index Options** (via **Interactive Brokers TCP Socket**) and
+    Simultaneous calibration of **SPX / SPY 0DTE Options** (via **Interactive Brokers TCP Socket**) and
     **Bitcoin Options Surface** (via **Deribit WebSocket**).
     Features **Bayesian linear-Gaussian Kalman filtering** across 9 standardized moneyness knots,
     **Total Variance Cubic Smile interpolation** with **Roger Lee wing asymptotics**, and
@@ -115,7 +116,11 @@ def _(mo):
 @app.cell
 def _(mo):
     view_mode = mo.ui.radio(
-        options=["📊 Both (Split View)", "⚡ SPX 0DTE Only", "🪙 BTC Surface Only"],
+        options=[
+            "📊 Both (Split View)",
+            "⚡ SPX / SPY 0DTE Only",
+            "🪙 BTC Surface Only",
+        ],
         value="📊 Both (Split View)",
         label="Dashboard View:",
     )
@@ -126,10 +131,13 @@ def _(mo):
 @app.cell
 def _(mo):
     spx_connect = mo.ui.switch(
-        value=False, label="⚡ Connect SPX 0DTE (IBKR Socket)"
+        value=False, label="⚡ Connect SPX/SPY 0DTE (IBKR Socket)"
     )
-    btc_connect = mo.ui.switch(
-        value=False, label="🪙 Connect BTC Surface (Deribit WS)"
+    btc_connect = mo.ui.switch(value=False, label="🪙 Connect BTC Surface (Deribit WS)")
+    spx_symbol = mo.ui.dropdown(
+        options={"SPX (CBOE Cash Index)": "SPX", "SPY (S&P 500 ETF)": "SPY"},
+        value="SPX (CBOE Cash Index)",
+        label="Underlying",
     )
     spx_port = mo.ui.dropdown(
         options={"4002 (Paper)": 4002, "4001 (Live)": 4001},
@@ -142,11 +150,11 @@ def _(mo):
         label="Market Data (applies on connect)",
     )
     spx_strike_radius = mo.ui.slider(
-        start=30,
+        start=5,
         stop=160,
-        step=10,
+        step=5,
         value=80,
-        label="SPX Strike Window (±pts)",
+        label="Strike Window (±pts)",
     )
     spx_process_rate = mo.ui.slider(
         start=0.01,
@@ -195,11 +203,12 @@ def _(mo):
         spx_process_rate,
         spx_reset,
         spx_strike_radius,
+        spx_symbol,
     )
 
 
 @app.cell
-def _(
+async def _(
     FilterConfig,
     spx_controller,
     spx_data_type,
@@ -207,7 +216,10 @@ def _(
     spx_port,
     spx_process_rate,
     spx_strike_radius,
+    spx_symbol,
+    spx_connect,
 ):
+    await spx_controller.set_symbol(str(spx_symbol.value))
     spx_controller.set_port(int(spx_port.value))
     spx_controller.set_market_data_type(int(spx_data_type.value))
     spx_controller.set_strike_radius(float(spx_strike_radius.value))
@@ -217,6 +229,7 @@ def _(
             measurement_sd=spx_meas_sd.value / 100.0,
         )
     )
+    await spx_controller.set_enabled(spx_connect.value)
     return
 
 
@@ -224,12 +237,6 @@ def _(
 def _(spx_controller, spx_reset):
     if spx_reset.value:
         spx_controller.reset_filters()
-    return
-
-
-@app.cell
-async def _(spx_connect, spx_controller):
-    await spx_controller.set_enabled(spx_connect.value)
     return
 
 
@@ -271,30 +278,50 @@ def _(
     spx_process_rate,
     spx_reset,
     spx_strike_radius,
+    spx_symbol,
     view_mode,
 ):
     header_controls = mo.hstack(
-        [spx_connect, btc_connect],
+        [spx_connect, spx_symbol, btc_connect],
         justify="start",
         gap=4,
     )
 
-    if view_mode.value == "⚡ SPX 0DTE Only":
+    if view_mode.value == "⚡ SPX / SPY 0DTE Only":
         tuning_ui = mo.vstack(
             [
-                mo.hstack([spx_port, spx_data_type, spx_strike_radius], justify="start", gap=2),
-                mo.hstack([spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2),
+                mo.hstack(
+                    [spx_port, spx_data_type, spx_strike_radius], justify="start", gap=2
+                ),
+                mo.hstack(
+                    [spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2
+                ),
             ],
             gap=1,
         )
     elif view_mode.value == "🪙 BTC Surface Only":
-        tuning_ui = mo.hstack([btc_process_rate, btc_meas_sd, btc_reset], justify="start", gap=2)
+        tuning_ui = mo.hstack(
+            [btc_process_rate, btc_meas_sd, btc_reset], justify="start", gap=2
+        )
     else:
         tuning_ui = mo.vstack(
             [
                 mo.md("#### Tuning Controls"),
-                mo.hstack([spx_port, spx_data_type, spx_strike_radius, spx_process_rate, spx_meas_sd, spx_reset], justify="start", gap=2),
-                mo.hstack([btc_process_rate, btc_meas_sd, btc_reset], justify="start", gap=2),
+                mo.hstack(
+                    [
+                        spx_port,
+                        spx_data_type,
+                        spx_strike_radius,
+                        spx_process_rate,
+                        spx_meas_sd,
+                        spx_reset,
+                    ],
+                    justify="start",
+                    gap=2,
+                ),
+                mo.hstack(
+                    [btc_process_rate, btc_meas_sd, btc_reset], justify="start", gap=2
+                ),
             ],
             gap=1,
         )
@@ -396,14 +423,18 @@ def _(
     view_mode,
 ):
     # ---------------------------------------------------------------------
-    # BUILD SPX COMPONENT
+    # BUILD SPX / SPY COMPONENT
     # ---------------------------------------------------------------------
+    sym = spx_snapshot.get("symbol", "SPX")
     if spx_error or spx_analysis is None:
-        spx_status_md = mo.md(f"**SPX Status:** {spx_snapshot.get('status', 'Waiting for SPX data...')}")
+        spx_status_md = mo.md(
+            f"**{sym} Status:** {spx_snapshot.get('status', f'Waiting for {sym} data...')}"
+        )
     else:
         view = spx_analysis["view"]
         butterfly_md = butterfly_markdown(
-            spx_analysis.get("butterfly_report"), label="Reference smile (total variance) butterfly check"
+            spx_analysis.get("butterfly_report"),
+            label="Reference smile (total variance) butterfly check",
         )
         if butterfly_md:
             butterfly_md += "<br>"
@@ -415,8 +446,8 @@ def _(
 
         spx_status_md = mo.md(
             textwrap.dedent(f"""
-            ### ⚡ SPX 0DTE Volatility Smile (IBKR Socket)
-            **SPX Spot:** `{spx_analysis['spot_price']:,.2f}` · **Forward:** `{spx_analysis['forward']:,.2f}` ({spx_analysis.get('forward_source') or 'n/a'}) · **ATM Vol:** `{spx_analysis['atm_vol']:.2%}` · **0DTE Expiration:** `{spx_analysis['expiry_str']}` (`{time_left_str}` to 4:00 PM ET close)<br>
+            ### ⚡ {sym} 0DTE Volatility Smile (IBKR Socket)
+            **{sym} Spot:** `{spx_analysis["spot_price"]:,.2f}` · **Forward:** `{spx_analysis["forward"]:,.2f}` ({spx_analysis.get("forward_source") or "n/a"}) · **ATM Vol:** `{spx_analysis["atm_vol"]:.2%}` · **0DTE Expiration:** `{spx_analysis["expiry_str"]}` (`{time_left_str}` to 4:00 PM ET close)<br>
             {butterfly_md}
             **Accepted Updates:** `{view.updates}` · **Resets:** `{view.resets}` · **Filter State:** `{view.status}` · **Last Reset Reason:** `{view.reset_reason}`<br>
             _The arbitrage check applies to the dashed reference smile only. The solid Kalman curve is a natural cubic in IV: not arbitrage-free, not a trading signal._
@@ -439,7 +470,11 @@ def _(
             for col in ["observed_mid_iv", "fitted_iv", "filtered_iv"]:
                 if col in obs_df:
                     obs_df[col] = obs_df[col].apply(fmt_pct)
-            for col in ["fitted_minus_observed", "filtered_minus_observed", "innovation"]:
+            for col in [
+                "fitted_minus_observed",
+                "filtered_minus_observed",
+                "innovation",
+            ]:
                 if col in obs_df:
                     obs_df[col] = obs_df[col].apply(
                         lambda v: f"{v * 100:+.2f} pts" if pd.notna(v) else ""
@@ -454,16 +489,16 @@ def _(
 
         spx_tables_ui = mo.ui.tabs(
             {
-                "📊 SPX 0DTE Quotes & Residuals": mo.ui.table(
+                f"📊 {sym} 0DTE Quotes & Residuals": mo.ui.table(
                     obs_df, pagination=True, page_size=10
                 ),
-                "📍 SPX Kalman Spline Knots (9 Knots)": mo.ui.table(
+                f"📍 {sym} Kalman Spline Knots (9 Knots)": mo.ui.table(
                     knots_df, pagination=False
                 ),
             }
         )
     else:
-        spx_tables_ui = mo.md("_No active SPX option quotes to display._")
+        spx_tables_ui = mo.md(f"_No active {sym} option quotes to display._")
 
     spx_section = mo.vstack(
         [
@@ -479,7 +514,7 @@ def _(
     # ---------------------------------------------------------------------
     btc_status_md = mo.md(f"""
     ### 🪙 Bitcoin Volatility Surface & Smile (Deribit WebSocket)
-    **Feed Status:** {btc_snapshot.get('status', 'Feed stopped.')}
+    **Feed Status:** {btc_snapshot.get("status", "Feed stopped.")}
     """)
 
     surface_fig = make_surface_figure(btc_snapshot.get("rows", {}))
@@ -506,8 +541,8 @@ def _(
         btc_smile_md = mo.md(
             textwrap.dedent(f"""
             #### Selected Expiry Smile: `{_exp_label}`
-            **Filter Status:** {btc_analysis['filter_status']} · **Last accepted update:** {_age_text}<br>
-            **Forward:** {btc_analysis['forward']:,.2f} USD · **Expiry:** {btc_analysis['exercise_time']:.8f} years · **ATM Vol:** {btc_analysis['atm_vol']:.2%}<br>
+            **Filter Status:** {btc_analysis["filter_status"]} · **Last accepted update:** {_age_text}<br>
+            **Forward:** {btc_analysis["forward"]:,.2f} USD · **Expiry:** {btc_analysis["exercise_time"]:.8f} years · **ATM Vol:** {btc_analysis["atm_vol"]:.2%}<br>
             **Accepted updates:** {_view.updates} · **Resets:** {_view.resets} · **Last reset:** {_view.reset_reason}
             {_butterfly_text}
             """)
@@ -532,7 +567,11 @@ def _(
             }
         )
 
-    selector_ui = btc_expiry_selector if btc_expiry_selector is not None else mo.md("_Start feed to populate expiries._")
+    selector_ui = (
+        btc_expiry_selector
+        if btc_expiry_selector is not None
+        else mo.md("_Start feed to populate expiries._")
+    )
 
     btc_section = mo.vstack(
         [
@@ -549,7 +588,7 @@ def _(
     # ---------------------------------------------------------------------
     # LAYOUT ACCORDING TO VIEW MODE
     # ---------------------------------------------------------------------
-    if view_mode.value == "⚡ SPX 0DTE Only":
+    if view_mode.value == "⚡ SPX / SPY 0DTE Only":
         final_layout = spx_section
     elif view_mode.value == "🪙 BTC Surface Only":
         final_layout = btc_section
