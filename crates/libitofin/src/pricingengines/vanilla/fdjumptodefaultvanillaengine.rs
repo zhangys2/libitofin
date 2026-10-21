@@ -12,7 +12,7 @@
 //! convention and are not this engine.
 
 use crate::errors::QlResult;
-use crate::exercise::{EuropeanExercise, Exercise, ExerciseType};
+use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
 use crate::handle::Handle;
 use crate::instruments::{
@@ -129,15 +129,7 @@ impl FdJumpToDefaultVanillaEngine {
         );
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
-        // European with no coupons ignores the exercise date; the rollback
-        // length is `maturity`.
-        let reference = self
-            .process
-            .risk_free_rate()
-            .current_link()?
-            .reference_date()?;
-        let exercise = EuropeanExercise::new(reference);
-        let solved = self.solve(spot, maturity, spot, shared(UnitPayoff), &exercise)?;
+        let solved = self.solve(spot, maturity, spot, shared(UnitPayoff), None)?;
         let discount = self
             .process
             .risk_free_rate()
@@ -156,7 +148,7 @@ impl FdJumpToDefaultVanillaEngine {
         maturity: Time,
         spot: Real,
         terminal: Shared<dyn Payoff>,
-        exercise: &dyn Exercise,
+        exercise: Option<&dyn Exercise>,
     ) -> QlResult<GridValue> {
         let equity = fdm_black_scholes_mesher_with_quanto(
             self.x_grid,
@@ -178,14 +170,18 @@ impl FdJumpToDefaultVanillaEngine {
             shared(fdm_log_inner_value(terminal, Shared::clone(&mesher_dyn), 0));
 
         let r_ts = self.process.risk_free_rate().current_link()?;
-        let conditions = FdmStepConditionComposite::vanilla_composite(
-            &[],
-            exercise,
-            Shared::clone(&mesher_dyn),
-            Shared::clone(&calculator),
-            r_ts.reference_date()?,
-            r_ts.require_day_counter()?,
-        )?;
+        let conditions = if let Some(exercise) = exercise {
+            FdmStepConditionComposite::vanilla_composite(
+                &[],
+                exercise,
+                Shared::clone(&mesher_dyn),
+                Shared::clone(&calculator),
+                r_ts.reference_date()?,
+                r_ts.require_day_counter()?,
+            )?
+        } else {
+            shared(FdmStepConditionComposite::new(&[], Vec::new()))
+        };
         let solver_desc = FdmSolverDesc {
             mesher: Shared::clone(&mesher_dyn),
             bc_set: Vec::new(),
@@ -349,7 +345,7 @@ impl PricingEngine for FdJumpToDefaultVanillaEngine {
                     )
                 }
             };
-        let solved = self.solve(strike, maturity, spot, terminal, &**exercise)?;
+        let solved = self.solve(strike, maturity, spot, terminal, Some(&**exercise))?;
         let (cash, cash_theta) = shift.unwrap_or((0.0, 0.0));
         let results = self.base.results_mut();
         results.instrument.value = Some(solved.value + cash);
@@ -691,6 +687,59 @@ mod tests {
             "observed order {order}: prices {prices:?}, differences {first} then {second}"
         );
         eprintln!("carr-madan mesh order {order} on grids 80/160/320");
+    }
+
+    /// A negative power makes `λ` large at low spots. The call stays positive
+    /// and increases in spot, so the central `λ` drift is not flipping the price.
+    #[test]
+    fn call_stays_positive_and_rises_with_spot() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let quote = shared(SimpleQuote::new(80.0));
+        let dc = Actual365Fixed::new();
+        let reference = today();
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::with_rate(
+                reference,
+                rate,
+                dc.clone(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let proc = shared(BlackScholesMertonProcess::new(
+            Handle::new(Shared::clone(&quote) as Shared<dyn Quote>),
+            flat(DIVIDEND),
+            flat(RATE),
+            Handle::new(
+                shared(BlackConstantVol::new(reference, None, VOL, dc.clone()))
+                    as Shared<dyn BlackVolTermStructure>,
+            ),
+        ));
+        let hazard = shared(PowerHazard::constant(0.04 * SPOT.powf(1.5), -1.5).unwrap());
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry(1.0)));
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(PlainVanillaPayoff::new(OptionType::Call, SPOT));
+        let mut previous = 0.0;
+        for spot in [80.0, 100.0, 130.0] {
+            quote.set_value(Some(spot));
+            let mut engine = FdJumpToDefaultVanillaEngine::new(
+                Shared::clone(&proc),
+                None,
+                Shared::clone(&hazard),
+                100,
+                120,
+                FdmSchemeDesc::douglas(),
+            );
+            let price = engine
+                .price(Shared::clone(&payoff), Shared::clone(&exercise))
+                .unwrap();
+            assert!(
+                price > previous,
+                "spot {spot}: price {price} should exceed {previous}"
+            );
+            previous = price;
+        }
     }
 
     /// Both the call and the put rise with `f`. Put–call parity does not

@@ -16,6 +16,7 @@ use crate::models::equity::jumptodefault::{
 };
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::quotes::Quote;
+use crate::require;
 use crate::shared::Shared;
 use crate::termstructures::volatility::{
     BlackVolTermStructure, LocalVolSurface, VolatilityTermStructure,
@@ -134,7 +135,15 @@ impl CarrMadanLocalVolSurface {
             - self.calls.call(strike, (t - dt).max(dt))?)
             / (t + dt - (t - dt).max(dt));
         let call_k = self.calls.call_dk(strike, t)?;
-        let step = (strike * 1.0e-4).max(1.0e-6);
+        // Price second difference, clamped so both samples stay at a positive
+        // strike. `call_dkk` is the total-variance density; pairing it with
+        // this time difference loses about 1e-3 of vol on the constant-hazard
+        // smile, where the price difference stays within 1e-4.
+        let step = (strike * 1.0e-4).min(0.25 * strike);
+        require!(
+            step.is_finite() && step > 0.0,
+            "local-vol strike step is not positive at strike {strike}"
+        );
         let density = |step: Real| -> QlResult<Real> {
             Ok((self.calls.call(strike + step, t)? - 2.0 * call
                 + self.calls.call(strike - step, t)?)
@@ -143,6 +152,12 @@ impl CarrMadanLocalVolSurface {
         let fine = density(step)?;
         let coarse = density(2.0 * step)?;
         let call_kk = (4.0 * fine - coarse) / 3.0;
+        let density_floor = 1.0e-12 * (call.abs() + 1.0) / (strike * strike);
+        if !call_kk.is_finite() || call_kk.abs() <= density_floor {
+            fail!(
+                "call density is too small to recover Carr-Madan local variance at strike {strike} and time {t}"
+            );
+        }
         let discount_up = self.calls.discount(t + dt)?;
         let discount_dn = self.calls.discount((t - dt).max(dt))?;
         let span = t + dt - (t - dt).max(dt);
@@ -330,10 +345,9 @@ mod tests {
             shared(PowerHazard::constant(hazard, 0.0).unwrap()),
             MomentGrid::new(12.0, 96).unwrap(),
         );
-        // Finite-difference gamma of the inverted smile loses the far left
-        // wing: at 0.5F the absolute vol error is about 2e-5 at T=1 and
-        // 3e-3 at T=0.5, because the call is nearly intrinsic. From 0.7F to
-        // 2F the corrected vol is within 1e-5, and Dupire itself is not flat.
+        // A clamped price difference of the inverted smile recovers the flat
+        // diffusion to 1e-5 from 0.7F to 2F. At 0.5F the call is nearly
+        // intrinsic and the error is a few thousandths. Dupire itself is not flat.
         let mut dupire_gap: Real = 0.0;
         for (t, moneyness) in [(1.0, 0.7), (1.0, 1.0), (1.0, 1.5), (2.0, 2.0)] {
             let strike = spot * ((rate - dividend) * t).exp() * moneyness;

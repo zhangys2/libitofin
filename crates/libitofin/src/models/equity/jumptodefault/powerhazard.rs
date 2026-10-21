@@ -81,6 +81,10 @@ impl PowerHazard {
 
     /// Scale `f(t)`. Flat before the first knot and after the last one.
     ///
+    /// The value on `(times[i-1], times[i]]` is `scales[i]`, with
+    /// `times[-1] = -∞`. Calibration stores the right-endpoint sample there,
+    /// so inside a bucket this is `f` at the bucket's right knot.
+    ///
     /// Carr–Madan working-paper eq. 8 writes the survival hazard as
     /// `h_V(t) = f(t) E[S_t^p]`.
     pub fn scale(&self, t: Time) -> Real {

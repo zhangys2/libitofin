@@ -61,7 +61,14 @@ pub struct FdmBlackScholesOp {
     /// process rate `r`. Drift and diffusion are unchanged.
     extra_discount: Option<Array>,
     /// Carr–Madan intensity `f(t) S^p`. `None` leaves the generator unchanged.
-    jump_to_default: Option<Shared<PowerHazard>>,
+    /// `spot_power` is `S_i^p`, fixed with the mesh.
+    jump_to_default: Option<JumpToDefault>,
+}
+
+/// Jump intensity split into a time scale and a cached spot power.
+struct JumpToDefault {
+    hazard: Shared<PowerHazard>,
+    spot_power: Array,
 }
 
 impl FdmBlackScholesOp {
@@ -164,7 +171,9 @@ impl FdmBlackScholesOp {
         if self.x.size() != self.mesher.layout().size() {
             self.x = self.mesher.locations(self.direction).exp();
         }
-        self.jump_to_default = Some(hazard);
+        let exponent = hazard.exponent();
+        let spot_power: Array = self.x.iter().map(|spot| spot.powf(exponent)).collect();
+        self.jump_to_default = Some(JumpToDefault { hazard, spot_power });
         self
     }
 
@@ -211,7 +220,7 @@ impl FdmBlackScholesOp {
         drift: Array,
         reaction: Array,
     ) -> QlResult<(Array, Array)> {
-        let Some(hazard) = &self.jump_to_default else {
+        let Some(jump) = &self.jump_to_default else {
             return Ok((drift, reaction));
         };
         let n = self.mesher.layout().size();
@@ -225,8 +234,9 @@ impl FdmBlackScholesOp {
         } else {
             Array::filled(n, reaction[0])
         };
+        let scale = jump.hazard.scale(t);
         for i in 0..n {
-            let lambda = hazard.intensity(t, self.x[i])?;
+            let lambda = scale * jump.spot_power[i];
             drift[i] += lambda;
             reaction[i] -= lambda;
         }

@@ -14,9 +14,15 @@ use super::{CallSurface, PowerHazard};
 
 /// Piecewise-constant `f` on `times`, for the power `exponent`.
 ///
-/// Each knot uses the survival curve's hazard rate and survival probability
-/// and the call surface's discount. `M_p(0, t)` is the grid's truncated
-/// power price.
+/// Knot `t_i` stores the right-endpoint value
+/// `f(t_i) = h_V(t_i) D(t_i) V(t_i) / M_p(0, t_i)`. [`PowerHazard`] then
+/// holds that value on the whole bucket `(t_{i-1}, t_i]` (and on
+/// `(-∞, t_0]` for the first knot). That is the instantaneous scale at the
+/// knot, not the bucket average, so a coarse knot grid is first-order in the
+/// spacing when `f` varies inside the bucket.
+///
+/// Both credit queries pass `extrapolate = true`, so a knot past the curve's
+/// last date uses the curve's own extrapolation.
 ///
 /// # Errors
 ///
@@ -107,5 +113,49 @@ mod tests {
                 h / (forward.powf(exponent) * (0.5 * exponent * (exponent - 1.0) * variance).exp());
             assert_rel(hazard.scale(t), expected, 1e-6);
         }
+    }
+
+    /// `f` on `(t_{i-1}, t_i]` is the sample at `t_i`, including past the curve.
+    #[test]
+    fn bucket_holds_the_right_endpoint_and_extrapolates_with_the_curve() {
+        use crate::math::interpolations::linear::Linear;
+        use crate::termstructures::credit::defaulttermstructure::DefaultProbabilityTermStructure;
+        use crate::termstructures::credit::interpolatedhazardratecurve::InterpolatedHazardRateCurve;
+        use crate::time::period::Period;
+        use crate::time::timeunit::TimeUnit;
+
+        let surface = ConstantHazardCallSurface::new(100.0, 0.02, 0.0, 0.2, 0.0).unwrap();
+        let reference = Date::new(15, Month::June, 2026);
+        let curve = InterpolatedHazardRateCurve::new(
+            vec![
+                reference,
+                reference + Period::new(365, TimeUnit::Days),
+                reference + Period::new(730, TimeUnit::Days),
+            ],
+            vec![0.01, 0.05, 0.02],
+            Actual365Fixed::new(),
+            Linear,
+        )
+        .unwrap();
+        let grid = MomentGrid::new(8.0, 48).unwrap();
+        let at = |t: Time| {
+            let hazard = curve.hazard_rate(t, true).unwrap();
+            let survival = curve.survival_probability(t, true).unwrap();
+            let discount = surface.discount(t).unwrap();
+            let moment = power_price(&surface, 0.0, t, &grid).unwrap();
+            hazard * discount * survival / moment
+        };
+        let hazard =
+            calibrate_power_hazard(&surface, &curve, 0.0, &[1.0, 2.0, 5.0], &grid).unwrap();
+        let at_knot = at(1.0);
+        let at_midpoint = at(0.5);
+        assert_rel(hazard.scale(0.5), at_knot, 1e-8);
+        assert_rel(hazard.scale(1.0), at_knot, 1e-8);
+        assert!(
+            (at_knot - at_midpoint).abs() / at_midpoint.abs() > 1e-2,
+            "midpoint formula {at_midpoint} should differ from the knot {at_knot}"
+        );
+        assert_rel(hazard.scale(5.0), at(5.0), 1e-6);
+        assert_rel(hazard.scale(3.0), hazard.scale(5.0), 1e-12);
     }
 }
