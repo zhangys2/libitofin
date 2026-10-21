@@ -5,6 +5,12 @@
 //! refer to the 2007 working paper. The intensity is `f(t) S^p` with `p <= 0`
 //! (working-paper eq. 1).
 
+mod callsurface;
 mod powerhazard;
+mod powermoments;
 
+#[cfg(test)]
+pub(crate) use callsurface::ConstantHazardCallSurface;
+pub use callsurface::{BlackVolCallSurface, CallSurface};
 pub use powerhazard::PowerHazard;
+pub use powermoments::{MomentGrid, power_price, truncated_power_price};
