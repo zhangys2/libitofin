@@ -1,6 +1,8 @@
-//! Constant-parameter Gaussian short-rate state process in a forward measure.
+//! Gaussian short-rate state process in a forward measure.
 //!
-//! This is the standalone process, not a GSR model or calibration engine.
+//! Identical volatility and reversion values use an untruncated closed form.
+//! A varying grid uses QuantLib's piecewise core, including its `|a| < 1e-4`
+//! zero-reversion cutoff. This is the standalone process, not a GSR model.
 
 use crate::errors::QlResult;
 use crate::fail;
@@ -16,15 +18,19 @@ enum Law {
     Piecewise(GsrProcessCore),
 }
 
-/// Constant-volatility, constant-reversion GSR process under a `T`-forward measure.
+/// GSR process under a `T`-forward measure.
 ///
-/// Dynamics are `dx = (y(t) - sigma² G(t,T) - a x) dt + sigma dW`, with
+/// When every volatility equals the first volatility and every reversion equals
+/// the first reversion, the law is the untruncated closed form
+/// `dx = (y(t) - sigma² G(t,T) - a x) dt + sigma dW`, with
 /// `y(t) = sigma² (1-exp(-2at))/(2a)` and `G(t,T) = (1-exp(-a(T-t)))/a`.
-/// Zero reversion uses the continuous limits, without a small-reversion cutoff.
-/// All dynamics require finite state and times in `[0,T]`. Date conversion is
-/// unsupported. Constant grids keep the closed form. Varying volatility or
-/// reversion uses the piecewise core. Changing the horizon through
-/// [`ForwardMeasureProcess1D`] immediately changes drift and transition mean.
+/// Zero reversion on that path uses the continuous limit, with no `1e-4` cutoff.
+/// A grid whose volatilities or reversions are not all equal uses the piecewise
+/// core. There, `|a| < 1e-4` is treated as zero, matching QuantLib. A one-ulp
+/// difference between two otherwise equal tiny reversions therefore changes the
+/// law. All dynamics require finite state and times in `[0,T]`. Date conversion
+/// is unsupported. Changing the horizon through [`ForwardMeasureProcess1D`]
+/// immediately changes drift and transition mean.
 pub struct GsrProcess {
     law: Law,
     measure: ForwardMeasureTime,
@@ -32,12 +38,13 @@ pub struct GsrProcess {
 }
 
 impl GsrProcess {
-    /// Constructs the constant-parameter subset of QuantLib's grid-shaped API.
+    /// Constructs a GSR process from QuantLib's grid-shaped arguments.
     ///
-    /// Repeated identical parameters use the constant closed form. Varying
+    /// Identical parameter values use the untruncated closed form. Any other
     /// finite nonnegative volatilities and finite reversions use the piecewise
-    /// core. Redundant constant-grid boundaries do not restrict subsequent
-    /// horizon changes, including changes to zero.
+    /// core, where `|a| < 1e-4` is the zero-reversion cutoff. Redundant
+    /// constant-grid boundaries do not restrict subsequent horizon changes,
+    /// including changes to zero.
     ///
     /// # Errors
     /// Rejects invalid grid lengths, nonfinite/negative or non-increasing times,
@@ -207,14 +214,6 @@ impl AsObservable for GsrProcess {
 impl ForwardMeasureProcess1D for GsrProcess {
     fn forward_measure_state(&self) -> &ForwardMeasureTime {
         &self.measure
-    }
-    fn set_forward_measure_time(&mut self, t: Time) -> QlResult<()> {
-        self.measure.set(t)?;
-        if let Law::Piecewise(core) = &self.law {
-            core.flush_cache();
-        }
-        self.observable.notify_observers();
-        Ok(())
     }
 }
 

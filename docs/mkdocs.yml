@@ -83,6 +83,7 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Go SDK: go.md
+  - .NET SDK: dotnet.md
   - Finite-difference options: finite-difference.md
   - Exotic option scope: exotic-options.md
   - Variance swaps: variance-swaps.md
@@ -131,6 +132,8 @@ nav:
   - ABCD math and volatility: abcd.md
   - Householder utilities: householder.md
   - Go/Python bond bindings: bond-bindings.md
+  - Go/Python bond forward bindings: bond-forward-bindings.md
+  - Go/Python callable bond bindings: callable-bond-bindings.md
   - Bond yield and Z-spread analytics: bond-analytics.md
   - Zero-coupon bonds: zero-coupon-bonds.md
   - Floating-rate bonds: floating-rate-bonds.md

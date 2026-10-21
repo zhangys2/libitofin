@@ -208,6 +208,26 @@ typedef struct ItofinFixedBondConfig {
   uint8_t ex_coupon_end_of_month;
 } ItofinFixedBondConfig;
 
+typedef struct ItofinBondForwardConfig {
+  uint64_t bond;
+  int32_t value_date;
+  int32_t delivery_date;
+  /**
+   * 0 Long, 1 Short. Strike is a dirty delivery quote, not a cash notional.
+   */
+  int32_t position;
+  double strike;
+  uint32_t settlement_days;
+  uint64_t day_counter;
+  uint64_t calendar;
+  int32_t convention;
+  uint64_t discount;
+  /**
+   * Zero explicitly defaults income discounting to the financing curve.
+   */
+  uint64_t income_discount;
+} ItofinBondForwardConfig;
+
 /**
  * Borrowed arrays valid only during a penalty callback; consumers must copy them.
  */
@@ -237,6 +257,80 @@ typedef struct ItofinBootstrapCallbacks {
                    struct ItofinError*);
   void (*release)(size_t);
 } ItofinBootstrapCallbacks;
+
+typedef struct ItofinCallableImpliedVolatilityConfig {
+  /**
+   * Presence bits: accuracy=1, max_evaluations=2, min_vol=4, max_vol=8.
+   */
+  uint32_t flags;
+  double accuracy;
+  uint64_t max_evaluations;
+  double min_vol;
+  double max_vol;
+} ItofinCallableImpliedVolatilityConfig;
+
+/**
+ * An immutable exercise quote per 100. Clean=0/dirty=1; call=0/put=1.
+ */
+typedef struct ItofinCallability {
+  double price;
+  int32_t price_type;
+  int32_t call_type;
+  int32_t date;
+} ItofinCallability;
+
+typedef struct ItofinCallableOASConfig {
+  uint64_t day_counter;
+  /**
+   * Existing compounding tags 0 through 4.
+   */
+  int32_t compounding;
+  /**
+   * Annual=0, Semiannual=1, Quarterly=2, Monthly=3.
+   */
+  int32_t frequency;
+  /**
+   * Bit 1 supplies an actual unadjusted settlement; other bits reject.
+   */
+  uint32_t settlement_flags;
+  int32_t settlement;
+} ItofinCallableOASConfig;
+
+typedef struct ItofinCallableBondRiskConfig {
+  uint64_t tree_engine;
+  uint64_t day_counter;
+  /**
+   * Simple=0, Compounded=1, Continuous=2, SimpleThenCompounded=3, CompoundedThenSimple=4.
+   */
+  int32_t compounding;
+  /**
+   * Annual=0, Semiannual=1, Quarterly=2, Monthly=3.
+   */
+  int32_t frequency;
+  /**
+   * Bit 1 selects an explicit positive bump; zero preserves native None (2e-4).
+   */
+  uint32_t flags;
+  double bump;
+} ItofinCallableBondRiskConfig;
+
+/**
+ * Plain same-currency paid and received Ibor legs. Flag zero preserves native defaults.
+ */
+typedef struct ItofinFloatFloatSwapConfig {
+  double nominal;
+  uint64_t pay_schedule;
+  uint64_t pay_index;
+  double pay_spread;
+  uint64_t pay_day_counter;
+  uint64_t receive_schedule;
+  uint64_t receive_index;
+  double receive_spread;
+  uint64_t receive_day_counter;
+  uint64_t settings;
+  uint8_t has_payment_convention;
+  int32_t payment_convention;
+} ItofinFloatFloatSwapConfig;
 
 typedef struct ItofinFloatingBondConfig {
   struct ItofinBondConfig bond;
@@ -491,6 +585,20 @@ typedef struct ItofinImpliedForwardResult {
   uint32_t pairs_pruned;
   double wls_rmse;
 } ItofinImpliedForwardResult;
+
+/**
+ * Two state components in x, y order, passed and returned by value.
+ */
+typedef struct ItofinG2Vector {
+  double values[2];
+} ItofinG2Vector;
+
+/**
+ * Two-by-two matrix in row-major order: xx, xy, yx, yy.
+ */
+typedef struct ItofinG2Matrix {
+  double values[4];
+} ItofinG2Matrix;
 
 /**
  * Daily variance parameters; live states contain annualized variance.
@@ -2059,6 +2167,47 @@ int32_t itofin_bond_action(struct ItofinContext *ctx,
                            struct ItofinError *error);
 
 /**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_forward_new(struct ItofinContext *ctx,
+                                struct ItofinBondForwardConfig a,
+                                uint64_t *out,
+                                struct ItofinError *error);
+
+/**
+ * Fields: 0 NPV, 1 fair dirty forward quote, 2 clean forward quote, 3 strike.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_forward_value(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  int32_t field,
+                                  double *out,
+                                  struct ItofinError *error);
+
+/**
+ * Fields: 0 checked settlement, 1 adjusted delivery, 2 value date, 3 expiry flag, 4 position.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_forward_integer(struct ItofinContext *ctx,
+                                    uint64_t id,
+                                    int32_t field,
+                                    int32_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * Actions: 0 force recalculation, 1 freeze, 2 unfreeze.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_forward_control(struct ItofinContext *ctx,
+                                    uint64_t id,
+                                    int32_t action,
+                                    struct ItofinError *error);
+
+/**
  * Construct a global discount curve, kind 0 log-linear or 1 linear.
  * Callback ownership transfers exactly when `adopted` becomes true, including
  * failed construction; the last native curve owner releases the callbacks.
@@ -2133,6 +2282,175 @@ int32_t itofin_context_free(struct ItofinContext *ctx, struct ItofinError *error
 int32_t itofin_handle_release(struct ItofinContext *ctx,
                               uint64_t handle,
                               struct ItofinError *error);
+
+/**
+ * Construct with live quote/curve graphs, without eager market valuation.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_black_callable_bond_engine_new(struct ItofinContext *ctx,
+                                              uint64_t yield_volatility,
+                                              uint64_t discount,
+                                              uint64_t settings_id,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Install only on actual callable products sharing the original Settings.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_set_black_engine(struct ItofinContext *ctx,
+                                              uint64_t id,
+                                              uint64_t engine,
+                                              struct ItofinError *error);
+
+/**
+ * Invert a settlement quote per 100 without changing the installed engine or cache.
+ * Price types are Clean=0 and Dirty=1; absent controls use 1e-10, 100, 0, 1.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_implied_volatility(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                double target,
+                                                int32_t price_type,
+                                                uint64_t discount,
+                                                struct ItofinCallableImpliedVolatilityConfig a,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
+ * Validate and copy a callability value. Every bond constructor also validates all records.
+ * # Safety
+ * Pointers must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callability_new(struct ItofinCallability a,
+                               struct ItofinCallability *out,
+                               struct ItofinError *error);
+
+/**
+ * The common calendar and first-period day-counter fields must be zero.
+ * Zero ex-coupon calendar selects NullCalendar when an ex-coupon period is present.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_fixed_rate_bond_new(struct ItofinContext *ctx,
+                                            struct ItofinFixedBondConfig a,
+                                            const double *coupons,
+                                            size_t count,
+                                            const struct ItofinCallability *calls,
+                                            size_t call_count,
+                                            uint64_t *out,
+                                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_zero_coupon_bond_new(struct ItofinContext *ctx,
+                                             struct ItofinBondConfig a,
+                                             int32_t maturity,
+                                             uint64_t counter,
+                                             const struct ItofinCallability *calls,
+                                             size_t call_count,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
+
+/**
+ * Copy schedule in original order. Capacity zero queries required length.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_callability(struct ItofinContext *ctx,
+                                         uint64_t id,
+                                         struct ItofinCallability *out,
+                                         size_t capacity,
+                                         size_t *required,
+                                         struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_zero_bond_day_counter(struct ItofinContext *ctx,
+                                              uint64_t id,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Pure clean settlement quote per 100 from a conventional decimal spread.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_clean_price_oas(struct ItofinContext *ctx,
+                                             uint64_t bond,
+                                             double spread,
+                                             uint64_t engine,
+                                             struct ItofinCallableOASConfig config,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * Recover conventional decimal OAS without altering bond or engine state.
+ * Omitted solver controls use 1e-10, 100 and zero in continuous shift units.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_oas(struct ItofinContext *ctx,
+                                 uint64_t bond,
+                                 double clean_price,
+                                 uint64_t engine,
+                                 struct ItofinCallableOASConfig config,
+                                 struct ItofinAnalyticsSolverConfig solver,
+                                 double *out,
+                                 struct ItofinError *error);
+
+/**
+ * Effective clean-price duration from the explicit immutable tree, without installed-engine changes.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_effective_duration(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                double spread,
+                                                struct ItofinCallableBondRiskConfig config,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
+ * Effective clean-price convexity from the explicit immutable tree, without installed-engine changes.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_effective_convexity(struct ItofinContext *ctx,
+                                                 uint64_t id,
+                                                 double spread,
+                                                 struct ItofinCallableBondRiskConfig config,
+                                                 double *out,
+                                                 struct ItofinError *error);
+
+/**
+ * Construct without eager valuation. Time steps must be positive and fit usize.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_tree_callable_bond_engine_new(struct ItofinContext *ctx,
+                                             uint64_t model,
+                                             uint64_t time_steps,
+                                             uint64_t settings_id,
+                                             uint64_t *out,
+                                             struct ItofinError *error);
+
+/**
+ * Install only on an actual callable product sharing the exact engine Settings.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_callable_bond_set_tree_engine(struct ItofinContext *ctx,
+                                             uint64_t id,
+                                             uint64_t engine,
+                                             struct ItofinError *error);
 
 /**
  * Compute Wilder +DI, -DI, DX and ADX in channel-major order.
@@ -2370,6 +2688,49 @@ int32_t itofin_chart_volume_bars(const ItofinReal *open,
                                  int8_t *out_direction,
                                  size_t capacity,
                                  struct ItofinError *error);
+
+/**
+ * Construct and retain the original native instrument, Settings and both indexes.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_float_float_swap_new(struct ItofinContext *ctx,
+                                    const struct ItofinFloatFloatSwapConfig *cfg,
+                                    uint64_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * Attach a live discount curve with native date/flow defaults and identical Settings.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_float_float_swap_set_engine(struct ItofinContext *ctx,
+                                           uint64_t id,
+                                           uint64_t discount,
+                                           uint64_t settings_id,
+                                           struct ItofinError *error);
+
+/**
+ * Query 0 NPV, 1/2 paid/received NPV, 3/4 paid/received BPS, 5/6 absolute fair
+ * paid/received spread, 7 cached state, 8 expiry. Failures leave output untouched.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_float_float_swap_value(struct ItofinContext *ctx,
+                                      uint64_t id,
+                                      int32_t query,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Action 0 calculate, 1 recalculate, 2 freeze, 3 unfreeze.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_float_float_swap_action(struct ItofinContext *ctx,
+                                       uint64_t id,
+                                       int32_t action,
+                                       struct ItofinError *error);
 
 /**
  * Construct without requiring coupon histories or a cap/floor pricer.
@@ -3526,6 +3887,66 @@ int32_t itofin_implied_forward_calculate(const double *strikes,
                                          double expiry_years,
                                          struct ItofinImpliedForwardResult *out,
                                          struct ItofinError *error);
+
+/**
+ * Create a bare-factor process. Signed reversions and zero volatility are valid.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_g2_process_new(struct ItofinContext *ctx,
+                              double a,
+                              double sigma,
+                              double b,
+                              double eta,
+                              double rho,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Scalar kind: 0 size, 1 factors, 2 x0, 3 y0, 4 a, 5 sigma, 6 b, 7 eta, 8 rho.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_g2_process_scalar(struct ItofinContext *ctx,
+                                 uint64_t process,
+                                 int32_t kind,
+                                 double *out,
+                                 struct ItofinError *error);
+
+/**
+ * Vector kind: 0 initial values, 1 drift, 2 expectation, 3 apply, 4 evolve.
+ * Drift uses t/state; expectation adds dt; apply uses state/change; evolve uses
+ * t/state/dt/change, where change is two independent standard Gaussian draws.
+ * Unused inputs are ignored. Apply requires finite inputs and finite sums.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_g2_process_vector(struct ItofinContext *ctx,
+                                 uint64_t process,
+                                 int32_t kind,
+                                 double t,
+                                 struct ItofinG2Vector state,
+                                 double dt,
+                                 struct ItofinG2Vector change,
+                                 struct ItofinG2Vector *out,
+                                 struct ItofinError *error);
+
+/**
+ * Matrix kind: 0 instantaneous diffusion, 1 exact step root, 2 covariance.
+ * All use t/state; kinds 1 and 2 additionally use dt. Results are row-major.
+ * Diffusion uses rho*eta in its lower-left entry, correcting QuantLib's
+ * unequal-volatility defect. Step roots map independent standard normals.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_g2_process_matrix(struct ItofinContext *ctx,
+                                 uint64_t process,
+                                 int32_t kind,
+                                 double t,
+                                 struct ItofinG2Vector state,
+                                 double dt,
+                                 struct ItofinG2Matrix *out,
+                                 struct ItofinError *error);
 
 /**
  * Fit a stationary GARCH(1,1) model to a return series and forecast one variance.

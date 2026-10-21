@@ -165,43 +165,42 @@ fn piecewise_core_matches_single_bucket_and_crosses_the_knot() {
     let bridge = (-0.5_f64 * 0.5).exp();
     let g_right = (1.0 - (-0.8_f64 * 0.5).exp()) / 0.8;
     close(varying.g(0.5, 1.5).unwrap(), g_left + bridge * g_right);
-    let times = vec![1.0, 2.0];
-    let vols = vec![0.02, 0.03, 0.025];
-    let reversions = vec![0.1, 0.05, 0.12];
-    let mut warmed = GsrProcess::new(times.clone(), vols.clone(), reversions.clone(), 5.0).unwrap();
-    let first = warmed.expectation(0.25, 0.1, 0.75).unwrap();
-    let second_state = warmed.expectation(0.25, -0.2, 0.75).unwrap();
-    let fresh = GsrProcess::new(times.clone(), vols.clone(), reversions.clone(), 5.0).unwrap();
-    close(first, fresh.expectation(0.25, 0.1, 0.75).unwrap());
-    close(second_state, fresh.expectation(0.25, -0.2, 0.75).unwrap());
-    let before = (
-        warmed.variance(0.25, 0.0, 0.75).unwrap(),
-        warmed.y(1.0).unwrap(),
-        warmed.g(0.25, 1.0).unwrap(),
-    );
-    warmed.set_forward_measure_time(6.0).unwrap();
-    let fresh_horizon = GsrProcess::new(times, vols, reversions, 6.0).unwrap();
+
+    let stub = GsrProcess::new(
+        vec![1.0, 2.0],
+        vec![0.2, 0.3, 0.4],
+        vec![0.5, 0.8, 1.3],
+        horizon,
+    )
+    .unwrap();
+    assert_eq!(stub.sigma(0.5).unwrap(), 0.2);
+    assert_eq!(stub.sigma(1.0).unwrap(), 0.3);
+    assert_eq!(stub.sigma(2.0).unwrap(), 0.4);
+    // Crosses the knot, so the l<k and l>k integral arms both run.
     close(
-        warmed.expectation(0.25, 0.1, 0.75).unwrap(),
-        fresh_horizon.expectation(0.25, 0.1, 0.75).unwrap(),
+        varying.expectation(0.5, 0.1, 1.0).unwrap(),
+        1.097_052_632_583_638e-2,
     );
     close(
-        warmed.variance(0.25, 0.0, 0.75).unwrap(),
-        fresh_horizon.variance(0.25, 0.0, 0.75).unwrap(),
+        varying.variance(0.5, 0.1, 1.0).unwrap(),
+        3.804_713_261_173_464_6e-2,
     );
-    close(warmed.y(1.0).unwrap(), fresh_horizon.y(1.0).unwrap());
     close(
-        warmed.g(0.25, 1.0).unwrap(),
-        fresh_horizon.g(0.25, 1.0).unwrap(),
+        varying.drift(1.5, 0.1).unwrap(),
+        -1.500_382_514_916_357_7e-1,
     );
-    assert_eq!(
-        before,
-        (
-            fresh.variance(0.25, 0.0, 0.75).unwrap(),
-            fresh.y(1.0).unwrap(),
-            fresh.g(0.25, 1.0).unwrap()
-        )
+    // QuantLib `testGsrProcess` stub: times 1,2; vols 0.2,0.3,0.4; reversions 0.5,0.8,1.3.
+    close(
+        stub.expectation(0.5, 0.1, 2.0).unwrap(),
+        -2.305_974_964_631_538e-2,
     );
+    close(
+        stub.variance(0.5, 0.1, 2.0).unwrap(),
+        5.786_812_950_866_354_6e-2,
+    );
+
+    let cutoff = GsrProcess::new(vec![1.0], vec![0.2, 0.3], vec![1.0e-5, 0.5], horizon).unwrap();
+    close(cutoff.y(0.5).unwrap(), 0.2 * 0.2 * 0.5);
 }
 
 #[test]

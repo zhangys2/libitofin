@@ -17,6 +17,7 @@ __all__ = [
     "BachelierCapFloorEngine",
     "BachelierSwaptionEngine",
     "BatesEngine",
+    "BlackCallableFixedRateBondEngine",
     "BlackCapFloorEngine",
     "BlackSwaptionEngine",
     "CashAnnuityModel",
@@ -39,6 +40,7 @@ __all__ = [
     "NumericalFix",
     "QMCEuropeanEngine",
     "ReplicatingVarianceSwapEngine",
+    "TreeCallableFixedRateBondEngine",
     "TreeCapFloorEngine",
     "TreeSwaptionEngine",
     "YoYInflationCapFloorEngine",
@@ -130,6 +132,16 @@ class BatesEngine:
         Retain the live model with an integration order from 1 through 192.
 
         Only NPV is supplied. Unsupported exercises and Greeks raise ItofinError.
+        """
+
+@typing.final
+class BlackCallableFixedRateBondEngine:
+    r"""
+    Single-European constant relative forward-yield volatility pricing.
+    """
+    def __init__(self, yield_volatility: quotes.SimpleQuote, discount_curve: termstructures.YieldTermStructure, settings: itofin.Settings) -> None:
+        r"""
+        Retain the live volatility quote, discount curve and exact settings allocation.
         """
 
 @typing.final
@@ -618,6 +630,16 @@ class ReplicatingVarianceSwapEngine:
 
         PyO3 extracts Python sequences before core bounds; additional core
         allocations are bounded. No iterator-only generator contract is promised.
+        """
+
+@typing.final
+class TreeCallableFixedRateBondEngine:
+    r"""
+    Event-aligned callable fixed/zero bond pricing on the retained Hull-White model.
+    """
+    def __init__(self, model: models.HullWhite, time_steps: builtins.int, settings: itofin.Settings) -> None:
+        r"""
+        Retain the existing model and settings; time steps must be positive.
         """
 
 @typing.final
