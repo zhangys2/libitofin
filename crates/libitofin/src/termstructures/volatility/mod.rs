@@ -31,13 +31,13 @@ mod blackconstantvol;
 mod blackvariancecurve;
 mod blackvariancesurface;
 mod capfloor;
+mod carrmadanlocalvol;
 mod cubicsmile;
 mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
 mod interpolatedsmilesection;
 mod kalman_smile;
-mod carrmadanlocalvol;
 mod localconstantvol;
 mod localvolcurve;
 mod localvolsurface;
@@ -55,6 +55,7 @@ pub use blackconstantvol::BlackConstantVol;
 pub use blackvariancecurve::{BlackVarianceCurve, BlackVolTimeExtrapolation};
 pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolCurve, CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
+pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
 pub use cubicsmile::{CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
@@ -71,7 +72,6 @@ pub use kalman_smile::{
     UpdateResult, UpdateStatus, basis_derivative, basis_vector, kalman_update_batch,
     kalman_update_scalar, process_covariance, transport,
 };
-pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;
 pub use localvolsurface::LocalVolSurface;
