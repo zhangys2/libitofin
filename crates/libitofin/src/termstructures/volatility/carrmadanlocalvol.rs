@@ -106,11 +106,11 @@ impl VolatilityTermStructure for CarrMadanLocalVolSurface {
 
 impl LocalVolTermStructure for CarrMadanLocalVolSurface {
     fn local_vol_impl(&self, t: Time, strike: Real) -> QlResult<Volatility> {
-        let dupire = self.dupire.local_vol(t, strike, true)?;
         // A zero scale is Dupire exactly, including a surface that would make
-        // the density ratio noisy.
+        // the density ratio noisy. A positive scale uses the call prices, so a
+        // Dupire failure on a rough smile does not block the correction.
         if self.hazard.scale(t) == 0.0 {
-            return Ok(dupire);
+            return self.dupire.local_vol(t, strike, true);
         }
         // Strike-space Dupire, eq. 10. Differentiating the call price keeps
         // `C_T`, `C_K` and `C_KK` on the same surface; the total-variance form
