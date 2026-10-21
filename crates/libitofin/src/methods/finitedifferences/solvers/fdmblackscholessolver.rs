@@ -92,6 +92,20 @@ impl FdmBlackScholesSolver {
         })
     }
 
+    /// Solver on an operator the caller has already built.
+    ///
+    /// The jump-to-default engine attaches [`FdmBlackScholesOp::with_jump_to_default`]
+    /// before the rollback; the greek queries are the same as [`with_quanto`](Self::with_quanto).
+    pub(crate) fn from_operator(
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        op: SharedMut<dyn FdmLinearOpComposite>,
+    ) -> Self {
+        Self {
+            solver: Fdm1DimSolver::new(solver_desc, scheme_desc, op),
+        }
+    }
+
     /// Option value at spot `s` (`cpp:59-62`).
     pub fn value_at(&self, s: Real) -> QlResult<Real> {
         self.solver.interpolate_at(s.ln())
