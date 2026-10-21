@@ -8,6 +8,7 @@ use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
 use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
+use crate::models::equity::jumptodefault::PowerHazard;
 use crate::processes::GeneralizedBlackScholesProcess;
 use crate::require;
 use crate::shared::Shared;
@@ -59,6 +60,8 @@ pub struct FdmBlackScholesOp {
     /// Added to the discount rate, one entry per node. `None` keeps the
     /// process rate `r`. Drift and diffusion are unchanged.
     extra_discount: Option<Array>,
+    /// Carr–Madan intensity `f(t) S^p`. `None` leaves the generator unchanged.
+    jump_to_default: Option<Shared<PowerHazard>>,
 }
 
 impl FdmBlackScholesOp {
@@ -144,7 +147,25 @@ impl FdmBlackScholesOp {
             direction,
             quanto,
             extra_discount: None,
+            jump_to_default: None,
         })
+    }
+
+    /// Adds the Carr–Madan jump-to-default intensity `λ(t, S) = f(t) S^p`.
+    ///
+    /// On each step the generator samples `λ` at the step midpoint, the same
+    /// instant local variance is read (the rates themselves stay the forward
+    /// over `[t1, t2]`). Working-paper eq. 1 and the pricing PDE in the spec:
+    /// `λ` is added to the `ln S` drift, and added to the discount on top of
+    /// any [`extra_discount`](Self::with_extra_discount). Diffusion is
+    /// unchanged. With no hazard set the operator is the Black–Scholes
+    /// generator.
+    pub fn with_jump_to_default(mut self, hazard: Shared<PowerHazard>) -> Self {
+        if self.x.size() != self.mesher.layout().size() {
+            self.x = self.mesher.locations(self.direction).exp();
+        }
+        self.jump_to_default = Some(hazard);
+        self
     }
 
     /// Discounts node `i` at `r + extra_discount[i]` instead of `r`.
@@ -180,6 +201,36 @@ impl FdmBlackScholesOp {
             *node -= extra_i;
         }
         reaction
+    }
+
+    /// Adds `λ_i` to the drift and to the discount. A missing hazard returns
+    /// the arrays untouched, so the no-jump generator stays bit-for-bit.
+    fn apply_jump_to_default(
+        &self,
+        t: Time,
+        drift: Array,
+        reaction: Array,
+    ) -> QlResult<(Array, Array)> {
+        let Some(hazard) = &self.jump_to_default else {
+            return Ok((drift, reaction));
+        };
+        let n = self.mesher.layout().size();
+        let mut drift = if drift.size() == n {
+            drift
+        } else {
+            Array::filled(n, drift[0])
+        };
+        let mut reaction = if reaction.size() == n {
+            reaction
+        } else {
+            Array::filled(n, reaction[0])
+        };
+        for i in 0..n {
+            let lambda = hazard.intensity(t, self.x[i])?;
+            drift[i] += lambda;
+            reaction[i] -= lambda;
+        }
+        Ok((drift, reaction))
     }
 }
 
@@ -237,6 +288,7 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
             }
             let diffusion = self.dxx_map.mult(&(0.5 * &v));
             let reaction = self.reaction(r);
+            let (drift, reaction) = self.apply_jump_to_default(0.5 * (t1 + t2), drift, reaction)?;
             self.map_t
                 .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
         } else {
@@ -254,6 +306,7 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
                 .dxx_map
                 .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
             let reaction = self.reaction(r);
+            let (drift, reaction) = self.apply_jump_to_default(0.5 * (t1 + t2), drift, reaction)?;
             self.map_t
                 .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
         }
@@ -598,5 +651,61 @@ mod tests {
         local.set_time(T1, T2).unwrap();
         let u = probe(&mesher);
         assert_close(&black.apply(&u), &local.apply(&u));
+    }
+
+    /// `λ ∂_x − λ` on top of the Black–Scholes generator. An extra discount
+    /// stays in the reaction and stacks with `λ`.
+    #[test]
+    fn jump_to_default_adds_intensity_to_drift_and_discount() {
+        use crate::models::equity::jumptodefault::PowerHazard;
+
+        let mesher = mesher();
+        let lambda = 0.03;
+        let hazard = shared(PowerHazard::constant(lambda, 0.0).unwrap());
+        let mut plain = black_scholes_op(&mesher);
+        let mut jumped = black_scholes_op(&mesher).with_jump_to_default(Shared::clone(&hazard));
+        plain.set_time(T1, T2).unwrap();
+        jumped.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let dx = first_derivative_op(DIRECTION, Shared::clone(&mesher)).apply(&u);
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            expected[i] += lambda * dx[i] - lambda * u[i];
+        }
+        assert_close(&jumped.apply(&u), &expected);
+
+        let mut stacked = black_scholes_op(&mesher)
+            .with_extra_discount(Array::filled(mesher.layout().size(), 0.01))
+            .unwrap()
+            .with_jump_to_default(hazard);
+        stacked.set_time(T1, T2).unwrap();
+        for i in 0..u.size() {
+            expected[i] -= 0.01 * u[i];
+        }
+        assert_close(&stacked.apply(&u), &expected);
+    }
+
+    /// A negative power makes `λ` differ across the spot grid.
+    #[test]
+    fn jump_to_default_intensity_follows_the_spot_power() {
+        use crate::models::equity::jumptodefault::PowerHazard;
+
+        let mesher = mesher();
+        let scale = 2.0;
+        let exponent = -1.0;
+        let hazard = shared(PowerHazard::constant(scale, exponent).unwrap());
+        let mut plain = black_scholes_op(&mesher);
+        let mut jumped = black_scholes_op(&mesher).with_jump_to_default(hazard);
+        plain.set_time(T1, T2).unwrap();
+        jumped.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let dx = first_derivative_op(DIRECTION, Shared::clone(&mesher)).apply(&u);
+        let spots = mesher.locations(DIRECTION).exp();
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            let lambda = scale * spots[i].powf(exponent);
+            expected[i] += lambda * dx[i] - lambda * u[i];
+        }
+        assert_close(&jumped.apply(&u), &expected);
     }
 }
