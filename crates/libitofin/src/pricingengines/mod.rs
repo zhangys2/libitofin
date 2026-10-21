@@ -76,7 +76,10 @@ pub use basket::{
 };
 pub use blackcalculator::BlackCalculator;
 pub use blackdeltacalculator::BlackDeltaCalculator;
-pub use bond::{BinomialConvertibleEngine, BondFunctions, DiscountingBondEngine, DividendSchedule};
+pub use bond::{
+    BinomialConvertibleEngine, BondFunctions, ConvertibleCashGamma, DiscountingBondEngine,
+    DividendSchedule, FdConvertibleEngine,
+};
 pub use capfloor::{
     AnalyticCapFloorEngine, BachelierCapFloorEngine, BlackCapFloorEngine, TreeCapFloorEngine,
 };
