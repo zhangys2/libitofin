@@ -113,10 +113,8 @@ impl LocalVolTermStructure for CarrMadanLocalVolSurface {
         if self.hazard.scale(t) == 0.0 {
             return self.dupire.local_vol(t, strike, true);
         }
-        // Strike-space Dupire, eq. 10. Differentiating the call price keeps
-        // `C_T`, `C_K` and `C_KK` on the same surface; the total-variance form
-        // inside `LocalVolSurface` loses `w_yy` where its log-moneyness step
-        // collapses, which is exactly the smile of a jump-to-default market.
+        // Strike-space Dupire, eq. 10. `C_KK` is the analytic density, so a
+        // negative density cannot cancel a negative numerator into a finite vol.
         let variance = self.strike_space_variance(t, strike)?;
         if variance <= 0.0 || !variance.is_finite() {
             fail!(
@@ -129,44 +127,60 @@ impl LocalVolTermStructure for CarrMadanLocalVolSurface {
 
 impl CarrMadanLocalVolSurface {
     fn strike_space_variance(&self, t: Time, strike: Real) -> QlResult<Real> {
-        let dt = (1.0e-4_f64).min(t / 2.0);
-        let call = self.calls.call(strike, t)?;
-        let call_t = (self.calls.call(strike, t + dt)?
-            - self.calls.call(strike, (t - dt).max(dt))?)
-            / (t + dt - (t - dt).max(dt));
-        let call_k = self.calls.call_dk(strike, t)?;
-        // Price second difference, clamped so both samples stay at a positive
-        // strike. `call_dkk` is the total-variance density; pairing it with
-        // this time difference loses about 1e-3 of vol on the constant-hazard
-        // smile, where the price difference stays within 1e-4.
-        let step = (strike * 1.0e-4).min(0.25 * strike);
         require!(
-            step.is_finite() && step > 0.0,
-            "local-vol strike step is not positive at strike {strike}"
+            t.is_finite() && t >= 0.0,
+            "Carr-Madan local vol time must be non-negative, got {t}"
         );
-        let density = |step: Real| -> QlResult<Real> {
-            Ok((self.calls.call(strike + step, t)? - 2.0 * call
-                + self.calls.call(strike - step, t)?)
-                / (step * step))
+        require!(
+            strike.is_finite() && strike > 0.0,
+            "Carr-Madan local vol strike must be positive, got {strike}"
+        );
+        // At the reference date the call surface has no maturity to difference.
+        // One-sided step, the same 1e-4 `LocalVolSurface` uses at `t = 0`.
+        let dt = if t == 0.0 {
+            1.0e-4
+        } else {
+            (1.0e-4_f64).min(t / 2.0)
         };
-        let fine = density(step)?;
-        let coarse = density(2.0 * step)?;
-        let call_kk = (4.0 * fine - coarse) / 3.0;
-        let density_floor = 1.0e-12 * (call.abs() + 1.0) / (strike * strike);
-        if !call_kk.is_finite() || call_kk.abs() <= density_floor {
+        let earlier = if t == 0.0 { 0.0 } else { t - dt };
+        let later = t + dt;
+        let span = later - earlier;
+        let call = if t == 0.0 {
+            let forward0 = self.calls.forward(0.0)?;
+            let discount0 = self.calls.discount(0.0)?;
+            (forward0 - strike).max(0.0) * discount0
+        } else {
+            self.calls.call(strike, t)?
+        };
+        let call_t = (self.calls.call(strike, later)?
+            - if t == 0.0 {
+                call
+            } else {
+                self.calls.call(strike, earlier)?
+            })
+            / span;
+        // Strike derivatives need a positive maturity. At t = 0 they are the
+        // one-sided values at `dt`.
+        let sample_t = if t == 0.0 { dt } else { t };
+        let call_k = self.calls.call_dk(strike, sample_t)?;
+        let call_kk = self.calls.call_dkk(strike, sample_t)?;
+        if !call_kk.is_finite() || call_kk <= 0.0 {
             fail!(
-                "call density is too small to recover Carr-Madan local variance at strike {strike} and time {t}"
+                "call density is not positive at strike {strike} and time {t}; cannot recover Carr-Madan local variance"
             );
         }
-        let discount_up = self.calls.discount(t + dt)?;
-        let discount_dn = self.calls.discount((t - dt).max(dt))?;
-        let span = t + dt - (t - dt).max(dt);
+        let discount_up = self.calls.discount(later)?;
+        let discount_dn = self.calls.discount(earlier)?;
         let rate = -(discount_up / discount_dn).ln() / span;
-        let carry =
-            (self.calls.forward(t + dt)? / self.calls.forward((t - dt).max(dt))?).ln() / span;
+        let carry = (self.calls.forward(later)? / self.calls.forward(earlier)?).ln() / span;
         let dividend = rate - carry;
-        let moment =
-            truncated_power_price(&self.calls, self.hazard.exponent(), strike, t, &self.grid)?;
+        let moment = truncated_power_price(
+            &self.calls,
+            self.hazard.exponent(),
+            strike,
+            sample_t,
+            &self.grid,
+        )?;
         let numerator = call_t + dividend * call + carry * strike * call_k
             - strike * self.hazard.scale(t) * moment;
         Ok(2.0 * numerator / (strike * strike * call_kk))
@@ -345,20 +359,34 @@ mod tests {
             shared(PowerHazard::constant(hazard, 0.0).unwrap()),
             MomentGrid::new(12.0, 96).unwrap(),
         );
-        // A clamped price difference of the inverted smile recovers the flat
-        // diffusion to 1e-5 from 0.7F to 2F. At 0.5F the call is nearly
-        // intrinsic and the error is a few thousandths. Dupire itself is not flat.
+        // Analytic density on the inverted smile. Measured absolute errors:
+        // 0.5F at T=0.5 is 3.7e-3 (the call is nearly intrinsic); ATM at T=1
+        // is 1.1e-3; from 1.5F the error is ~1e-8. Dupire itself is not flat.
+        // t = 0 is the one-sided step and lands about 0.10 above the diffusion.
+        let at_zero = surface.local_vol(0.0, spot, true).unwrap();
+        assert!((at_zero - vol).abs() < 0.12, "t=0 local vol {at_zero}");
         let mut dupire_gap: Real = 0.0;
-        for (t, moneyness) in [(1.0, 0.7), (1.0, 1.0), (1.0, 1.5), (2.0, 2.0)] {
+        for (t, moneyness, tol) in [
+            (0.5, 0.5, 5.0e-3),
+            (0.5, 0.7, 3.0e-4),
+            (1.0, 0.7, 1.0e-4),
+            (1.0, 1.0, 2.0e-3),
+            (1.0, 1.5, 1.0e-5),
+            (2.0, 2.0, 1.0e-5),
+        ] {
             let strike = spot * ((rate - dividend) * t).exp() * moneyness;
             let local = surface.local_vol(t, strike, true).unwrap();
             let plain = dupire.local_vol(t, strike, true).unwrap();
             dupire_gap = dupire_gap.max((plain - vol).abs());
             assert!(
-                (local - vol).abs() <= 1e-5,
-                "t={t} strike={strike} local={local} dupire={plain}"
+                (local - vol).abs() <= tol,
+                "t={t} strike={strike} local={local} dupire={plain} tol={tol}"
             );
         }
+        assert!(
+            dupire_gap > 1e-2,
+            "market Dupire should leave the flat diffusion, gap {dupire_gap}"
+        );
         assert!(
             dupire_gap > 1e-2,
             "market Dupire should leave the flat diffusion, gap {dupire_gap}"

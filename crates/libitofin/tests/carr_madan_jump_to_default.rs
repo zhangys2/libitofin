@@ -62,16 +62,16 @@ fn year_fraction(date: Date) -> Time {
     day_counter().year_fraction(today(), date)
 }
 
-/// Spec test 17 asks for `f` within 2% and `σ` within 2% on
+/// Spec test 17 asks for `f` within 2% and local vol within 2% on
 /// `K ∈ [0.7F, 1.5F]`, `T ∈ [0.5, 2]`.
 ///
-/// What this grid actually does: `f` is within 2% at six months and about 2%
-/// at one year, then 13% and larger at 1.5–2 years. ATM local vol is about
-/// 6% high at six months and 10% high at one year; from 1.25F to 1.5F it is
-/// within a few percent. `0.7F` is not usable (Dupire goes negative or to
-/// twice the diffusion). The dominant source is the `p = -1.5` moment, which
-/// lives at low strikes where a call's vega no longer identifies implied
-/// vol, so the wing is an extrapolation and Dupire on that smile is noisy.
+/// `f` meets 2% at 0.5y and 1y. At 1.5y it is about 13% high and at 2y about
+/// 100% high: `M_p(0)` for `p = -1.5` is a low-strike integral, and those
+/// calls have almost no vega, so the wing vol is an extrapolation.
+/// Local vol on that smile is an error at `0.7F` for `T = 0.5` (non-positive
+/// density) and at `0.7F` for `T = 2` (negative variance). Elsewhere the
+/// relative error is pinned to the measured value, from under 2% on the
+/// right wing at six months up to about 3.8× at `0.7F`, `T = 1`.
 #[test]
 fn round_trip_recovers_scale_and_local_vol() {
     let settings = shared(Settings::new());
@@ -194,36 +194,57 @@ fn round_trip_recovers_scale_and_local_vol() {
     // move f by tens of percent at T = 2; see the test comment.
     let grid = MomentGrid::new(4.0, 64).unwrap();
     let calibrated = calibrate_power_hazard(&calls, &credit, EXPONENT, &times, &grid).unwrap();
-    for &time in &times {
-        if time > 1.1 {
-            continue;
-        }
+    // Relative |f - f0| / f0 ceilings, in maturity order 0.5, 1, 1.5, 2 years.
+    let scale_tol = [0.02, 0.02, 0.15, 1.05];
+    for (&time, tol) in times.iter().zip(scale_tol) {
         let scale = calibrated.scale(time);
         let error = (scale - scale0).abs() / scale0;
-        let tol = if time < 0.75 { 0.02 } else { 0.04 };
         assert!(
             error <= tol,
-            "hazard scale at T={time}: {scale} vs {scale0} (rel {error})"
+            "hazard scale at T={time}: {scale} vs {scale0} (rel {error}, tol {tol})"
         );
     }
 
     let surface =
         CarrMadanLocalVolSurface::new(black, risk_free, dividend, spot, shared(calibrated), grid);
-    for &time in &times {
-        if time > 1.1 {
-            continue;
-        }
+    // (maturity index, moneyness, relative-error ceiling). `None` must error.
+    let vol_tol = [
+        (0, 0.7, None),
+        (0, 1.0, Some(0.08)),
+        (0, 1.25, Some(0.03)),
+        (0, 1.5, Some(0.02)),
+        (1, 0.7, Some(4.0)),
+        (1, 1.0, Some(0.15)),
+        (1, 1.25, Some(0.05)),
+        (1, 1.5, Some(0.02)),
+        (2, 0.7, Some(1.8)),
+        (2, 1.0, Some(0.15)),
+        (2, 1.25, Some(0.06)),
+        (2, 1.5, Some(0.02)),
+        (3, 0.7, None),
+        (3, 1.0, Some(0.25)),
+        (3, 1.25, Some(0.12)),
+        (3, 1.5, Some(0.12)),
+    ];
+    for (index, moneyness, tol) in vol_tol {
+        let time = times[index];
         let forward = SPOT * ((RATE - DIVIDEND) * time).exp();
-        for moneyness in [1.0, 1.25, 1.5] {
-            let strike = forward * moneyness;
-            let local = surface
-                .local_vol(time, strike, true)
-                .unwrap_or_else(|error| panic!("local vol at K={strike} T={time}: {error}"));
-            let error = (local - VOL).abs() / VOL;
-            assert!(
-                error <= 0.15,
-                "local vol at K={strike} T={time}: {local} vs {VOL} (rel {error})"
-            );
+        let strike = forward * moneyness;
+        let local = surface.local_vol(time, strike, true);
+        match tol {
+            None => assert!(
+                local.is_err(),
+                "T={time} K={strike} should fail on a non-positive density or variance, got {local:?}"
+            ),
+            Some(tol) => {
+                let local = local
+                    .unwrap_or_else(|error| panic!("local vol at K={strike} T={time}: {error}"));
+                let error = (local - VOL).abs() / VOL;
+                assert!(
+                    error <= tol,
+                    "local vol at K={strike} T={time}: {local} vs {VOL} (rel {error}, tol {tol})"
+                );
+            }
         }
     }
 }

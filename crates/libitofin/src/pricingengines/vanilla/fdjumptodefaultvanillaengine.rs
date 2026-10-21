@@ -15,9 +15,11 @@ use crate::errors::QlResult;
 use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
 use crate::handle::Handle;
+use std::any::Any;
+
 use crate::instruments::{
     Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
-    StrikedTypePayoff,
+    PlainVanillaPayoff, StrikedTypePayoff,
 };
 use crate::methods::finitedifferences::meshers::{
     FdmMesher, FdmMesherComposite, fdm_black_scholes_mesher_with_quanto,
@@ -75,6 +77,9 @@ impl FdJumpToDefaultVanillaEngine {
         let base =
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
         base.register_with(process.observable());
+        if let Some(local_vol) = &local_vol {
+            local_vol.register_observer(&base.observer());
+        }
         Self {
             base,
             process,
@@ -334,17 +339,27 @@ impl PricingEngine for FdJumpToDefaultVanillaEngine {
         let spot = self.process.x0()?;
         require!(spot > 0.0, "negative or null underlying given");
 
-        let (terminal, shift): (Shared<dyn Payoff>, Option<(Real, Real)>) =
-            match payoff.option_type() {
-                OptionType::Call => (Shared::clone(payoff) as Shared<dyn Payoff>, None),
-                OptionType::Put => {
-                    let yield_curve = self.process.risk_free_rate().current_link()?;
-                    (
-                        shared(ShiftedPutTerminal { strike }) as Shared<dyn Payoff>,
-                        Some(put_shift(&*yield_curve, strike, maturity)?),
-                    )
+        let (terminal, shift): (Shared<dyn Payoff>, Option<(Real, Real)>) = match payoff
+            .option_type()
+        {
+            OptionType::Call => (Shared::clone(payoff) as Shared<dyn Payoff>, None),
+            OptionType::Put => {
+                if (&**payoff as &dyn Any)
+                    .downcast_ref::<PlainVanillaPayoff>()
+                    .is_none()
+                {
+                    fail!(
+                        "jump-to-default put shift is the vanilla identity (K-S)+ = -min(S,K)+K; got {}",
+                        payoff.name()
+                    );
                 }
-            };
+                let yield_curve = self.process.risk_free_rate().current_link()?;
+                (
+                    shared(ShiftedPutTerminal { strike }) as Shared<dyn Payoff>,
+                    Some(put_shift(&*yield_curve, strike, maturity)?),
+                )
+            }
+        };
         let solved = self.solve(strike, maturity, spot, terminal, Some(&**exercise))?;
         let (cash, cash_theta) = shift.unwrap_or((0.0, 0.0));
         let results = self.base.results_mut();
@@ -740,6 +755,67 @@ mod tests {
             );
             previous = price;
         }
+    }
+
+    #[test]
+    fn a_non_vanilla_put_is_rejected() {
+        use crate::instruments::CashOrNothingPayoff;
+
+        let mut engine = engine(
+            shared(PowerHazard::constant(0.02, 0.0).unwrap()),
+            None,
+            20,
+            20,
+        );
+        let payoff: Shared<dyn StrikedTypePayoff> =
+            shared(CashOrNothingPayoff::new(OptionType::Put, SPOT, 1.0));
+        let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry(1.0)));
+        let error = engine.price(payoff, exercise).unwrap_err();
+        assert!(
+            error.to_string().contains("vanilla"),
+            "rejection should name the vanilla shift, got {error}"
+        );
+    }
+
+    #[test]
+    fn a_local_vol_update_reprices_the_instrument() {
+        use crate::instrument::Instrument;
+        use crate::instruments::OneAssetOption;
+        use crate::pricingengine::PricingEngine;
+        use crate::shared::{SharedMut, shared_mut};
+        use crate::termstructures::volatility::LocalConstantVol;
+
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today());
+        let vol_quote = shared(SimpleQuote::new(VOL));
+        let local_vol = Handle::new(shared(LocalConstantVol::with_quote(
+            today(),
+            Handle::new(Shared::clone(&vol_quote) as Shared<dyn Quote>),
+            Actual365Fixed::new(),
+        )) as Shared<dyn LocalVolTermStructure>);
+        let mut option = OneAssetOption::new(
+            shared(PlainVanillaPayoff::new(OptionType::Call, SPOT)),
+            shared(EuropeanExercise::new(expiry(1.0))),
+            settings,
+        );
+        let engine = shared_mut(FdJumpToDefaultVanillaEngine::new(
+            process(VOL),
+            Some(local_vol),
+            shared(PowerHazard::constant(0.0, 0.0).unwrap()),
+            40,
+            40,
+            FdmSchemeDesc::douglas(),
+        ));
+        option
+            .base_mut()
+            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+        let first = option.npv().unwrap();
+        vol_quote.set_value(Some(0.45));
+        let second = option.npv().unwrap();
+        assert!(
+            (first - second).abs() > 1.0,
+            "local vol notification should reprice, {first} vs {second}"
+        );
     }
 
     /// Both the call and the put rise with `f`. Put–call parity does not
