@@ -206,7 +206,8 @@ class SpxFeedController:
         self.client_id = kwargs.get("client_id", client_id)
         self.symbol = symbol.upper()
         self.strike_radius = 8.0 if self.symbol == "SPY" else 80.0
-        self.market_data_type = 1  # live; 3 = delayed (free) fallback
+        self.market_data_type = 1  # live; 3 = delayed, only when the caller asks for it
+        self._connection = (self.host, self.port, self.market_data_type)
         self.ingest_errors = 0
         self.recorder = kwargs.get("recorder")
         self.task: asyncio.Task | None = None
@@ -310,14 +311,30 @@ class SpxFeedController:
         }
         self.publish(self.snapshot)
 
+    def _connection_key(self) -> tuple:
+        return (self.host, self.port, self.market_data_type)
+
     async def set_enabled(self, enabled: bool):
         self._desired_enabled = enabled
         async with self._lifecycle_lock:
             if enabled:
-                if self.task is None or self.task.done():
-                    self.task = asyncio.create_task(
-                        self._run(), name=f"{self.symbol.lower()}-0dte-live-feed"
-                    )
+                current = self._connection_key()
+                running = self.task is not None and not self.task.done()
+                if running and current == self._connection:
+                    return
+                if running:
+                    task = self.task
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    if self.task is task:
+                        self.task = None
+                self._connection = current
+                self.task = asyncio.create_task(
+                    self._run(), name=f"{self.symbol.lower()}-0dte-live-feed"
+                )
                 return
             task = self.task
             if task is not None and not task.done():
@@ -402,15 +419,6 @@ class SpxFeedController:
                 )
                 if spot:
                     break
-                # If requesting live data (1) but no spot arrives after 2 attempts,
-                # fall back to delayed data (3) since accounts without an active OPRA subscription
-                # will never receive a live SPX/SPY spot price.
-                if attempt == 2 and self.market_data_type == 1:
-                    self.market_data_type = 3
-                    if hasattr(ib, "cancelMktData"):
-                        ib.cancelMktData(underlying)
-                    ib.reqMarketDataType(3)
-                    ticker_underlying = ib.reqMktData(underlying)
 
             if not spot:
                 raise RuntimeError(

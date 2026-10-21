@@ -148,22 +148,34 @@ class ParquetL1Recorder:
         with self._lock:
             if not self._buffer:
                 return
-            current_buffers = self._buffer
+            pending = self._buffer
             self._buffer = {}
-            for partition_key, records in current_buffers.items():
-                if not records:
-                    continue
-                _symbol, _expiry, _date_str = partition_key
-                writer, row_count, file_path = self._get_or_create_writer(partition_key)
-                table = pa.Table.from_pylist(records, schema=L1_RECORD_SCHEMA)
-                writer.write_table(table)
-                new_count = row_count + len(records)
-                self._total_records_written += len(records)
-                if new_count >= self.max_rows_per_file:
-                    writer.close()
-                    del self._active_writers[partition_key]
-                else:
-                    self._active_writers[partition_key] = (writer, new_count, file_path)
+            remaining = dict(pending)
+            try:
+                for partition_key, records in list(remaining.items()):
+                    if not records:
+                        remaining.pop(partition_key)
+                        continue
+                    writer, row_count, _file_path = self._get_or_create_writer(partition_key)
+                    table = pa.Table.from_pylist(records, schema=L1_RECORD_SCHEMA)
+                    writer.write_table(table)
+                    new_count = row_count + len(records)
+                    self._total_records_written += len(records)
+                    if new_count >= self.max_rows_per_file:
+                        writer.close()
+                        del self._active_writers[partition_key]
+                    else:
+                        self._active_writers[partition_key] = (
+                            writer,
+                            new_count,
+                            self._active_writers[partition_key][2],
+                        )
+                    remaining.pop(partition_key)
+            except Exception:
+                for partition_key, records in remaining.items():
+                    self._buffer.setdefault(partition_key, [])
+                    self._buffer[partition_key] = list(records) + self._buffer[partition_key]
+                raise
 
     def _get_or_create_writer(
         self, partition_key: tuple[str, str, str]

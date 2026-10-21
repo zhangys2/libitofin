@@ -57,6 +57,8 @@ def sink(tmp_path):
 
 def test_option_name_detection():
     assert is_option(OPT)
+    assert is_option("BTC_USDC-16OCT26-87000-C")
+    assert is_option("ETH_USDC-16OCT26-3000-P")
     assert not is_option("BTC-PERPETUAL")
     assert not is_option("BTC-30OCT26")
 

@@ -85,6 +85,7 @@ def _(Any, Callable, asyncio, datetime):
             self.refresh_interval = refresh_interval
             self.task: asyncio.Task | None = None
             self.ib = None
+            self._connection = (self.host, self.port, self.market_data_type)
 
         def configure(self, port: int, market_data_type: int, refresh_interval: float):
             self.port = port
@@ -93,8 +94,20 @@ def _(Any, Callable, asyncio, datetime):
 
         async def set_enabled(self, enabled: bool):
             if enabled:
-                if self.task is None or self.task.done():
-                    self.task = asyncio.create_task(self._run(), name="ib-level1-feed")
+                current = (self.host, self.port, self.market_data_type)
+                running = self.task is not None and not self.task.done()
+                if running and current == self._connection:
+                    return
+                if running:
+                    task = self.task
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    self.task = None
+                self._connection = current
+                self.task = asyncio.create_task(self._run(), name="ib-level1-feed")
                 return
             if self.task is not None and not self.task.done():
                 self.task.cancel()

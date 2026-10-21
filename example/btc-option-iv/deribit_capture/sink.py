@@ -91,10 +91,13 @@ class ParquetSink:
 
     def _flush_key(self, key: tuple[str, str]) -> int:
         table_name, date = key
-        cols = self._cols.pop(key)
-        count = self._rows.pop(key)
-        first_ts = self._first_ts.pop(key)
-        if count == 0:
+        cols = self._cols.get(key)
+        count = self._rows.get(key, 0)
+        first_ts = self._first_ts.get(key)
+        if cols is None or count == 0 or first_ts is None:
+            self._cols.pop(key, None)
+            self._rows.pop(key, None)
+            self._first_ts.pop(key, None)
             return 0
         table = pa.Table.from_pydict(cols, schema=SCHEMAS[table_name])
         directory = self.root / table_name / f"date={date}"
@@ -109,6 +112,9 @@ class ParquetSink:
             compression_level=self.compression_level,
         )
         os.replace(temp, final)
+        self._cols.pop(key, None)
+        self._rows.pop(key, None)
+        self._first_ts.pop(key, None)
         self.rows_written[table_name] = self.rows_written.get(table_name, 0) + count
         self.bytes_written += final.stat().st_size
         return count

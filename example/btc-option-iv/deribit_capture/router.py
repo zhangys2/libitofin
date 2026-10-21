@@ -9,7 +9,9 @@ from typing import Any
 
 from deribit_capture.sink import ParquetSink
 
-_OPTION_NAME = re.compile(r"^[A-Z]+-\d{1,2}[A-Z]{3}\d{2}-\d+(?:d\d+)?-[CP]$")
+_OPTION_NAME = re.compile(
+    r"^[A-Z]+(?:_[A-Z]+)?-\d{1,2}[A-Z]{3}\d{2}-\d+(?:d\d+)?-[CP]$"
+)
 _TRADE_KNOWN = {
     "timestamp",
     "trade_id",

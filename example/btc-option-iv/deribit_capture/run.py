@@ -102,6 +102,12 @@ def select_book_options(
     return [name for *_, name in ranked[:top_n]]
 
 
+def stale_channels(subscribed: set[str], desired: list[str]) -> list[str]:
+    """Subscribed channels that are no longer in the desired set, including option tickers."""
+    keep = set(desired)
+    return sorted(channel for channel in subscribed if channel not in keep)
+
+
 def plan_book_channels(wanted: list[str], subscribed: set[str], *, depth: int) -> tuple[list[str], list[str]]:
     """Option-book channels to subscribe and to drop; perpetual and ticker channels are never dropped."""
     wanted_channels = [_book_channel(name, depth) for name in wanted]
@@ -162,6 +168,7 @@ class Capture:
         self.stop = asyncio.Event()
         self._ids = 0
         self._subscribed: set[str] = set()
+        self._pending_subscribe: dict[int, list[str]] = {}
         self._saved_names: frozenset[str] = frozenset()
         self._rows: list[dict] = []
         self._book_names: list[str] = []
@@ -169,16 +176,23 @@ class Capture:
     def _event(self, event: str, detail: str = "") -> None:
         self.sink.add("sessions", {"ts_ms": int(time.time() * 1000), "event": event, "detail": detail})
 
-    async def _rpc(self, ws, method: str, params: dict) -> None:
+    async def _rpc(self, ws, method: str, params: dict) -> int:
         self._ids += 1
         await ws.send(
             json.dumps({"jsonrpc": "2.0", "id": self._ids, "method": method, "params": params})
         )
+        return self._ids
 
     async def _universe(self) -> list[str]:
         rows = await asyncio.to_thread(fetch_instruments, self.args.currency)
         self._rows = rows
-        names = sorted(r["instrument_name"] for r in rows if r.get("is_active", True))
+        names = sorted(
+            name
+            for r in rows
+            if r.get("is_active", True)
+            and isinstance(name := r.get("instrument_name"), str)
+            and name
+        )
         if frozenset(names) != self._saved_names:
             path = await asyncio.to_thread(save_instruments, self.root, rows, time.time())
             self._saved_names = frozenset(names)
@@ -206,12 +220,8 @@ class Capture:
             _log(f"option books: {len(chosen)} instruments selected (was {len(self._book_names)})")
         self._book_names = chosen
 
-    async def _drop_stale_books(self, ws) -> None:
-        if self.args.option_book_depth <= 0:
-            return
-        _, stale = plan_book_channels(
-            self._book_names, self._subscribed, depth=self.args.option_book_depth
-        )
+    async def _drop_stale(self, ws, names: list[str]) -> None:
+        stale = stale_channels(self._subscribed, self._channels(names))
         for i in range(0, len(stale), _CHUNK):
             chunk = stale[i : i + _CHUNK]
             await self._rpc(ws, "public/unsubscribe", {"channels": chunk})
@@ -230,8 +240,21 @@ class Capture:
         new = [c for c in channels if c not in self._subscribed]
         for i in range(0, len(new), _CHUNK):
             chunk = new[i : i + _CHUNK]
-            await self._rpc(ws, "public/subscribe", {"channels": chunk})
-            self._subscribed.update(chunk)
+            req_id = await self._rpc(ws, "public/subscribe", {"channels": chunk})
+            self._pending_subscribe[req_id] = chunk
+
+    def _ack_subscribe(self, message: dict) -> bool:
+        """Record a subscribe only after Deribit accepts it. Returns True if this frame was that reply."""
+        req_id = message.get("id")
+        if req_id not in self._pending_subscribe:
+            return False
+        channels = self._pending_subscribe.pop(req_id)
+        if "error" in message:
+            _log(f"subscribe rejected: {message['error']!r}")
+            self._event("rpc_error", repr(message["error"])[:300])
+            return True
+        self._subscribed.update(channels)
+        return True
 
     async def _session(self) -> None:
         import websockets
@@ -239,13 +262,14 @@ class Capture:
         names = await self._universe()
         await self._refresh_books()
         self._subscribed.clear()
+        self._pending_subscribe.clear()
         async with websockets.connect(
             WS_URL, ping_interval=20, ping_timeout=20, open_timeout=30, max_size=None
         ) as ws:
             self._event("connect", f"options={len(names)}")
             await self._rpc(ws, "public/set_heartbeat", {"interval": 30})
             await self._subscribe(ws, self._channels(names))
-            last_msg = time.monotonic()
+            last_data = time.monotonic()
             last_refresh = time.monotonic()
             last_stats = time.monotonic()
             count = 0
@@ -257,26 +281,28 @@ class Capture:
                 now = time.monotonic()
                 if raw is not None:
                     recv_ns = time.time_ns()
-                    last_msg = now
                     message = json.loads(raw if isinstance(raw, str) else raw.decode())
-                    if "error" in message:
+                    if self._ack_subscribe(message):
+                        pass
+                    elif "error" in message:
                         _log(f"rpc error: {message['error']!r}")
                         self._event("rpc_error", repr(message["error"])[:300])
                     elif message.get("method") == "heartbeat":
                         if (message.get("params") or {}).get("type") == "test_request":
                             await self._rpc(ws, "public/test", {})
                     else:
+                        last_data = now
                         self.router.handle(message, recv_ns)
                         count += 1
-                elif now - last_msg > _SILENCE_S:
-                    raise TimeoutError(f"no frames for {_SILENCE_S:.0f}s")
+                elif now - last_data > _SILENCE_S:
+                    raise TimeoutError(f"no market data for {_SILENCE_S:.0f}s")
                 self.sink.maybe_flush()
                 if now - last_refresh >= self.args.refresh_seconds:
                     last_refresh = now
                     fresh = await self._universe()
                     await self._refresh_books()
                     await self._subscribe(ws, self._channels(fresh))
-                    await self._drop_stale_books(ws)
+                    await self._drop_stale(ws, fresh)
                 if now - last_stats >= self.args.stats_seconds:
                     elapsed = now - last_stats
                     last_stats = now
@@ -310,6 +336,7 @@ class Capture:
                     OSError,
                     TimeoutError,
                     ValueError,
+                    KeyError,
                     websockets.exceptions.WebSocketException,
                 ) as exc:
                     _log(f"disconnect {type(exc).__name__}: {exc}")
