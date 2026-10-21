@@ -37,6 +37,7 @@ mod impliedvoltermstructure;
 mod inflation;
 mod interpolatedsmilesection;
 mod kalman_smile;
+mod carrmadanlocalvol;
 mod localconstantvol;
 mod localvolcurve;
 mod localvolsurface;
@@ -70,6 +71,7 @@ pub use kalman_smile::{
     UpdateResult, UpdateStatus, basis_derivative, basis_vector, kalman_update_batch,
     kalman_update_scalar, process_covariance, transport,
 };
+pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;
 pub use localvolsurface::LocalVolSurface;

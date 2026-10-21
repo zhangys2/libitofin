@@ -2,8 +2,9 @@
 //!
 //! `C(K, T)` is the price of a call on the defaultable stock. `C_KK` is the
 //! defective density of the surviving stock (working-paper text under eq. 4).
-//! On a Black surface it is Gatheral's form `D n(d2) g(k) / (K √w)`, with the
-//! same `g` that makes Dupire local variance `∂_T w / g`.
+//! On a Black surface it is `D n(d2) g(k) / (K √w)`, with the same `g`
+//! [`LocalVolSurface`](crate::termstructures::volatility::LocalVolSurface)
+//! uses for Dupire local variance `∂_T w / g`.
 
 use crate::errors::QlResult;
 use crate::handle::Handle;
@@ -91,11 +92,18 @@ impl BlackVolCallSurface {
         let black = self.black.current_link()?;
         let w = black.black_variance(t, strike, true)?;
         require!(
-            w.is_finite() && w > 0.0,
-            "total variance must be positive at strike {strike} and time {t}, got {w}"
+            w.is_finite() && w >= 0.0,
+            "total variance must be non-negative at strike {strike} and time {t}, got {w}"
         );
         let y = (strike / forward).ln();
-        let (wy, wyy) = log_moneyness_derivatives(&*black, strike, y, t, w)?;
+        // A vanished total variance is the intrinsic call. Far wings of an
+        // inverted smile hit this when the price underflows, and the density
+        // there is zero.
+        let (wy, wyy) = if w == 0.0 {
+            (0.0, 0.0)
+        } else {
+            log_moneyness_derivatives(&*black, strike, y, t, w)?
+        };
         Ok(CallInputs {
             discount,
             forward,
@@ -287,6 +295,13 @@ fn black_call(inputs: &CallInputs, strike: Real) -> QlResult<Real> {
 
 /// `C_K = D (−N(d2) + n(d2) w_y / (2 √w))`, total derivative through the smile.
 fn call_strike_derivative(inputs: &CallInputs) -> Real {
+    if inputs.variance == 0.0 {
+        return if inputs.log_moneyness < 0.0 {
+            -inputs.discount
+        } else {
+            0.0
+        };
+    }
     let sqrt_w = inputs.variance.sqrt();
     let d2 = -inputs.log_moneyness / sqrt_w - 0.5 * sqrt_w;
     let phi = CumulativeNormalDistribution::standard();
@@ -294,18 +309,25 @@ fn call_strike_derivative(inputs: &CallInputs) -> Real {
     inputs.discount * (-phi.value(d2) + skew)
 }
 
-/// Gatheral density `D n(d2) g(y) / (K √w)`.
+/// Discounted density `D n(d2) g(y) / (K √w)`.
 ///
-/// `g` is the denominator of Dupire local variance in total-variance
-/// coordinates, `(1 − y w_y / w)² − ¼(¼ + 1/w) w_y² + ½ w_yy`.
+/// `g` is the Dupire denominator [`LocalVolSurface`](crate::termstructures::volatility::LocalVolSurface)
+/// divides `∂_T w` by, not the squared form in Gatheral's notes. The two
+/// agree for a flat smile. Using this `g` keeps `C_KK` consistent with that
+/// surface, which is the `σ²_Dupire` the Carr–Madan correction subtracts from.
 fn call_density(inputs: &CallInputs, strike: Real) -> QlResult<Real> {
+    if inputs.variance == 0.0 {
+        return Ok(0.0);
+    }
     let sqrt_w = inputs.variance.sqrt();
     let d2 = -inputs.log_moneyness / sqrt_w - 0.5 * sqrt_w;
     let density = CumulativeNormalDistribution::standard().derivative(d2);
     let w = inputs.variance;
+    let y = inputs.log_moneyness;
     let wy = inputs.variance_y;
-    let slope = 1.0 - inputs.log_moneyness / w * wy;
-    let g = slope * slope - 0.25 * (0.25 + 1.0 / w) * wy * wy + 0.5 * inputs.variance_yy;
+    let g = 1.0 - y / w * wy
+        + 0.25 * (-0.25 - 1.0 / w + y * y / (w * w)) * wy * wy
+        + 0.5 * inputs.variance_yy;
     let value = inputs.discount * density * g / (strike * sqrt_w);
     require!(
         value.is_finite(),
