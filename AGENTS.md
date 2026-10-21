@@ -39,3 +39,9 @@ CI runs `pre-commit` only on files changed in the PR (see the `--from-ref/--to-r
 step in the workflow), not the whole tree. A whole-repo `cargo fmt --all --check`
 reports pre-existing formatting drift that CI does not gate — don't treat it as a
 regression. `cargo clippy --all-targets` is clean.
+
+### Marimo notebook development workflow
+In `example/btc-option-iv`:
+- Marimo notebooks (`spx_vol_surface.py`, `live_vol_surface.py`) run as long-lived Python kernels.
+- Python processes cache imported modules in `sys.modules`. When editing library/submodule files (`spx_option_iv/*`, `btc_option_iv/*`) or notebook files (`*.py`) on disk, **running Marimo server tasks must be restarted** (`uv run marimo edit ...`) and the user given the fresh access URL/token. Otherwise, the kernel executes stale in-memory module bytecode and client component tokens become skewed (`Function call not found / skew protection token`).
+- In Marimo notebook cells, ensure reactive controllers and feed connections maintain explicit DAG dependencies (or single-cell encapsulation) rather than relying on cell ordering, and widgets must be read outside their creator cells.
