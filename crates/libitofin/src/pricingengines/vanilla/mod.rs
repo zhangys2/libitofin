@@ -40,6 +40,7 @@ pub mod juquadraticengine;
 pub mod mcamericanengine;
 pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
+pub mod mcslvjumptodefaultvanillaengine;
 pub mod mcvanillaengine;
 pub mod quantoengine;
 
@@ -65,6 +66,7 @@ pub use mceuropeanengine::{EuropeanPathPricer, MCEuropeanEngine, MakeMcEuropeanE
 pub use mceuropeanhestonengine::{
     EuropeanHestonPathPricer, MCEuropeanHestonEngine, MakeMcEuropeanHestonEngine,
 };
+pub use mcslvjumptodefaultvanillaengine::McSlvJumpToDefaultVanillaEngine;
 pub use mcvanillaengine::McVanillaEngineBase;
 pub use quantoengine::QuantoEuropeanEngine;
 
