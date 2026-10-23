@@ -147,7 +147,9 @@ def test_parquet_recorder_skips_invalid_quotes():
         assert list(Path(tmpdir).glob("symbol=*")) == []
 
 
-def test_parquet_recorder_auto_rotates_on_row_limit():
+def test_parquet_recorder_auto_rotates_on_row_limit(monkeypatch):
+    # Freeze the clock so both parts would share one millisecond name.
+    monkeypatch.setattr("spx_option_iv.recorder.time.time", lambda: 1_700_000_000.0)
     with tempfile.TemporaryDirectory() as tmpdir:
         out_dir = Path(tmpdir)
         # Low max_rows_per_file to trigger rotation

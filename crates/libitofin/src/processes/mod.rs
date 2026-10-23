@@ -23,6 +23,7 @@ mod hullwhiteprocess;
 mod merton76process;
 mod mfstateprocess;
 mod ornsteinuhlenbeckprocess;
+mod slvjumptodefaultprocess;
 mod stochasticprocessarray;
 
 pub use batesprocess::BatesProcess;
@@ -47,4 +48,5 @@ pub use hullwhiteprocess::HullWhiteForwardProcess;
 pub use merton76process::Merton76Process;
 pub use mfstateprocess::MfStateProcess;
 pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
+pub use slvjumptodefaultprocess::SlvJumpToDefaultProcess;
 pub use stochasticprocessarray::StochasticProcessArray;

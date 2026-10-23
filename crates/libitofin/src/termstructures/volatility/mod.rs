@@ -36,6 +36,7 @@ mod cubicsmile;
 mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
+mod interpolatedlocalvolsurface;
 mod interpolatedsmilesection;
 mod kalman_smile;
 mod localconstantvol;
@@ -66,6 +67,7 @@ pub use inflation::{
     YoYOptionletStripper, YoYOptionletVolHelperBase, YoYOptionletVolatilityHelper,
     YoYOptionletVolatilitySurface, YoYOptionletVolatilitySurfaceBase,
 };
+pub use interpolatedlocalvolsurface::InterpolatedLocalVolSurface;
 pub use interpolatedsmilesection::InterpolatedSmileSection;
 pub use kalman_smile::{
     FilterConfig, KalmanSmileSection, MAX_END_SLOPE, MAX_OVERHANG, N_KNOTS, SmileContext,
