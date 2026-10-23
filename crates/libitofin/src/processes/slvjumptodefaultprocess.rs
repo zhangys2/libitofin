@@ -105,15 +105,65 @@ impl SlvJumpToDefaultProcess {
             "jump-to-default step state must be finite"
         );
         let lambda = self.intensity(t0, spot0)?;
-        let evolved = self.slv.evolve(
-            t0,
-            &Array::from([spot0, var0]),
-            dt,
-            &Array::from([dw_spot, dw_var]),
-        )?;
+        let (next_spot, next_var) = if self.slv.mixing_factor() == 0.0 || self.slv.sigma() == 0.0 {
+            // Andersen QE divides by the mixed vol-of-vol. The zero-vol-of-vol
+            // limit is a deterministic variance and a one-factor log-Euler spot.
+            self.evolve_without_vol_of_vol(t0, spot0, var0, dt, dw_spot)?
+        } else {
+            let evolved = self.slv.evolve(
+                t0,
+                &Array::from([spot0, var0]),
+                dt,
+                &Array::from([dw_spot, dw_var]),
+            )?;
+            (evolved[0], evolved[1])
+        };
+        require!(
+            next_spot.is_finite() && next_spot > 0.0 && next_var.is_finite(),
+            "jump-to-default step produced a non-finite state"
+        );
         let survival = (-lambda * dt).exp();
-        let next_spot = evolved[0] * (lambda * dt).exp();
-        Ok((next_spot, evolved[1], survival))
+        let next_spot = next_spot * (lambda * dt).exp();
+        Ok((next_spot, next_var, survival))
+    }
+
+    /// Deterministic variance and a full spot shock. `dw_var` is unused: there
+    /// is no variance Brownian when the mixed vol-of-vol is zero.
+    fn evolve_without_vol_of_vol(
+        &self,
+        t0: Time,
+        spot0: Real,
+        var0: Real,
+        dt: Time,
+        dw_spot: Real,
+    ) -> QlResult<(Real, Real)> {
+        let kappa = self.slv.kappa();
+        let theta = self.slv.theta();
+        let next_var = if kappa == 0.0 {
+            var0
+        } else {
+            theta + (var0 - theta) * (-kappa * dt).exp()
+        };
+        let leverage = self.slv.leverage_fct().local_vol(t0, spot0, true)?;
+        let variance = 0.5 * (var0 + next_var) * leverage * leverage;
+        let mu = self.carry(t0, dt)?;
+        let next_spot = spot0
+            * (mu * dt - 0.5 * variance * dt + (variance * dt).max(0.0).sqrt() * dw_spot).exp();
+        Ok((next_spot, next_var))
+    }
+
+    fn carry(&self, t0: Time, dt: Time) -> QlResult<Real> {
+        let risk_free = self.slv.risk_free_rate().current_link()?;
+        let dividend = self.slv.dividend_yield().current_link()?;
+        let dr0 = risk_free.discount(t0, true)?;
+        let dr1 = risk_free.discount(t0 + dt, true)?;
+        let dq0 = dividend.discount(t0, true)?;
+        let dq1 = dividend.discount(t0 + dt, true)?;
+        require!(
+            dr0 > 0.0 && dr1 > 0.0 && dq0 > 0.0 && dq1 > 0.0,
+            "jump-to-default step discounts must be positive"
+        );
+        Ok(-(dr1 / dr0).ln() / dt + (dq1 / dq0).ln() / dt)
     }
 }
 
@@ -251,5 +301,43 @@ mod tests {
         let expected_survival = (-lambda * dt).exp();
         assert!((survival - expected_survival).abs() <= 1e-14);
         assert!((spot - plain[0] * (lambda * dt).exp()).abs() <= 1e-12 * spot.abs().max(1.0));
+    }
+
+    #[test]
+    fn zero_mixing_is_finite_and_the_variance_is_deterministic() {
+        let heston = shared(HestonProcess::new(
+            flat_yield(0.03),
+            flat_yield(0.01),
+            make_quote_handle(100.0).handle(),
+            0.09,
+            1.2,
+            0.04,
+            0.3,
+            -0.5,
+        ));
+        let leverage = shared(LocalConstantVol::new(
+            ref_date(),
+            1.0,
+            Actual365Fixed::new(),
+        ));
+        let slv = shared(HestonSLVProcess::new(heston, leverage, 0.0));
+        let process = SlvJumpToDefaultProcess::new(
+            slv,
+            shared(PowerHazard::constant(0.0, 0.0).unwrap()),
+            1.0,
+        )
+        .unwrap();
+        let dt = 0.25;
+        let var0 = 0.09;
+        let (spot, variance, survival) = process
+            .evolve_with_survival(0.2, 100.0, var0, dt, 0.3, -0.4)
+            .unwrap();
+        let expected = 0.04 + (var0 - 0.04) * (-1.2 * dt).exp();
+        assert!(spot.is_finite() && spot > 0.0, "spot {spot}");
+        assert!(
+            (variance - expected).abs() <= 1e-12,
+            "{variance} vs {expected}"
+        );
+        assert!((survival - 1.0).abs() <= 1e-14);
     }
 }

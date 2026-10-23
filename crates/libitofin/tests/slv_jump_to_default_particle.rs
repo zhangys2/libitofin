@@ -12,7 +12,7 @@ use libitofin::instruments::{PlainVanillaPayoff, StrikedTypePayoff};
 use libitofin::interestrate::Compounding;
 use libitofin::methods::finitedifferences::solvers::FdmSchemeDesc;
 use libitofin::models::equity::jumptodefault::{
-    calibrate_slv_jump_to_default, MomentGrid, SlvJtdParticleConfig,
+    MomentGrid, SlvJtdParticleConfig, calibrate_slv_jump_to_default,
 };
 use libitofin::option::OptionType;
 use libitofin::patterns::observable::{AsObservable, Observable};
@@ -22,7 +22,7 @@ use libitofin::pricingengines::vanilla::{
 };
 use libitofin::processes::{GeneralizedBlackScholesProcess, HestonProcess};
 use libitofin::quotes::{Quote, SimpleQuote};
-use libitofin::shared::{shared, Shared};
+use libitofin::shared::{Shared, shared};
 use libitofin::termstructures::credit::defaulttermstructure::DefaultProbabilityTermStructure;
 use libitofin::termstructures::credit::flathazardrate::FlatHazardRate;
 use libitofin::termstructures::credit::interpolatedhazardratecurve::InterpolatedHazardRateCurve;

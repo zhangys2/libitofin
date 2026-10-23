@@ -60,7 +60,6 @@ pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
 pub use cubicsmile::{CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
-pub use interpolatedlocalvolsurface::InterpolatedLocalVolSurface;
 pub use inflation::{
     ConstantYoYOptionletVolatility, InterpolatedYoYOptionletStripper,
     InterpolatedYoYOptionletVolatilityCurve, KInterpolatedYoYOptionletVolatilitySurface,
@@ -68,6 +67,7 @@ pub use inflation::{
     YoYOptionletStripper, YoYOptionletVolHelperBase, YoYOptionletVolatilityHelper,
     YoYOptionletVolatilitySurface, YoYOptionletVolatilitySurfaceBase,
 };
+pub use interpolatedlocalvolsurface::InterpolatedLocalVolSurface;
 pub use interpolatedsmilesection::InterpolatedSmileSection;
 pub use kalman_smile::{
     FilterConfig, KalmanSmileSection, MAX_END_SLOPE, MAX_OVERHANG, N_KNOTS, SmileContext,

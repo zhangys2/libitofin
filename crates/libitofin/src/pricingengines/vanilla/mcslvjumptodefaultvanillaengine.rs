@@ -14,12 +14,12 @@ use crate::instruments::{
     OneAssetOptionEngine, OneAssetOptionResults, OptionArguments, PlainVanillaPayoff,
     StrikedTypePayoff, TypePayoff,
 };
-use crate::models::equity::jumptodefault::{defaultable_option_value, SlvJtdCalibrationResult};
+use crate::models::equity::jumptodefault::{SlvJtdCalibrationResult, defaultable_option_value};
 use crate::option::OptionType;
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::require;
-use crate::shared::{shared, Shared};
+use crate::shared::{Shared, shared};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::types::{Rate, Real, Time};
 
@@ -285,7 +285,7 @@ mod tests {
     use crate::instruments::PlainVanillaPayoff;
     use crate::interestrate::Compounding;
     use crate::models::equity::jumptodefault::{
-        calibrate_slv_jump_to_default, MomentGrid, SlvJtdParticleConfig,
+        MomentGrid, SlvJtdParticleConfig, calibrate_slv_jump_to_default,
     };
     use crate::processes::HestonProcess;
     use crate::quotes::make_quote_handle;
@@ -471,10 +471,12 @@ mod tests {
 
         let american = crate::exercise::AmericanExercise::over(today(), today() + 365).unwrap();
         engine.base.arguments_mut().exercise = Some(shared(american) as Shared<dyn Exercise>);
-        assert!(engine
-            .calculate()
-            .unwrap_err()
-            .to_string()
-            .contains("European"));
+        assert!(
+            engine
+                .calculate()
+                .unwrap_err()
+                .to_string()
+                .contains("European")
+        );
     }
 }

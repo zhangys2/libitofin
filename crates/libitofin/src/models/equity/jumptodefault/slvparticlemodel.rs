@@ -13,12 +13,12 @@ use crate::math::distributions::normal::InverseCumulativeNormal;
 use crate::math::matrix::Matrix;
 use crate::math::randomnumbers::{UniformRng, Xoshiro256StarStarUniformRng};
 use crate::models::equity::jumptodefault::{
-    truncated_power_price, BlackVolCallSurface, CallSurface, MomentGrid, PowerHazard,
+    BlackVolCallSurface, CallSurface, MomentGrid, PowerHazard, truncated_power_price,
 };
 use crate::option::OptionType;
 use crate::processes::{HestonProcess, HestonSLVProcess, SlvJumpToDefaultProcess};
 use crate::require;
-use crate::shared::{shared, Shared};
+use crate::shared::{Shared, shared};
 use crate::termstructures::credit::defaulttermstructure::DefaultProbabilityTermStructure;
 use crate::termstructures::volatility::{
     BlackVolTermStructure, InterpolatedLocalVolSurface, LocalVolTermStructure,
@@ -169,6 +169,8 @@ pub struct SlvJtdCalibrationResult {
     pub snapshots: Vec<SlvJtdParticleSnapshot>,
     /// Generator seed, reused by common-random-number Greeks.
     pub seed: u64,
+    /// Floor applied to the leverage when a path is evolved.
+    pub min_local_vol: Volatility,
 }
 
 /// Jointly calibrate the leverage surface and the power-hazard scale.
@@ -199,6 +201,11 @@ pub fn calibrate_slv_jump_to_default(
         max_maturity.is_finite() && max_maturity > 0.0 && max_maturity <= 100.0,
         "calibration maturity must lie in (0, 100], got {max_maturity}"
     );
+    require!(
+        heston.theta().is_finite() && heston.theta() > 0.0,
+        "Heston long-run variance must be positive so the variance floor is positive, got {}",
+        heston.theta()
+    );
 
     let risk_free = heston.risk_free_rate().current_link()?;
     let dividend = heston.dividend_yield().current_link()?;
@@ -217,13 +224,14 @@ pub fn calibrate_slv_jump_to_default(
     );
     let survival = survival_curve.current_link()?;
 
-    let n_steps = (max_maturity * config.time_steps_per_year as Real)
-        .round()
-        .max(1.0) as usize;
+    // Check the rounded count before the cast. `f64::max` would turn a NaN
+    // product into 1, and a non-finite float cast saturates instead of failing.
+    let rounded_steps = (max_maturity * config.time_steps_per_year as Real).round();
     require!(
-        n_steps <= 100_000,
-        "calibration would take {n_steps} steps, above the 100000 cap"
+        rounded_steps.is_finite() && (1.0..=100_000.0).contains(&rounded_steps),
+        "calibration step count must be a finite number in [1, 100000], got {rounded_steps}"
     );
+    let n_steps = rounded_steps as usize;
     let time_grid: Vec<Time> = (0..=n_steps)
         .map(|i| max_maturity * i as Real / n_steps as Real)
         .collect();
@@ -333,6 +341,7 @@ pub fn calibrate_slv_jump_to_default(
                 hazard_scale: scale,
                 intensity_shift: 0.0,
                 leverage_shift: 0.0,
+                min_local_vol: config.min_local_vol,
                 moneyness_spot: spot0,
                 scenario_spot: spot0,
             },
@@ -407,6 +416,7 @@ pub fn calibrate_slv_jump_to_default(
         survival_probs_target,
         snapshots,
         seed: config.seed,
+        min_local_vol: config.min_local_vol,
     })
 }
 
@@ -547,6 +557,7 @@ pub(crate) fn simulate_fixed_leverage(
                 hazard_scale: result.process.hazard().scale(t0 + 0.5 * dt),
                 intensity_shift,
                 leverage_shift,
+                min_local_vol: result.min_local_vol,
                 moneyness_spot: heston_spot,
                 scenario_spot: spot0,
             },
@@ -570,6 +581,7 @@ struct StepCoeffs {
     hazard_scale: Real,
     intensity_shift: Real,
     leverage_shift: Real,
+    min_local_vol: Real,
     moneyness_spot: Real,
     scenario_spot: Real,
 }
@@ -583,6 +595,16 @@ fn advance(
     leverage: &[Real],
     coeffs: &StepCoeffs,
 ) -> QlResult<()> {
+    require!(
+        coeffs.theta.is_finite() && coeffs.theta > 0.0,
+        "variance floor needs a positive long-run variance, got {}",
+        coeffs.theta
+    );
+    require!(
+        coeffs.min_local_vol.is_finite() && coeffs.min_local_vol > 0.0,
+        "leverage floor must be positive, got {}",
+        coeffs.min_local_vol
+    );
     let n = spots.len();
     let sqrt_dt = coeffs.dt.sqrt();
     let (z1, z2) = moment_matched_normals(rng, n)?;
@@ -592,7 +614,13 @@ fn advance(
         let lambda = (coeffs.hazard_scale * g + coeffs.intensity_shift).max(0.0);
         weights[i] *= (-lambda * coeffs.dt).exp();
         let query = spots[i] * (coeffs.moneyness_spot / coeffs.scenario_spot);
-        let local = (linear_interp(strikes, leverage, query) + coeffs.leverage_shift).max(1.0e-4);
+        let local = linear_interp(strikes, leverage, query) + coeffs.leverage_shift;
+        require!(
+            local.is_finite(),
+            "leverage at spot {} is not finite",
+            spots[i]
+        );
+        let local = local.max(coeffs.min_local_vol);
         let sigma = local * variances[i].max(0.0).sqrt();
         let dw_spot = sqrt_dt * z1[i];
         let dw_var = sqrt_dt * (coeffs.rho * z1[i] + coeffs.rho_complement * z2[i]);
@@ -606,6 +634,7 @@ fn advance(
             + coeffs.kappa * (coeffs.theta - variances[i]) * coeffs.dt
             + coeffs.xi * sqrt_v * dw_var
             + 0.25 * coeffs.xi * coeffs.xi * (dw_var * dw_var - coeffs.dt);
+        require!(next_v.is_finite(), "variance step is not finite");
         variances[i] = next_v.max(1.0e-4 * coeffs.theta);
         weighted_spot += weights[i] * spots[i];
     }
@@ -954,13 +983,13 @@ mod tests {
     use crate::math::interpolations::flat::BackwardFlat;
     use crate::quotes::make_quote_handle;
     use crate::shared::shared;
+    use crate::termstructures::TermStructure;
     use crate::termstructures::credit::defaulttermstructure::DefaultProbabilityTermStructure;
     use crate::termstructures::credit::flathazardrate::FlatHazardRate;
     use crate::termstructures::credit::interpolatedhazardratecurve::InterpolatedHazardRateCurve;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
-    use crate::termstructures::TermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -1074,6 +1103,93 @@ mod tests {
         {
             assert!((mc - target).abs() <= 1e-13, "{mc} vs {target}");
         }
+    }
+
+    #[test]
+    fn non_finite_maturity_and_non_positive_theta_are_rejected() {
+        let cfg = config(100, 20);
+        let market = black(0.2);
+        let credit = flat_survival(0.01);
+        assert!(
+            calibrate_slv_jump_to_default(
+                market.clone(),
+                heston(1.0, 1.0, 1.0, 0.2, 0.0),
+                credit.clone(),
+                0.0,
+                1.0,
+                Time::NAN,
+                &cfg,
+            )
+            .is_err()
+        );
+        assert!(
+            calibrate_slv_jump_to_default(
+                market,
+                heston(1.0, 1.0, 0.0, 0.2, 0.0),
+                credit,
+                0.0,
+                1.0,
+                1.0,
+                &cfg,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_non_finite_leverage_or_variance_update_is_rejected() {
+        let mut spots = vec![100.0, 100.0];
+        let mut variances = vec![1.0, 1.0];
+        let mut weights = vec![1.0, 1.0];
+        let strikes = [50.0, 150.0];
+        let coeffs = StepCoeffs {
+            dt: 0.1,
+            rate: 0.0,
+            dividend: 0.0,
+            forward: 100.0,
+            kappa: 1.0,
+            theta: 1.0,
+            xi: 0.0,
+            rho: 0.0,
+            rho_complement: 1.0,
+            exponent: 0.0,
+            spot_floor: 1.0,
+            hazard_scale: 0.0,
+            intensity_shift: 0.0,
+            leverage_shift: 0.0,
+            min_local_vol: 0.03,
+            moneyness_spot: 100.0,
+            scenario_spot: 100.0,
+        };
+        let mut rng = Xoshiro256StarStarUniformRng::new(7);
+        assert!(
+            advance(
+                &mut rng,
+                &mut spots,
+                &mut variances,
+                &mut weights,
+                &strikes,
+                &[Real::NAN, 0.2],
+                &coeffs,
+            )
+            .is_err()
+        );
+        let nan_variance = StepCoeffs {
+            xi: Real::NAN,
+            ..coeffs
+        };
+        assert!(
+            advance(
+                &mut rng,
+                &mut spots,
+                &mut variances,
+                &mut weights,
+                &strikes,
+                &[0.2, 0.2],
+                &nan_variance,
+            )
+            .is_err()
+        );
     }
 
     #[test]

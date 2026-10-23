@@ -8,7 +8,7 @@ use crate::errors::QlResult;
 use crate::option::OptionType;
 use crate::require;
 
-use super::{defaultable_option_value, simulate_fixed_leverage, SlvJtdCalibrationResult};
+use super::{SlvJtdCalibrationResult, defaultable_option_value, simulate_fixed_leverage};
 use crate::types::{Real, Time};
 
 /// Price and bumps of one European option on the defaultable stock.
@@ -95,11 +95,11 @@ mod tests {
     use crate::handle::Handle;
     use crate::interestrate::Compounding;
     use crate::models::equity::jumptodefault::{
-        calibrate_slv_jump_to_default, MomentGrid, SlvJtdParticleConfig,
+        MomentGrid, SlvJtdParticleConfig, calibrate_slv_jump_to_default,
     };
     use crate::processes::HestonProcess;
     use crate::quotes::make_quote_handle;
-    use crate::shared::{shared, Shared};
+    use crate::shared::{Shared, shared};
     use crate::termstructures::credit::defaulttermstructure::DefaultProbabilityTermStructure;
     use crate::termstructures::credit::flathazardrate::FlatHazardRate;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};

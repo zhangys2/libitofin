@@ -143,6 +143,15 @@ impl TermStructure for InterpolatedLocalVolSurface {
         Date::max_date()
     }
 
+    /// Last tabulated time.
+    ///
+    /// The grid ends here. [`local_vol_impl`](LocalVolTermStructure::local_vol_impl)
+    /// still holds the boundary knot flat past this time, but only once the
+    /// caller allows extrapolation (`local_vol(..., true)` or
+    /// [`TermStructure::allows_extrapolation`](crate::termstructures::TermStructure::allows_extrapolation)).
+    /// A query that does not extrapolate stops at this node. That is the same
+    /// split as QuantLib's `FixedLocalVolSurface`: `maxDate` is the last knot,
+    /// and flat values beyond it are extrapolation.
     fn max_time(&self) -> QlResult<Time> {
         Ok(self.times[self.times.len() - 1])
     }
@@ -163,6 +172,10 @@ impl VolatilityTermStructure for InterpolatedLocalVolSurface {
 }
 
 impl LocalVolTermStructure for InterpolatedLocalVolSurface {
+    /// Bilinear value on the grid. Times and strikes outside the knots are
+    /// clamped to the boundary, so this hook answers them. The term-structure
+    /// range check still rejects those queries unless extrapolation is on;
+    /// see [`TermStructure::max_time`](crate::termstructures::TermStructure::max_time).
     fn local_vol_impl(&self, t: Time, strike: Real) -> QlResult<Volatility> {
         let (time_left, time_weight) = Self::bracket(&self.times, t);
         let (strike_left, strike_weight) = Self::bracket(&self.strikes, strike);
@@ -189,86 +202,106 @@ mod tests {
         let day_counter = Actual365Fixed::new();
         let today = Date::new(15, Month::June, 2026);
         let ok = Matrix::from([[0.2, 0.3], [0.4, 0.5]]);
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            day_counter,
-            vec![1.0],
-            vec![100.0, 120.0],
-            Matrix::from([[0.2, 0.3]]),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![100.0],
-            Matrix::from([[0.2], [0.3]]),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![1.0, 0.5],
-            vec![100.0, 120.0],
-            ok.clone(),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![-0.1, 1.0],
-            vec![100.0, 120.0],
-            ok.clone(),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![120.0, 100.0],
-            ok.clone(),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![0.0, 100.0],
-            ok.clone(),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![100.0, 120.0],
-            Matrix::from([[0.2, 0.3]]),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![100.0, 120.0],
-            Matrix::from([[0.2, 0.0], [0.3, 0.4]]),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![100.0, 120.0],
-            Matrix::from([[0.2, -0.1], [0.3, 0.4]]),
-        )
-        .is_err());
-        assert!(InterpolatedLocalVolSurface::new(
-            today,
-            Actual365Fixed::new(),
-            vec![0.0, 1.0],
-            vec![100.0, 120.0],
-            Matrix::from([[0.2, Real::NAN], [0.3, 0.4]]),
-        )
-        .is_err());
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                day_counter,
+                vec![1.0],
+                vec![100.0, 120.0],
+                Matrix::from([[0.2, 0.3]]),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![100.0],
+                Matrix::from([[0.2], [0.3]]),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![1.0, 0.5],
+                vec![100.0, 120.0],
+                ok.clone(),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![-0.1, 1.0],
+                vec![100.0, 120.0],
+                ok.clone(),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![120.0, 100.0],
+                ok.clone(),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![0.0, 100.0],
+                ok.clone(),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![100.0, 120.0],
+                Matrix::from([[0.2, 0.3]]),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![100.0, 120.0],
+                Matrix::from([[0.2, 0.0], [0.3, 0.4]]),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![100.0, 120.0],
+                Matrix::from([[0.2, -0.1], [0.3, 0.4]]),
+            )
+            .is_err()
+        );
+        assert!(
+            InterpolatedLocalVolSurface::new(
+                today,
+                Actual365Fixed::new(),
+                vec![0.0, 1.0],
+                vec![100.0, 120.0],
+                Matrix::from([[0.2, Real::NAN], [0.3, 0.4]]),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -292,6 +325,7 @@ mod tests {
         assert!((at(0.0, 50.0) - 0.10).abs() <= 1e-14);
         assert!((curve.local_vol_impl(-1.0, 50.0).unwrap() - 0.10).abs() <= 1e-14);
         assert!((at(10.0, 1_000.0) - 0.60).abs() <= 1e-14);
+        assert!((curve.max_time().unwrap() - 2.0).abs() <= 1e-14);
         assert!(curve.local_vol(1.0, 50.0, false).is_err());
         assert!(curve.local_vol(3.0, 150.0, false).is_err());
     }

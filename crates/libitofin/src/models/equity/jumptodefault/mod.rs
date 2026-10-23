@@ -19,9 +19,9 @@ pub(crate) use callsurface::ConstantHazardCallSurface;
 pub use callsurface::{BlackVolCallSurface, CallSurface};
 pub use powerhazard::PowerHazard;
 pub use powermoments::{MomentGrid, power_price, truncated_power_price};
-pub use slvdiagnostics::{compute_cross_asset_greeks, CrossAssetGreeks};
+pub use slvdiagnostics::{CrossAssetGreeks, compute_cross_asset_greeks};
 pub use slvparticlemodel::{
-    calibrate_slv_jump_to_default, SlvJtdCalibrationResult, SlvJtdParticleConfig,
-    SlvJtdParticleSnapshot,
+    SlvJtdCalibrationResult, SlvJtdParticleConfig, SlvJtdParticleSnapshot,
+    calibrate_slv_jump_to_default,
 };
 pub(crate) use slvparticlemodel::{defaultable_option_value, simulate_fixed_leverage};
