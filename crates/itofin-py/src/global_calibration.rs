@@ -38,10 +38,10 @@ impl PyDifferentialEvolution {
         #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
         #[pyo3(from_py_with = extract_population_size)] population_size: Option<usize>,
         initial_population: Option<Vec<Vec<f64>>>,
-        xatol: Option<f64>,
-        fatol: Option<f64>,
-        mutation: f64,
-        recombination: f64,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_mutation)] mutation: f64,
+        #[pyo3(from_py_with = extract_recombination)] recombination: f64,
         #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
         #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
     ) -> PyResult<Self> {
@@ -112,12 +112,12 @@ impl PyParticleSwarm {
         #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
         #[pyo3(from_py_with = extract_population_size)] population_size: Option<usize>,
         initial_population: Option<Vec<Vec<f64>>>,
-        xatol: Option<f64>,
-        fatol: Option<f64>,
-        inertia: f64,
-        cognitive: f64,
-        social: f64,
-        velocity_clamp: f64,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_inertia)] inertia: f64,
+        #[pyo3(from_py_with = extract_cognitive)] cognitive: f64,
+        #[pyo3(from_py_with = extract_social)] social: f64,
+        #[pyo3(from_py_with = extract_velocity_clamp)] velocity_clamp: f64,
         #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
         #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
     ) -> PyResult<Self> {
@@ -192,14 +192,14 @@ impl PyHybridSimulatedAnnealing {
     fn new(
         bounds: Vec<(f64, f64)>,
         #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
-        initial_temperature: f64,
-        cooling_rate: f64,
-        step_size: f64,
+        #[pyo3(from_py_with = extract_initial_temperature)] initial_temperature: f64,
+        #[pyo3(from_py_with = extract_cooling_rate)] cooling_rate: f64,
+        #[pyo3(from_py_with = extract_step_size)] step_size: f64,
         #[pyo3(from_py_with = extract_local_search_interval)] local_search_interval: usize,
         #[pyo3(from_py_with = extract_local_search_steps)] local_search_steps: usize,
         #[pyo3(from_py_with = extract_reanneal_interval)] reanneal_interval: usize,
-        xatol: Option<f64>,
-        fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
         #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
         #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
     ) -> PyResult<Self> {
@@ -270,12 +270,12 @@ impl PyFirefly {
         #[pyo3(from_py_with = crate::optimize::strict_global_seed)] seed: u64,
         #[pyo3(from_py_with = extract_population_size)] population_size: Option<usize>,
         initial_population: Option<Vec<Vec<f64>>>,
-        xatol: Option<f64>,
-        fatol: Option<f64>,
-        alpha: f64,
-        beta0: f64,
-        gamma: f64,
-        alpha_decay: f64,
+        #[pyo3(from_py_with = extract_xatol)] xatol: Option<f64>,
+        #[pyo3(from_py_with = extract_fatol)] fatol: Option<f64>,
+        #[pyo3(from_py_with = extract_alpha)] alpha: f64,
+        #[pyo3(from_py_with = extract_beta0)] beta0: f64,
+        #[pyo3(from_py_with = extract_gamma)] gamma: f64,
+        #[pyo3(from_py_with = extract_alpha_decay)] alpha_decay: f64,
         #[pyo3(from_py_with = extract_maxiter)] maxiter: Option<usize>,
         #[pyo3(from_py_with = extract_maxfev)] maxfev: Option<usize>,
     ) -> PyResult<Self> {
@@ -352,4 +352,49 @@ fn extract_maxiter(value: &Bound<'_, PyAny>) -> PyResult<Option<usize>> {
 }
 fn extract_maxfev(value: &Bound<'_, PyAny>) -> PyResult<Option<usize>> {
     optional_integer(value, "maxfev")
+}
+fn extract_xatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+    crate::optimize::strict_global_optional_f64(value, "xatol")
+}
+fn extract_fatol(value: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+    crate::optimize::strict_global_optional_f64(value, "fatol")
+}
+fn extract_initial_temperature(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "initial_temperature")
+}
+fn extract_cooling_rate(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "cooling_rate")
+}
+fn extract_step_size(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "step_size")
+}
+fn extract_alpha(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "alpha")
+}
+fn extract_beta0(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "beta0")
+}
+fn extract_gamma(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "gamma")
+}
+fn extract_alpha_decay(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "alpha_decay")
+}
+fn extract_mutation(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "mutation")
+}
+fn extract_recombination(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "recombination")
+}
+fn extract_inertia(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "inertia")
+}
+fn extract_cognitive(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "cognitive")
+}
+fn extract_social(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "social")
+}
+fn extract_velocity_clamp(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    crate::optimize::strict_global_f64(value, "velocity_clamp")
 }

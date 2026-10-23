@@ -172,6 +172,15 @@ pub trait Coupon: AsObservable {
         self.coupon_base().accrual_start_date
     }
 
+    /// The index fixing date when this coupon is floating-rate.
+    ///
+    /// Fixed-rate coupons answer [`None`]. Floating coupons
+    /// ([`IborCoupon`](crate::cashflows::IborCoupon) and kin) answer the date
+    /// their index is read on, matching C++ `FloatingRateCoupon::fixingDate`.
+    fn fixing_date(&self) -> Option<Date> {
+        None
+    }
+
     /// The end of the accrual period.
     fn accrual_end_date(&self) -> Date {
         self.coupon_base().accrual_end_date

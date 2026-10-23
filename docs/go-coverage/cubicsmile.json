@@ -1,0 +1,430 @@
+{
+  "entries": [
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Smoothing",
+      "python": "itofin.termstructures.CubicSmileSection.smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileSparseSmoothing",
+        "sparse_default_fit_and_explicit_smoothing_cross_c_boundary"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedStrikes",
+      "python": "itofin.termstructures.CubicSmileSection.observed_strikes",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedStdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.observed_std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservedMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.observed_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.ObservationResiduals",
+      "python": "itofin.termstructures.CubicSmileSection.observation_residuals",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileObservationResiduals"
+      ]
+    },
+    {
+      "c": [
+        "itofin_cubic_smile_new",
+        "itofin_cubic_smile_new_with_smoothing"
+      ],
+      "go": [
+        "Session.CubicSmileSection",
+        "Session.CubicSmileSectionWithSmoothing"
+      ],
+      "python": "itofin.termstructures.CubicSmileSection.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Volatility",
+      "python": "itofin.termstructures.CubicSmileSection.volatility",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Variance",
+      "python": "itofin.termstructures.CubicSmileSection.variance",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.VolatilityAtStdDev",
+      "python": "itofin.termstructures.CubicSmileSection.volatility_at_std_dev",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.StrikeAtStdDev",
+      "python": "itofin.termstructures.CubicSmileSection.strike_at_std_dev",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.Forward",
+      "python": "itofin.termstructures.CubicSmileSection.forward",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.AtmVol",
+      "python": "itofin.termstructures.CubicSmileSection.atm_vol",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.ExerciseTime",
+      "python": "itofin.termstructures.CubicSmileSection.exercise_time",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.MinStrike",
+      "python": "itofin.termstructures.CubicSmileSection.min_strike",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_query",
+      "go": "CubicSmileSection.MaxStrike",
+      "python": "itofin.termstructures.CubicSmileSection.max_strike",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.StdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeStdDevPoints",
+      "python": "itofin.termstructures.CubicSmileSection.node_std_dev_points",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.node_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.NodeResiduals",
+      "python": "itofin.termstructures.CubicSmileSection.node_residuals",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.SegmentCoefficients",
+      "python": "itofin.termstructures.CubicSmileSection.segment_coefficients",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": "itofin_cubic_smile_series",
+      "go": "CubicSmileSection.SampledMidIVs",
+      "python": "itofin.termstructures.CubicSmileSection.sampled_mid_ivs",
+      "status": "implemented",
+      "tests": [
+        "TestCubicSmileMidIV"
+      ]
+    },
+    {
+      "c": [
+        "itofin_total_variance_cubic_smile_new"
+      ],
+      "go": [
+        "Session.TotalVarianceCubicSmileSection",
+        "Session.TotalVarianceCubicSmileSectionWithOptions"
+      ],
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.__init__",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Volatility",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.volatility",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Variance",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.variance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVariance",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVarianceDerivative",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance_derivative",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.TotalVarianceSecondDerivative",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.total_variance_second_derivative",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.DurrlemanDensity",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.durrleman_density",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Forward",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.forward",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.ATMVol",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.atm_vol",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.ExerciseTime",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.exercise_time",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.Smoothing",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.MinStrike",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.min_strike",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.MaxStrike",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.max_strike",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_series",
+      "go": "TotalVarianceCubicSmileSection.KnotsK",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.knots_k",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_series",
+      "go": "TotalVarianceCubicSmileSection.FittedTotalVariances",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.fitted_total_variances",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.RightWingSlope",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.right_wing_slope",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_query",
+      "go": "TotalVarianceCubicSmileSection.LeftWingSlope",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.left_wing_slope",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "TotalVarianceCubicSmileSection.ButterflyReport",
+      "python": "itofin.termstructures.TotalVarianceCubicSmileSection.butterfly_report",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.MinDensity",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.min_density",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.ArgminK",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.argmin_k",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.HasArbitrage",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.has_arbitrage",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.Tolerance",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.tolerance",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.PointsChecked",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.points_checked",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.RampIterations",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.ramp_iterations",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    },
+    {
+      "c": "itofin_total_variance_cubic_smile_check_arbitrage",
+      "go": "ButterflyArbitrageReport.FinalSmoothing",
+      "python": "itofin.termstructures.ButterflyArbitrageReport.final_smoothing",
+      "status": "implemented",
+      "tests": [
+        "TestTotalVarianceCubicSmileSection"
+      ]
+    }
+  ]
+}

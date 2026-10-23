@@ -74,8 +74,9 @@ impl PyFdBlackScholesVanillaEngine {
             ));
         }
         Ok(Self {
-            inner: shared_mut(FdBlackScholesVanillaEngine::new(
+            inner: shared_mut(FdBlackScholesVanillaEngine::with_params(
                 process.inner(),
+                Vec::new(),
                 t_grid,
                 x_grid,
                 damping_steps,

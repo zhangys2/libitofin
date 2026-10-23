@@ -12,7 +12,10 @@ func TestSettingsOptionalFlagAndIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := s.NewSettings()
+	b, err := s.NewSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if v, err := a.IncludeTodaysCashFlows(); err != nil || v != nil {
 		t.Fatal(v, err)
 	}

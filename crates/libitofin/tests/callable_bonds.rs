@@ -391,7 +391,8 @@ fn constructors_and_direct_engine_usage_return_errors_not_panics() {
     assert!(engine.calculate().is_err());
     let curve = flat(0.03);
     assert!(
-        DiscretizedCallableFixedRateBond::new(&CallableBondArguments::default(), &*curve).is_err()
+        DiscretizedCallableFixedRateBond::new(&CallableBondArguments::default(), &*curve, 0.0)
+            .is_err()
     );
     let bond = bond(vec![], settings, 1000.0);
     bond.setup_arguments(engine.arguments_mut()).unwrap();
@@ -432,9 +433,9 @@ fn argument_validation_guards_vectors_dates_and_numerical_values() {
     args.callability_dates = vec![Date::new(7, Month::July, 2028)];
     args.callability_types = vec![CallabilityType::Call];
     args.callability_prices = vec![f64::MAX];
-    assert!(DiscretizedCallableFixedRateBond::new(&args, &*curve).is_err());
+    assert!(DiscretizedCallableFixedRateBond::new(&args, &*curve, 0.0).is_err());
     bond.setup_arguments(&mut args).unwrap();
-    let discretized = DiscretizedCallableFixedRateBond::new(&args, &*curve).unwrap();
+    let discretized = DiscretizedCallableFixedRateBond::new(&args, &*curve, 0.0).unwrap();
     assert_eq!(
         discretized.mandatory_times().len(),
         args.coupon_dates.len() + 1

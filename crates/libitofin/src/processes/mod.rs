@@ -4,9 +4,9 @@
 //! [`StochasticProcess1D`](crate::stochasticprocess::StochasticProcess1D)
 //! contract. The generalized Black-Scholes process (with its Merton
 //! convenience) is the first resident; the sibling conveniences
-//! (`BlackScholesProcess`, `BlackProcess`, `GarmanKohlagenProcess`) and the
-//! other process conveniences follow as noted on
-//! [`GeneralizedBlackScholesProcess`].
+//! (`BlackScholesProcess`, `BlackProcess`, `GarmanKohlagenProcess`) are thin
+//! aliases to it for now, and the pluggable discretization objects follow as
+//! noted on [`GeneralizedBlackScholesProcess`].
 
 mod batesprocess;
 mod blackscholesprocess;
@@ -15,15 +15,22 @@ pub mod forwardmeasureprocess;
 mod g2process;
 mod geometricbrownianprocess;
 mod gjrgarchprocess;
-pub mod gsrprocess;
+mod gsrprocess;
+mod gsrprocesscore;
 mod hestonprocess;
+mod hestonslvprocess;
 mod hullwhiteprocess;
 mod merton76process;
+mod mfstateprocess;
 mod ornsteinuhlenbeckprocess;
+mod slvjumptodefaultprocess;
 mod stochasticprocessarray;
 
 pub use batesprocess::BatesProcess;
-pub use blackscholesprocess::{BlackScholesMertonProcess, GeneralizedBlackScholesProcess};
+pub use blackscholesprocess::{
+    BlackProcess, BlackScholesMertonProcess, BlackScholesProcess, GarmanKohlagenProcess,
+    GeneralizedBlackScholesProcess,
+};
 pub use discretization::{
     DiscretizedProcess, DiscretizedProcess1D, EulerDiscretization, ProcessDiscretization,
     ProcessDiscretization1D,
@@ -36,9 +43,10 @@ pub use gjrgarchprocess::{
 };
 pub use gsrprocess::GsrProcess;
 pub use hestonprocess::{Discretization as HestonDiscretization, HestonProcess};
+pub use hestonslvprocess::HestonSLVProcess;
 pub use hullwhiteprocess::HullWhiteForwardProcess;
 pub use merton76process::Merton76Process;
-pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
-pub use stochasticprocessarray::StochasticProcessArray;
-mod mfstateprocess;
 pub use mfstateprocess::MfStateProcess;
+pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
+pub use slvjumptodefaultprocess::SlvJumpToDefaultProcess;
+pub use stochasticprocessarray::StochasticProcessArray;

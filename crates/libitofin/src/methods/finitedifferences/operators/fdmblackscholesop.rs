@@ -7,12 +7,16 @@ use crate::errors::QlResult;
 use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::methods::finitedifferences::meshers::FdmMesher;
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
+use crate::models::equity::jumptodefault::PowerHazard;
 use crate::processes::GeneralizedBlackScholesProcess;
+use crate::require;
 use crate::shared::Shared;
-use crate::termstructures::volatility::BlackVolTermStructure;
+use crate::termstructures::volatility::{BlackVolTermStructure, LocalVolTermStructure};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
+use crate::utilities::null::Null;
 
 use super::fdmlinearop::FdmLinearOp;
 use super::fdmlinearopcomposite::FdmLinearOpComposite;
@@ -33,30 +37,45 @@ use super::triplebandlinearop::TripleBandLinearOp;
 /// `currentLink()` (`cpp:40-42`). Relinking a handle of the process afterwards
 /// therefore does not reach this operator.
 ///
-/// Deferred to #636, and omitted rather than accepted and ignored:
+/// Deferred, omitted rather than accepted and ignored:
 ///
-/// - the local-volatility branch, with the `localVol` flag, the
-///   `illegalLocalVolOverwrite` fallback and the `x_` grid of spots it needs
-///   (`cpp:43-45`, `cpp:55-79`);
-/// - the quanto branch, which adjusts the drift through an `FdmQuantoHelper`
-///   (`cpp:72-79`, `cpp:84-91`); that helper is not ported;
 /// - `toMatrixDecomp` (`cpp:133-135`), which returns a `SparseMatrix`.
+///
+/// The quanto branch (`cpp:72-79`, `cpp:84-91`) is
+/// [`with_quanto`](Self::with_quanto).
 pub struct FdmBlackScholesOp {
     mesher: Shared<dyn FdmMesher>,
     r_ts: Shared<dyn YieldTermStructure>,
     q_ts: Shared<dyn YieldTermStructure>,
     vol_ts: Shared<dyn BlackVolTermStructure>,
+    local_vol: Option<Shared<dyn LocalVolTermStructure>>,
+    x: Array,
     dx_map: TripleBandLinearOp,
     dxx_map: TripleBandLinearOp,
     map_t: TripleBandLinearOp,
     strike: Real,
+    illegal_local_vol_overwrite: Real,
     direction: Size,
+    quanto: Option<Shared<FdmQuantoHelper>>,
+    /// Added to the discount rate, one entry per node. `None` keeps the
+    /// process rate `r`. Drift and diffusion are unchanged.
+    extra_discount: Option<Array>,
+    /// Carr–Madan intensity `f(t) S^p`. `None` leaves the generator unchanged.
+    /// `spot_power` is `S_i^p`, fixed with the mesh.
+    jump_to_default: Option<JumpToDefault>,
+}
+
+/// Jump intensity split into a time scale and a cached spot power.
+struct JumpToDefault {
+    hazard: Shared<PowerHazard>,
+    spot_power: Array,
 }
 
 impl FdmBlackScholesOp {
     /// The generator over `direction` of `mesher`, reading its rates and
     /// volatility from `process` and its forward variance at `strike`
-    /// (`cpp:32-49`).
+    /// (`cpp:32-49`). Local-vol is off; the illegal-vol overwrite is
+    /// `-Null<Real>()`, matching the C++ default.
     ///
     /// The operator is unusable until
     /// [`set_time`](FdmLinearOpComposite::set_time) has filled it: its bands
@@ -71,17 +90,157 @@ impl FdmBlackScholesOp {
         strike: Real,
         direction: Size,
     ) -> QlResult<Self> {
+        Self::with_local_vol(mesher, process, strike, false, -Real::null(), direction)
+    }
+
+    /// `FdmBlackScholesOp(mesher, process, strike, localVol, illegalLocalVolOverwrite, direction)`
+    /// (`cpp:32-49`) without quanto.
+    ///
+    /// When `local_vol` is set the generator samples Dupire local variance on
+    /// the spot grid at the midpoint of each time step. A non-negative
+    /// `illegal_local_vol_overwrite` replaces Dupire failures (C++ `catch`);
+    /// a negative value, the C++ default, lets them surface.
+    pub fn with_local_vol(
+        mesher: Shared<dyn FdmMesher>,
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        direction: Size,
+    ) -> QlResult<Self> {
+        Self::with_quanto(
+            mesher,
+            process,
+            strike,
+            local_vol,
+            illegal_local_vol_overwrite,
+            direction,
+            None,
+        )
+    }
+
+    /// As [`with_local_vol`](Self::with_local_vol), with the C++ `quantoHelper`
+    /// argument (`cpp:32-49`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_quanto(
+        mesher: Shared<dyn FdmMesher>,
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        direction: Size,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> QlResult<Self> {
+        let (lv, x) = if local_vol {
+            (
+                Some(process.local_volatility()?.current_link()?),
+                mesher.locations(direction).exp(),
+            )
+        } else {
+            (None, Array::new())
+        };
         Ok(FdmBlackScholesOp {
             r_ts: process.risk_free_rate().current_link()?,
             q_ts: process.dividend_yield().current_link()?,
             vol_ts: process.black_volatility().current_link()?,
+            local_vol: lv,
+            x,
             dx_map: first_derivative_op(direction, Shared::clone(&mesher)),
             dxx_map: second_derivative_op(direction, Shared::clone(&mesher)),
             map_t: TripleBandLinearOp::new(direction, Shared::clone(&mesher)),
             mesher,
             strike,
+            illegal_local_vol_overwrite,
             direction,
+            quanto,
+            extra_discount: None,
+            jump_to_default: None,
         })
+    }
+
+    /// Adds the Carr–Madan jump-to-default intensity `λ(t, S) = f(t) S^p`.
+    ///
+    /// On each step the generator samples `λ` at the step midpoint, the same
+    /// instant local variance is read (the rates themselves stay the forward
+    /// over `[t1, t2]`). Working-paper eq. 1 and the pricing PDE in the spec:
+    /// `λ` is added to the `ln S` drift, and added to the discount on top of
+    /// any [`extra_discount`](Self::with_extra_discount). Diffusion is
+    /// unchanged. With no hazard set the operator is the Black–Scholes
+    /// generator.
+    pub fn with_jump_to_default(mut self, hazard: Shared<PowerHazard>) -> Self {
+        if self.x.size() != self.mesher.layout().size() {
+            self.x = self.mesher.locations(self.direction).exp();
+        }
+        let exponent = hazard.exponent();
+        let spot_power: Array = self.x.iter().map(|spot| spot.powf(exponent)).collect();
+        self.jump_to_default = Some(JumpToDefault { hazard, spot_power });
+        self
+    }
+
+    /// Discounts node `i` at `r + extra_discount[i]` instead of `r`.
+    ///
+    /// The drift and diffusion stencil are left on the process. `extra_discount`
+    /// has one entry per mesh node and does not depend on time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `extra_discount` does not match the mesh length
+    /// or contains a non-finite entry.
+    pub fn with_extra_discount(mut self, extra_discount: Array) -> QlResult<Self> {
+        require!(
+            extra_discount.size() == self.mesher.layout().size(),
+            "extra discount must have one entry per mesh node, got {} for {}",
+            extra_discount.size(),
+            self.mesher.layout().size()
+        );
+        require!(
+            extra_discount.iter().all(|value| value.is_finite()),
+            "extra discount entries must be finite"
+        );
+        self.extra_discount = Some(extra_discount);
+        Ok(self)
+    }
+
+    fn reaction(&self, rate: Real) -> Array {
+        let Some(extra) = &self.extra_discount else {
+            return Array::filled(1, -rate);
+        };
+        let mut reaction = Array::filled(extra.size(), -rate);
+        for (node, extra_i) in reaction.iter_mut().zip(extra.iter()) {
+            *node -= extra_i;
+        }
+        reaction
+    }
+
+    /// Adds `λ_i` to the drift and to the discount. A missing hazard returns
+    /// the arrays untouched, so the no-jump generator stays bit-for-bit.
+    fn apply_jump_to_default(
+        &self,
+        t: Time,
+        drift: Array,
+        reaction: Array,
+    ) -> QlResult<(Array, Array)> {
+        let Some(jump) = &self.jump_to_default else {
+            return Ok((drift, reaction));
+        };
+        let n = self.mesher.layout().size();
+        let mut drift = if drift.size() == n {
+            drift
+        } else {
+            Array::filled(n, drift[0])
+        };
+        let mut reaction = if reaction.size() == n {
+            reaction
+        } else {
+            Array::filled(n, reaction[0])
+        };
+        let scale = jump.hazard.scale(t);
+        for i in 0..n {
+            let lambda = scale * jump.spot_power[i];
+            drift[i] += lambda;
+            reaction[i] -= lambda;
+        }
+        Ok((drift, reaction))
     }
 }
 
@@ -98,7 +257,8 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
         1
     }
 
-    /// `cpp:80-97`, the plain path.
+    /// `cpp:80-97`. Local-vol samples Dupire at the step midpoint; otherwise
+    /// the Black forward variance at `strike` is used.
     ///
     /// The two scalars scaling the whole grid are passed as one-element arrays,
     /// which [`axpyb`](TripleBandLinearOp::axpyb) broadcasts, while
@@ -114,20 +274,52 @@ impl FdmLinearOpComposite for FdmBlackScholesOp {
             .q_ts
             .forward_rate(t1, t2, Compounding::Continuous, Frequency::Annual, false)?
             .rate();
-        let v = self
-            .vol_ts
-            .black_forward_variance(t1, t2, self.strike, false)?
-            / (t2 - t1);
 
-        let diffusion = self
-            .dxx_map
-            .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
-        self.map_t.axpyb(
-            &Array::filled(1, r - q - 0.5 * v),
-            &self.dx_map,
-            &diffusion,
-            &Array::filled(1, -r),
-        );
+        if let Some(local_vol) = &self.local_vol {
+            let t = 0.5 * (t1 + t2);
+            let n = self.mesher.layout().size();
+            let mut v = Array::with_size(n);
+            for iter in self.mesher.layout().iter() {
+                let i = iter.index();
+                let lv = if self.illegal_local_vol_overwrite < 0.0 {
+                    local_vol.local_vol(t, self.x[i], true)?
+                } else {
+                    match local_vol.local_vol(t, self.x[i], true) {
+                        Ok(lv) => lv,
+                        Err(_) => self.illegal_local_vol_overwrite,
+                    }
+                };
+                v[i] = lv * lv;
+            }
+            let mut drift = (r - q) - &(0.5 * &v);
+            if let Some(quanto) = &self.quanto {
+                let adj = quanto.quanto_adjustment_array(&v.sqrt(), t1, t2)?;
+                drift = &drift - &adj;
+            }
+            let diffusion = self.dxx_map.mult(&(0.5 * &v));
+            let reaction = self.reaction(r);
+            let (drift, reaction) = self.apply_jump_to_default(0.5 * (t1 + t2), drift, reaction)?;
+            self.map_t
+                .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
+        } else {
+            let v = self
+                .vol_ts
+                .black_forward_variance(t1, t2, self.strike, false)?
+                / (t2 - t1);
+
+            let mut drift = Array::filled(1, r - q - 0.5 * v);
+            if let Some(quanto) = &self.quanto {
+                let adj = quanto.quanto_adjustment_array(&Array::filled(1, v.sqrt()), t1, t2)?;
+                drift = &drift - &adj;
+            }
+            let diffusion = self
+                .dxx_map
+                .mult(&Array::filled(self.mesher.layout().size(), 0.5 * v));
+            let reaction = self.reaction(r);
+            let (drift, reaction) = self.apply_jump_to_default(0.5 * (t1 + t2), drift, reaction)?;
+            self.map_t
+                .axpyb(&drift, &self.dx_map, &diffusion, &reaction);
+        }
 
         Ok(())
     }
@@ -289,6 +481,55 @@ mod tests {
         assert_close(&operator.apply(&u), &expected);
     }
 
+    /// A zero extra discount is the plain operator. That pins the `None`
+    /// reaction, a length-1 array, against the full-mesh path.
+    #[test]
+    fn zero_extra_discount_matches_the_plain_operator() {
+        let mesher = mesher();
+        let mut plain = black_scholes_op(&mesher);
+        let zeros = Array::filled(mesher.layout().size(), 0.0);
+        let mut shifted = black_scholes_op(&mesher)
+            .with_extra_discount(zeros)
+            .unwrap();
+        plain.set_time(T1, T2).unwrap();
+        shifted.set_time(T1, T2).unwrap();
+        assert_close(
+            &shifted.apply(&probe(&mesher)),
+            &plain.apply(&probe(&mesher)),
+        );
+    }
+
+    /// A constant extra discount is added to `r` in the reaction term only.
+    #[test]
+    fn extra_discount_is_added_to_the_reaction() {
+        let mesher = mesher();
+        let mut plain = black_scholes_op(&mesher);
+        let extra = Array::filled(mesher.layout().size(), 0.01);
+        let mut shifted = black_scholes_op(&mesher)
+            .with_extra_discount(extra)
+            .unwrap();
+        plain.set_time(T1, T2).unwrap();
+        shifted.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            expected[i] -= 0.01 * u[i];
+        }
+        assert_close(&shifted.apply(&u), &expected);
+    }
+
+    #[test]
+    fn extra_discount_rejects_a_non_finite_entry() {
+        let mesher = mesher();
+        let mut extra = Array::filled(mesher.layout().size(), 0.0);
+        extra[0] = Real::NAN;
+        assert!(
+            black_scholes_op(&mesher)
+                .with_extra_discount(extra)
+                .is_err()
+        );
+    }
+
     /// The curves reject a step that runs backwards, and `set_time` carries
     /// that out rather than swallowing it as C++'s `void` signature must.
     #[test]
@@ -390,5 +631,91 @@ mod tests {
         };
 
         assert_eq!(handle.borrow().apply(&u), applied);
+    }
+
+    /// Constant Black vol with `localVol=true` samples the same `v = σ²` at
+    /// every node, so the generator matches the non-local-vol operator.
+    #[test]
+    fn constant_local_vol_matches_the_black_generator() {
+        let mesher = mesher();
+        let dc = Actual365Fixed::new();
+        let today = Date::new(11, Month::February, 2018);
+        let process = GeneralizedBlackScholesProcess::new(
+            make_quote_handle(100.0).handle(),
+            flat_rate(today, Q, dc.clone()),
+            flat_rate(today, R, dc.clone()),
+            flat_vol(today, VOL, dc),
+        );
+        let mut black =
+            FdmBlackScholesOp::new(Shared::clone(&mesher), &process, STRIKE, DIRECTION).unwrap();
+        let mut local = FdmBlackScholesOp::with_local_vol(
+            Shared::clone(&mesher),
+            &process,
+            STRIKE,
+            true,
+            -Real::null(),
+            DIRECTION,
+        )
+        .unwrap();
+        black.set_time(T1, T2).unwrap();
+        local.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        assert_close(&black.apply(&u), &local.apply(&u));
+    }
+
+    /// `λ ∂_x − λ` on top of the Black–Scholes generator. An extra discount
+    /// stays in the reaction and stacks with `λ`.
+    #[test]
+    fn jump_to_default_adds_intensity_to_drift_and_discount() {
+        use crate::models::equity::jumptodefault::PowerHazard;
+
+        let mesher = mesher();
+        let lambda = 0.03;
+        let hazard = shared(PowerHazard::constant(lambda, 0.0).unwrap());
+        let mut plain = black_scholes_op(&mesher);
+        let mut jumped = black_scholes_op(&mesher).with_jump_to_default(Shared::clone(&hazard));
+        plain.set_time(T1, T2).unwrap();
+        jumped.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let dx = first_derivative_op(DIRECTION, Shared::clone(&mesher)).apply(&u);
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            expected[i] += lambda * dx[i] - lambda * u[i];
+        }
+        assert_close(&jumped.apply(&u), &expected);
+
+        let mut stacked = black_scholes_op(&mesher)
+            .with_extra_discount(Array::filled(mesher.layout().size(), 0.01))
+            .unwrap()
+            .with_jump_to_default(hazard);
+        stacked.set_time(T1, T2).unwrap();
+        for i in 0..u.size() {
+            expected[i] -= 0.01 * u[i];
+        }
+        assert_close(&stacked.apply(&u), &expected);
+    }
+
+    /// A negative power makes `λ` differ across the spot grid.
+    #[test]
+    fn jump_to_default_intensity_follows_the_spot_power() {
+        use crate::models::equity::jumptodefault::PowerHazard;
+
+        let mesher = mesher();
+        let scale = 2.0;
+        let exponent = -1.0;
+        let hazard = shared(PowerHazard::constant(scale, exponent).unwrap());
+        let mut plain = black_scholes_op(&mesher);
+        let mut jumped = black_scholes_op(&mesher).with_jump_to_default(hazard);
+        plain.set_time(T1, T2).unwrap();
+        jumped.set_time(T1, T2).unwrap();
+        let u = probe(&mesher);
+        let dx = first_derivative_op(DIRECTION, Shared::clone(&mesher)).apply(&u);
+        let spots = mesher.locations(DIRECTION).exp();
+        let mut expected = plain.apply(&u);
+        for i in 0..u.size() {
+            let lambda = scale * spots[i].powf(exponent);
+            expected[i] += lambda * dx[i] - lambda * u[i];
+        }
+        assert_close(&jumped.apply(&u), &expected);
     }
 }

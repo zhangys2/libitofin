@@ -13,10 +13,12 @@
 
 mod fdmamericanstepcondition;
 mod fdmbermudanstepcondition;
+mod fdmsimpleswingcondition;
 mod fdmsnapshotcondition;
 mod fdmstepconditioncomposite;
 
 pub use fdmamericanstepcondition::FdmAmericanStepCondition;
 pub use fdmbermudanstepcondition::FdmBermudanStepCondition;
+pub use fdmsimpleswingcondition::FdmSimpleSwingCondition;
 pub use fdmsnapshotcondition::FdmSnapshotCondition;
 pub use fdmstepconditioncomposite::FdmStepConditionComposite;

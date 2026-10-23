@@ -48,6 +48,7 @@ pub struct Callability {
     price: BondPrice,
     call_type: CallabilityType,
     date: Date,
+    trigger: Option<Real>,
 }
 
 impl Callability {
@@ -66,7 +67,19 @@ impl Callability {
             price,
             call_type,
             date,
+            trigger: None,
         })
+    }
+
+    /// Builds a soft call at `date` with soft-call `trigger`
+    /// (`ql/instruments/bonds/convertiblebonds.hpp` `SoftCallability`).
+    pub fn soft(price: BondPrice, date: Date, trigger: Real) -> Self {
+        Self {
+            price,
+            call_type: CallabilityType::Call,
+            date,
+            trigger: Some(trigger),
+        }
     }
 
     /// The exercise price per 100, including its quote convention.
@@ -82,6 +95,11 @@ impl Callability {
     /// The exercise date.
     pub fn date(&self) -> Date {
         self.date
+    }
+
+    /// Soft-call trigger multiple of the conversion value, when present.
+    pub fn trigger(&self) -> Option<Real> {
+        self.trigger
     }
 }
 

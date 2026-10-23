@@ -54,6 +54,11 @@ pub unsafe extern "C" fn itofin_differential_evolution_new(
                     "population must contain rows times dimension values",
                 ));
             }
+            if population_rows != 0 && !(4..=4096).contains(&population_rows) {
+                return Err(BindingError::invalid(
+                    "initial population rows must be in 4..=4096",
+                ));
+            }
             let bounds = Bounds {
                 lower: input_slice(lower, lower_len)?.to_vec(),
                 upper: input_slice(upper, upper_len)?.to_vec(),
@@ -171,6 +176,11 @@ pub unsafe extern "C" fn itofin_particle_swarm_new(
             if expected != population_len {
                 return Err(BindingError::invalid(
                     "population must contain rows times dimension values",
+                ));
+            }
+            if population_rows != 0 && !(4..=4096).contains(&population_rows) {
+                return Err(BindingError::invalid(
+                    "initial population rows must be in 4..=4096",
                 ));
             }
             let options = if options.is_null() {
@@ -328,6 +338,11 @@ pub unsafe extern "C" fn itofin_firefly_new(
             if expected != population_len {
                 return Err(BindingError::invalid(
                     "population must contain rows times dimension values",
+                ));
+            }
+            if population_rows != 0 && !(4..=4096).contains(&population_rows) {
+                return Err(BindingError::invalid(
+                    "initial population rows must be in 4..=4096",
                 ));
             }
             let options = if options.is_null() {

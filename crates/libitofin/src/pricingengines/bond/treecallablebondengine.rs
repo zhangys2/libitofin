@@ -104,7 +104,7 @@ impl TreeCallableFixedRateBondEngine {
             redemption_date > reference_date,
             "redemption must follow curve reference date"
         );
-        let mut bond = DiscretizedCallableFixedRateBond::new(arguments, &*curve)?;
+        let mut bond = DiscretizedCallableFixedRateBond::new(arguments, &*curve, spread)?;
         let grid = TimeGrid::with_mandatory_times(&bond.mandatory_times(), self.time_steps)?;
         for time in grid.times() {
             let discount = curve.discount(*time, false)?;

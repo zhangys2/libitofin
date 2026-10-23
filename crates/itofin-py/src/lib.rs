@@ -1,15 +1,16 @@
 //! Python bindings for `libitofin`, published as the `itofin` extension module.
 //!
-//! This crate is the walking skeleton (issue #484): it builds an `abi3-py313`
-//! wheel, imports as `itofin`, and bridges QlError to the Python-visible
-//! ItofinError exception. The pricing facades land in follow-up tickets
-//! (#485-#487).
+//! This crate is the walking skeleton (issue #484): it builds an `abi3-py310`
+//! wheel (CPython 3.10+), imports as `itofin`, and bridges QlError to the
+//! Python-visible ItofinError exception. The pricing facades land in follow-up
+//! tickets (#485-#487).
 
 mod asset_swap;
 mod bates;
 mod benchmark_beta;
 mod black_calculator;
 mod black_delta;
+mod blackformula;
 mod bma;
 mod bond_forward;
 mod bonds;
@@ -33,6 +34,7 @@ mod credit;
 mod creditdensity;
 mod creditengine;
 mod credithelpers;
+mod cubicsmile;
 mod currency;
 mod curve;
 mod discrepancy_statistics;
@@ -40,6 +42,7 @@ mod drawdown;
 mod fdengine;
 mod float_float_swap;
 mod floating_bonds;
+mod forward;
 mod fra;
 mod fx_forward;
 mod g2_process;
@@ -111,6 +114,9 @@ use creditengine::{
     PyAccrualBias, PyForwardsInCouponPeriod, PyIsdaCdsEngine, PyMidPointCdsEngine, PyNumericalFix,
 };
 use credithelpers::{PyDefaultProbabilityHelper, PySpreadCdsHelper, PyUpfrontCdsHelper};
+use cubicsmile::{
+    PyButterflyArbitrageReport, PyCubicSmileSection, PyTotalVarianceCubicSmileSection,
+};
 use currency::PyCurrency;
 use curve::{
     PyDiscountCurve, PyFlatForward, PyForwardCurve, PyPiecewiseConvexMonotoneForward,
@@ -237,6 +243,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ou_simulation::simulate_ou, m)?)?;
     m.add_function(wrap_pyfunction!(merton_simulation::simulate_merton, m)?)?;
     m.add_function(wrap_pyfunction!(gjr_simulation::simulate_gjr, m)?)?;
+    m.add_function(wrap_pyfunction!(forward::implied_forward, m)?)?;
     m.add_class::<PySettings>()?;
 
     let time = PyModule::new(py, "time")?;
@@ -299,6 +306,13 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyInterpolatedSwaptionVolatilityCube>()?;
     termstructures.add_class::<PySabrSwaptionVolatilityCube>()?;
     termstructures.add_class::<PySabrSmileSection>()?;
+    termstructures.add_class::<PyCubicSmileSection>()?;
+    termstructures.add_class::<PyTotalVarianceCubicSmileSection>()?;
+    termstructures.add_class::<PyButterflyArbitrageReport>()?;
+    termstructures.add_class::<forward::PyOptionQuotePair>()?;
+    termstructures.add_class::<forward::PyForwardDiagnostics>()?;
+    termstructures.add_class::<forward::PyImpliedForwardResult>()?;
+    termstructures.add_function(wrap_pyfunction!(forward::implied_forward, &termstructures)?)?;
     termstructures.add_class::<PyOptionletVolatilityStructure>()?;
     termstructures.add_class::<PyConstantOptionletVolatility>()?;
     termstructures.add_class::<PyCapFloorTermVolSurface>()?;
@@ -463,6 +477,14 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<heston_engines::PyExponentialFittingControlVariate>()?;
     pricingengines.add_class::<PyMCEuropeanHestonEngine>()?;
     pricingengines.add_class::<PyMCAmericanEngine>()?;
+    pricingengines.add_function(wrap_pyfunction!(
+        blackformula::black_formula_implied_std_dev,
+        &pricingengines
+    )?)?;
+    pricingengines.add_function(wrap_pyfunction!(
+        blackformula::black_formula_implied_volatility,
+        &pricingengines
+    )?)?;
 
     let optimization = PyModule::new(py, "optimization")?;
     optimization.add_class::<PyLevenbergMarquardt>()?;

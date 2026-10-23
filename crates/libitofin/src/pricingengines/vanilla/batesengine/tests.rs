@@ -9,6 +9,7 @@ pub(super) use crate::instruments::{
 pub(super) use crate::interestrate::Compounding;
 pub(super) use crate::math::array::Array;
 pub(super) use crate::models::HestonModel;
+pub(super) use crate::pricingengines::black_formula;
 pub(super) use crate::quotes::{Quote, SimpleQuote};
 pub(super) use crate::settings::Settings;
 pub(super) use crate::shared::{Shared, shared, shared_mut};
@@ -16,7 +17,10 @@ pub(super) use crate::termstructures::yields::FlatForward;
 pub(super) use crate::termstructures::yieldtermstructure::YieldTermStructure;
 pub(super) use crate::time::date::{Date, Month};
 pub(super) use crate::time::daycounters::actual360::Actual360;
+pub(super) use crate::time::daycounters::actualactual::{ActualActual, Convention};
 pub(super) use crate::time::frequency::Frequency;
+pub(super) use crate::time::period::Period;
+pub(super) use crate::time::timeunit::TimeUnit;
 pub(super) use crate::types::Real;
 
 pub(super) fn reference() -> Date {
@@ -317,4 +321,73 @@ fn unsupported_payoff_exercise_and_invalid_strike_fail_loudly() {
         ) as SharedMut<dyn PricingEngine>);
         assert!(option.npv().is_err());
     }
+}
+
+/// `batesmodel.cpp` `testAnalyticVsBlack`, BatesEngine arm only.
+///
+/// Tiny jump intensity and jump-size volatility, with variance-of-variance
+/// near zero, must reproduce the Black put. `BatesDetJumpEngine`,
+/// `BatesDoubleExpEngine`, and `BatesDoubleExpDetJumpEngine` are not ported.
+#[test]
+fn analytic_vs_black_for_tiny_jumps() {
+    let settlement = Date::new(30, Month::March, 2007);
+    let settings = shared(Settings::new());
+    settings.set_evaluation_date(settlement);
+    let day_counter = ActualActual::with_convention(Convention::ISDA);
+    let exercise_date = settlement + Period::new(6, TimeUnit::Months);
+    let year_fraction = day_counter.year_fraction(settlement, exercise_date);
+    let spot = 32.0;
+    let rate = 0.1;
+    let dividend = 0.04;
+    let strike = 30.0;
+    let forward = spot * ((rate - dividend) * year_fraction).exp();
+    let expected = black_formula(
+        OptionType::Put,
+        strike,
+        forward,
+        (0.05 * year_fraction).sqrt(),
+        1.0,
+        0.0,
+    )
+    .unwrap()
+        * (-rate * year_fraction).exp();
+
+    let curve = |value| {
+        Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            value,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    };
+    let process = shared(
+        BatesProcess::new(
+            curve(rate),
+            curve(dividend),
+            Handle::new(quote(spot) as Shared<dyn Quote>),
+            0.05,
+            5.0,
+            0.05,
+            1.0e-4,
+            0.0,
+            0.0001,
+            0.0,
+            0.0001,
+        )
+        .unwrap(),
+    );
+    let mut option = VanillaOption::new(
+        shared(PlainVanillaPayoff::new(OptionType::Put, strike)) as Shared<dyn StrikedTypePayoff>,
+        shared(EuropeanExercise::new(exercise_date)) as Shared<dyn Exercise>,
+        settings,
+    );
+    option.base_mut().set_pricing_engine(shared_mut(
+        BatesEngine::new(BatesModel::new(process).unwrap(), 64).unwrap(),
+    ) as SharedMut<dyn PricingEngine>);
+    let calculated = option.npv().unwrap();
+    assert!(
+        (calculated - expected).abs() <= 2.0e-7,
+        "calculated {calculated} expected {expected}"
+    );
 }

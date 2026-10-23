@@ -1,7 +1,7 @@
 //! Standalone constant-parameter GSR process bindings.
 use crate::PyQlError;
+use libitofin::processes::GsrProcess;
 use libitofin::processes::forwardmeasureprocess::ForwardMeasureProcess1D;
-use libitofin::processes::gsrprocess::GsrProcess;
 use libitofin::stochasticprocess::StochasticProcess1D;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};

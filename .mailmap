@@ -1,0 +1,4 @@
+# Collapse duplicate identities that share an email address.
+# `git shortlog -sne`, `git blame`, and `%aN` honour this file.
+Ben Chen <bn@bitbrew.dev> benbenbang <bn@bitbrew.dev>
+JOHN SAM <zhangys1@gmail.com> Zhang <zhangys1@gmail.com>

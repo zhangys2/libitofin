@@ -74,8 +74,9 @@ pub unsafe extern "C" fn itofin_fd_black_scholes_engine_new(
                 return Err(BindingError::invalid("FD step count exceeds platform size"));
             }
             let process = c.get::<Shared<GeneralizedBlackScholesProcess>>(process)?;
-            let engine = shared_mut(FdBlackScholesVanillaEngine::new(
+            let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
                 process,
+                Vec::new(),
                 t_grid,
                 x_grid,
                 damping_steps,

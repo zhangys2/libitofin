@@ -68,5 +68,5 @@ def test_volatility_empty_short_and_invalid_inputs():
         chart.simple_local_volatility_constant_fraction([100.0, 110.0], float("inf"))
     with pytest.raises(itofin.ItofinError):
         chart.constant_volatility(one, 0)
-    with pytest.raises(itofin.ItofinError):
+    with pytest.raises(itofin.ItofinError, match="got -1"):
         chart.constant_volatility(one, -1)

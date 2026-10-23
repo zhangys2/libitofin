@@ -1,7 +1,7 @@
 //! Constant-grid forward-measure GSR process adapters.
 use crate::boundary::*;
+use libitofin::processes::GsrProcess;
 use libitofin::processes::forwardmeasureprocess::ForwardMeasureProcess1D;
-use libitofin::processes::gsrprocess::GsrProcess;
 use libitofin::shared::{SharedMut, shared_mut};
 use libitofin::stochasticprocess::StochasticProcess1D;
 

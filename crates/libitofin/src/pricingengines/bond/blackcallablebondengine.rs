@@ -317,3 +317,7 @@ impl PricingEngine for BlackCallableFixedRateBondEngine {
 #[cfg(test)]
 #[path = "blackcallablebondengine_tests.rs"]
 mod tests;
+
+/// QuantLib's `BlackCallableZeroCouponBondEngine` is a thin alias of
+/// [`BlackCallableFixedRateBondEngine`].
+pub type BlackCallableZeroCouponBondEngine = BlackCallableFixedRateBondEngine;

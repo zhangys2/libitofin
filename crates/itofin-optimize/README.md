@@ -11,7 +11,7 @@ A general-purpose `minimize` for Nelder-Mead, BFGS, L-BFGS-B, SLSQP and
 Differential-Evolution and Particle-Swarm, with an
 `Objective` trait carrying its own error type, explicit budgets, a cancellation
 hook and validated inputs. All six Rust solvers use the single `minimize`
-entry point. L-BFGS-B bindings are tracked in issue #1086.
+entry point. C, Go, and Python expose the same six methods.
 
 Differential-Evolution is serial deferred-generation DE/rand/1/bin. It requires
 finite-width box bounds and minimizes signed scalar values directly. Seed zero
@@ -49,26 +49,9 @@ records the SciPy version and the generation date into every fixture it writes.
 
 ## Release
 
-The initial **0.36.0** publication is available on
-[crates.io](https://crates.io/crates/itofin-optimize/0.36.0). Bootstrap and the
-GitHub trusted-publisher configuration are verified:
-
-- Owner `benbenbang`, repository `libitofin`, workflow `semantic-release.yml`;
-  no GitHub environment is configured for the Rust publish jobs.
-- Future coordinated releases publish `itofin-optimize` before `libitofin`, using
-  the same released tag, committed-version checks and OIDC authentication.
-  Optimizer publication failure blocks core publication.
-- Python and Go release jobs remain independently gated by the release; their
-  existing artifacts bundle optimizer code without an additional runtime install.
-- CI dry runs perform no publication. The first coordinated **v0.37.0** release
-  verified optimizer-before-core OIDC publishing in
-  [CI run 37492675222](https://github.com/benbenbang/libitofin/actions/runs/37492675222).
-  [#1091](https://github.com/benbenbang/libitofin/issues/1091) was closed by the maintainer
-  and retains historical bootstrap details.
-
-See [Trusted Publishing](https://crates.io/docs/trusted-publishing) for authentication
-and the [Cargo publishing guide](https://doc.rust-lang.org/cargo/reference/publishing.html)
-for package validation.
+This fork does not publish `itofin-optimize` through `semantic-release.yml`.
+The crate bundles the workspace BSD-3-Clause `LICENSE`. Upstream's crates.io
+releases, including 0.37.0, are separate publications from `benbenbang/libitofin`.
 
 ## Citations
 

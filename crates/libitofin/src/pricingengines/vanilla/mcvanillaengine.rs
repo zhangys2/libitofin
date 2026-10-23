@@ -31,9 +31,15 @@
 //!   use that default, so `S` is fixed rather than a third generic.
 //!
 //! Deferred, rejected visibly rather than silently ignored:
-//! - **control variate**: the flag threads to [`McSimulation`], which rejects
-//!   it as deferred; `controlVariateValue` and the control
-//!   pricing engine (`mcvanillaengine.hpp:82,126`) are not ported.
+//! - **control variate through this base**: the `control_variate` flag still
+//!   threads to [`McSimulation::calculate`], which rejects it; callers that need
+//!   same-path CV must use
+//!   [`McSimulation::calculate_with_control_variate`](crate::methods::montecarlo::McSimulation::calculate_with_control_variate)
+//!   directly. `controlVariateValue` and the control pricing engine
+//!   (`mcvanillaengine.hpp:82,126`) are not ported.
+//!
+//! Antithetic averaging is live: the flag threads to [`McSimulation`] and runs
+//! over the policy's path generator.
 
 use std::marker::PhantomData;
 

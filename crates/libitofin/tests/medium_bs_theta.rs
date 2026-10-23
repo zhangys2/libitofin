@@ -367,7 +367,7 @@ fn empty_handles_propagate_errors() {
 }
 
 #[test]
-fn unsupported_derived_surface_errors_but_external_local_vol_is_sufficient() {
+fn black_variance_surface_uses_dupire_local_vol_and_external_local_vol_is_sufficient() {
     let market = Market::new();
     let surface = BlackVarianceSurface::new(
         reference(),
@@ -379,7 +379,8 @@ fn unsupported_derived_surface_errors_but_external_local_vol_is_sufficient() {
     )
     .unwrap();
     market.black.link_to(shared(surface));
-    assert!(market.theta().is_err());
+    // This fork maps a general Black surface to Dupire local vol.
+    assert!(market.theta().unwrap().is_finite());
     let process = GeneralizedBlackScholesProcess::with_local_vol(
         market.process.state_variable(),
         market.dividend.handle(),

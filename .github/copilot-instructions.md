@@ -34,7 +34,7 @@ suggest alternatives to these choices; doing so creates noise and stalls reviews
 | **D3** | Shared ownership uses `Rc` (not `Arc`).  The codebase exposes three aliases - `Shared<T>`, `SharedMut<T>`, `WeakMut<T>` - that must be used throughout; do not suggest raw `Rc`/`Arc`/`RefCell` at call sites. |
 | **D4** | Error handling uses `QlResult<T>` (`Result<T, QlError>`) raised via the `fail!`, `require!`, `assert_ql!`, and `ensure!` macros.  Do not suggest `anyhow`, `eyre`, panics, or `unwrap` in library code. |
 | **D5** | `Settings` is an explicit value object passed as `&Context`, not a `thread_local` global or a `lazy_static`. |
-| **D6** | The core is single-threaded-mutable.  No `async`/`tokio` anywhere in `crates/itofin`.  Parallelism is `rayon` snapshot-and-fan-out, added only at L9–L11. |
+| **D6** | The core is single-threaded-mutable.  No `async`/`tokio` anywhere in the core.  Parallelism is planned as `rayon` snapshot-and-fan-out at L9–L11 (not yet a core dependency). |
 | **D7** | FFI lives in sibling crates (`itofin-ffi`, `itofin-py`); the core crate is FFI-agnostic. |
 | **D8** | Logging is deferred.  Do not suggest adding `tracing` spans or `log::debug!` calls inside hot paths. |
 

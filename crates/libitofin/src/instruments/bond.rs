@@ -23,11 +23,15 @@
 //!   [`accrued_amount`](Bond::accrued_amount) - call [`CashFlows`] directly, the
 //!   port's home for those analytics.
 //! - The price-fed [`Bond::yield_rate`] and [`BondPrice`] land here (#290),
-//!   solver-backed through `BondFunctions`. The engine-priced
-//!   `Bond::yield(dayCounter, ...)` overload, the price-from-yield
-//!   `cleanPrice`/`dirtyPrice`, the coupon-rate and cash-flow-date inspectors,
-//!   and the `faceAmount` constructor remain follow-up work. Derived bonds
-//!   use the crate-private `set_single_redemption` helper.
+//!   solver-backed through `BondFunctions`. Yield-based
+//!   [`BondFunctions::clean_price_at_yield`] /
+//!   [`BondFunctions::dirty_price_at_yield`] cover the free-function
+//!   `cleanPrice`/`dirtyPrice` path. Derived bonds use the crate-private
+//!   `set_single_redemption` helper. The engine-priced
+//!   `Bond::yield(dayCounter, ...)` overload, instance
+//!   `Bond::cleanPrice`/`dirtyPrice` from yield, the coupon-rate and
+//!   cash-flow-date inspectors, and the `faceAmount` constructor remain
+//!   follow-up work.
 
 use std::any::Any;
 
@@ -335,30 +339,6 @@ impl Bond {
         self.maturity_date = Some(date);
     }
 
-    /// Appends one redemption and sets its two-point notional schedule.
-    ///
-    /// Mirrors the protected QuantLib `Bond::setSingleRedemption` helper.
-    ///
-    /// # Errors
-    ///
-    /// Propagates invalid redemption amount or payment date errors.
-    pub(crate) fn set_single_redemption(
-        &mut self,
-        notional: Real,
-        redemption: Real,
-        date: Date,
-    ) -> QlResult<()> {
-        let payment: Shared<dyn CashFlow> =
-            shared(Redemption::new(notional * redemption / 100.0, date)?);
-        self.notionals = vec![notional, 0.0];
-        self.notional_schedule = vec![Date::null(), date];
-        self.redemptions.clear();
-        self.base.register_with(payment.observable());
-        self.cashflows.push(Shared::clone(&payment));
-        self.redemptions.push(payment);
-        Ok(())
-    }
-
     /// Sets the issue date after constructing a derived bond's coupon leg.
     pub(crate) fn set_issue_date(&mut self, date: Option<Date>) {
         self.issue_date = date;
@@ -525,6 +505,27 @@ impl Bond {
             max_evaluations,
             guess,
         )
+    }
+
+    /// Installs a single redemption of `notional * redemption / 100` on `date`
+    /// (the protected `Bond::setSingleRedemption`).
+    ///
+    /// Used by zero-coupon bonds that have no coupon leg.
+    pub(crate) fn set_single_redemption(
+        &mut self,
+        notional: Real,
+        redemption: Real,
+        date: Date,
+    ) -> QlResult<()> {
+        let payment: Shared<dyn CashFlow> =
+            shared(Redemption::new(notional * redemption / 100.0, date)?) as Shared<dyn CashFlow>;
+        self.notionals = vec![notional, 0.0];
+        self.notional_schedule = vec![Date::null(), date];
+        self.redemptions.clear();
+        self.base.register_with(payment.observable());
+        self.cashflows.push(Shared::clone(&payment));
+        self.redemptions.push(payment);
+        Ok(())
     }
 
     /// Builds the redemption flows from the notional schedule and appends them

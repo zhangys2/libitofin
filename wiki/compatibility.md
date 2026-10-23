@@ -132,30 +132,28 @@ oversight) and is documented at the point of divergence in the source.
   (`couponpricer.cpp:56-88`) and reads the specialized 3-arg `forecastFixing`
   off the curve; a *determined* fixing is mode-independent and returns the same
   required past fixing as the C++ override. `BlackIborCouponPricer` ports
-  `swapletRate = gearing * indexFixing + spread`;
-  since a non-in-arrears `Black76` coupon needs no convexity adjustment it needs
-  no volatility, and since only `swapletPrice` (not `swapletRate`) reads the
-  forwarding-curve discount, the pricer captures no curve. The caplet/floorlet
-  optionlet path, the `*Price` methods, and the in-arrears convexity adjustment
-  belong to the cap/floor slice; an in-arrears coupon is refused with an `Err`
-  rather than priced with a missing convexity term.
+  `swapletRate = gearing * adjustedFixing + spread` with the Black76 in-arrears
+  convexity adjustment (`couponpricer.cpp` `adjustedFixing`); a non-in-arrears
+  coupon needs no volatility. Caplet/floorlet optionlets on the undetermined
+  path also Black off `adjustedFixing()`. The `*Price` methods remain deferred.
+  Since only `swapletPrice` (not `swapletRate`) reads the forwarding-curve
+  discount, the pricer captures no curve.
 
-- **`IborLeg` builds the plain-vanilla coupons only; caps, floors and the
-  in-arrears feature are omitted, not silently dropped.** QuantLib's `IborLeg`
-  carries `withCaps`/`withFloors`/`inArrears` builder methods that route the leg
-  through `CappedFlooredIborCoupon` and the optionlet pricer. Those belong to the
-  cap/floor slice, so this port omits the methods entirely rather than accepting
-  the vectors and building plain coupons. The default `BlackIborCouponPricer` is
-  attached in `coupons()` (C++ attaches it in `operator Leg()` under the same
-  no-cap/no-floor/no-arrears condition, which here always holds); `build()` only
-  erases the concrete coupons into a `Leg`, and the free `set_coupon_pricer`
-  overrides the default on the concrete coupons, the erased `Leg` carrying no
-  downcast. The stub reference dates follow the `FloatingLeg` template
-  (`calendar.adjust(end - tenor, bdc)`, no end-of-month flag), which agrees with
-  the fixed leg on every multi-coupon schedule. A zero gearing, which the C++
-  template collapses to a `FixedRateCoupon`, is not special-cased: `IborCoupon`
-  rejects it, so `with_gearing(0.0)` surfaces that `Err` rather than a silent
-  fixed coupon.
+- **`IborLeg` builds plain coupons; caps, floors and in-arrears are ported.**
+  QuantLib's `IborLeg` carries `withCaps`/`withFloors`/`inArrears`. The port
+  exposes the same builders: caps/floors yield `CappedFlooredCoupon`s over the
+  optionlet path, and `in_arrears()` sets the coupon flag while withholding the
+  default pricer so the caller attaches a volatility-carrying
+  `BlackIborCouponPricer`. The default pricer is attached in `coupons()` only
+  when no cap, floor or in-arrears feature is set (matching C++ `operator Leg()`);
+  `build()` only erases the concrete coupons into a `Leg`, and the free
+  `set_coupon_pricer` overrides the default on the concrete coupons, the erased
+  `Leg` carrying no downcast. The stub reference dates follow the `FloatingLeg`
+  template (`calendar.adjust(end - tenor, bdc)`, no end-of-month flag), which
+  agrees with the fixed leg on every multi-coupon schedule. A zero gearing,
+  which the C++ template collapses to a `FixedRateCoupon`, is not special-cased:
+  `IborCoupon` rejects it, so `with_gearing(0.0)` surfaces that `Err` rather
+  than a silent fixed coupon.
 
 ## Term structures (EPIC-4)
 
@@ -215,7 +213,18 @@ oversight) and is documented at the point of divergence in the source.
   and `zero_volatility_otm_put_gets_put_greeks_not_call_greeks` in
   `blackcalculator.rs`, which assert the corrected numbers (OTM `0.0`, ATM
   `-0.5`, ITM `-1.0` for the put, and the call mirror), so a regression to the
-  `alpha_ >= 0` form is a test failure.
+- **`PearsonSpreadEngine` handles `effectiveStrike <= 0` for puts correctly (returning 0) and preserves put-call parity across all strikes.**
+  QuantLib `pearsonspreadengine.cpp:73-75` unconditionally evaluates
+  `phi(z) * std::max(0.0, f1_cond - effectiveStrike)`, returning positive call
+  intrinsic for put payoffs when `effectiveStrike <= 0`, violating put-call
+  parity. This port evaluates `0.0` for puts when `effectiveStrike <= 0`
+  (since $(K_{\text{eff}} - F_1)^+ = 0$ when $F_1 > 0 \ge K_{\text{eff}}$),
+  preserving $(C - P)/\text{df} = F_1 - F_2 - K$ across all strikes.
+- **`OperatorSplittingSpreadEngine` applies the discount factor in the second-order Taylor expansion branch.**
+  In QuantLib C++ (`operatorsplittingspreadengine.cpp:104`), `ooPlt` in the Taylor expansion
+  branch (`rs < EPSILON^0.625`) omitted the discount factor `df`. In this port, `discount` is
+  applied, ensuring $C^0$ continuity across the `rs` threshold for non-zero discount rates while
+  matching QuantLib's test case (`testNoDivByZeroOperatorSplitting`, where $r=0$ and $df=1$).
 
 ## Credit (EPIC Credit, #676)
 

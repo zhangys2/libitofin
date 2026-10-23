@@ -56,6 +56,19 @@ fn sobol_policy_skips_zero_and_preserves_copied_state() {
     assert!(LowDiscrepancy::make_sequence_generator(sobol::PPMT_MAX_DIM + 1, 0).is_err());
 }
 
+#[test]
+fn generic_and_rngtraits_low_discrepancy_share_the_first_sequences() {
+    let mut policy = LowDiscrepancy::make_sequence_generator(8, 42).unwrap();
+    let mut generic =
+        GenericLowDiscrepancy::<SobolSequence, InverseCumulativeNormal>::make_sequence_generator(
+            8, 42,
+        )
+        .unwrap();
+    for _ in 0..32 {
+        assert_eq!(policy.next_sequence().value, generic.next_sequence().value);
+    }
+}
+
 #[derive(Clone)]
 struct Uniforms(Vec<f64>);
 impl UniformRng for Uniforms {

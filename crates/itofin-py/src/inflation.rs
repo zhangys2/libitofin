@@ -525,10 +525,12 @@ impl PyKerkhofSeasonality {
     /// Return the cumulative monthly factor relative to the anchor date.
     fn seasonality_factor(slf: PyRef<'_, Self>, to: &PyDate) -> PyResult<f64> {
         let base = slf.into_super();
-        Ok(base
-            .kerkhof
-            .as_ref()
-            .expect("Kerkhof subclass invariant")
+        let Some(kerkhof) = base.kerkhof.as_ref() else {
+            return Err(crate::ItofinError::new_err(
+                "KerkhofSeasonality missing its Kerkhof correction",
+            ));
+        };
+        Ok(kerkhof
             .seasonality_factor(to.inner())
             .map_err(PyQlError::from)?)
     }

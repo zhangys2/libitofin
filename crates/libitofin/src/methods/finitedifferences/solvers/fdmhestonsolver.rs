@@ -1,0 +1,315 @@
+//! Finite-difference solver specialised to the Heston model.
+//!
+//! Port of `ql/methods/finitedifferences/solvers/fdmhestonsolver.{hpp,cpp}`: a
+//! thin lazy wrapper that builds [`FdmHestonOp`] and delegates point queries
+//! to [`Fdm2DimSolver`]. `valueAt(s, v)` interpolates at `(ln(s), v)`.
+//!
+//! Quanto is [`with_quanto`](FdmHestonSolver::with_quanto). Leverage is
+//! [`with_leverage`](FdmHestonSolver::with_leverage).
+
+use std::cell::RefCell;
+
+use crate::errors::QlResult;
+use crate::methods::finitedifferences::operators::{FdmHestonOp, FdmLinearOpComposite};
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
+use crate::patterns::lazyobject::LazyObject;
+use crate::patterns::observable::{AsObservable, Observer};
+use crate::processes::HestonProcess;
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
+use crate::termstructures::volatility::LocalVolTermStructure;
+use crate::types::Real;
+
+use super::fdm2dimsolver::Fdm2DimSolver;
+use super::fdmschemedesc::FdmSchemeDesc;
+use super::fdmsolverdesc::FdmSolverDesc;
+
+/// Clears the lazy cache when the Heston process notifies.
+struct Updater {
+    lazy: SharedMut<LazyObject>,
+    solver: Shared<RefCell<Option<Shared<Fdm2DimSolver>>>>,
+}
+
+impl Observer for Updater {
+    fn update(&mut self) {
+        *self.solver.borrow_mut() = None;
+        if let Some(update) = LazyObject::deferred_update(&self.lazy) {
+            update.notify_observers();
+        }
+    }
+}
+
+/// Lazy Heston 2-D FD solver (`fdmhestonsolver.hpp:37`).
+pub struct FdmHestonSolver {
+    process: Shared<HestonProcess>,
+    solver_desc: FdmSolverDesc,
+    scheme_desc: FdmSchemeDesc,
+    mixing_factor: Real,
+    quanto: Option<Shared<FdmQuantoHelper>>,
+    leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
+    solver: Shared<RefCell<Option<Shared<Fdm2DimSolver>>>>,
+    lazy: SharedMut<LazyObject>,
+    _updater: SharedMut<Updater>,
+}
+
+impl FdmHestonSolver {
+    /// `FdmHestonSolver(process, solverDesc, schemeDesc)` (`cpp:33-44`)
+    /// without quanto / leverage. `mixing_factor` defaults to 1 in C++.
+    pub fn new(
+        process: Shared<HestonProcess>,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        mixing_factor: Real,
+    ) -> FdmHestonSolver {
+        Self::with_quanto(process, solver_desc, scheme_desc, mixing_factor, None)
+    }
+
+    /// As [`new`](Self::new), with the C++ `quantoHelper`.
+    pub fn with_quanto(
+        process: Shared<HestonProcess>,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        mixing_factor: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> FdmHestonSolver {
+        Self::with_leverage(
+            process,
+            solver_desc,
+            scheme_desc,
+            mixing_factor,
+            quanto,
+            None,
+        )
+    }
+
+    /// As [`with_quanto`](Self::with_quanto), with the C++ `leverageFct`.
+    pub fn with_leverage(
+        process: Shared<HestonProcess>,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        mixing_factor: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+        leverage_fct: Option<Shared<dyn LocalVolTermStructure>>,
+    ) -> FdmHestonSolver {
+        let lazy = shared_mut(LazyObject::new(true));
+        let solver = shared(RefCell::new(None));
+        let updater = shared_mut(Updater {
+            lazy: SharedMut::clone(&lazy),
+            solver: Shared::clone(&solver),
+        });
+        let observer = updater.clone() as SharedMut<dyn Observer>;
+        process.observable().register_observer(&observer);
+
+        FdmHestonSolver {
+            process,
+            solver_desc,
+            scheme_desc,
+            mixing_factor,
+            quanto,
+            leverage_fct,
+            solver,
+            lazy,
+            _updater: updater,
+        }
+    }
+
+    /// Solution at spot `s` and variance `v` (`cpp:57-60`).
+    pub fn value_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        self.solver
+            .borrow()
+            .as_ref()
+            .expect("solver is filled by calculate")
+            .interpolate_at(s.ln(), v)
+    }
+
+    /// Delta at spot `s` and variance `v` (`cpp:61-64`).
+    pub fn delta_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        Ok(self
+            .solver
+            .borrow()
+            .as_ref()
+            .expect("solver is filled by calculate")
+            .derivative_x(s.ln(), v)?
+            / s)
+    }
+
+    /// Gamma at spot `s` and variance `v` (`cpp:66-70`):
+    /// `(d²V/d(ln S)² − dV/d(ln S)) / S²`.
+    pub fn gamma_at(&self, s: Real, v: Real) -> QlResult<Real> {
+        self.calculate()?;
+        let x = s.ln();
+        let solver = self.solver.borrow();
+        let solver = solver.as_ref().expect("solver is filled by calculate");
+        Ok((solver.derivative_xx(x, v)? - solver.derivative_x(x, v)?) / (s * s))
+    }
+
+    fn calculate(&self) -> QlResult<()> {
+        if !self.lazy.borrow_mut().start_calculation() {
+            return Ok(());
+        }
+        let result = self.perform_calculations();
+        self.lazy.borrow_mut().finish_calculation(&result);
+        result
+    }
+
+    fn perform_calculations(&self) -> QlResult<()> {
+        let op = shared_mut(FdmHestonOp::with_leverage(
+            Shared::clone(&self.solver_desc.mesher),
+            &self.process,
+            self.mixing_factor,
+            self.quanto.clone(),
+            self.leverage_fct.clone(),
+        )?) as SharedMut<dyn FdmLinearOpComposite>;
+        let solver = shared(Fdm2DimSolver::new(
+            self.solver_desc.clone(),
+            self.scheme_desc,
+            op,
+        ));
+        *self.solver.borrow_mut() = Some(solver);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::handle::Handle;
+    use crate::interestrate::Compounding;
+    use crate::methods::finitedifferences::meshers::{
+        FdmMesher, FdmMesherComposite, uniform_1d_mesher,
+    };
+    use crate::methods::finitedifferences::operators::FdmLinearOpIterator;
+    use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
+    use crate::methods::finitedifferences::utilities::FdmInnerValueCalculator;
+    use crate::quotes::{Quote, SimpleQuote};
+    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
+    use crate::time::date::{Date, Month};
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
+    use crate::time::frequency::Frequency;
+    use crate::types::Time;
+
+    struct ConstantPayoff(Real);
+
+    impl FdmInnerValueCalculator for ConstantPayoff {
+        fn inner_value(&self, _iter: &FdmLinearOpIterator, _t: Time) -> Real {
+            self.0
+        }
+
+        fn avg_inner_value(&self, iter: &FdmLinearOpIterator, t: Time) -> Real {
+            self.inner_value(iter, t)
+        }
+    }
+
+    fn process() -> Shared<HestonProcess> {
+        let curve = Handle::new(shared(FlatForward::with_rate(
+            Date::new(15, Month::January, 2026),
+            0.05,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        shared(HestonProcess::new(
+            curve.clone(),
+            curve,
+            Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+            0.04,
+            1.0,
+            0.04,
+            0.2,
+            -0.5,
+        ))
+    }
+
+    fn solver(payoff: Real) -> FdmHestonSolver {
+        let mesher: Shared<dyn FdmMesher> = shared(FdmMesherComposite::new(vec![
+            uniform_1d_mesher((80.0_f64).ln(), (120.0_f64).ln(), 11).unwrap(),
+            uniform_1d_mesher(0.01, 0.09, 9).unwrap(),
+        ])) as Shared<dyn FdmMesher>;
+        let desc = FdmSolverDesc {
+            mesher,
+            bc_set: Vec::new(),
+            condition: shared(FdmStepConditionComposite::new(&[], Vec::new())),
+            calculator: shared(ConstantPayoff(payoff)) as Shared<dyn FdmInnerValueCalculator>,
+            maturity: 0.5,
+            time_steps: 20,
+            damping_steps: 0,
+        };
+        FdmHestonSolver::new(process(), desc, FdmSchemeDesc::hundsdorfer(), 1.0)
+    }
+
+    #[test]
+    fn constant_payoff_stays_near_discounted_constant() {
+        let v = solver(1.0).value_at(100.0, 0.04).unwrap();
+        assert!(v.is_finite(), "value={v}");
+        assert!(
+            v > 0.0 && v < 1.0,
+            "expected a discount-factor-ish value, got {v}"
+        );
+    }
+
+    #[test]
+    fn zero_payoff_is_zero() {
+        let v = solver(0.0).value_at(100.0, 0.04).unwrap();
+        assert!(v.abs() < 1e-10, "got {v}");
+    }
+
+    /// Pins `delta_at`/`gamma_at` log-space conversion (`cpp:61-70`).
+    struct SpotSquared {
+        mesher: Shared<dyn FdmMesher>,
+    }
+
+    impl FdmInnerValueCalculator for SpotSquared {
+        fn inner_value(&self, iter: &FdmLinearOpIterator, _t: Time) -> Real {
+            let s = self.mesher.location(iter, 0).exp();
+            s * s
+        }
+
+        fn avg_inner_value(&self, iter: &FdmLinearOpIterator, t: Time) -> Real {
+            self.inner_value(iter, t)
+        }
+    }
+
+    #[test]
+    fn delta_gamma_at_match_value_at_differences() {
+        let flat = solver(1.0);
+        let d0 = flat.delta_at(100.0, 0.04).unwrap();
+        let g0 = flat.gamma_at(100.0, 0.04).unwrap();
+        assert!(d0.abs() < 1e-4, "constant δ={d0}");
+        assert!(g0.abs() < 1e-4, "constant γ={g0}");
+
+        let mesher: Shared<dyn FdmMesher> = shared(FdmMesherComposite::new(vec![
+            uniform_1d_mesher((80.0_f64).ln(), (120.0_f64).ln(), 11).unwrap(),
+            uniform_1d_mesher(0.01, 0.09, 9).unwrap(),
+        ])) as Shared<dyn FdmMesher>;
+        let desc = FdmSolverDesc {
+            mesher: Shared::clone(&mesher),
+            bc_set: Vec::new(),
+            condition: shared(FdmStepConditionComposite::new(&[], Vec::new())),
+            calculator: shared(SpotSquared { mesher }) as Shared<dyn FdmInnerValueCalculator>,
+            maturity: 0.5,
+            time_steps: 20,
+            damping_steps: 0,
+        };
+        let slv = FdmHestonSolver::new(process(), desc, FdmSchemeDesc::hundsdorfer(), 1.0);
+        let s0 = 100.0;
+        let v = 0.04;
+        let h = 1.0;
+        let val = slv.value_at(s0, v).unwrap();
+        let vp = slv.value_at(s0 + h, v).unwrap();
+        let vm = slv.value_at(s0 - h, v).unwrap();
+        let fd_d = (vp - vm) / (2.0 * h);
+        let fd_g = (vp - 2.0 * val + vm) / (h * h);
+        let d = slv.delta_at(s0, v).unwrap();
+        let g = slv.gamma_at(s0, v).unwrap();
+        assert!(
+            (d - fd_d).abs() < 0.05 * fd_d.abs().max(1.0),
+            "δ={d} fd={fd_d}"
+        );
+        assert!(
+            (g - fd_g).abs() < 0.05 * fd_g.abs().max(1.0),
+            "γ={g} fd={fd_g}"
+        );
+    }
+}
