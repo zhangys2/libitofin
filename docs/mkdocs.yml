@@ -71,6 +71,9 @@ plugins:
 
 nav:
   - Bare-factor G2 process: g2-process.md
+  - Constant-parameter GSR process: gsr-process-bindings.md
+  - Black FX delta conventions: black-delta-bindings.md
+  - Plain-vanilla BlackCalculator: black-calculator-bindings.md
   - Callable bond sensitivities: callable-bond-sensitivities.md
   - Callable OAS: callable-oas.md
   - Callable implied volatility: callable-implied-volatility.md
@@ -83,6 +86,7 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Go SDK: go.md
+  - Standalone currencies: currency-bindings.md
   - .NET SDK: dotnet.md
   - Finite-difference options: finite-difference.md
   - Exotic option scope: exotic-options.md
@@ -127,6 +131,7 @@ nav:
   - Implied volatility term structure: implied-vol-term-structure.md
   - Black-Scholes theta: black-scholes-theta.md
   - FX forwards: fx-forwards.md
+  - Go/Python FX forward bindings: fx-forward-bindings.md
   - Hull-White forward process: hullwhite-forward-process.md
   - Quanto term structure: quanto-term-structure.md
   - ABCD math and volatility: abcd.md
@@ -138,6 +143,8 @@ nav:
   - Zero-coupon bonds: zero-coupon-bonds.md
   - Floating-rate bonds: floating-rate-bonds.md
   - Par asset swaps: asset-swaps.md
+  - Asset swap bindings: asset-swap-bindings.md
+  - Currency presets: currency-presets.md
   - Cross-currency basis swaps: cross-currency-basis-swaps.md
   - MF state process: mf-state-process.md
   - Asset-or-nothing payoff: asset-or-nothing-payoff.md

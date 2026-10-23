@@ -5,8 +5,11 @@
 //! Python-visible ItofinError exception. The pricing facades land in follow-up
 //! tickets (#485-#487).
 
+mod asset_swap;
 mod bates;
 mod benchmark_beta;
+mod black_calculator;
+mod black_delta;
 mod blackformula;
 mod bma;
 mod bond_forward;
@@ -41,6 +44,7 @@ mod float_float_swap;
 mod floating_bonds;
 mod forward;
 mod fra;
+mod fx_forward;
 mod g2_process;
 mod general_statistics;
 mod geometric_brownian;
@@ -48,6 +52,7 @@ mod gjr;
 mod gjr_model;
 mod gjr_simulation;
 mod global_calibration;
+mod gsr_process;
 mod helpers;
 mod heston;
 mod heston_engines;
@@ -255,6 +260,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let quotes = PyModule::new(py, "quotes")?;
     quotes.add_class::<PySimpleQuote>()?;
+    quotes.add_class::<black_delta::PyDeltaType>()?;
+    quotes.add_class::<black_delta::PyAtmType>()?;
 
     let termstructures = PyModule::new(py, "termstructures")?;
     termstructures.add_class::<PyYieldTermStructure>()?;
@@ -347,6 +354,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     processes.add_class::<geometric_brownian::PyGeometricBrownianMotionProcess>()?;
     processes.add_class::<gjr::PyGjrGarchProcess>()?;
     processes.add_class::<g2_process::PyG2Process>()?;
+    processes.add_class::<gsr_process::PyGsrProcess>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
     indexes.add_class::<overnightfuture::PySofr>()?;
@@ -383,7 +391,9 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let instruments = PyModule::new(py, "instruments")?;
     instruments.add_class::<bonds::PyBond>()?;
+    instruments.add_class::<bonds::PyDuration>()?;
     instruments.add_class::<bond_forward::PyBondForward>()?;
+    instruments.add_class::<fx_forward::PyFxForward>()?;
     instruments.add_class::<callable_bonds::PyCallabilityType>()?;
     instruments.add_class::<callable_bonds::PyCallability>()?;
     instruments.add_class::<callable_bonds::PyCallableFixedRateBond>()?;
@@ -396,6 +406,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<PyVanillaOption>()?;
     instruments.add_class::<PySwapType>()?;
     instruments.add_class::<PyVanillaSwap>()?;
+    instruments.add_class::<asset_swap::PyAssetSwap>()?;
     instruments.add_class::<float_float_swap::PyFloatFloatSwap>()?;
     instruments.add_class::<bma::PyBMASwap>()?;
     instruments.add_class::<PyMakeVanillaSwap>()?;
@@ -431,6 +442,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     models.add_class::<PyCalibrationErrorType>()?;
 
     let pricingengines = PyModule::new(py, "pricingengines")?;
+    pricingengines.add_class::<black_calculator::PyBlackCalculator>()?;
+    pricingengines.add_class::<black_delta::PyBlackDeltaCalculator>()?;
     pricingengines.add_class::<bonds::PyDiscountingBondEngine>()?;
     pricingengines.add_class::<callable_bonds::PyTreeCallableFixedRateBondEngine>()?;
     pricingengines.add_class::<callable_bonds::PyBlackCallableFixedRateBondEngine>()?;

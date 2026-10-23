@@ -21,6 +21,61 @@
 #include <stdlib.h>
 typedef double ItofinReal;
 
+/**
+ * Spot delta convention.
+ */
+#define ITOFIN_DELTA_SPOT 0
+
+/**
+ * Forward delta convention.
+ */
+#define ITOFIN_DELTA_FWD 1
+
+/**
+ * Premium-adjusted spot delta convention.
+ */
+#define ITOFIN_DELTA_PA_SPOT 2
+
+/**
+ * Premium-adjusted forward delta convention.
+ */
+#define ITOFIN_DELTA_PA_FWD 3
+
+/**
+ * Unspecified ATM convention, rejected by atm_strike.
+ */
+#define ITOFIN_ATM_NULL 0
+
+/**
+ * Spot ATM strike.
+ */
+#define ITOFIN_ATM_SPOT 1
+
+/**
+ * Forward ATM strike.
+ */
+#define ITOFIN_ATM_FWD 2
+
+/**
+ * Delta-neutral ATM strike.
+ */
+#define ITOFIN_ATM_DELTA_NEUTRAL 3
+
+/**
+ * Maximum-vega ATM strike.
+ */
+#define ITOFIN_ATM_VEGA_MAX 4
+
+/**
+ * Maximum-gamma ATM strike.
+ */
+#define ITOFIN_ATM_GAMMA_MAX 5
+
+/**
+ * Fifty-delta ATM strike, valid only for unadjusted forward delta.
+ */
+#define ITOFIN_ATM_PUT_CALL_50 6
+
 #define ITOFIN_INVALID_ARGUMENT 1
 
 #define ITOFIN_INVALID_HANDLE 2
@@ -48,6 +103,49 @@ typedef struct ItofinContext ItofinContext;
 typedef struct ItofinBootstrapOutput ItofinBootstrapOutput;
 
 /**
+ * Par full-maturity terms. Zero schedule generates backwards from settlement;
+ * zero day counter uses the index's.
+ */
+typedef struct ItofinAssetSwapConfig {
+  /**
+   * Existing plain fixed/zero bullet bond handle in this context.
+   */
+  uint64_t bond;
+  /**
+   * Ibor index handle sharing the bond's Settings.
+   */
+  uint64_t index;
+  /**
+   * Zero generates backwards from settlement; otherwise a full-maturity schedule handle.
+   */
+  uint64_t floating_schedule;
+  /**
+   * Zero uses the index's counter; otherwise a day-counter handle.
+   */
+  uint64_t floating_day_counter;
+  /**
+   * Forward clean quote per 100 at the floating schedule start.
+   */
+  double clean_price;
+  /**
+   * Floating coupon spread in decimal rate units.
+   */
+  double spread;
+  /**
+   * Zero receives bond coupons; one pays them.
+   */
+  uint8_t pay_bond_coupon;
+} ItofinAssetSwapConfig;
+
+/**
+ * Caller-owned error. Zero code means success; message is NUL-terminated UTF-8.
+ */
+typedef struct ItofinError {
+  int32_t code;
+  char message[1024];
+} ItofinError;
+
+/**
  * Physical constructor order, distinct from calibrated parameter-array order.
  */
 typedef struct ItofinBatesParameters {
@@ -60,14 +158,6 @@ typedef struct ItofinBatesParameters {
   double nu;
   double delta;
 } ItofinBatesParameters;
-
-/**
- * Caller-owned error. Zero code means success; message is NUL-terminated UTF-8.
- */
-typedef struct ItofinError {
-  int32_t code;
-  char message[1024];
-} ItofinError;
 
 typedef struct ItofinCalibrationOptions {
   uint64_t constraint;
@@ -543,6 +633,22 @@ typedef struct ItofinMakeCdsConfig {
 } ItofinMakeCdsConfig;
 
 /**
+ * Owned-on-construction UTF-8 fields. Code must contain three ASCII letters.
+ */
+typedef struct ItofinCurrencyConfig {
+  const uint8_t *name;
+  size_t name_length;
+  const uint8_t *code;
+  size_t code_length;
+  int32_t numeric_code;
+  const uint8_t *symbol;
+  size_t symbol_length;
+  const uint8_t *fraction_symbol;
+  size_t fraction_symbol_length;
+  int32_t fractions_per_unit;
+} ItofinCurrencyConfig;
+
+/**
  * Maximum fractional running-peak loss and zero-based peak/trough indices.
  */
 typedef struct ItofinDrawdownResult {
@@ -585,6 +691,52 @@ typedef struct ItofinImpliedForwardResult {
   uint32_t pairs_pruned;
   double wls_rmse;
 } ItofinImpliedForwardResult;
+
+/**
+ * Quote-per-base spot/strike, positive base notional, fixed unadjusted dates.
+ */
+typedef struct ItofinFxForwardConfig {
+  /**
+   * Typed Currency handle copied as the base/source specification.
+   */
+  uint64_t base_currency;
+  /**
+   * Typed Currency handle copied as the quote/target NPV denomination.
+   */
+  uint64_t quote_currency;
+  /**
+   * Immutable finite positive quote-currency units per one base unit.
+   */
+  double spot;
+  /**
+   * Typed yield-curve Handle retained for live base-currency discounting.
+   */
+  uint64_t base_curve;
+  /**
+   * Typed yield-curve Handle retained for live quote-currency discounting.
+   */
+  uint64_t quote_curve;
+  /**
+   * Finite positive notional denominated in the base currency.
+   */
+  double base_notional;
+  /**
+   * Finite positive contractual quote-per-base delivery rate.
+   */
+  double strike;
+  /**
+   * Fixed unadjusted spot-value-date serial, valid in 1901-2199.
+   */
+  int32_t spot_settlement_date;
+  /**
+   * Fixed unadjusted delivery-date serial, on or after spot settlement.
+   */
+  int32_t delivery_date;
+  /**
+   * 0 receives base and pays quote; 1 reverses both legs.
+   */
+  int32_t position;
+} ItofinFxForwardConfig;
 
 /**
  * Two state components in x, y order, passed and returned by value.
@@ -1658,6 +1810,50 @@ extern "C" {
 #endif // __cplusplus
 
 /**
+ * Construct over a plain fixed/zero bullet bond, retaining its native dependency graph.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_asset_swap_new(struct ItofinContext *ctx,
+                              const struct ItofinAssetSwapConfig *cfg,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Attach a live discount curve with the bond's identical Settings and native defaults.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_asset_swap_set_engine(struct ItofinContext *ctx,
+                                     uint64_t id,
+                                     uint64_t discount,
+                                     uint64_t settings_id,
+                                     struct ItofinError *error);
+
+/**
+ * Query 0 NPV, 1 bond NPV, 2 floating NPV, 3 floating BPS, 4 fair spread,
+ * 5 fair clean price, 6 clean price, 7 spread, 8 upfront serial, 9 payer flag,
+ * 10 calculated flag, 11 expiry. Failures preserve the output.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_asset_swap_value(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t query,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * Action 0 calculate, 1 recalculate, 2 freeze, 3 unfreeze.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_asset_swap_action(struct ItofinContext *ctx,
+                                 uint64_t id,
+                                 int32_t action,
+                                 struct ItofinError *error);
+
+/**
  * Retain live spot, risk-free and dividend inputs with constant parameters.
  * # Safety
  * Pointers must be aligned, live and non-overlapping. Context and handles
@@ -1767,6 +1963,272 @@ int32_t itofin_bates_calibrate_with_options(struct ItofinContext *ctx,
                                             size_t integration_order,
                                             const struct ItofinCalibrationOptions *options,
                                             struct ItofinError *error);
+
+/**
+ * Copy finite parameters for a plain-vanilla call (0) or put (1).
+ * Strike and std_dev are nonnegative; forward and discount are positive.
+ * std_dev is volatility times sqrt(time). No payoff handle is accepted.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_new(struct ItofinContext *ctx,
+                                    int32_t option_kind,
+                                    double strike,
+                                    double forward,
+                                    double std_dev,
+                                    double discount,
+                                    uint64_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * Present value.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_value(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Forward delta.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_delta_forward(struct ItofinContext *ctx,
+                                              uint64_t calculator,
+                                              double *out,
+                                              struct ItofinError *error);
+
+/**
+ * Spot delta, requiring positive finite spot.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_delta(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      double spot,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Forward elasticity; native finite MAX/MIN sentinels are retained.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_elasticity_forward(struct ItofinContext *ctx,
+                                                   uint64_t calculator,
+                                                   double *out,
+                                                   struct ItofinError *error);
+
+/**
+ * Spot elasticity, requiring positive finite spot.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_elasticity(struct ItofinContext *ctx,
+                                           uint64_t calculator,
+                                           double spot,
+                                           double *out,
+                                           struct ItofinError *error);
+
+/**
+ * Forward gamma.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_gamma_forward(struct ItofinContext *ctx,
+                                              uint64_t calculator,
+                                              double *out,
+                                              struct ItofinError *error);
+
+/**
+ * Spot gamma, requiring positive finite spot.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_gamma(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      double spot,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Theta per year. Native expiry shortcut is retained.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_theta(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      double spot,
+                                      double maturity,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Theta divided by 365. Native expiry shortcut is retained.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_theta_per_day(struct ItofinContext *ctx,
+                                              uint64_t calculator,
+                                              double spot,
+                                              double maturity,
+                                              double *out,
+                                              struct ItofinError *error);
+
+/**
+ * Vega for finite nonnegative maturity.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_vega(struct ItofinContext *ctx,
+                                     uint64_t calculator,
+                                     double maturity,
+                                     double *out,
+                                     struct ItofinError *error);
+
+/**
+ * Discount-rate rho for finite nonnegative maturity.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_rho(struct ItofinContext *ctx,
+                                    uint64_t calculator,
+                                    double maturity,
+                                    double *out,
+                                    struct ItofinError *error);
+
+/**
+ * Growth-rate rho for finite nonnegative maturity.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_dividend_rho(struct ItofinContext *ctx,
+                                             uint64_t calculator,
+                                             double maturity,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * Native N(d2), independent of option sign.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_itm_cash_probability(struct ItofinContext *ctx,
+                                                     uint64_t calculator,
+                                                     double *out,
+                                                     struct ItofinError *error);
+
+/**
+ * Native N(d1), independent of option sign.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_itm_asset_probability(struct ItofinContext *ctx,
+                                                      uint64_t calculator,
+                                                      double *out,
+                                                      struct ItofinError *error);
+
+/**
+ * Strike sensitivity.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_strike_sensitivity(struct ItofinContext *ctx,
+                                                   uint64_t calculator,
+                                                   double *out,
+                                                   struct ItofinError *error);
+
+/**
+ * Forward coefficient in the native value formula.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_alpha(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Strike coefficient in the native value formula.
+ * Nonfinite native results are errors; finite native edge behavior is unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_beta(struct ItofinContext *ctx,
+                                     uint64_t calculator,
+                                     double *out,
+                                     struct ItofinError *error);
+
+/**
+ * Copy validated parameters into an immutable calculator. Option kind is
+ * 0 call or 1 put, preserving the existing ABI mapping. Deviation is volatility
+ * times square root of time, not volatility or maturity separately.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_delta_new(struct ItofinContext *ctx,
+                               int32_t option_kind,
+                               int32_t delta_kind,
+                               double spot,
+                               double domestic_discount,
+                               double foreign_discount,
+                               double std_dev,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Signed delta at a finite nonnegative strike. Zero deviation is supported;
+ * premium-adjusted put deltas are not clamped to minus one.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_delta_delta_from_strike(struct ItofinContext *ctx,
+                                             uint64_t calculator,
+                                             double strike,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * Invert a signed interior delta with positive deviation. Premium-adjusted
+ * calls select the high-strike root, not necessarily the original strike.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_delta_strike_from_delta(struct ItofinContext *ctx,
+                                             uint64_t calculator,
+                                             double delta,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * ATM strike for a stable ITOFIN_ATM_* value. Null is an error; PutCall50
+ * requires ITOFIN_DELTA_FWD, not premium-adjusted forward delta.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_delta_atm_strike(struct ItofinContext *ctx,
+                                      uint64_t calculator,
+                                      int32_t atm_kind,
+                                      double *out,
+                                      struct ItofinError *error);
 
 /**
  * # Safety
@@ -1960,6 +2422,23 @@ int32_t itofin_bma_helper_new(struct ItofinContext *ctx,
                               const struct ItofinBmaHelperConfig *cfg,
                               uint64_t *out,
                               struct ItofinError *error);
+
+/**
+ * Flat-yield risk for ordinary fixed, zero and floating bonds, independent of engines.
+ * Fields: 0 Simple duration, 1 Macaulay duration, 2 Modified duration,
+ * 3 convexity, 4 basis-point value, 5 yield-value basis point.
+ * BPV is signed currency value and YVBP is yield change per currency cent, not per 100.
+ * Macaulay requires compounded yield. Settlement-date flows are excluded.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_risk(struct ItofinContext *ctx,
+                         uint64_t id,
+                         int32_t field,
+                         double rate,
+                         struct ItofinBondYieldAnalyticsConfig a,
+                         double *out,
+                         struct ItofinError *error);
 
 /**
  * # Safety
@@ -3713,6 +4192,43 @@ int32_t itofin_total_variance_cubic_smile_series(struct ItofinContext *ctx,
                                                  struct ItofinError *error);
 
 /**
+ * Construct a reusable currency, copying all input bytes. No ISO registry lookup.
+ * Numeric fields retain the core's signed integer semantics.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_currency_custom_new(struct ItofinContext *ctx,
+                                   const struct ItofinCurrencyConfig *config,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * UTF-8 bytes without a trailing NUL, retaining embedded NULs.
+ * Field: 0 name, 1 code, 2 symbol, 3 fraction symbol. Capacity zero queries length.
+ * On error neither the buffer nor required length is changed.
+ * # Safety
+ * Follow the crate-level C caller contract, including non-overlapping outputs.
+ */
+int32_t itofin_currency_text(struct ItofinContext *ctx,
+                             uint64_t id,
+                             int32_t field,
+                             uint8_t *out,
+                             size_t capacity,
+                             size_t *required,
+                             struct ItofinError *error);
+
+/**
+ * Field: 0 numeric code, 1 fractions per unit.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_currency_integer(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t field,
+                                int32_t *out,
+                                struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -3887,6 +4403,53 @@ int32_t itofin_implied_forward_calculate(const double *strikes,
                                          double expiry_years,
                                          struct ItofinImpliedForwardResult *out,
                                          struct ItofinError *error);
+
+/**
+ * Retain both live curves and copy both currencies and the spot snapshot.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_fx_forward_new(struct ItofinContext *ctx,
+                              struct ItofinFxForwardConfig a,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Fields: 0 spot, 1 strike, 2 base notional, 3 fair forward, 4 quote-currency NPV.
+ * Only NPV uses evaluation_date; NPV is at the quote curve reference date.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_fx_forward_value(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t field,
+                                int32_t evaluation_date,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * Fields: 0 spot settlement, 1 delivery, 2 position (0 long/1 short), 3 expiry.
+ * Only expiry uses evaluation_date. Delivery on evaluation remains active.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_fx_forward_integer(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  int32_t field,
+                                  int32_t evaluation_date,
+                                  int32_t *out,
+                                  struct ItofinError *error);
+
+/**
+ * Copy an endpoint currency into a new owned handle. Side 0 base, 1 quote.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_fx_forward_currency(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   int32_t side,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
 
 /**
  * Create a bare-factor process. Signed reversions and zero volatility are valid.
@@ -4381,6 +4944,50 @@ int32_t itofin_firefly_result(struct ItofinContext *ctx,
                               struct ItofinError *error);
 
 /**
+ * Copies a constant parameter grid. Signed reversion and zero volatility are valid.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_gsr_process_new(struct ItofinContext *ctx,
+                               const double *times,
+                               size_t times_len,
+                               const double *vols,
+                               size_t vols_len,
+                               const double *reversions,
+                               size_t reversions_len,
+                               double horizon,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Query kind: 0 x0, 1 horizon, 2 sigma(t), 3 reversion(t), 4 y(t),
+ * 5 G(t,end), 6 drift(t,x), 7 diffusion(t,x), 8 expectation(t,x,dt),
+ * 9 standard deviation(t,x,dt), 10 variance(t,x,dt), 11 evolve(t,x,dt,dw).
+ * Kind 5 uses `dt` as the absolute end time. Other unused inputs are ignored.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_gsr_process_query(struct ItofinContext *ctx,
+                                 uint64_t process,
+                                 int32_t kind,
+                                 double t,
+                                 double x,
+                                 double dt,
+                                 double dw,
+                                 double *out,
+                                 struct ItofinError *error);
+
+/**
+ * Updates the horizon through the native notifying setter. Invalid values preserve it.
+ * # Safety
+ * Follow the crate-level C caller contract.
+ */
+int32_t itofin_gsr_process_set_forward_measure_time(struct ItofinContext *ctx,
+                                                    uint64_t process,
+                                                    double horizon,
+                                                    struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -4675,6 +5282,9 @@ int32_t itofin_incremental_statistics_query(struct ItofinContext *ctx,
  * must not overlap inputs or other outputs. Any context and its handles must
  * belong to the calling thread; serialize calls including destruction.
  * See the crate-level C caller contract for lifetime requirements.
+ * Presets: 0 EUR, 1 USD, 2 GBP, 3 JPY, 4 TWD, 5 CHF, 6 AUD, 7 CAD,
+ * 8 SEK, 9 NOK, 10 DKK, 11 NZD, 12 HKD, 13 SGD, 14 CNY, 15 KRW,
+ * 16 INR, 17 BRL, 18 MXN, 19 ZAR, 20 PLN, 21 CZK, 22 HUF, 23 TRY.
  */
 int32_t itofin_currency_new(struct ItofinContext *ctx,
                             int32_t kind,

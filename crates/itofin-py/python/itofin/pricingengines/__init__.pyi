@@ -17,8 +17,10 @@ __all__ = [
     "BachelierCapFloorEngine",
     "BachelierSwaptionEngine",
     "BatesEngine",
+    "BlackCalculator",
     "BlackCallableFixedRateBondEngine",
     "BlackCapFloorEngine",
+    "BlackDeltaCalculator",
     "BlackSwaptionEngine",
     "CashAnnuityModel",
     "CosHestonEngine",
@@ -135,6 +137,86 @@ class BatesEngine:
         """
 
 @typing.final
+class BlackCalculator:
+    r"""
+    Immutable plain-vanilla standalone value and Greeks, not a pricing engine.
+    Every nonfinite result raises ItofinError, including native zero-strike NaNs.
+    """
+    def __init__(self, option_type: instruments.OptionType, strike: builtins.float, forward: builtins.float, std_dev: builtins.float, discount: builtins.float) -> None:
+        r"""
+        Copy finite strike >= 0, forward > 0, std_dev >= 0 and discount > 0.
+        std_dev is volatility times sqrt(time); no payoff objects are accepted.
+        """
+    def value(self) -> builtins.float:
+        r"""
+        Present value.
+        """
+    def delta_forward(self) -> builtins.float:
+        r"""
+        Forward delta.
+        """
+    def delta(self, spot: builtins.float) -> builtins.float:
+        r"""
+        Spot delta, requiring positive finite spot.
+        """
+    def elasticity_forward(self) -> builtins.float:
+        r"""
+        Forward elasticity; native finite MAX/MIN sentinels are retained.
+        """
+    def elasticity(self, spot: builtins.float) -> builtins.float:
+        r"""
+        Spot elasticity, requiring positive finite spot.
+        """
+    def gamma_forward(self) -> builtins.float:
+        r"""
+        Forward gamma.
+        """
+    def gamma(self, spot: builtins.float) -> builtins.float:
+        r"""
+        Spot gamma, requiring positive finite spot.
+        """
+    def theta(self, spot: builtins.float, maturity: builtins.float) -> builtins.float:
+        r"""
+        Theta per year. Native expiry shortcut is retained.
+        """
+    def theta_per_day(self, spot: builtins.float, maturity: builtins.float) -> builtins.float:
+        r"""
+        Theta divided by 365. Native expiry shortcut is retained.
+        """
+    def vega(self, maturity: builtins.float) -> builtins.float:
+        r"""
+        Vega for finite nonnegative maturity.
+        """
+    def rho(self, maturity: builtins.float) -> builtins.float:
+        r"""
+        Discount-rate rho for finite nonnegative maturity.
+        """
+    def dividend_rho(self, maturity: builtins.float) -> builtins.float:
+        r"""
+        Growth-rate rho for finite nonnegative maturity.
+        """
+    def itm_cash_probability(self) -> builtins.float:
+        r"""
+        Native N(d2), independent of option sign.
+        """
+    def itm_asset_probability(self) -> builtins.float:
+        r"""
+        Native N(d1), independent of option sign.
+        """
+    def strike_sensitivity(self) -> builtins.float:
+        r"""
+        Strike sensitivity.
+        """
+    def alpha(self) -> builtins.float:
+        r"""
+        Forward coefficient in the native value formula.
+        """
+    def beta(self) -> builtins.float:
+        r"""
+        Strike coefficient in the native value formula.
+        """
+
+@typing.final
 class BlackCallableFixedRateBondEngine:
     r"""
     Single-European constant relative forward-yield volatility pricing.
@@ -203,6 +285,33 @@ class BlackCapFloorEngine:
 
         Returns:
             float: The displacement.
+        """
+
+@typing.final
+class BlackDeltaCalculator:
+    r"""
+    Immutable standalone FX delta/strike conversion, not a pricing engine.
+    Premium-adjusted calls invert on the high-strike branch.
+    """
+    def __init__(self, option_type: instruments.OptionType, delta_type: quotes.DeltaType, spot: builtins.float, domestic_discount: builtins.float, foreign_discount: builtins.float, std_dev: builtins.float) -> None:
+        r"""
+        Copy positive finite spot/discounts and finite nonnegative std_dev.
+        std_dev is volatility times sqrt(time). Construct a new calculator to
+        change option or delta convention; no mutators are exposed.
+        """
+    def delta_from_strike(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Signed delta at finite nonnegative strike, including zero deviation.
+        Premium-adjusted put deltas may be below minus one.
+        """
+    def strike_from_delta(self, delta: builtins.float) -> builtins.float:
+        r"""
+        Invert a signed interior delta with positive deviation. A premium-adjusted
+        call returns the high-strike root, not necessarily the original strike.
+        """
+    def atm_strike(self, atm_type: quotes.AtmType) -> builtins.float:
+        r"""
+        ATM strike; Null errors and PutCall50 is valid only for Fwd delta.
         """
 
 @typing.final

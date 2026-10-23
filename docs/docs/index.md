@@ -19,6 +19,13 @@ separate. [Callable bonds, Hull-White tree and single-European Black pricing/IV]
 share the retained Bond interface. OAS and effective risk measures remain
 separate binding work.
 
+## Standalone binding helpers
+
+- [Reusable currencies and stored fields](currency-bindings.md), plus
+  [named currency presets including TWD](currency-presets.md).
+- [Black FX delta conventions](black-delta-bindings.md): standalone
+  delta/strike and ATM conversions, not an FX option pricing engine.
+
 ## Install
 
 === "Python"
@@ -104,6 +111,7 @@ links to the language guides and project documentation.
 - [Floating-rate bonds](floating-rate-bonds.md): Ibor coupons, gearing, caps/floors and ex-coupon schedules.
 
 - [Par asset swaps](asset-swaps.md): bullet-bond dirty upfront and floating fair spread.
+- [Asset swap bindings](asset-swap-bindings.md): retained plain bullet bonds, live Ibor/discount curves and par swap analytics.
 
 - [Cross-currency basis swaps](cross-currency-basis-swaps.md): plain non-resettable Ibor legs and explicit FX valuation.
 
@@ -140,5 +148,10 @@ links to the language guides and project documentation.
 - [Callable bond sensitivities](callable-bond-sensitivities.md).
 
 - [Bare-factor G2 process](g2-process.md).
+- [Constant-parameter GSR process](gsr-process-bindings.md), with mutable forward-measure horizon.
 
 [Bond forward bindings](bond-forward-bindings.md) retain live plain fixed/zero bonds and explicit financing/income curves.
+
+[Plain-vanilla BlackCalculator](black-calculator-bindings.md) exposes scalar pricing and Greeks with documented inherited numerical limits.
+[Bond risk analytics](bond-analytics.md) covers duration, convexity and signed yield sensitivities.
+[FX forward bindings](fx-forward-bindings.md) retain live discount curves with immutable spot and explicit contractual dates.

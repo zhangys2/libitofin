@@ -23,6 +23,14 @@ allows C/Go and Python builds to share Cargo target directories. The cgo flags u
 relative to this checkout. An external Go module uses the `itofin_external` build tag with the native
 package headers and library paths described in the installation guide.
 
+Source API guides: [currency fields](https://github.com/benbenbang/libitofin/blob/main/docs/docs/currency-bindings.md),
+[currency presets including TWD](https://github.com/benbenbang/libitofin/blob/main/docs/docs/currency-presets.md),
+and [Black FX delta conventions](https://github.com/benbenbang/libitofin/blob/main/docs/docs/black-delta-bindings.md).
+These helpers do not add currency rounding, conversion or a new option pricing engine.
+
+Standalone [constant-parameter GSR process](https://github.com/benbenbang/libitofin/blob/main/docs/docs/gsr-process-bindings.md)
+bindings expose forward-measure transitions, not a fitted GSR model.
+
 ## Sessions and ownership
 
 ```go
@@ -101,3 +109,15 @@ Regenerate the header with cbindgen 0.29.2:
 cbindgen --config crates/libitofin-ffi/cbindgen.toml \
   --crate libitofin-ffi --output crates/libitofin-ffi/include/itofin.h
 ```
+
+## Standalone plain-vanilla BlackCalculator
+
+Immutable Black 1976 value and scalar Greeks are available through `BlackCalculator`.
+See the [bounded scope and edge-case contract](https://github.com/benbenbang/libitofin/blob/main/docs/docs/black-calculator-bindings.md).
+
+### Par asset swap bindings
+
+Plain fixed/zero bullet-bond `AssetSwap` supports live discounting, signed leg
+values, floating BPS and fair spread/clean price. Market, amortizing, callable
+and overnight variants are excluded. See the [bounded scope and lifecycle
+contract](https://github.com/benbenbang/libitofin/blob/main/docs/docs/asset-swap-bindings.md).

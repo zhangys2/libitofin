@@ -4,6 +4,14 @@ Idiomatic Python bindings over the [`libitofin`](https://github.com/benbenbang/l
 
 The API mirrors QuantLib's `ql/` layout: types live in submodules (`itofin.time`, `itofin.instruments`, `itofin.models`, ...), while `Settings` and `ItofinError` stay at the top level.
 
+Source API guides: [currency fields](https://github.com/benbenbang/libitofin/blob/main/docs/docs/currency-bindings.md),
+[currency presets including TWD](https://github.com/benbenbang/libitofin/blob/main/docs/docs/currency-presets.md),
+and [Black FX delta conventions](https://github.com/benbenbang/libitofin/blob/main/docs/docs/black-delta-bindings.md).
+These helpers do not add currency rounding, conversion or a new option pricing engine.
+
+Standalone [constant-parameter GSR process](https://github.com/benbenbang/libitofin/blob/main/docs/docs/gsr-process-bindings.md)
+bindings expose forward-measure transitions, not a fitted GSR model.
+
 ## Install
 
 ```bash
@@ -307,3 +315,15 @@ See [typing acceptance](TYPING.md) for the pinned, bidirectional Pyright gate.
 ## License
 
 BSD-3-Clause, matching the `libitofin` core. See the [repository](https://github.com/benbenbang/libitofin) for the layer status table, the divergences-from-QuantLib catalogue, and the Rust test oracles behind the numbers above.
+
+## Standalone plain-vanilla BlackCalculator
+
+Immutable Black 1976 value and scalar Greeks are available through `BlackCalculator`.
+See the [bounded scope and edge-case contract](https://github.com/benbenbang/libitofin/blob/main/docs/docs/black-calculator-bindings.md).
+
+### Par asset swap bindings
+
+Plain fixed/zero bullet-bond `AssetSwap` supports live discounting, signed leg
+values, floating BPS and fair spread/clean price. Market, amortizing, callable
+and overnight variants are excluded. See the [bounded scope and lifecycle
+contract](https://github.com/benbenbang/libitofin/blob/main/docs/docs/asset-swap-bindings.md).

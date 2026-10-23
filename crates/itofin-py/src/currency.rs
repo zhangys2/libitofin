@@ -1,14 +1,8 @@
 //! Facade for the currency specification Currency.
 //!
-//! An index carries a currency, so the general IborIndex constructor cannot be
-//! called without one. Only the four named currencies the core provides are
-//! exposed as staticmethods; the general Currency.new() form is deliberately
-//! omitted, since the core itself ports only the currencies the indexes need
-//! and the full `ql/currencies/*` catalogue is deferred there.
-//!
-//! It is registered under `itofin.indexes` rather than a submodule of its own:
-//! the index constructors are its only consumers today, both the general
-//! IborIndex one and, since #868, SwapIndex, which used to hard-code EUR.
+//! Currency values are reusable in index constructors. Text fields retain UTF-8
+//! and embedded NULs; equality inside the core remains name-based. Rounding,
+//! triangulation and minor-unit metadata remain outside this stored-field slice.
 
 use libitofin::currency::Currency;
 use pyo3::prelude::*;
@@ -19,9 +13,9 @@ use pyo3_stub_gen::derive::{
 
 /// An ISO 4217 currency specification.
 ///
-/// Only the four named currencies the core provides are exposed; the general
-/// constructor is omitted, as the core ports only the currencies its indexes
-/// need and the full catalogue is deferred there.
+/// A custom code contains exactly three ASCII letters, without registry lookup.
+/// Numeric fields retain the core's signed 32-bit integer semantics.
+/// Selected named presets match the stored fields of pinned QuantLib source.
 #[gen_stub_pyclass]
 #[pyclass(name = "Currency", unsendable, module = "itofin.indexes")]
 pub struct PyCurrency {
@@ -31,6 +25,69 @@ pub struct PyCurrency {
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyCurrency {
+    /// Construct a reusable currency specification, copying every stored field.
+    ///
+    /// Args:
+    ///     name (str): Name used for core currency equality.
+    ///     code (str): Exactly three ASCII letters; no registry lookup or normalization.
+    ///     numeric_code (int): Signed 32-bit numeric identifier.
+    ///     symbol (str): Currency symbol, retaining Unicode and embedded NULs.
+    ///     fraction_symbol (str): Fraction symbol, retaining Unicode and embedded NULs.
+    ///     fractions_per_unit (int): Signed 32-bit number of fractions in one unit.
+    ///
+    /// Raises:
+    ///     ValueError: If code is not three ASCII letters.
+    #[new]
+    fn new(
+        name: String,
+        code: String,
+        numeric_code: i32,
+        symbol: String,
+        fraction_symbol: String,
+        fractions_per_unit: i32,
+    ) -> PyResult<Self> {
+        if code.len() != 3 || !code.bytes().all(|b| b.is_ascii_alphabetic()) {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "currency code needs three ASCII letters",
+            ));
+        }
+        Ok(Self {
+            inner: Currency::new(
+                name,
+                code,
+                numeric_code,
+                symbol,
+                fraction_symbol,
+                fractions_per_unit,
+            ),
+        })
+    }
+
+    /// Return the name used for core currency equality.
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    /// Return the signed numeric identifier without registry lookup.
+    fn numeric_code(&self) -> i32 {
+        self.inner.numeric_code()
+    }
+
+    /// Return the symbol, retaining Unicode and embedded NULs.
+    fn symbol(&self) -> &str {
+        self.inner.symbol()
+    }
+
+    /// Return the fraction symbol, retaining Unicode and embedded NULs.
+    fn fraction_symbol(&self) -> &str {
+        self.inner.fraction_symbol()
+    }
+
+    /// Return the stored number of fractions per unit.
+    fn fractions_per_unit(&self) -> i32 {
+        self.inner.fractions_per_unit()
+    }
+
     /// Return the European Euro.
     ///
     /// Returns:
@@ -72,6 +129,166 @@ impl PyCurrency {
     fn jpy() -> Self {
         PyCurrency {
             inner: Currency::jpy(),
+        }
+    }
+
+    /// Return the Taiwan dollar.
+    #[staticmethod]
+    fn twd() -> Self {
+        Self {
+            inner: Currency::twd(),
+        }
+    }
+
+    /// Return the Swiss franc.
+    #[staticmethod]
+    fn chf() -> Self {
+        Self {
+            inner: Currency::chf(),
+        }
+    }
+
+    /// Return the Australian dollar.
+    #[staticmethod]
+    fn aud() -> Self {
+        Self {
+            inner: Currency::aud(),
+        }
+    }
+
+    /// Return the Canadian dollar.
+    #[staticmethod]
+    fn cad() -> Self {
+        Self {
+            inner: Currency::cad(),
+        }
+    }
+
+    /// Return the Swedish krona.
+    #[staticmethod]
+    fn sek() -> Self {
+        Self {
+            inner: Currency::sek(),
+        }
+    }
+
+    /// Return the Norwegian krone.
+    #[staticmethod]
+    fn nok() -> Self {
+        Self {
+            inner: Currency::nok(),
+        }
+    }
+
+    /// Return the Danish krone.
+    #[staticmethod]
+    fn dkk() -> Self {
+        Self {
+            inner: Currency::dkk(),
+        }
+    }
+
+    /// Return the New Zealand dollar.
+    #[staticmethod]
+    fn nzd() -> Self {
+        Self {
+            inner: Currency::nzd(),
+        }
+    }
+
+    /// Return the Hong Kong dollar.
+    #[staticmethod]
+    fn hkd() -> Self {
+        Self {
+            inner: Currency::hkd(),
+        }
+    }
+
+    /// Return the Singapore dollar.
+    #[staticmethod]
+    fn sgd() -> Self {
+        Self {
+            inner: Currency::sgd(),
+        }
+    }
+
+    /// Return the Chinese yuan.
+    #[staticmethod]
+    fn cny() -> Self {
+        Self {
+            inner: Currency::cny(),
+        }
+    }
+
+    /// Return the South-Korean won.
+    #[staticmethod]
+    fn krw() -> Self {
+        Self {
+            inner: Currency::krw(),
+        }
+    }
+
+    /// Return the Indian rupee.
+    #[staticmethod]
+    fn inr() -> Self {
+        Self {
+            inner: Currency::inr(),
+        }
+    }
+
+    /// Return the Brazilian real.
+    #[staticmethod]
+    fn brl() -> Self {
+        Self {
+            inner: Currency::brl(),
+        }
+    }
+
+    /// Return the Mexican peso.
+    #[staticmethod]
+    fn mxn() -> Self {
+        Self {
+            inner: Currency::mxn(),
+        }
+    }
+
+    /// Return the South-African rand.
+    #[staticmethod]
+    fn zar() -> Self {
+        Self {
+            inner: Currency::zar(),
+        }
+    }
+
+    /// Return the Polish zloty.
+    #[staticmethod]
+    fn pln() -> Self {
+        Self {
+            inner: Currency::pln(),
+        }
+    }
+
+    /// Return the Czech koruna.
+    #[staticmethod]
+    fn czk() -> Self {
+        Self {
+            inner: Currency::czk(),
+        }
+    }
+
+    /// Return the Hungarian forint.
+    #[staticmethod]
+    fn huf() -> Self {
+        Self {
+            inner: Currency::huf(),
+        }
+    }
+
+    /// Return the New Turkish lira.
+    #[staticmethod]
+    fn try_() -> Self {
+        Self {
+            inner: Currency::try_(),
         }
     }
 

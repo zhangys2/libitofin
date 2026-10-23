@@ -107,11 +107,25 @@ c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/float_float_swap.c -Ltarget/release -litofin_ffi -o target/cpp-float-float-swap
 ./target/cpp-float-float-swap
 cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/asset_swap.c -Ltarget/release -litofin_ffi -o target/c-asset-swap
+./target/c-asset-swap
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/asset_swap.c -Ltarget/release -litofin_ffi -o target/cpp-asset-swap
+./target/cpp-asset-swap
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/c-g2-process
 ./target/c-g2-process
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/cpp-g2-process
 ./target/cpp-g2-process
+for probe in c_currency black_delta black_calculator bond_risk fx_forward gsr_process; do
+  cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+    "crates/libitofin-ffi/tests/$probe.c" -Ltarget/release -litofin_ffi -lm -o "target/c-$probe"
+  "./target/c-$probe"
+  c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+    "crates/libitofin-ffi/tests/$probe.c" -Ltarget/release -litofin_ffi -lm -o "target/cpp-$probe"
+  "./target/cpp-$probe"
+done
 cargo build -p libitofin-ffi --release --features optimization-method-oracle
 cd sdk/go
 go vet ./...
@@ -121,6 +135,7 @@ go test -race -count=1 -coverprofile=../../target/go-coverage.out ./...
 go run ./examples/european_option
 go run ./examples/portfolio
 go run ./examples/g2_process
+go run ./examples/gsr_process
 
 go run ./examples/drawdown
 go run ./examples/benchmark_beta

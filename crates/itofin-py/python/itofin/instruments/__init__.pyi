@@ -14,6 +14,7 @@ from itofin import termstructures
 from itofin import time
 import typing
 __all__ = [
+    "AssetSwap",
     "BMASwap",
     "BermudanExercise",
     "Bond",
@@ -25,11 +26,13 @@ __all__ = [
     "CapFloor",
     "CapFloorType",
     "CreditDefaultSwap",
+    "Duration",
     "EuropeanExercise",
     "FixedRateBond",
     "FloatFloatSwap",
     "FloatingRateBond",
     "ForwardRateAgreement",
+    "FxForward",
     "MakeCreditDefaultSwap",
     "MakeOis",
     "MakeSwaption",
@@ -53,6 +56,90 @@ __all__ = [
     "ZeroCouponBond",
     "ZeroCouponInflationSwap",
 ]
+
+@typing.final
+class AssetSwap:
+    r"""
+    Full-maturity par asset swap over a plain fixed/zero bullet bond and Ibor index.
+    An explicit floating schedule must end at adjusted full bond maturity.
+    Without one, generate backwards from settlement using the index tenor.
+    """
+    def __init__(self, pay_bond_coupon: builtins.bool, bond: Bond, clean_price: builtins.float, index: indexes.IborIndex, spread: builtins.float, floating_schedule: typing.Optional[time.Schedule] = None, floating_day_counter: typing.Optional[time.DayCounter] = None) -> None:
+        r"""
+        Build a par swap with an optional floating schedule and index day-counter default.
+        """
+    def set_engine(self, curve: termstructures.YieldTermStructure, settings: itofin.Settings) -> None:
+        r"""
+        Attach a live discount curve; Settings must be the bond's identical object.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Signed present value of both legs, including eligible upfront exchange.
+        """
+    def bond_leg_npv(self) -> builtins.float:
+        r"""
+        Signed bond-leg present value.
+        """
+    def floating_leg_npv(self) -> builtins.float:
+        r"""
+        Signed floating-leg present value, including principal exchanges.
+        """
+    def floating_leg_bps(self) -> builtins.float:
+        r"""
+        Signed floating-leg value for a one-basis-point spread change.
+        """
+    def fair_spread(self) -> builtins.float:
+        r"""
+        Absolute floating spread that zeroes the current NPV.
+        """
+    def fair_clean_price(self) -> builtins.float:
+        r"""
+        Native fair clean quote per 100; zeroes NPV only if upfront is included.
+        """
+    def clean_price(self) -> builtins.float:
+        r"""
+        Original quoted clean price, per 100.
+        """
+    def spread(self) -> builtins.float:
+        r"""
+        Original floating spread in decimal rate units.
+        """
+    def pay_bond_coupon(self) -> builtins.bool:
+        r"""
+        Whether the bond coupons are paid rather than received.
+        """
+    def par_swap(self) -> builtins.bool:
+        r"""
+        This bounded API always constructs a par swap.
+        """
+    def upfront_date(self) -> time.Date:
+        r"""
+        Date of the dirty-price upfront payment.
+        """
+    def calculate(self) -> None:
+        r"""
+        Populate native cached results if needed.
+        """
+    def recalculate(self) -> None:
+        r"""
+        Force repricing, including while frozen.
+        """
+    def freeze(self) -> None:
+        r"""
+        Pin native cached results until unfreeze or explicit recalculation.
+        """
+    def unfreeze(self) -> None:
+        r"""
+        Resume native observer-driven repricing.
+        """
+    def is_calculated(self) -> builtins.bool:
+        r"""
+        Read native cache state without pricing.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Test native expiry without pricing.
+        """
 
 @typing.final
 class BMASwap:
@@ -138,6 +225,22 @@ class Bond:
     def dirty_price_at_z_spread(self, discount_curve: termstructures.YieldTermStructure, z_spread: builtins.float, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
         r"""
         Dirty analytical quote per 100 using a parallel zero-rate spread.
+        """
+    def duration(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, duration_type: Duration = Duration.Modified, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Flat-yield duration, independent of pricing engines. Macaulay requires compounded yield.
+        """
+    def convexity(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Flat-yield convexity of ordinary bond cash flows.
+        """
+    def basis_point_value(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Signed currency value for a one-basis-point yield rise, not a per-100 quote.
+        """
+    def yield_value_basis_point(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Yield change for a one-cent currency value increase, not a per-100 quote.
         """
     def yield_rate(self, price: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, price_type: termstructures.BondPriceType = termstructures.BondPriceType.Clean, settlement: typing.Optional[time.Date] = None, accuracy: builtins.float = 1e-10, max_evaluations: builtins.int = 100, guess: builtins.float = 0.05) -> builtins.float:
         r"""
@@ -982,6 +1085,64 @@ class ForwardRateAgreement:
 
         Returns:
             Date: The adjusted maturity date.
+        """
+
+@typing.final
+class FxForward:
+    r"""
+    Fixed-date forward with an immutable quote-per-base spot snapshot.
+
+    Long receives base and pays quote. NPV is in quote currency at the quote
+    curve reference date. Explicit evaluation dates control expiry only.
+    This is not a live spot quote, rolling spot lag or full FX engine facade.
+    """
+    def __init__(self, base_currency: indexes.Currency, quote_currency: indexes.Currency, spot: builtins.float, base_curve: termstructures.YieldTermStructure, quote_curve: termstructures.YieldTermStructure, base_notional: builtins.float, strike: builtins.float, spot_settlement_date: time.Date, delivery_date: time.Date, position: Position) -> None:
+        r"""
+        Copy currencies and spot; retain the two live discount curves.
+        """
+    def fair_forward_rate(self) -> builtins.float:
+        r"""
+        Fair quote-per-base rate; does not apply expiry.
+        """
+    def npv(self, evaluation_date: time.Date) -> builtins.float:
+        r"""
+        Quote-currency NPV at the quote curve reference date, not evaluation date.
+        """
+    def is_expired(self, evaluation_date: time.Date) -> builtins.bool:
+        r"""
+        True only when delivery is strictly before the explicit evaluation date.
+        """
+    def spot(self) -> builtins.float:
+        r"""
+        Immutable quote-currency units per one base-currency unit.
+        """
+    def strike(self) -> builtins.float:
+        r"""
+        Contractual quote-per-base delivery rate.
+        """
+    def base_notional(self) -> builtins.float:
+        r"""
+        Positive notional denominated in the base currency.
+        """
+    def spot_settlement_date(self) -> time.Date:
+        r"""
+        Fixed, unadjusted value date of the supplied spot snapshot.
+        """
+    def delivery_date(self) -> time.Date:
+        r"""
+        Fixed, unadjusted contractual delivery date.
+        """
+    def position(self) -> Position:
+        r"""
+        Long receives base and pays quote; short reverses both legs.
+        """
+    def base_currency(self) -> indexes.Currency:
+        r"""
+        Independent copy of the base-currency specification.
+        """
+    def quote_currency(self) -> indexes.Currency:
+        r"""
+        Independent copy of the quote currency, which denominates NPV.
         """
 
 @typing.final
@@ -2709,6 +2870,27 @@ class CapFloorType:
     Floor: typing.ClassVar[CapFloorType]
     Collar: typing.ClassVar[CapFloorType]
     def __new__(cls, _unconstructible: typing.NoReturn) -> CapFloorType: ...
+    def __int__(self) -> builtins.int: ...
+    __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+@typing.final
+class Duration:
+    r"""
+    Flat-yield duration conventions for ordinary bond cash flows.
+    """
+    Simple: typing.ClassVar[Duration]
+    r"""
+    Discounted cash-flow-weighted average payment time.
+    """
+    Macaulay: typing.ClassVar[Duration]
+    r"""
+    Modified duration scaled by 1 + yield/frequency; requires compounded yield.
+    """
+    Modified: typing.ClassVar[Duration]
+    r"""
+    Negative first yield derivative divided by bond value.
+    """
+    def __new__(cls, _unconstructible: typing.NoReturn) -> Duration: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 

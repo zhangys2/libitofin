@@ -8,8 +8,11 @@
 //! Go enforces these rules through a session worker locked to one OS thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod asset_swap_api;
 pub mod bates_api;
 pub mod bates_calibration_api;
+pub mod black_calculator_api;
+pub mod black_delta_api;
 pub mod blackformula_api;
 pub mod bma_api;
 pub mod bma_swap_api;
@@ -48,11 +51,13 @@ pub mod credit_api;
 pub mod credit_helpers_api;
 pub mod credit_instruments_api;
 pub mod cubicsmile_api;
+pub mod currency_api;
 pub mod curves_api;
 pub mod discrepancy_statistics_api;
 pub mod drawdown_api;
 pub mod fd_engine_api;
 pub mod forward_api;
+pub mod fx_forward_api;
 pub mod g2_process_api;
 pub mod garch_api;
 pub mod general_statistics_api;
@@ -60,6 +65,7 @@ pub mod geometric_brownian_api;
 pub mod gjr_api;
 pub mod gjr_model_api;
 pub mod global_calibration_api;
+pub mod gsr_process_api;
 pub mod helpers_api;
 pub mod heston_engines_api;
 pub mod incremental_statistics_api;
