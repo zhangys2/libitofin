@@ -403,8 +403,8 @@ fn skewed_surface_and_upward_cds_are_jointly_repriced() {
         1.5,
         &{
             let mut config = accurate_config(24_000, 280);
-            config.n_strike_knots = 61;
-            config.kde_bandwidth_scale = 0.50;
+            config.n_strike_knots = 71;
+            config.kde_bandwidth_scale = 0.48;
             config
         },
     )
@@ -466,7 +466,16 @@ fn zero_mixing_matches_the_finite_difference_engine() {
         0.0,
         0.0,
         1.0,
-        &accurate_config(6_000, 80),
+        &{
+            // The finite-difference mesh flat-extrapolates past the leverage
+            // grid. Short-dated Dupire outside this window is a density
+            // artifact, so the comparison stays where both schemes read a
+            // real local variance.
+            let mut config = accurate_config(6_000, 80);
+            config.log_moneyness_low = -0.45;
+            config.log_moneyness_high = 0.45;
+            config
+        },
     )
     .unwrap();
     let mc = McSlvJumpToDefaultVanillaEngine::new(shared(calibrated));

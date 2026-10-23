@@ -126,6 +126,18 @@ impl InterpolatedLocalVolSurface {
         let width = knots[right] - knots[left];
         (left, (x - knots[left]) / width)
     }
+
+    /// Greatest knot index at or before `t`, clamped to the grid.
+    fn time_row(times: &[Time], t: Time) -> usize {
+        if t <= times[0] {
+            return 0;
+        }
+        let last = times.len() - 1;
+        if t >= times[last] {
+            return last;
+        }
+        times.partition_point(|knot| *knot <= t) - 1
+    }
 }
 
 impl AsObservable for InterpolatedLocalVolSurface {
@@ -172,20 +184,19 @@ impl VolatilityTermStructure for InterpolatedLocalVolSurface {
 }
 
 impl LocalVolTermStructure for InterpolatedLocalVolSurface {
-    /// Bilinear value on the grid. Times and strikes outside the knots are
-    /// clamped to the boundary, so this hook answers them. The term-structure
-    /// range check still rejects those queries unless extrapolation is on;
-    /// see [`TermStructure::max_time`](crate::termstructures::TermStructure::max_time).
+    /// Strike-linear value on one time row.
+    ///
+    /// Time is piecewise constant: a query in `[t_i, t_{i+1})` uses row `i`,
+    /// the leverage the particle step holds over that interval. Times and
+    /// strikes outside the knots clamp to the boundary row or strike. The
+    /// term-structure range check still rejects those queries unless
+    /// extrapolation is on.
     fn local_vol_impl(&self, t: Time, strike: Real) -> QlResult<Volatility> {
-        let (time_left, time_weight) = Self::bracket(&self.times, t);
+        let row = Self::time_row(&self.times, t);
         let (strike_left, strike_weight) = Self::bracket(&self.strikes, strike);
-        let v00 = self.local_vols[(time_left, strike_left)];
-        let v01 = self.local_vols[(time_left, strike_left + 1)];
-        let v10 = self.local_vols[(time_left + 1, strike_left)];
-        let v11 = self.local_vols[(time_left + 1, strike_left + 1)];
-        let along_low = (1.0 - strike_weight) * v00 + strike_weight * v01;
-        let along_high = (1.0 - strike_weight) * v10 + strike_weight * v11;
-        Ok((1.0 - time_weight) * along_low + time_weight * along_high)
+        let left = self.local_vols[(row, strike_left)];
+        let right = self.local_vols[(row, strike_left + 1)];
+        Ok((1.0 - strike_weight) * left + strike_weight * right)
     }
 }
 
@@ -305,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn bilinear_on_knots_between_knots_and_flat_outside() {
+    fn piecewise_constant_in_time_and_linear_in_strike() {
         let curve = InterpolatedLocalVolSurface::new(
             Date::new(15, Month::June, 2026),
             Actual365Fixed::new(),
@@ -320,8 +331,9 @@ mod tests {
         assert!((at(0.5, 200.0) - 0.30).abs() <= 1e-14);
         assert!((at(2.0, 100.0) - 0.20).abs() <= 1e-14);
         assert!((at(2.0, 200.0) - 0.60).abs() <= 1e-14);
-        // Midway in time and strike: equal weight on all four knots.
-        assert!((at(1.25, 150.0) - 0.30).abs() <= 1e-14);
+        // Inside the first interval the time row stays on the left knot.
+        // Strike 150 is midway, so the value is midway on that row.
+        assert!((at(1.25, 150.0) - 0.20).abs() <= 1e-14);
         assert!((at(0.0, 50.0) - 0.10).abs() <= 1e-14);
         assert!((curve.local_vol_impl(-1.0, 50.0).unwrap() - 0.10).abs() <= 1e-14);
         assert!((at(10.0, 1_000.0) - 0.60).abs() <= 1e-14);

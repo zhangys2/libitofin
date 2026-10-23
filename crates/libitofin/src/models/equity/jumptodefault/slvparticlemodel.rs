@@ -41,11 +41,15 @@ pub struct SlvJtdParticleConfig {
     pub log_moneyness_high: Real,
     /// Multiplier on Silverman's bandwidth.
     pub kde_bandwidth_scale: Real,
+    /// Absolute floor on the KDE bandwidth. Zero leaves Silverman's rule in charge.
+    pub kde_bandwidth_floor: Real,
     /// Ridge weight on the affine variance prior.
     pub wing_regularization: Real,
-    /// Floor applied to Carr–Madan local volatility and to leverage.
+    /// Floor applied to Carr–Madan local volatility, and to the effective
+    /// diffusion `L sqrt(v)` when a path is evolved. Not a cap on the
+    /// dimensionless leverage `L`.
     pub min_local_vol: Volatility,
-    /// Cap applied to Carr–Madan local volatility and to leverage.
+    /// Cap applied to Carr–Madan local volatility and to `L sqrt(v)`.
     pub max_local_vol: Volatility,
     /// `S_min / S_0` inside the power intensity.
     pub spot_floor_ratio: Real,
@@ -65,6 +69,7 @@ impl Default for SlvJtdParticleConfig {
             log_moneyness_low: -1.10,
             log_moneyness_high: 0.90,
             kde_bandwidth_scale: 0.85,
+            kde_bandwidth_floor: 0.0,
             wing_regularization: 1.0e-4,
             min_local_vol: 0.03,
             max_local_vol: 1.50,
@@ -106,6 +111,11 @@ impl SlvJtdParticleConfig {
             self.kde_bandwidth_scale
         );
         require!(
+            self.kde_bandwidth_floor.is_finite() && self.kde_bandwidth_floor >= 0.0,
+            "KDE bandwidth floor must be non-negative, got {}",
+            self.kde_bandwidth_floor
+        );
+        require!(
             self.wing_regularization.is_finite() && self.wing_regularization >= 0.0,
             "wing regularization must be non-negative, got {}",
             self.wing_regularization
@@ -139,11 +149,15 @@ pub struct SlvJtdParticleSnapshot {
     pub variances: Vec<Real>,
     /// Cumulative survival weight of each particle.
     pub survival_weights: Vec<Real>,
+    /// Risk-free discount `D_r(t)` frozen at calibration.
+    pub discount: Real,
+    /// Dividend discount `D_q(t)` frozen at calibration.
+    pub dividend_discount: Real,
 }
 
 /// Leverage surface, hazard, and the paths that produced them.
 pub struct SlvJtdCalibrationResult {
-    /// Bilinear leverage `L(t, K)`.
+    /// Leverage `L(t, K)`, piecewise constant in time and linear in strike.
     pub leverage_surface: Shared<InterpolatedLocalVolSurface>,
     /// Piecewise-constant scale `f(t)` matched to the survival curve.
     pub calibrated_hazard: Shared<PowerHazard>,
@@ -169,8 +183,12 @@ pub struct SlvJtdCalibrationResult {
     pub snapshots: Vec<SlvJtdParticleSnapshot>,
     /// Generator seed, reused by common-random-number Greeks.
     pub seed: u64,
-    /// Floor applied to the leverage when a path is evolved.
+    /// Floor applied to the effective diffusion `L sqrt(v)`.
     pub min_local_vol: Volatility,
+    /// Cap applied to the effective diffusion `L sqrt(v)`.
+    pub max_local_vol: Volatility,
+    /// Knots where the strike-space variance was not positive, filled from the nearest valid strike.
+    pub unreliable_local_vol: Vec<(Time, Real)>,
 }
 
 /// Jointly calibrate the leverage surface and the power-hazard scale.
@@ -205,6 +223,11 @@ pub fn calibrate_slv_jump_to_default(
         heston.theta().is_finite() && heston.theta() > 0.0,
         "Heston long-run variance must be positive so the variance floor is positive, got {}",
         heston.theta()
+    );
+    require!(
+        heston.v0().is_finite() && heston.v0() >= 0.0,
+        "Heston initial variance must be finite and non-negative, got {}",
+        heston.v0()
     );
 
     let risk_free = heston.risk_free_rate().current_link()?;
@@ -262,15 +285,18 @@ pub fn calibrate_slv_jump_to_default(
     let mut survival_probs_mc = Vec::with_capacity(n_steps + 1);
     let mut survival_probs_target = Vec::with_capacity(n_steps + 1);
     let mut snapshots = Vec::with_capacity(n_steps + 1);
+    let mut unreliable_local_vol = Vec::new();
 
     let v0 = heston.v0();
     let spot_floor = config.spot_floor_ratio * spot0;
     let rho_complement = (1.0 - heston.rho() * heston.rho()).max(0.0).sqrt();
     let xi = mixing_factor * heston.sigma();
 
+    let dr0 = risk_free.discount(0.0, true)?;
+    let dq0 = dividend.discount(0.0, true)?;
     survival_probs_target.push(survival.survival_probability(0.0, true)?);
     survival_probs_mc.push(1.0);
-    snapshots.push(snapshot(0.0, &spots, &variances, &weights));
+    snapshots.push(snapshot(0.0, &spots, &variances, &weights, dr0, dq0));
 
     for step in 0..n_steps {
         let t0 = time_grid[step];
@@ -294,10 +320,11 @@ pub fn calibrate_slv_jump_to_default(
                 spot0,
                 v0,
                 config.kde_bandwidth_scale,
+                config.kde_bandwidth_floor,
                 config.wing_regularization,
-            )
+            )?
         };
-        let (vol_jtd, vol_plain) = local_vol_slice(
+        let (vol_jtd, vol_plain, unreliable) = local_vol_slice(
             &calls,
             &strike_grid,
             exponent,
@@ -307,12 +334,10 @@ pub fn calibrate_slv_jump_to_default(
             config.min_local_vol,
             config.max_local_vol,
         )?;
-        let leverage = leverage_slice(
-            &vol_jtd,
-            &conditional,
-            config.min_local_vol,
-            config.max_local_vol,
-        );
+        for strike in unreliable {
+            unreliable_local_vol.push((t_eval, strike));
+        }
+        let leverage = leverage_slice(&vol_jtd, &conditional)?;
         write_row(&mut leverage_grid, step, &leverage);
         write_row(&mut dupire_jtd_grid, step, &vol_jtd);
         write_row(&mut dupire_no_default_grid, step, &vol_plain);
@@ -342,12 +367,15 @@ pub fn calibrate_slv_jump_to_default(
                 intensity_shift: 0.0,
                 leverage_shift: 0.0,
                 min_local_vol: config.min_local_vol,
+                max_local_vol: config.max_local_vol,
                 moneyness_spot: spot0,
                 scenario_spot: spot0,
             },
         )?;
         survival_probs_mc.push(mean(&weights));
-        snapshots.push(snapshot(t1, &spots, &variances, &weights));
+        let dr1 = risk_free.discount(t1, true)?;
+        let dq1 = dividend.discount(t1, true)?;
+        snapshots.push(snapshot(t1, &spots, &variances, &weights, dr1, dq1));
     }
 
     let t_final = time_grid[n_steps];
@@ -360,9 +388,10 @@ pub fn calibrate_slv_jump_to_default(
         spot0,
         v0,
         config.kde_bandwidth_scale,
+        config.kde_bandwidth_floor,
         config.wing_regularization,
-    );
-    let (vol_jtd, vol_plain) = local_vol_slice(
+    )?;
+    let (vol_jtd, vol_plain, unreliable) = local_vol_slice(
         &calls,
         &strike_grid,
         exponent,
@@ -372,12 +401,10 @@ pub fn calibrate_slv_jump_to_default(
         config.min_local_vol,
         config.max_local_vol,
     )?;
-    let leverage = leverage_slice(
-        &vol_jtd,
-        &conditional,
-        config.min_local_vol,
-        config.max_local_vol,
-    );
+    for strike in unreliable {
+        unreliable_local_vol.push((t_final, strike));
+    }
+    let leverage = leverage_slice(&vol_jtd, &conditional)?;
     write_row(&mut leverage_grid, n_steps, &leverage);
     write_row(&mut dupire_jtd_grid, n_steps, &vol_jtd);
     write_row(&mut dupire_no_default_grid, n_steps, &vol_plain);
@@ -417,6 +444,8 @@ pub fn calibrate_slv_jump_to_default(
         snapshots,
         seed: config.seed,
         min_local_vol: config.min_local_vol,
+        max_local_vol: config.max_local_vol,
+        unreliable_local_vol,
     })
 }
 
@@ -558,6 +587,7 @@ pub(crate) fn simulate_fixed_leverage(
                 intensity_shift,
                 leverage_shift,
                 min_local_vol: result.min_local_vol,
+                max_local_vol: result.max_local_vol,
                 moneyness_spot: heston_spot,
                 scenario_spot: spot0,
             },
@@ -582,6 +612,7 @@ struct StepCoeffs {
     intensity_shift: Real,
     leverage_shift: Real,
     min_local_vol: Real,
+    max_local_vol: Real,
     moneyness_spot: Real,
     scenario_spot: Real,
 }
@@ -611,17 +642,23 @@ fn advance(
     let mut weighted_spot = 0.0;
     for i in 0..n {
         let g = state_factor(spots[i], coeffs.spot_floor, coeffs.exponent);
-        let lambda = (coeffs.hazard_scale * g + coeffs.intensity_shift).max(0.0);
+        let raw_lambda = coeffs.hazard_scale * g + coeffs.intensity_shift;
+        require!(raw_lambda.is_finite(), "intensity is not finite");
+        let lambda = raw_lambda.max(0.0);
         weights[i] *= (-lambda * coeffs.dt).exp();
         let query = spots[i] * (coeffs.moneyness_spot / coeffs.scenario_spot);
         let local = linear_interp(strikes, leverage, query) + coeffs.leverage_shift;
         require!(
-            local.is_finite(),
+            local.is_finite() && local > 0.0,
             "leverage at spot {} is not finite",
             spots[i]
         );
-        let local = local.max(coeffs.min_local_vol);
         let sigma = local * variances[i].max(0.0).sqrt();
+        require!(
+            sigma.is_finite() && sigma >= 0.0,
+            "effective local volatility is not finite"
+        );
+        let sigma = sigma.min(coeffs.max_local_vol);
         let dw_spot = sqrt_dt * z1[i];
         let dw_var = sqrt_dt * (coeffs.rho * z1[i] + coeffs.rho_complement * z2[i]);
         let next = spots[i]
@@ -703,27 +740,17 @@ fn conditional_variance(
     spot0: Real,
     v0: Real,
     bandwidth_scale: Real,
+    bandwidth_floor: Real,
     regularization: Real,
-) -> Vec<Real> {
+) -> QlResult<Vec<Real>> {
     let n = spots.len();
-    let n_real = n as Real;
-    let mut log_spots = Vec::with_capacity(n);
-    let mut mean_log = 0.0;
-    for spot in spots {
-        let x = (spot.max(1.0e-8) / spot0).ln();
-        mean_log += x;
-        log_spots.push(x);
-    }
-    mean_log /= n_real;
-    let mut variance_log = 0.0;
-    for x in &log_spots {
-        let d = x - mean_log;
-        variance_log += d * d;
-    }
-    variance_log /= n_real;
-    let std_log = variance_log.sqrt();
+    let log_spots: Vec<Real> = spots
+        .iter()
+        .map(|spot| (spot.max(1.0e-8) / spot0).ln())
+        .collect();
     let weight_sum: Real = weights.iter().sum();
-    if weight_sum <= 0.0 || std_log < 1.0e-5 {
+    let bandwidth = kde_bandwidth(&log_spots, weights, bandwidth_scale, bandwidth_floor);
+    if weight_sum <= 0.0 || bandwidth == 0.0 {
         let average = if weight_sum <= 0.0 {
             v0
         } else {
@@ -734,7 +761,11 @@ fn conditional_variance(
                 .sum::<Real>()
                 / weight_sum
         };
-        return vec![average; log_strikes.len()];
+        require!(
+            average.is_finite() && average > 0.0,
+            "conditional variance is not positive"
+        );
+        return Ok(vec![average; log_strikes.len()]);
     }
 
     let mut mean_x = 0.0;
@@ -755,26 +786,57 @@ fn conditional_variance(
     let slope = cov / var_x.max(1.0e-8);
     let floor = 0.15 * v0;
     let cap = 3.50 * v0;
-    // Silverman's rule. The floor only keeps a degenerate cloud from collapsing the kernel.
-    let bandwidth = (bandwidth_scale * std_log * n_real.powf(-0.2)).max(0.0065);
     let ridge = regularization * weight_sum;
+    let mut conditional = Vec::with_capacity(log_strikes.len());
+    for log_strike in log_strikes {
+        let mut numerator = 0.0;
+        let mut denominator = 0.0;
+        let prior = (mean_v + slope * (log_strike - mean_x)).clamp(floor, cap);
+        for i in 0..n {
+            let unit = (log_strike - log_spots[i]) / bandwidth;
+            let kernel = (-0.5 * unit * unit).exp();
+            let weighted = weights[i] * kernel;
+            numerator += weighted * variances[i];
+            denominator += weighted;
+        }
+        let value = (numerator + ridge * prior) / (denominator + ridge);
+        require!(
+            value.is_finite() && value > 0.0,
+            "conditional variance is not positive"
+        );
+        conditional.push(value);
+    }
+    Ok(conditional)
+}
 
-    log_strikes
+/// Survival-weighted Silverman bandwidth.
+///
+/// `n_eff = (sum w)^2 / sum w^2`. The absolute `floor` binds only when it
+/// exceeds that width.
+fn kde_bandwidth(log_spots: &[Real], weights: &[Real], scale: Real, floor: Real) -> Real {
+    let weight_sum: Real = weights.iter().copied().sum();
+    let weight_square: Real = weights.iter().map(|weight| weight * weight).sum();
+    if weight_sum <= 0.0 || weight_square <= 0.0 {
+        return floor;
+    }
+    let n_eff = (weight_sum * weight_sum / weight_square).max(1.0);
+    let mean = log_spots
         .iter()
-        .map(|log_strike| {
-            let mut numerator = 0.0;
-            let mut denominator = 0.0;
-            let prior = (mean_v + slope * (log_strike - mean_x)).clamp(floor, cap);
-            for i in 0..n {
-                let unit = (log_strike - log_spots[i]) / bandwidth;
-                let kernel = (-0.5 * unit * unit).exp();
-                let weighted = weights[i] * kernel;
-                numerator += weighted * variances[i];
-                denominator += weighted;
-            }
-            ((numerator + ridge * prior) / (denominator + ridge)).max(1.0e-12)
-        })
-        .collect()
+        .zip(weights)
+        .map(|(spot, weight)| weight * spot)
+        .sum::<Real>()
+        / weight_sum;
+    let variance = log_spots
+        .iter()
+        .zip(weights)
+        .map(|(spot, weight)| weight * (spot - mean) * (spot - mean))
+        .sum::<Real>()
+        / weight_sum;
+    let silverman = scale * variance.sqrt() * n_eff.powf(-0.2);
+    if !silverman.is_finite() {
+        return floor;
+    }
+    silverman.max(floor)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -787,16 +849,63 @@ fn local_vol_slice(
     grid: &MomentGrid,
     min_vol: Volatility,
     max_vol: Volatility,
-) -> QlResult<(Vec<Real>, Vec<Real>)> {
-    let mut jumped = Vec::with_capacity(strikes.len());
-    let mut plain = Vec::with_capacity(strikes.len());
-    for strike in strikes {
+) -> QlResult<(Vec<Real>, Vec<Real>, Vec<Real>)> {
+    let mut jumped_raw = vec![None; strikes.len()];
+    let mut plain_raw = vec![None; strikes.len()];
+    for (index, strike) in strikes.iter().enumerate() {
         let (var_jtd, var_plain) =
-            strike_space_variances(calls, exponent, scale, *strike, t, grid)?;
-        jumped.push(clamp_vol(var_jtd, min_vol, max_vol));
-        plain.push(clamp_vol(var_plain, min_vol, max_vol));
+            match strike_space_variances(calls, exponent, scale, *strike, t, grid) {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+        if var_jtd.is_finite() && var_jtd > 0.0 && var_plain.is_finite() && var_plain > 0.0 {
+            jumped_raw[index] = Some(var_jtd.sqrt().clamp(min_vol, max_vol));
+            plain_raw[index] = Some(var_plain.sqrt().clamp(min_vol, max_vol));
+        }
     }
-    Ok((jumped, plain))
+    let unreliable = strikes
+        .iter()
+        .zip(&jumped_raw)
+        .filter_map(|(strike, value)| value.is_none().then_some(*strike))
+        .collect();
+    Ok((
+        fill_missing_local_vol(&jumped_raw, strikes)?,
+        fill_missing_local_vol(&plain_raw, strikes)?,
+        unreliable,
+    ))
+}
+
+/// Copies each missing knot from the nearest strike that had a positive variance.
+///
+/// A slice with no positive variance is an error, the same outcome as
+/// `CarrMadanLocalVolSurface` on a negative local variance. A far wing whose
+/// call density underflows is filled from that neighbor and reported, rather
+/// than published as the volatility floor.
+fn fill_missing_local_vol(values: &[Option<Real>], strikes: &[Real]) -> QlResult<Vec<Real>> {
+    require!(
+        values.iter().any(Option::is_some),
+        "negative Carr-Madan local vol^2 across the strike slice; the black vol surface is not smooth enough"
+    );
+    let mut filled = vec![0.0; values.len()];
+    for (index, value) in values.iter().enumerate() {
+        if let Some(vol) = value {
+            filled[index] = *vol;
+            continue;
+        }
+        let mut nearest = 0.0;
+        let mut nearest_distance = Real::MAX;
+        for (other, defined) in strikes.iter().zip(values) {
+            if let Some(vol) = defined {
+                let distance = (other - strikes[index]).abs();
+                if distance < nearest_distance {
+                    nearest_distance = distance;
+                    nearest = *vol;
+                }
+            }
+        }
+        filled[index] = nearest;
+    }
+    Ok(filled)
 }
 
 fn strike_space_variances(
@@ -815,9 +924,10 @@ fn strike_space_variances(
     let call_t = (calls.call(strike, later)? - calls.call(strike, earlier)?) / span;
     let call_k = calls.call_dk(strike, t)?;
     let call_kk = calls.call_dkk(strike, t)?;
-    if !call_kk.is_finite() || call_kk <= 0.0 {
-        return Ok((Real::NAN, Real::NAN));
-    }
+    require!(
+        call_kk.is_finite() && call_kk > 0.0,
+        "call density is not positive at strike {strike} and time {t}; cannot recover Carr-Madan local variance"
+    );
     let discount_up = calls.discount(later)?;
     let discount_dn = calls.discount(earlier)?;
     let rate = -(discount_up / discount_dn).ln() / span;
@@ -833,24 +943,36 @@ fn strike_space_variances(
     Ok((2.0 * (base - adjustment) / denom, 2.0 * base / denom))
 }
 
-fn leverage_slice(
-    local_vol: &[Real],
-    conditional: &[Real],
-    min_vol: Volatility,
-    max_vol: Volatility,
-) -> Vec<Real> {
-    local_vol
-        .iter()
-        .zip(conditional)
-        .map(|(vol, variance)| (vol / variance.max(1.0e-12).sqrt()).clamp(min_vol, max_vol))
-        .collect()
+fn leverage_slice(local_vol: &[Real], conditional: &[Real]) -> QlResult<Vec<Real>> {
+    let mut leverage = Vec::with_capacity(local_vol.len());
+    for (vol, variance) in local_vol.iter().zip(conditional) {
+        require!(
+            variance.is_finite() && *variance > 0.0,
+            "conditional variance must be positive, got {variance}"
+        );
+        let ratio = vol / variance.sqrt();
+        require!(
+            ratio.is_finite() && ratio > 0.0,
+            "leverage must be positive, got {ratio}"
+        );
+        leverage.push(ratio);
+    }
+    Ok(leverage)
 }
 
-fn clamp_vol(variance: Real, min_vol: Volatility, max_vol: Volatility) -> Real {
-    if !variance.is_finite() || variance <= 0.0 {
-        return min_vol;
-    }
-    variance.sqrt().clamp(min_vol, max_vol)
+#[cfg(test)]
+fn bounded_local_vol(
+    variance: Real,
+    min_vol: Volatility,
+    max_vol: Volatility,
+    strike: Real,
+    t: Time,
+) -> QlResult<Real> {
+    require!(
+        variance.is_finite() && variance > 0.0,
+        "negative Carr-Madan local vol^2 at strike {strike} and time {t}; the black vol surface is not smooth enough"
+    );
+    Ok(variance.sqrt().clamp(min_vol, max_vol))
 }
 
 fn moment_matched_normals(
@@ -948,12 +1070,16 @@ fn snapshot(
     spots: &[Real],
     variances: &[Real],
     weights: &[Real],
+    discount: Real,
+    dividend_discount: Real,
 ) -> SlvJtdParticleSnapshot {
     SlvJtdParticleSnapshot {
         time,
         spots: spots.to_vec(),
         variances: variances.to_vec(),
         survival_weights: weights.to_vec(),
+        discount,
+        dividend_discount,
     }
 }
 
@@ -981,6 +1107,7 @@ mod tests {
     use crate::handle::Handle;
     use crate::interestrate::Compounding;
     use crate::math::interpolations::flat::BackwardFlat;
+    use crate::models::equity::jumptodefault::BlackVolCallSurface;
     use crate::quotes::make_quote_handle;
     use crate::shared::shared;
     use crate::termstructures::TermStructure;
@@ -1158,6 +1285,7 @@ mod tests {
             intensity_shift: 0.0,
             leverage_shift: 0.0,
             min_local_vol: 0.03,
+            max_local_vol: 1.50,
             moneyness_spot: 100.0,
             scenario_spot: 100.0,
         };
@@ -1187,6 +1315,74 @@ mod tests {
                 &strikes,
                 &[0.2, 0.2],
                 &nan_variance,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn kde_bandwidth_follows_the_weighted_cloud_unless_the_floor_binds() {
+        let logs = [0.0, 0.0, 1.0, 1.0];
+        let weights = [1.0, 1.0, 1.0, 1.0];
+        let open = kde_bandwidth(&logs, &weights, 1.0, 0.0);
+        let expected = 0.5 * 4.0_f64.powf(-0.2);
+        assert!((open - expected).abs() <= 1e-12, "{open} vs {expected}");
+        assert!((kde_bandwidth(&logs, &weights, 1.0, 10.0) - 10.0).abs() <= 1e-12);
+    }
+
+    #[test]
+    fn low_variance_leverage_is_not_capped_like_a_volatility() {
+        let result = calibrate_slv_jump_to_default(
+            black(0.45),
+            heston(0.04, 1.5, 0.04, 0.01, 0.0),
+            flat_survival(0.0),
+            0.0,
+            0.0,
+            0.5,
+            &config(100, 20),
+        )
+        .unwrap();
+        let column = result
+            .strike_grid
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                (**left - 100.0)
+                    .abs()
+                    .partial_cmp(&(**right - 100.0).abs())
+                    .unwrap()
+            })
+            .unwrap()
+            .0;
+        let leverage = result.leverage_grid[(0, column)];
+        let expected = 0.45 / 0.04_f64.sqrt();
+        assert!(
+            (leverage - expected).abs() < 0.05,
+            "leverage {leverage} vs {expected}"
+        );
+        assert!(leverage > result.max_local_vol);
+    }
+
+    #[test]
+    fn a_non_positive_local_variance_is_an_error() {
+        assert!(bounded_local_vol(-1.0, 0.03, 1.5, 100.0, 1.0).is_err());
+        let calls = BlackVolCallSurface::new(
+            black(0.2),
+            yield_curve(0.01),
+            yield_curve(0.0),
+            make_quote_handle(100.0).handle(),
+        );
+        let grid = MomentGrid::new(8.0, 16).unwrap();
+        assert!(
+            local_vol_slice(
+                &calls,
+                &[90.0, 100.0, 110.0],
+                0.0,
+                2.0,
+                1.0,
+                &grid,
+                0.03,
+                1.5,
             )
             .is_err()
         );

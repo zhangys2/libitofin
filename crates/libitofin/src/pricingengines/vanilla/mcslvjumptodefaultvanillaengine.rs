@@ -20,7 +20,6 @@ use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
 use crate::require;
 use crate::shared::{Shared, shared};
-use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::types::{Rate, Real, Time};
 
 /// European engine on a calibrated SLV-JD particle set.
@@ -63,17 +62,10 @@ impl McSlvJumpToDefaultVanillaEngine {
     ) -> QlResult<(Real, Real, Real)> {
         let index = self.snapshot_index(expiry)?;
         let snap = &self.calibration.snapshots[index];
-        let discount = self
-            .calibration
-            .process
-            .slv()
-            .risk_free_rate()
-            .current_link()?
-            .discount(snap.time, true)?;
         defaultable_option_value(
             option_type,
             strike,
-            discount,
+            snap.discount,
             &snap.spots,
             &snap.survival_weights,
         )
@@ -116,15 +108,10 @@ impl McSlvJumpToDefaultVanillaEngine {
             .current_link()?
             .value()?;
         let barrier = barrier_ratio * spot0;
-        let risk_free = self
-            .calibration
-            .process
-            .slv()
-            .risk_free_rate()
-            .current_link()?;
         let n = self.calibration.snapshots[0].spots.len();
         let mut still_above = vec![true; n];
         let mut times = Vec::new();
+        let mut discounts = Vec::new();
         let mut eds_survival = Vec::new();
         let mut credit_survival = 0.0;
         for snap in self.calibration.snapshots.iter().take(index + 1) {
@@ -146,11 +133,12 @@ impl McSlvJumpToDefaultVanillaEngine {
             }
             let scale = n as Real;
             times.push(snap.time);
+            discounts.push(snap.discount);
             eds_survival.push(alive / scale);
             credit_survival = survived / scale;
         }
         let (protection, annuity) =
-            protection_and_annuity(&times, &eds_survival, &*risk_free, 1.0 - eds_recovery)?;
+            protection_and_annuity(&times, &eds_survival, &discounts, 1.0 - eds_recovery)?;
         require!(
             annuity > 0.0,
             "equity default swap risky annuity is not positive"
@@ -195,15 +183,14 @@ impl McSlvJumpToDefaultVanillaEngine {
 fn protection_and_annuity(
     times: &[Time],
     survival: &[Real],
-    risk_free: &dyn YieldTermStructure,
+    discounts: &[Real],
     loss_given_default: Real,
 ) -> QlResult<(Real, Real)> {
     let mut protection = 0.0;
     let mut annuity = 0.0;
     for i in 0..times.len() - 1 {
         let dt = times[i + 1] - times[i];
-        let mid = 0.5 * (times[i] + times[i + 1]);
-        let discount = risk_free.discount(mid, true)?;
+        let discount = (discounts[i] * discounts[i + 1]).sqrt();
         let survival_mid = 0.5 * (survival[i] + survival[i + 1]);
         protection += loss_given_default * discount * (survival[i] - survival[i + 1]);
         annuity += discount * survival_mid * dt;
@@ -294,6 +281,7 @@ mod tests {
     use crate::termstructures::credit::flathazardrate::FlatHazardRate;
     use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::frequency::Frequency;
@@ -412,27 +400,21 @@ mod tests {
         maturity: Time,
         recovery: Real,
     ) -> Real {
-        let risk_free = calibration
-            .process
-            .slv()
-            .risk_free_rate()
-            .current_link()
-            .unwrap();
         let mut times = Vec::new();
+        let mut discounts = Vec::new();
         let mut survival = Vec::new();
-        for (time, probability) in calibration
-            .time_grid
-            .iter()
-            .zip(&calibration.survival_probs_mc)
-        {
-            if *time > maturity + 1e-12 {
+        for snap in &calibration.snapshots {
+            if snap.time > maturity + 1e-12 {
                 break;
             }
-            times.push(*time);
-            survival.push(*probability);
+            times.push(snap.time);
+            discounts.push(snap.discount);
+            survival.push(
+                snap.survival_weights.iter().sum::<Real>() / snap.survival_weights.len() as Real,
+            );
         }
         let (protection, annuity) =
-            protection_and_annuity(&times, &survival, &*risk_free, 1.0 - recovery).unwrap();
+            protection_and_annuity(&times, &survival, &discounts, 1.0 - recovery).unwrap();
         protection / annuity
     }
 
