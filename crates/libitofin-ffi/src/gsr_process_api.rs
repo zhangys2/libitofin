@@ -27,12 +27,20 @@ pub unsafe extern "C" fn itofin_gsr_process_new(
                 check_ptr(error)?;
             }
             check_ptr(out)?;
-            let p = GsrProcess::new(
-                input_slice(times, times_len)?.to_vec(),
-                input_slice(vols, vols_len)?.to_vec(),
-                input_slice(reversions, reversions_len)?.to_vec(),
-                horizon,
-            )?;
+            let times = input_slice(times, times_len)?.to_vec();
+            let vols = input_slice(vols, vols_len)?.to_vec();
+            let reversions = input_slice(reversions, reversions_len)?.to_vec();
+            if vols.windows(2).any(|pair| pair[0] != pair[1])
+                || reversions.windows(2).any(|pair| pair[0] != pair[1])
+            {
+                return Err(libitofin::errors::QlError::new(
+                    "GSR binding accepts only constant volatility and reversion",
+                    file!(),
+                    line!(),
+                )
+                .into());
+            }
+            let p = GsrProcess::new(times, vols, reversions, horizon)?;
             output(out, c.insert(shared_mut(p))?)
         })
     }

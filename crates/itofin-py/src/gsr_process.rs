@@ -31,6 +31,16 @@ impl PyGsrProcess {
         reversions: Vec<f64>,
         t_measure: f64,
     ) -> PyResult<Self> {
+        if vols.windows(2).any(|pair| pair[0] != pair[1])
+            || reversions.windows(2).any(|pair| pair[0] != pair[1])
+        {
+            return Err(PyQlError::from(libitofin::errors::QlError::new(
+                "GSR binding accepts only constant volatility and reversion",
+                file!(),
+                line!(),
+            ))
+            .into());
+        }
         Ok(Self {
             inner: GsrProcess::new(times, vols, reversions, t_measure).map_err(PyQlError::from)?,
         })
