@@ -194,6 +194,11 @@ class ParquetL1Recorder:
 
         now_ms = int(time.time() * 1000)
         file_path = partition_dir / f"quotes_{now_ms}.parquet"
+        # Two rotations in the same millisecond must not clobber the previous part.
+        sequence = 1
+        while file_path.exists():
+            file_path = partition_dir / f"quotes_{now_ms}_{sequence}.parquet"
+            sequence += 1
 
         writer = pq.ParquetWriter(
             file_path,
