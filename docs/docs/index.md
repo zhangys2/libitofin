@@ -46,7 +46,7 @@ separate binding work.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.43.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.44.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for

@@ -133,6 +133,7 @@ go vet -tags optimization_oracle ./...
 go test -tags optimization_oracle -race -count=1 -run "^TestOptimizationMethodsQuantLibParabola$" ./...
 go test -race -count=1 -coverprofile=../../target/go-coverage.out ./...
 go run ./examples/european_option
+go run ./examples/cash_digital
 go run ./examples/portfolio
 go run ./examples/g2_process
 go run ./examples/gsr_process
@@ -150,6 +151,7 @@ go run ./examples/callable-oas
 go run ./examples/callable-risk
 
 go run ./examples/bond-forward
+go run ./examples/bond-coupon-analytics
 
 go run ./examples/float-float-swap
 
