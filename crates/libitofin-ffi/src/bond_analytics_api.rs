@@ -273,7 +273,8 @@ pub unsafe extern "C" fn itofin_bond_atm_rate_from_curve(
             bond.bond.plain()?;
             let actual = settlement(&bond, serial, false)?;
             let discount = curve(c, discount)?.current_link()?;
-            let value = BondFunctions::atm_rate(&bond.bond.borrow(), &*discount, Some(actual))?;
+            let value =
+                BondFunctions::atm_rate(&bond.bond.borrow(), &*discount, Some(actual), None)?;
             output(out, finite(value)?)
         })
     }

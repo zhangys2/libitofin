@@ -729,7 +729,7 @@ impl PyBond {
             .current_link()
             .map_err(PyQlError::from)?;
         finite(
-            BondFunctions::atm_rate(&self.inner.borrow(), &*curve, Some(settlement))
+            BondFunctions::atm_rate(&self.inner.borrow(), &*curve, Some(settlement), None)
                 .map_err(PyQlError::from)?,
         )
     }
