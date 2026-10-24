@@ -68,6 +68,7 @@ pub mod global_calibration_api;
 pub mod gsr_process_api;
 pub mod helpers_api;
 pub mod heston_engines_api;
+pub mod hw_forward_process_api;
 pub mod incremental_statistics_api;
 pub mod indexes_api;
 pub mod inflation_api;
@@ -84,6 +85,7 @@ pub mod joint_curves_api;
 pub mod market_api;
 pub mod mc_api;
 pub mod merton_api;
+pub mod mf_state_process_api;
 pub mod models_api;
 pub mod optimize_api;
 pub mod options_api;
@@ -127,3 +129,5 @@ mod swaption_facades_tests;
 mod cap_calibration_tests;
 
 pub mod variance_swap_api;
+
+pub mod xccy_basis_api;

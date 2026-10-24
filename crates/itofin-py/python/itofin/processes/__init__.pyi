@@ -14,7 +14,9 @@ __all__ = [
     "GeometricBrownianMotionProcess",
     "GsrProcess",
     "HestonProcess",
+    "HullWhiteForwardProcess",
     "Merton76Process",
+    "MfStateProcess",
 ]
 
 @typing.final
@@ -467,6 +469,75 @@ class HestonProcess:
         """
 
 @typing.final
+class HullWhiteForwardProcess:
+    r"""
+    Standalone forward-measure short-rate process, not a calibrated pricing model.
+
+    The initial short rate is captured once. Fitting shifts and drift read the
+    retained live curve. Horizon starts at zero; times are process years, not dates.
+    """
+    def __init__(self, curve: termstructures.YieldTermStructure, a: builtins.float, sigma: builtins.float) -> None:
+        r"""
+        Retain the exact curve handle, with finite nonnegative reversion and volatility.
+        """
+    def x0(self) -> builtins.float:
+        r"""
+        Return the short rate captured at construction, unchanged by curve updates.
+        """
+    def a(self) -> builtins.float:
+        r"""
+        Return constant nonnegative mean reversion.
+        """
+    def sigma(self) -> builtins.float:
+        r"""
+        Return constant nonnegative volatility.
+        """
+    def forward_measure_time(self) -> builtins.float:
+        r"""
+        Return the current finite nonnegative horizon.
+        """
+    def set_forward_measure_time(self, horizon: builtins.float) -> None:
+        r"""
+        Replace the horizon and notify observers. Invalid values preserve state.
+        """
+    def alpha(self, t: builtins.float) -> builtins.float:
+        r"""
+        Return the fitting shift using the retained live curve.
+        """
+    def b(self, t: builtins.float, maturity: builtins.float) -> builtins.float:
+        r"""
+        Return B(t,maturity) for absolute endpoints; maturity before t is valid.
+        """
+    def m_t(self, s: builtins.float, t: builtins.float, maturity: builtins.float) -> builtins.float:
+        r"""
+        Return M_T(s,t,maturity) for s <= t and any nonnegative absolute maturity.
+        """
+    def drift(self, t: builtins.float, x: builtins.float) -> builtins.float:
+        r"""
+        Return forward-measure drift using the live curve and current horizon.
+        """
+    def diffusion(self, t: builtins.float, x: builtins.float) -> builtins.float:
+        r"""
+        Return instantaneous volatility at valid t and x.
+        """
+    def expectation(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Return the exact conditional mean using the retained live curve.
+        """
+    def std_deviation(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Return conditional standard deviation.
+        """
+    def variance(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Return variance, retaining the native Ornstein-Uhlenbeck small-speed branch.
+        """
+    def evolve(self, t: builtins.float, x: builtins.float, dt: builtins.float, dw: builtins.float) -> builtins.float:
+        r"""
+        Evolve with one finite standard Gaussian draw.
+        """
+
+@typing.final
 class Merton76Process:
     r"""
     Merton's lognormal-jump model retaining observable market and jump inputs.
@@ -500,4 +571,59 @@ class Merton76Process:
     def time(self, date: time.Date) -> builtins.float:
         r"""
         Convert a date with the risk-free curve's reference date and day count.
+        """
+
+@typing.final
+class MfStateProcess:
+    r"""
+    Standalone Gaussian state process with immutable volatility buckets.
+
+    Not a fitted Markov-functional interest-rate model. Times are process years.
+    Diffusion returns raw volatility; variance integrates sigma(s)^2 exp(2 a s).
+    With no bucket times, variance uses unit volatility irrespective of vols[0].
+    """
+    def __init__(self, reversion: builtins.float, times: typing.Sequence[builtins.float], vols: typing.Sequence[builtins.float]) -> None:
+        r"""
+        Copy signed reversion, increasing times and nonnegative raw volatilities.
+        Volatility count must exceed time count by one; all inputs must be finite.
+        """
+    def reversion(self) -> builtins.float:
+        r"""
+        Return the signed exponential reversion parameter.
+        """
+    def times(self) -> builtins.list[builtins.float]:
+        r"""
+        Return a new copy of the right-continuous bucket boundaries.
+        """
+    def volatilities(self) -> builtins.list[builtins.float]:
+        r"""
+        Return a new copy of the raw bucket volatilities.
+        """
+    def x0(self) -> builtins.float:
+        r"""
+        Return zero, the initial process state.
+        """
+    def drift(self, t: builtins.float, x: builtins.float) -> builtins.float:
+        r"""
+        Return zero after validating process time and state.
+        """
+    def diffusion(self, t: builtins.float, x: builtins.float) -> builtins.float:
+        r"""
+        Return raw sigma(t), not sigma(t) exp(reversion*t).
+        """
+    def expectation(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Return the unchanged state after validating the interval.
+        """
+    def std_deviation(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Return the exact conditional standard deviation.
+        """
+    def variance(self, t: builtins.float, x: builtins.float, dt: builtins.float) -> builtins.float:
+        r"""
+        Integrate sigma(s)^2 exp(2*reversion*s) over the interval.
+        """
+    def evolve(self, t: builtins.float, x: builtins.float, dt: builtins.float, dw: builtins.float) -> builtins.float:
+        r"""
+        Evolve using one finite standard Gaussian draw.
         """

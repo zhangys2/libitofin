@@ -57,6 +57,7 @@ mod helpers;
 mod heston;
 mod heston_engines;
 mod hullwhite;
+mod hw_forward_process;
 mod incremental_statistics;
 mod inflation;
 mod iterativebootstrap;
@@ -67,6 +68,7 @@ mod mc_variance_swap;
 mod mcengine;
 mod merton;
 mod merton_simulation;
+mod mf_state_process;
 mod ois;
 mod optimize;
 mod option;
@@ -91,6 +93,7 @@ mod time;
 mod treeswaption;
 mod variance_swap;
 mod vol;
+mod xccy_basis;
 
 use calibration::{
     PyBoundaryConstraint, PyCalibrationErrorType, PyCompositeConstraint, PyConjugateGradient,
@@ -355,6 +358,8 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     processes.add_class::<gjr::PyGjrGarchProcess>()?;
     processes.add_class::<g2_process::PyG2Process>()?;
     processes.add_class::<gsr_process::PyGsrProcess>()?;
+    processes.add_class::<mf_state_process::PyMfStateProcess>()?;
+    processes.add_class::<hw_forward_process::PyHullWhiteForwardProcess>()?;
 
     let indexes = PyModule::new(py, "indexes")?;
     indexes.add_class::<overnightfuture::PySofr>()?;
@@ -394,6 +399,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<bonds::PyDuration>()?;
     instruments.add_class::<bond_forward::PyBondForward>()?;
     instruments.add_class::<fx_forward::PyFxForward>()?;
+    instruments.add_class::<xccy_basis::PyXccyBasisSwap>()?;
     instruments.add_class::<callable_bonds::PyCallabilityType>()?;
     instruments.add_class::<callable_bonds::PyCallability>()?;
     instruments.add_class::<callable_bonds::PyCallableFixedRateBond>()?;

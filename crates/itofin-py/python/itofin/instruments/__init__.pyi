@@ -51,6 +51,7 @@ __all__ = [
     "VanillaOption",
     "VanillaSwap",
     "VarianceSwap",
+    "XccyBasisSwap",
     "YearOnYearInflationSwap",
     "YoYInflationCapFloor",
     "ZeroCouponBond",
@@ -225,6 +226,18 @@ class Bond:
     def dirty_price_at_z_spread(self, discount_curve: termstructures.YieldTermStructure, z_spread: builtins.float, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
         r"""
         Dirty analytical quote per 100 using a parallel zero-rate spread.
+        """
+    def bps_from_curve(self, discount_curve: termstructures.YieldTermStructure, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Coupon-rate sensitivity per 100, not signed yield BPV. Coupon amounts are not read.
+        """
+    def bps_from_yield(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Coupon-rate BPS per 100 under flat-yield discounting, not signed yield BPV.
+        """
+    def atm_rate_from_curve(self, discount_curve: termstructures.YieldTermStructure, *, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        The coupon rate repricing the bond's own curve NPV, not a par-price target.
         """
     def duration(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, duration_type: Duration = Duration.Modified, settlement: typing.Optional[time.Date] = None) -> builtins.float:
         r"""
@@ -1687,6 +1700,16 @@ class VanillaOption:
                 date the option prices against.
         """
     @classmethod
+    def cash_or_nothing(cls, option_type: OptionType, strike: builtins.float, cash_payoff: builtins.float, expiry: time.Date, settings: itofin.Settings) -> VanillaOption:
+        r"""
+        Build a European fixed-cash digital option, using the existing analytic engine.
+
+        The strike must be finite and nonnegative, and cash_payoff finite. Signed
+        and zero cash amounts are accepted. Use set_engine(process) to attach the
+        analytic European engine; other engine compatibility is not implied.
+        Existing zero-volatility and zero-strike numerical behavior is retained.
+        """
+    @classmethod
     def american(cls, option_type: OptionType, strike: builtins.float, earliest: time.Date, latest: time.Date, settings: itofin.Settings) -> VanillaOption:
         r"""
         Build the option exercisable at any time over [earliest, latest].
@@ -2246,6 +2269,55 @@ class VarianceSwap:
     def maturity_date(self) -> time.Date:
         r"""
         Return the immutable contract maturity date.
+        """
+
+@typing.final
+class XccyBasisSwap:
+    r"""
+    Constant-notional Ibor swap paying base and receiving quote, including principal exchanges.
+    Spot is an immutable quote-per-base snapshot. Every query rereads live curves/fixings/Settings.
+    This is not a resetting, overnight, live-spot or cached pricing-engine facade.
+    """
+    def __init__(self, base_schedule: time.Schedule, base_index: indexes.IborIndex, base_curve: termstructures.YieldTermStructure, base_notional: builtins.float, base_day_count: time.DayCounter, quote_schedule: time.Schedule, quote_index: indexes.IborIndex, quote_curve: termstructures.YieldTermStructure, quote_notional: builtins.float, quote_day_count: time.DayCounter, quote_spread: builtins.float, base_currency: indexes.Currency, quote_currency: indexes.Currency, spot: builtins.float, settings: itofin.Settings, *, payment_convention: typing.Optional[time.BusinessDayConvention] = None, settlement_date: typing.Optional[time.Date] = None, npv_date: typing.Optional[time.Date] = None, include_settlement_flows: builtins.bool = False, spot_settlement_date: typing.Optional[time.Date] = None) -> None:
+        r"""
+        Copy currencies and spot, retaining the exact live curves, indexes, schedules and Settings.
+        Omitted payment convention means Following. Both valuation dates must be supplied together.
+        """
+    def base_leg_pv(self) -> builtins.float:
+        r"""
+        Contractual base-currency leg PV before its paid-leg sign.
+        """
+    def quote_leg_pv(self) -> builtins.float:
+        r"""
+        Contractual quote-currency leg PV before its received-leg sign.
+        """
+    def quote_leg_bps(self) -> builtins.float:
+        r"""
+        Quote-currency sensitivity per one basis point of spread, excluding principal.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Signed base-currency NPV at the selected NPV date.
+        """
+    def npv_in_quote(self) -> builtins.float:
+        r"""
+        Signed quote-currency NPV at the selected NPV date.
+        """
+    def fair_quote_basis_spread(self) -> builtins.float:
+        r"""
+        Absolute quote spread repricing the swap to zero, not a spread adjustment.
+        """
+    def spot(self) -> builtins.float:
+        r"""
+        Immutable quote-currency units per one base unit.
+        """
+    def base_currency(self) -> indexes.Currency:
+        r"""
+        Independent copy of the base currency.
+        """
+    def quote_currency(self) -> indexes.Currency:
+        r"""
+        Independent copy of the quote currency.
         """
 
 @typing.final

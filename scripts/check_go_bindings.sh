@@ -118,7 +118,7 @@ cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/cpp-g2-process
 ./target/cpp-g2-process
-for probe in c_currency black_delta black_calculator bond_risk fx_forward gsr_process; do
+for probe in c_currency black_delta black_calculator bond_risk fx_forward gsr_process cash_digital mf_state_process hw_forward_process xccy_basis; do
   cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
     "crates/libitofin-ffi/tests/$probe.c" -Ltarget/release -litofin_ffi -lm -o "target/c-$probe"
   "./target/c-$probe"
@@ -133,9 +133,12 @@ go vet -tags optimization_oracle ./...
 go test -tags optimization_oracle -race -count=1 -run "^TestOptimizationMethodsQuantLibParabola$" ./...
 go test -race -count=1 -coverprofile=../../target/go-coverage.out ./...
 go run ./examples/european_option
+go run ./examples/cash_digital
 go run ./examples/portfolio
 go run ./examples/g2_process
 go run ./examples/gsr_process
+go run ./examples/mf_state_process
+go run ./examples/hw_forward_process
 
 go run ./examples/drawdown
 go run ./examples/benchmark_beta
@@ -148,5 +151,8 @@ go run ./examples/callable-oas
 go run ./examples/callable-risk
 
 go run ./examples/bond-forward
+go run ./examples/bond-coupon-analytics
 
 go run ./examples/float-float-swap
+
+go run ./examples/xccy_basis

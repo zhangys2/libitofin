@@ -1787,6 +1787,39 @@ typedef struct ItofinVarianceSwapMcConfig {
   uint64_t seed;
 } ItofinVarianceSwapMcConfig;
 
+/**
+ * Pay base, receive quote, with mandatory initial and final principal exchanges.
+ * Currency handles and immutable spot are copied; index/curve/Settings graphs are retained.
+ */
+typedef struct ItofinXccyBasisSwapConfig {
+  uint64_t base_schedule;
+  uint64_t base_index;
+  uint64_t base_curve;
+  uint64_t base_day_counter;
+  uint64_t base_currency;
+  uint64_t quote_schedule;
+  uint64_t quote_index;
+  uint64_t quote_curve;
+  uint64_t quote_day_counter;
+  uint64_t quote_currency;
+  uint64_t settings;
+  double base_notional;
+  double quote_notional;
+  double quote_spread;
+  /**
+   * Quote-currency units per base unit at reference or explicit spot settlement.
+   */
+  double spot;
+  uint8_t has_payment_convention;
+  int32_t payment_convention;
+  uint8_t has_valuation_dates;
+  int32_t settlement_date;
+  int32_t npv_date;
+  uint8_t include_settlement_flows;
+  uint8_t has_spot_settlement_date;
+  int32_t spot_settlement_date;
+} ItofinXccyBasisSwapConfig;
+
 #define ITOFIN_OPTIMIZE_CONVERGED_XTOL 0
 
 #define ITOFIN_OPTIMIZE_CONVERGED_FTOL 1
@@ -2439,6 +2472,45 @@ int32_t itofin_bond_risk(struct ItofinContext *ctx,
                          struct ItofinBondYieldAnalyticsConfig a,
                          double *out,
                          struct ItofinError *error);
+
+/**
+ * Coupon-rate BPS per 100 of notional, not signed yield BPV. Coupon amounts are not read.
+ * Settlement-date and ex-coupon flows are excluded. No pricing engine is required.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_bps_from_curve(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   uint64_t discount,
+                                   int32_t serial,
+                                   double *out,
+                                   struct ItofinError *error);
+
+/**
+ * Coupon-rate BPS per 100 under flat-yield discounting, not signed yield BPV.
+ * Coupon amounts are not read. Settlement-date and ex-coupon flows are excluded.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_bps_from_yield(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   double rate,
+                                   struct ItofinBondYieldAnalyticsConfig a,
+                                   double *out,
+                                   struct ItofinError *error);
+
+/**
+ * The coupon rate repricing the bond's own curve NPV, not a par-price target.
+ * Reads live coupon amounts without a pricing engine. Ordinary bonds only.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_atm_rate_from_curve(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        uint64_t discount,
+                                        int32_t serial,
+                                        double *out,
+                                        struct ItofinError *error);
 
 /**
  * # Safety
@@ -5204,6 +5276,47 @@ int32_t itofin_cos_heston_value(struct ItofinContext *ctx,
                                 struct ItofinError *error);
 
 /**
+ * Retains the exact curve handle. Initial short rate is captured; horizon starts at zero.
+ * # Safety
+ * Follow the crate-level owning-thread and pointer contract. Output on success only.
+ */
+int32_t itofin_hw_forward_process_new(struct ItofinContext *ctx,
+                                      uint64_t yield_curve,
+                                      double a,
+                                      double sigma,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * Thirteen query kinds: 0 x0, 1 a, 2 sigma, 3 horizon, 4 alpha(t), 5 B(t,dt),
+ * 6 M_T(t,x,dt), 7 drift(t,x), 8 diffusion(t,x), 9 expectation(t,x,dt),
+ * 10 std deviation(t,x,dt), 11 variance(t,x,dt), 12 evolve(t,x,dt,dw).
+ * For kinds 5/6, dt is an absolute maturity; x is the second endpoint for kind 6.
+ * Unused inputs are ignored. Times may exceed the forward-measure horizon.
+ * # Safety
+ * Follow the crate-level owning-thread and pointer contract. Output on success only.
+ */
+int32_t itofin_hw_forward_process_query(struct ItofinContext *ctx,
+                                        uint64_t process,
+                                        int32_t kind,
+                                        double t,
+                                        double x,
+                                        double dt,
+                                        double dw,
+                                        double *out,
+                                        struct ItofinError *error);
+
+/**
+ * Replaces the horizon using the native notifying setter. Invalid values preserve state.
+ * # Safety
+ * Follow the crate-level owning-thread and pointer contract.
+ */
+int32_t itofin_hw_forward_process_set_forward_measure_time(struct ItofinContext *ctx,
+                                                           uint64_t process,
+                                                           double horizon,
+                                                           struct ItofinError *error);
+
+/**
  * Create an empty incremental accumulator in the caller's context.
  *
  * # Safety
@@ -6812,6 +6925,50 @@ int32_t itofin_jump_diffusion_engine_new(struct ItofinContext *ctx,
                                          struct ItofinError *error);
 
 /**
+ * Copies the parameter arrays. Volatility count must exceed time count by one.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_mf_state_process_new(struct ItofinContext *ctx,
+                                    double reversion,
+                                    const double *times,
+                                    size_t times_len,
+                                    const double *vols,
+                                    size_t vols_len,
+                                    uint64_t *out,
+                                    struct ItofinError *error);
+
+/**
+ * Query kind: 0 reversion, 1 x0, 2 drift, 3 diffusion, 4 expectation,
+ * 5 standard deviation, 6 variance, 7 evolve. Unused inputs are ignored.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_mf_state_process_query(struct ItofinContext *ctx,
+                                      uint64_t process,
+                                      int32_t kind,
+                                      double t,
+                                      double x,
+                                      double dt,
+                                      double dw,
+                                      double *out,
+                                      struct ItofinError *error);
+
+/**
+ * Copies grid kind 0 times or 1 volatilities. Pass null output/capacity zero
+ * to obtain its size. An undersized buffer leaves both outputs unchanged.
+ * # Safety
+ * Follow the crate-level C caller contract. Buffers and written must not overlap.
+ */
+int32_t itofin_mf_state_process_grid(struct ItofinContext *ctx,
+                                     uint64_t process,
+                                     int32_t kind,
+                                     double *out,
+                                     size_t capacity,
+                                     size_t *written,
+                                     struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -7212,6 +7369,23 @@ int32_t itofin_option_new(struct ItofinContext *ctx,
                           uint64_t settings,
                           uint64_t *out,
                           struct ItofinError *error);
+
+/**
+ * Build a European cash-or-nothing option retaining the supplied settings.
+ * Kind is 0 call or 1 put. Strike must be finite and nonnegative; cash must
+ * be finite, with signed and zero amounts accepted. Attach the existing analytic
+ * European engine. Other engine compatibility is not established by this factory.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_option_cash_or_nothing_new(struct ItofinContext *ctx,
+                                          int32_t kind,
+                                          double strike,
+                                          double cash_payoff,
+                                          int32_t expiry,
+                                          uint64_t settings,
+                                          uint64_t *out,
+                                          struct ItofinError *error);
 
 /**
  * Build an American option whose exercise window starts at Date::min_date().
@@ -8993,6 +9167,40 @@ int32_t itofin_variance_swap_samples(struct ItofinContext *ctx,
                                      uint64_t swap,
                                      size_t *out,
                                      struct ItofinError *error);
+
+/**
+ * Construct a plain Ibor swap. Omitted payment convention means Following.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_xccy_basis_swap_new(struct ItofinContext *ctx,
+                                   const struct ItofinXccyBasisSwapConfig *cfg,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * Queries: 0 base-leg PV, 1 quote-leg PV, 2 quote-leg BPS, 3 base NPV,
+ * 4 quote NPV, 5 absolute fair quote spread, 6 immutable spot.
+ * Contractual leg PVs precede the paid-base/received-quote signs.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_xccy_basis_swap_value(struct ItofinContext *ctx,
+                                     uint64_t id,
+                                     int32_t query,
+                                     double *out,
+                                     struct ItofinError *error);
+
+/**
+ * Copy a currency into an independently owned handle: side zero base, one quote.
+ * # Safety
+ * Follow the crate-level pointer and owning-thread contract. Output on success only.
+ */
+int32_t itofin_xccy_basis_swap_currency(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        int32_t side,
+                                        uint64_t *out,
+                                        struct ItofinError *error);
 
 #ifdef __cplusplus
 }  // extern "C"
