@@ -31,10 +31,14 @@ mod blackconstantvol;
 mod blackvariancecurve;
 mod blackvariancesurface;
 mod capfloor;
+mod carrmadanlocalvol;
+mod cubicsmile;
 mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
+mod interpolatedlocalvolsurface;
 mod interpolatedsmilesection;
+mod kalman_smile;
 mod localconstantvol;
 mod localvolcurve;
 mod localvolsurface;
@@ -44,6 +48,7 @@ mod sabr;
 mod sabrsmilesection;
 mod smilesection;
 mod swaption;
+mod total_variance_cubic_smile;
 mod volatilitytype;
 
 pub use abcd::{AbcdFunction, AbcdSquared};
@@ -51,6 +56,8 @@ pub use blackconstantvol::BlackConstantVol;
 pub use blackvariancecurve::{BlackVarianceCurve, BlackVolTimeExtrapolation};
 pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolCurve, CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
+pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
+pub use cubicsmile::{CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
 pub use inflation::{
@@ -60,7 +67,13 @@ pub use inflation::{
     YoYOptionletStripper, YoYOptionletVolHelperBase, YoYOptionletVolatilityHelper,
     YoYOptionletVolatilitySurface, YoYOptionletVolatilitySurfaceBase,
 };
+pub use interpolatedlocalvolsurface::InterpolatedLocalVolSurface;
 pub use interpolatedsmilesection::InterpolatedSmileSection;
+pub use kalman_smile::{
+    FilterConfig, KalmanSmileSection, MAX_END_SLOPE, MAX_OVERHANG, N_KNOTS, SmileContext,
+    UpdateResult, UpdateStatus, basis_derivative, basis_vector, kalman_update_batch,
+    kalman_update_scalar, process_covariance, transport,
+};
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;
 pub use localvolsurface::LocalVolSurface;
@@ -77,6 +90,10 @@ pub use swaption::{
     ConstantSwaptionVolatility, InterpolatedSwaptionVolatilityCube, SabrSwaptionVolatilityCube,
     SwaptionCubeSmileSection, SwaptionVolatilityCube, SwaptionVolatilityDiscrete,
     SwaptionVolatilityMatrix, SwaptionVolatilityStructure,
+};
+pub use total_variance_cubic_smile::{
+    ArbitrageFallbackPolicy, ButterflyArbitrageReport, RogerLeeWing, RogerLeeWingConfig,
+    TotalVarianceCubicSmileSection, WingExtrapolationMode,
 };
 pub use volatilitytype::VolatilityType;
 

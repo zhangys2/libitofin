@@ -1,0 +1,43 @@
+{
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "expiration_timestamp": 1735286400000,
+      "instrument_name": "BTC-27DEC24-100000-C",
+      "is_active": true,
+      "kind": "option",
+      "option_type": "call",
+      "quote_currency": "BTC",
+      "settlement_currency": "BTC",
+      "strike": 100000
+    },
+    {
+      "expiration_timestamp": 1735286400000,
+      "instrument_name": "BTC-27DEC24-100000-P",
+      "is_active": true,
+      "kind": "option",
+      "option_type": "put",
+      "quote_currency": "BTC",
+      "settlement_currency": "BTC",
+      "strike": 100000
+    },
+    {
+      "expiration_timestamp": 1600000000000,
+      "instrument_name": "BTC-27SEP24-90000-C",
+      "is_active": true,
+      "kind": "option",
+      "option_type": "call",
+      "settlement_currency": "BTC",
+      "strike": 90000
+    },
+    {
+      "expiration_timestamp": 1735286400000,
+      "instrument_name": "BTC-27DEC24-110000-C",
+      "is_active": true,
+      "kind": "option",
+      "option_type": "call",
+      "settlement_currency": "USDC",
+      "strike": 110000
+    }
+  ]
+}

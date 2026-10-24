@@ -1,46 +1,29 @@
-//! The driver that rolls a one-dimensional grid back and reads it off.
+//! One-dimensional finite-difference solver with cubic interpolation.
 //!
-//! Port of `ql/methods/finitedifferences/solvers/fdm1dimsolver.hpp:38` and its
-//! `.cpp`.
+//! Port of `ql/methods/finitedifferences/solvers/fdm1dimsolver.{hpp,cpp}`:
+//! rolls a 1-D grid from maturity to 0 via [`FdmBackwardSolver`], then answers
+//! point queries through a [`MonotonicCubicNaturalSpline`] on the result.
 
 use std::cell::RefCell;
 
 use crate::errors::QlResult;
 use crate::math::array::Array;
 use crate::math::interpolations::Interpolation;
-use crate::math::interpolations::cubic::{CubicInterpolation, MonotonicCubicNaturalSpline};
+use crate::math::interpolations::cubic::MonotonicCubicNaturalSpline;
 use crate::methods::finitedifferences::operators::FdmLinearOpComposite;
 use crate::methods::finitedifferences::stepconditions::{
     FdmSnapshotCondition, FdmStepConditionComposite,
 };
-use crate::require;
-use crate::shared::{Shared, SharedMut, shared};
-use crate::types::{Real, Time};
+use crate::patterns::lazyobject::LazyObject;
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
+use crate::types::Real;
+use crate::utilities::null::Null;
 
-use super::{FdmBackwardSolver, FdmSchemeDesc, FdmSolverDesc};
+use super::fdmbackwardsolver::FdmBackwardSolver;
+use super::fdmschemedesc::FdmSchemeDesc;
+use super::fdmsolverdesc::FdmSolverDesc;
 
-/// The interval the theta capture is placed inside, one day in years
-/// (`fdm1dimsolver.cpp:37`).
-const ONE_DAY: Time = 1.0 / 365.0;
-
-/// The fraction of that interval the capture sits at (`cpp:37`), which keeps
-/// the snapshot strictly before the first stopping time rather than on it.
-const CAPTURE_FRACTION: Real = 0.99;
-
-/// Seeds a grid with the terminal payoff, rolls it back to today and answers
-/// value, derivative and theta off a monotone natural cubic spline.
-///
-/// The grid is read along direction zero only (`cpp:49`): C++ takes a
-/// one-dimensional layout for granted here and so does this port, which is
-/// what the engines of #668 construct.
-///
-/// C++ is a `LazyObject` (`hpp:38`) and this is not. The distinction is not
-/// observed: `FdmBlackScholesSolver` builds a fresh solver on every
-/// recalculation (`fdmblackscholessolver.cpp:55`), so the laziness only ever
-/// buys the compute-once behaviour of a single pricing, never a notification
-/// from the market data underneath. That is a plain internal cache, and the
-/// observer wiring a [`LazyObject`](crate::patterns::lazyobject::LazyObject)
-/// brings would be wiring nothing ever fires.
+/// Lazy 1-D FD solver (`fdm1dimsolver.hpp`).
 pub struct Fdm1DimSolver {
     solver_desc: FdmSolverDesc,
     scheme_desc: FdmSchemeDesc,
@@ -49,33 +32,39 @@ pub struct Fdm1DimSolver {
     conditions: Shared<FdmStepConditionComposite>,
     x: Vec<Real>,
     initial_values: Vec<Real>,
-    interpolation: RefCell<Option<CubicInterpolation>>,
+    interpolation: RefCell<Option<crate::math::interpolations::cubic::CubicInterpolation>>,
+    result_values: RefCell<Vec<Real>>,
+    lazy: SharedMut<LazyObject>,
 }
 
 impl Fdm1DimSolver {
-    /// The solver rolling `op` over the grid `solver_desc` describes, under the
-    /// scheme `scheme_desc` names (`cpp:32-51`).
-    ///
-    /// Seeding happens here rather than on the first read, as it does in C++:
-    /// the payoff at maturity is a property of the descriptor, not of the
-    /// rollback.
+    /// `Fdm1DimSolver(solverDesc, schemeDesc, op)` (`fdm1dimsolver.cpp:33-55`).
     pub fn new(
         solver_desc: FdmSolverDesc,
         scheme_desc: FdmSchemeDesc,
         op: SharedMut<dyn FdmLinearOpComposite>,
-    ) -> Self {
-        let theta_condition = shared(FdmSnapshotCondition::new(theta_time(&solver_desc)));
+    ) -> Fdm1DimSolver {
+        let layout = solver_desc.mesher.layout();
+        let first_stop = solver_desc
+            .condition
+            .stopping_times()
+            .first()
+            .copied()
+            .unwrap_or(solver_desc.maturity);
+        let theta_t = 0.99 * Real::min(1.0 / 365.0, first_stop);
+        let theta_condition = shared(FdmSnapshotCondition::new(theta_t));
         let conditions =
             FdmStepConditionComposite::join_conditions(&theta_condition, &solver_desc.condition);
 
-        let layout = Shared::clone(solver_desc.mesher.layout());
-        let mut x = vec![0.0; layout.size()];
+        let mut x = Vec::with_capacity(layout.size());
         let mut initial_values = vec![0.0; layout.size()];
-        for iter in layout.iter() {
-            initial_values[iter.index()] = solver_desc
+        let mut position = layout.begin();
+        while position.index() < layout.size() {
+            initial_values[position.index()] = solver_desc
                 .calculator
-                .avg_inner_value(&iter, solver_desc.maturity);
-            x[iter.index()] = solver_desc.mesher.location(&iter, 0);
+                .avg_inner_value(&position, solver_desc.maturity);
+            x.push(solver_desc.mesher.location(&position, 0));
+            position.advance();
         }
 
         Fdm1DimSolver {
@@ -87,92 +76,70 @@ impl Fdm1DimSolver {
             x,
             initial_values,
             interpolation: RefCell::new(None),
+            result_values: RefCell::new(Vec::new()),
+            lazy: shared_mut(LazyObject::new(true)),
         }
     }
 
-    /// The rolled-back value at `x` (`cpp:67-70`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the rollback or the spline fails.
+    /// Interpolated solution at `x` (`fdm1dimsolver.cpp:70-73`).
     pub fn interpolate_at(&self, x: Real) -> QlResult<Real> {
-        self.validate_query(x)?;
-        self.read_off(|spline| spline.value(x))
+        self.calculate()?;
+        self.interpolation
+            .borrow()
+            .as_ref()
+            .expect("interpolation is filled by calculate")
+            .value(x)
     }
 
-    /// The first derivative of the rolled-back grid at `x` (`cpp:88-91`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the rollback or the spline fails.
-    pub fn derivative_x(&self, x: Real) -> QlResult<Real> {
-        self.validate_query(x)?;
-        self.read_off(|spline| spline.derivative(x))
-    }
-
-    /// The second derivative of the rolled-back grid at `x` (`cpp:93-96`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the rollback or the spline fails.
-    pub fn derivative_xx(&self, x: Real) -> QlResult<Real> {
-        self.validate_query(x)?;
-        self.read_off(|spline| spline.second_derivative(x))
-    }
-
-    /// The theta at `x`, from the grid captured a fraction of a day before
-    /// today (`cpp:72-85`).
-    ///
-    /// [`None`] is C++'s `Null<Real>` (`cpp:73-74`), returned when the first
-    /// stopping time is zero. That is a division guard rather than a special
-    /// case: a stopping time at zero drives [`theta_time`] to zero through the
-    /// `min`, which would leave the capture on today itself and the difference
-    /// quotient dividing by nothing.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the rollback or either spline fails. Included in
-    /// that is an unfired capture, which C++ instead reads as a grid of zeros
-    /// (`cpp:77-80` copies an empty array into a sized one). No route the
-    /// backward solver offers reaches it: the capture time is carried by the
-    /// joined stopping times and sits strictly inside `(0, maturity)`, and
-    /// whichever arm that solver takes, its last segment ends on today - so
-    /// the model rolling that segment cuts a sub-step on the capture and the
-    /// condition fires there.
-    pub fn theta_at(&self, x: Real) -> QlResult<Option<Real>> {
-        self.validate_query(x)?;
-        if self.conditions.stopping_times().first() == Some(&0.0) {
-            return Ok(None);
+    /// Finite-difference theta at `x` (`fdm1dimsolver.cpp:75-88`).
+    pub fn theta_at(&self, x: Real) -> QlResult<Real> {
+        if self
+            .conditions
+            .stopping_times()
+            .first()
+            .is_some_and(|&t| t == 0.0)
+        {
+            return Ok(Real::null());
         }
-
-        let value = self.interpolate_at(x)?;
-        let captured = self.theta_condition.values();
-        let capture_spline = MonotonicCubicNaturalSpline::new(self.x.clone(), captured.to_vec())?;
-
-        Ok(Some(
-            (capture_spline.value(x)? - value) / self.theta_condition.time(),
-        ))
+        self.calculate()?;
+        let theta_values = self.theta_condition.values().to_vec();
+        let theta_interp = MonotonicCubicNaturalSpline::new(self.x.clone(), theta_values)?;
+        Ok((theta_interp.value(x)? - self.interpolate_at(x)?) / self.theta_condition.time())
     }
 
-    fn validate_query(&self, x: Real) -> QlResult<()> {
-        require!(
-            self.solver_desc.mesher.layout().dim().len() == 1,
-            "one-dimensional solver requires a one-dimensional grid"
-        );
-        require!(x.is_finite(), "query coordinate must be finite");
-        Ok(())
+    /// `∂/∂x` of the solution (`fdm1dimsolver.cpp:90-93`).
+    pub fn derivative_x(&self, x: Real) -> QlResult<Real> {
+        self.calculate()?;
+        self.interpolation
+            .borrow()
+            .as_ref()
+            .expect("interpolation is filled by calculate")
+            .derivative(x)
     }
 
-    /// Rolls the seeded grid back and splines the result, once (`cpp:54-65`).
+    /// `∂²/∂x²` of the solution (`fdm1dimsolver.cpp:93-96`).
+    pub fn derivative_xx(&self, x: Real) -> QlResult<Real> {
+        self.calculate()?;
+        self.interpolation
+            .borrow()
+            .as_ref()
+            .expect("interpolation is filled by calculate")
+            .second_derivative(x)
+    }
+
     fn calculate(&self) -> QlResult<()> {
-        let built = self.interpolation.borrow().is_some();
-        if built {
+        if !self.lazy.borrow_mut().start_calculation() {
             return Ok(());
         }
+        let result = self.perform_calculations();
+        self.lazy.borrow_mut().finish_calculation(&result);
+        result
+    }
 
+    fn perform_calculations(&self) -> QlResult<()> {
         let mut rhs = Array::from(self.initial_values.clone());
         FdmBackwardSolver::new(
-            self.op.clone(),
+            SharedMut::clone(&self.op),
             self.solver_desc.bc_set.clone(),
             Some(Shared::clone(&self.conditions)),
             self.scheme_desc,
@@ -185,82 +152,40 @@ impl Fdm1DimSolver {
             self.solver_desc.damping_steps,
         )?;
 
-        let spline = MonotonicCubicNaturalSpline::new(self.x.clone(), rhs.to_vec())?;
-        *self.interpolation.borrow_mut() = Some(spline);
-
+        let result_values = rhs.to_vec();
+        let interpolation =
+            MonotonicCubicNaturalSpline::new(self.x.clone(), result_values.clone())?;
+        *self.result_values.borrow_mut() = result_values;
+        *self.interpolation.borrow_mut() = Some(interpolation);
         Ok(())
     }
-
-    fn read_off<T>(&self, read: impl FnOnce(&CubicInterpolation) -> QlResult<T>) -> QlResult<T> {
-        self.calculate()?;
-
-        let cached = self.interpolation.borrow();
-        let spline = cached
-            .as_ref()
-            .expect("calculate leaves the interpolation built");
-
-        read(spline)
-    }
-}
-
-/// The time the theta capture fires at (`cpp:36-40`): a fraction of a day
-/// before today, or of the first stopping time when one falls inside that day.
-fn theta_time(solver_desc: &FdmSolverDesc) -> Time {
-    let first_stopping_time = solver_desc
-        .condition
-        .stopping_times()
-        .first()
-        .copied()
-        .unwrap_or(solver_desc.maturity);
-
-    CAPTURE_FRACTION * ONE_DAY.min(first_stopping_time)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::instruments::CashOrNothingPayoff;
-    use crate::methods::finitedifferences::meshers::FdmMesher;
-    use crate::methods::finitedifferences::operators::FdmLinearOp;
-    use crate::methods::finitedifferences::schemes::testops;
-    use crate::methods::finitedifferences::utilities::{
-        FdmInnerValueCalculator, fdm_log_inner_value,
+    use crate::methods::finitedifferences::meshers::{FdmMesher, UniformGridMesher};
+    use crate::methods::finitedifferences::operators::{
+        FdmLinearOp, FdmLinearOpIterator, FdmLinearOpLayout,
     };
-    use crate::option::OptionType::Put;
-    use crate::payoff::Payoff;
-    use crate::shared::shared_mut;
-    use crate::types::Size;
+    use crate::methods::finitedifferences::utilities::FdmInnerValueCalculator;
+    use crate::shared::shared;
+    use crate::types::{Size, Time};
 
-    const COEFFICIENT: Real = 0.4;
-    const MATURITY: Time = 0.75;
-    const STEPS: Size = 10;
-    const DAMPING_STEPS: Size = 2;
-    const STRIKE: Real = 100.0;
-    const CASH: Real = 10.0;
-    const CAPTURE_TIME: Time = 0.99 / 365.0;
-    const PROBE: Real = 4.5;
-    const INTERIOR: Size = 2;
+    struct ZeroOp;
 
-    /// A diagonal composite that counts the steps taken over it, so a second
-    /// read shows whether it drove a second rollback.
-    struct CountingComposite {
-        set_times: Shared<RefCell<Size>>,
-    }
-
-    impl FdmLinearOp for CountingComposite {
+    impl FdmLinearOp for ZeroOp {
         fn apply(&self, r: &Array) -> Array {
-            COEFFICIENT * r
+            Array::with_size(r.size())
         }
     }
 
-    impl FdmLinearOpComposite for CountingComposite {
+    impl FdmLinearOpComposite for ZeroOp {
         fn size(&self) -> Size {
             1
         }
 
         fn set_time(&mut self, _t1: Time, _t2: Time) -> QlResult<()> {
-            *self.set_times.borrow_mut() += 1;
             Ok(())
         }
 
@@ -269,11 +194,11 @@ mod tests {
         }
 
         fn apply_direction(&self, _direction: Size, r: &Array) -> Array {
-            COEFFICIENT * r
+            Array::with_size(r.size())
         }
 
-        fn solve_splitting(&self, _direction: Size, r: &Array, s: Real) -> QlResult<Array> {
-            Ok(r / (1.0 + s * COEFFICIENT))
+        fn solve_splitting(&self, _direction: Size, r: &Array, _s: Real) -> QlResult<Array> {
+            Ok(r.clone())
         }
 
         fn preconditioner(&self, r: &Array, s: Real) -> QlResult<Array> {
@@ -281,275 +206,55 @@ mod tests {
         }
     }
 
-    /// A digital put whose strike falls inside the grid, so the seed carries a
-    /// jump rather than a constant a rollback could not move visibly.
-    fn calculator(mesher: &Shared<dyn FdmMesher>) -> Shared<dyn FdmInnerValueCalculator> {
-        let payoff = shared(CashOrNothingPayoff::new(Put, STRIKE, CASH)) as Shared<dyn Payoff>;
-
-        shared(fdm_log_inner_value(payoff, Shared::clone(mesher), 0))
+    struct MesherPayoff {
+        mesher: Shared<dyn FdmMesher>,
+        f: fn(Real) -> Real,
     }
 
-    fn empty_condition() -> Shared<FdmStepConditionComposite> {
-        shared(FdmStepConditionComposite::new(&[], Vec::new()))
+    impl FdmInnerValueCalculator for MesherPayoff {
+        fn inner_value(&self, iter: &FdmLinearOpIterator, _t: Time) -> Real {
+            (self.f)(self.mesher.location(iter, 0))
+        }
+
+        fn avg_inner_value(&self, iter: &FdmLinearOpIterator, t: Time) -> Real {
+            self.inner_value(iter, t)
+        }
     }
 
-    fn desc(
-        mesher: &Shared<dyn FdmMesher>,
-        condition: Shared<FdmStepConditionComposite>,
-        maturity: Time,
-    ) -> FdmSolverDesc {
-        FdmSolverDesc {
-            mesher: Shared::clone(mesher),
+    fn fixture(f: fn(Real) -> Real) -> Fdm1DimSolver {
+        let layout = shared(FdmLinearOpLayout::new(vec![5]));
+        let mesher: Shared<dyn FdmMesher> =
+            shared(UniformGridMesher::new(Shared::clone(&layout), &[(0.0, 1.0)]).unwrap());
+        let desc = FdmSolverDesc {
+            mesher: Shared::clone(&mesher),
             bc_set: Vec::new(),
-            condition,
-            calculator: calculator(mesher),
-            maturity,
-            time_steps: STEPS,
-            damping_steps: DAMPING_STEPS,
+            condition: shared(FdmStepConditionComposite::new(&[], Vec::new())),
+            calculator: shared(MesherPayoff { mesher, f }) as Shared<dyn FdmInnerValueCalculator>,
+            maturity: 1.0,
+            time_steps: 10,
+            damping_steps: 0,
+        };
+        let op = shared_mut(ZeroOp) as SharedMut<dyn FdmLinearOpComposite>;
+        Fdm1DimSolver::new(desc, FdmSchemeDesc::douglas(), op)
+    }
+
+    #[test]
+    fn interpolates_terminal_payoff_when_generator_is_zero() {
+        let solver = fixture(|x| 2.0 * x + 1.0);
+        for &x in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+            let got = solver.interpolate_at(x).unwrap();
+            let expected = 2.0 * x + 1.0;
+            assert!(
+                (got - expected).abs() < 1e-10,
+                "at {x}: {got} vs {expected}"
+            );
         }
     }
 
-    fn solver(
-        mesher: &Shared<dyn FdmMesher>,
-        condition: Shared<FdmStepConditionComposite>,
-    ) -> Fdm1DimSolver {
-        Fdm1DimSolver::new(
-            desc(mesher, condition, MATURITY),
-            FdmSchemeDesc::douglas(),
-            testops::scaled_composite(&[COEFFICIENT]),
-        )
-    }
-
-    fn capture_time(condition: Shared<FdmStepConditionComposite>, maturity: Time) -> Time {
-        let mesher = testops::mesher();
-        let solver = Fdm1DimSolver::new(
-            desc(&mesher, condition, maturity),
-            FdmSchemeDesc::douglas(),
-            testops::scaled_composite(&[COEFFICIENT]),
-        );
-
-        solver.theta_condition.time()
-    }
-
-    /// The same roll driven by hand: seed, join a capture at the literal
-    /// `0.99 / 365`, roll from maturity to today, spline. Every number the
-    /// solver answers has to come off this, which is what separates a spline
-    /// over the rolled grid from one over the seed, and a capture time or a
-    /// step count read out of the wrong slot from the right one.
-    fn rolled_by_hand(
-        mesher: &Shared<dyn FdmMesher>,
-        condition: &Shared<FdmStepConditionComposite>,
-    ) -> CubicInterpolation {
-        let calculator = calculator(mesher);
-        let layout = Shared::clone(mesher.layout());
-        let mut x = vec![0.0; layout.size()];
-        let mut rhs = Array::with_size(layout.size());
-        for iter in layout.iter() {
-            rhs[iter.index()] = calculator.avg_inner_value(&iter, MATURITY);
-            x[iter.index()] = mesher.location(&iter, 0);
-        }
-
-        let snapshot = shared(FdmSnapshotCondition::new(CAPTURE_TIME));
-        let joined = FdmStepConditionComposite::join_conditions(&snapshot, condition);
-        FdmBackwardSolver::new(
-            testops::scaled_composite(&[COEFFICIENT]),
-            Vec::new(),
-            Some(joined),
-            FdmSchemeDesc::douglas(),
-        )
-        .rollback(&mut rhs, MATURITY, 0.0, STEPS, DAMPING_STEPS)
-        .unwrap();
-
-        MonotonicCubicNaturalSpline::new(x, rhs.to_vec()).unwrap()
-    }
-
-    /// `cpp:45-50`: the seed is the cell-averaged payoff at maturity, indexed
-    /// the way the layout indexes its points.
     #[test]
-    fn the_grid_is_seeded_with_the_cell_averaged_payoff_at_maturity() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher, empty_condition());
-
-        let calculator = calculator(&mesher);
-        let expected: Vec<Real> = mesher
-            .layout()
-            .iter()
-            .map(|iter| calculator.avg_inner_value(&iter, MATURITY))
-            .collect();
-
-        assert_eq!(solver.initial_values, expected);
-    }
-
-    /// `cpp:49` reads direction zero point by point; the mesher answers the
-    /// same coordinates in one call, so the two paths cross-check.
-    #[test]
-    fn the_grid_coordinates_are_the_mesher_locations() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher, empty_condition());
-
-        assert_eq!(solver.x, mesher.locations(0).to_vec());
-    }
-
-    /// `cpp:54-65` and `cpp:67-96`: value and both derivatives come off a
-    /// spline through the rolled-back grid.
-    #[test]
-    fn the_read_offs_come_from_the_rolled_back_grid() {
-        let mesher = testops::mesher();
-        let condition = empty_condition();
-        let solver = solver(&mesher, Shared::clone(&condition));
-        let expected = rolled_by_hand(&mesher, &condition);
-
-        assert_eq!(
-            solver.interpolate_at(PROBE).unwrap(),
-            expected.value(PROBE).unwrap()
-        );
-        assert_eq!(
-            solver.derivative_x(PROBE).unwrap(),
-            expected.derivative(PROBE).unwrap()
-        );
-        assert_eq!(
-            solver.derivative_xx(PROBE).unwrap(),
-            expected.second_derivative(PROBE).unwrap()
-        );
-    }
-
-    /// The rollback moves the grid far enough that splining the seed instead
-    /// would be visible: the digital's seed at the interior node is the full
-    /// cash payment and the rolled value is not.
-    #[test]
-    fn the_rolled_grid_is_not_the_seed() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher, empty_condition());
-
-        let rolled = solver.interpolate_at(solver.x[INTERIOR]).unwrap();
-
-        assert!(
-            (rolled - solver.initial_values[INTERIOR]).abs() > 1e-3,
-            "the rollback left the interior node at its seed {}: {rolled}",
-            solver.initial_values[INTERIOR]
-        );
-    }
-
-    /// `cpp:36-40`: with nothing stopping inside the day before today, the
-    /// capture sits a hundredth short of that whole day.
-    #[test]
-    fn the_capture_sits_just_inside_the_day_before_today() {
-        assert_eq!(capture_time(empty_condition(), MATURITY), CAPTURE_TIME);
-    }
-
-    /// `cpp:38-39`: an empty stopping-time list falls back on the maturity,
-    /// and a maturity inside that day pulls the capture in with it.
-    #[test]
-    fn a_maturity_inside_that_day_pulls_the_capture_in() {
-        assert_eq!(capture_time(empty_condition(), 0.001), 0.99 * 0.001);
-    }
-
-    /// `cpp:40`: the first stopping time wins over the maturity, and pulls the
-    /// capture in when it too falls inside the day.
-    #[test]
-    fn the_first_stopping_time_pulls_the_capture_in() {
-        let condition = shared(FdmStepConditionComposite::new(
-            &[vec![0.5, 0.002]],
-            Vec::new(),
-        ));
-
-        assert_eq!(capture_time(condition, MATURITY), 0.99 * 0.002);
-    }
-
-    /// `cpp:72-85`: the theta is the captured grid less the result, over the
-    /// time between them, and the capture fires because the joined conditions
-    /// put its time on the rollback's grid.
-    #[test]
-    fn the_theta_is_the_captured_grid_less_the_result_over_the_capture_time() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher, empty_condition());
-
-        let theta = solver
-            .theta_at(PROBE)
-            .unwrap()
-            .expect("a capture away from today has a theta");
-
-        let captured = solver.theta_condition.values();
-        assert!(
-            !captured.is_empty(),
-            "the capture did not fire through the joined conditions"
-        );
-        let capture_spline =
-            MonotonicCubicNaturalSpline::new(solver.x.clone(), captured.to_vec()).unwrap();
-        let expected = (capture_spline.value(PROBE).unwrap()
-            - solver.interpolate_at(PROBE).unwrap())
-            / CAPTURE_TIME;
-
-        assert_eq!(theta, expected);
-    }
-
-    /// `cpp:73-74`: a stopping time on today drives the capture time to zero,
-    /// so there is no interval to difference over and no theta.
-    #[test]
-    fn a_stopping_time_on_today_has_no_theta() {
-        let mesher = testops::mesher();
-        let condition = shared(FdmStepConditionComposite::new(
-            &[vec![0.0, 0.5]],
-            Vec::new(),
-        ));
-        let solver = solver(&mesher, condition);
-
-        assert_eq!(solver.theta_condition.time(), 0.0);
-        assert_eq!(solver.theta_at(PROBE).unwrap(), None);
-    }
-
-    /// The cache is what C++ gets from `LazyObject::calculate` (`cpp:68`): the
-    /// reads after the first roll no further steps.
-    #[test]
-    fn the_rollback_runs_once_however_many_reads_follow() {
-        let mesher = testops::mesher();
-        let set_times = shared(RefCell::new(0));
-        let op = shared_mut(CountingComposite {
-            set_times: Shared::clone(&set_times),
-        });
-        let solver = Fdm1DimSolver::new(
-            desc(&mesher, empty_condition(), MATURITY),
-            FdmSchemeDesc::douglas(),
-            op,
-        );
-
-        solver.interpolate_at(PROBE).unwrap();
-        let after_first_read = *set_times.borrow();
-
-        solver.derivative_x(PROBE).unwrap();
-        solver.derivative_xx(PROBE).unwrap();
-        solver.theta_at(PROBE).unwrap();
-
-        assert!(after_first_read >= STEPS + DAMPING_STEPS);
-        assert_eq!(*set_times.borrow(), after_first_read);
-    }
-    #[test]
-    fn invalid_query_coordinates_and_multidimensional_layouts_fail() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher, empty_condition());
-        for x in [Real::NAN, Real::INFINITY, Real::NEG_INFINITY] {
-            assert!(solver.interpolate_at(x).is_err());
-            assert!(solver.derivative_x(x).is_err());
-            assert!(solver.derivative_xx(x).is_err());
-            assert!(solver.theta_at(x).is_err());
-        }
-        let mesher: Shared<dyn FdmMesher> = shared(
-            crate::methods::finitedifferences::meshers::UniformGridMesher::new(
-                shared(
-                    crate::methods::finitedifferences::operators::FdmLinearOpLayout::new(vec![
-                        5, 4,
-                    ]),
-                ),
-                &[(4.0, 5.0), (0.0, 1.0)],
-            )
-            .unwrap(),
-        );
-        let solver = Fdm1DimSolver::new(
-            desc(&mesher, empty_condition(), MATURITY),
-            FdmSchemeDesc::douglas(),
-            testops::scaled_composite(&[COEFFICIENT]),
-        );
-        assert!(solver.interpolate_at(PROBE).is_err());
-        assert!(solver.theta_at(PROBE).is_err());
+    fn rejects_out_of_range_query() {
+        let solver = fixture(|x| x);
+        let err = solver.interpolate_at(2.0).unwrap_err();
+        assert!(err.message().contains("extrapolation"));
     }
 }

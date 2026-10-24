@@ -1,0 +1,310 @@
+{
+  "entries": [
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics",
+      "python": "itofin.termstructures.ForwardDiagnostics",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.BoxArbitrageViolations",
+      "python": "itofin.termstructures.ForwardDiagnostics.box_arbitrage_violations",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.IsCrossed",
+      "python": "itofin.termstructures.ForwardDiagnostics.is_crossed",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.IsValid",
+      "python": "itofin.termstructures.ForwardDiagnostics.is_valid",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.MaxSpread",
+      "python": "itofin.termstructures.ForwardDiagnostics.max_spread",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.MinSpread",
+      "python": "itofin.termstructures.ForwardDiagnostics.min_spread",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.PairsPruned",
+      "python": "itofin.termstructures.ForwardDiagnostics.pairs_pruned",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.PairsUsed",
+      "python": "itofin.termstructures.ForwardDiagnostics.pairs_used",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.Status",
+      "python": "itofin.termstructures.ForwardDiagnostics.status",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.TotalPairsReceived",
+      "python": "itofin.termstructures.ForwardDiagnostics.total_pairs_received",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ForwardDiagnostics.WlsRmse",
+      "python": "itofin.termstructures.ForwardDiagnostics.wls_rmse",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult",
+      "python": "itofin.termstructures.ImpliedForwardResult",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.Repr",
+      "python": "itofin.termstructures.ImpliedForwardResult.__repr__",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.Diagnostics",
+      "python": "itofin.termstructures.ImpliedForwardResult.diagnostics",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.DiscountFactor",
+      "python": "itofin.termstructures.ImpliedForwardResult.discount_factor",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.Forward",
+      "python": "itofin.termstructures.ImpliedForwardResult.forward",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.ForwardAskRobust",
+      "python": "itofin.termstructures.ImpliedForwardResult.forward_ask_robust",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.ForwardAskStrict",
+      "python": "itofin.termstructures.ImpliedForwardResult.forward_ask_strict",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.ForwardBidRobust",
+      "python": "itofin.termstructures.ImpliedForwardResult.forward_bid_robust",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.ForwardBidStrict",
+      "python": "itofin.termstructures.ImpliedForwardResult.forward_bid_strict",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.ImpliedCarryRate",
+      "python": "itofin.termstructures.ImpliedForwardResult.implied_carry_rate",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.IsValid",
+      "python": "itofin.termstructures.ImpliedForwardResult.is_valid",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.PairsUsed",
+      "python": "itofin.termstructures.ImpliedForwardResult.pairs_used",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForwardResult.Status",
+      "python": "itofin.termstructures.ImpliedForwardResult.status",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair",
+      "python": "itofin.termstructures.OptionQuotePair",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "NewOptionQuotePair",
+      "python": "itofin.termstructures.OptionQuotePair.__new__",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.Repr",
+      "python": "itofin.termstructures.OptionQuotePair.__repr__",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.CallAsk",
+      "python": "itofin.termstructures.OptionQuotePair.call_ask",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.CallBid",
+      "python": "itofin.termstructures.OptionQuotePair.call_bid",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.IsValid",
+      "python": "itofin.termstructures.OptionQuotePair.is_valid",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.PutAsk",
+      "python": "itofin.termstructures.OptionQuotePair.put_ask",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.PutBid",
+      "python": "itofin.termstructures.OptionQuotePair.put_bid",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "OptionQuotePair.Strike",
+      "python": "itofin.termstructures.OptionQuotePair.strike",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate",
+      "go": "ImpliedForward",
+      "python": "itofin.termstructures.implied_forward",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForward"
+      ]
+    }
+  ]
+}

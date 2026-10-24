@@ -1,6 +1,7 @@
 //! Python chart indicators backed by the shared Rust calculations.
 
 use crate::PyQlError;
+use libitofin::errors::QlError;
 use libitofin::math::chart::{
     self, BollingerBands, ChartSeries, Kd, KeltnerChannels, Macd, VolumeBars,
 };
@@ -455,7 +456,13 @@ pub(crate) fn constant_volatility(
     input: PyRef<PyChartSeries>,
     window: i64,
 ) -> PyResult<PyChartSeries> {
-    let window = usize::try_from(window).unwrap_or(0);
+    let window = usize::try_from(window).map_err(|_| {
+        PyQlError::from(QlError::new(
+            format!("volatility window must be positive, got {window}"),
+            file!(),
+            line!(),
+        ))
+    })?;
     volatility::constant_volatility(&input.inner, window)
         .map(PyChartSeries::from_core)
         .map_err(PyQlError::from)

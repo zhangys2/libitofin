@@ -149,8 +149,9 @@ fn american_price(market: &Market, ju: &JuValue) -> Real {
         shared(exercise) as Shared<dyn Exercise>,
         Shared::clone(&market.settings),
     );
-    let engine = shared_mut(FdBlackScholesVanillaEngine::new(
+    let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
         Shared::clone(&market.process),
+        Vec::new(),
         T_GRID,
         X_GRID,
         0, // damping steps

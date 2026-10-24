@@ -678,6 +678,20 @@ typedef struct ItofinFdConfig {
   int32_t scheme;
 } ItofinFdConfig;
 
+typedef struct ItofinImpliedForwardResult {
+  double forward;
+  double forward_bid_strict;
+  double forward_ask_strict;
+  double forward_bid_robust;
+  double forward_ask_robust;
+  double discount_factor;
+  double implied_carry_rate;
+  int32_t status_code;
+  uint32_t pairs_used;
+  uint32_t pairs_pruned;
+  double wls_rmse;
+} ItofinImpliedForwardResult;
+
 /**
  * Quote-per-base spot/strike, positive base notional, fixed unadjusted dates.
  */
@@ -2248,6 +2262,44 @@ int32_t itofin_black_delta_atm_strike(struct ItofinContext *ctx,
                                       int32_t atm_kind,
                                       double *out,
                                       struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. `guess` may be null. Any context
+ * and its handles must belong to the calling thread; serialize calls including
+ * destruction. See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_formula_implied_std_dev(int32_t option_type_code,
+                                             double strike,
+                                             double forward,
+                                             double black_price,
+                                             double discount,
+                                             double displacement,
+                                             const double *guess,
+                                             double accuracy,
+                                             int64_t max_iterations,
+                                             double *out,
+                                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_formula_implied_volatility(int32_t option_type_code,
+                                                double strike,
+                                                double forward,
+                                                double expiry,
+                                                double black_price,
+                                                double discount,
+                                                double displacement,
+                                                double accuracy,
+                                                int64_t max_iterations,
+                                                double *out,
+                                                struct ItofinError *error);
 
 /**
  * Construct a retained BMA index; zero forwarding creates an empty forecast handle.
@@ -4077,6 +4129,141 @@ int32_t itofin_cds_results(struct ItofinContext *ctx,
                            struct ItofinError *error);
 
 /**
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ * A null `std_dev_points` pointer with `n_points == 0` selects the default grid.
+ */
+int32_t itofin_cubic_smile_new(struct ItofinContext *ctx,
+                               const double *strikes,
+                               size_t n_strikes,
+                               const double *mid_ivs,
+                               size_t n_ivs,
+                               double forward,
+                               double exercise_time,
+                               double atm_vol,
+                               const double *std_dev_points,
+                               size_t n_points,
+                               uint8_t extrapolate,
+                               uint64_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Fit fixed knots with an explicit nonnegative curvature penalty weight.
+ * Zero smoothing requests the unregularized fit and requires full quote rank.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_cubic_smile_new_with_smoothing(struct ItofinContext *ctx,
+                                              const double *strikes,
+                                              size_t n_strikes,
+                                              const double *mid_ivs,
+                                              size_t n_ivs,
+                                              double forward,
+                                              double exercise_time,
+                                              double atm_vol,
+                                              const double *std_dev_points,
+                                              size_t n_points,
+                                              uint8_t extrapolate,
+                                              double smoothing,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Query: 0 volatility(strike), 1 volatility_at_std_dev, 2 strike_at_std_dev,
+ * 3 forward, 4 atm vol, 5 exercise time, 6 min strike, 7 max strike, 8 variance,
+ * 9 smoothing weight.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_cubic_smile_query(struct ItofinContext *ctx,
+                                 uint64_t id,
+                                 int32_t kind,
+                                 double x,
+                                 double *out,
+                                 struct ItofinError *error);
+
+/**
+ * Series: 0 knot points, 1 knot points, 2 fitted knot IVs, 3 sampled knot IVs,
+ * 4 fitted-minus-knot residuals, 5 segment coefficients flattened as (a, b, c)
+ * triples; 6 observed strikes, 7 observed coordinates, 8 observed IVs,
+ * 9 observation residuals. A null `out` reports the required length. For
+ * series 3 and 9, `valid` receives 1 for entries inside the knot domain.
+ * # Safety
+ * Follow the crate C caller contract; `out` and `valid` must hold `capacity` slots.
+ */
+int32_t itofin_cubic_smile_series(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  int32_t kind,
+                                  double *out,
+                                  uint8_t *valid,
+                                  size_t capacity,
+                                  size_t *out_len,
+                                  struct ItofinError *error);
+
+/**
+ * Fit a total variance cubic smile with Roger Lee wing asymptotics.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_total_variance_cubic_smile_new(struct ItofinContext *ctx,
+                                              const double *strikes,
+                                              size_t n_strikes,
+                                              const double *mid_ivs,
+                                              size_t n_ivs,
+                                              double forward,
+                                              double exercise_time,
+                                              double atm_vol,
+                                              double smoothing,
+                                              uint8_t arbitrage_repair,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * Query a total variance cubic smile:
+ * 0 volatility(strike), 1 variance(strike), 2 total_variance(k),
+ * 3 total_variance_derivative(k), 4 total_variance_second_derivative(k),
+ * 5 durrleman_density(k), 6 forward, 7 atm_vol, 8 exercise_time,
+ * 9 smoothing, 10 min_strike, 11 max_strike, 12 right_wing_slope, 13 left_wing_slope.
+ * # Safety
+ * Follow the crate C caller contract.
+ */
+int32_t itofin_total_variance_cubic_smile_query(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                int32_t kind,
+                                                double x,
+                                                double *out,
+                                                struct ItofinError *error);
+
+/**
+ * Check butterfly arbitrage report on a total variance cubic smile.
+ * # Safety
+ * Follow the crate C caller contract; out pointers must be valid.
+ */
+int32_t itofin_total_variance_cubic_smile_check_arbitrage(struct ItofinContext *ctx,
+                                                          uint64_t id,
+                                                          double *out_min_density,
+                                                          double *out_argmin_k,
+                                                          uint8_t *out_has_arbitrage,
+                                                          double *out_final_smoothing,
+                                                          uint32_t *out_ramp_iterations,
+                                                          double *out_tolerance,
+                                                          size_t *out_points_checked,
+                                                          struct ItofinError *error);
+
+/**
+ * Series: 0 knots_k, 1 fitted_total_variances. A null `out` reports the required length.
+ * # Safety
+ * Follow the crate C caller contract; `out` must hold `capacity` slots.
+ */
+int32_t itofin_total_variance_cubic_smile_series(struct ItofinContext *ctx,
+                                                 uint64_t id,
+                                                 int32_t kind,
+                                                 double *out,
+                                                 size_t capacity,
+                                                 size_t *out_len,
+                                                 struct ItofinError *error);
+
+/**
  * Construct a reusable currency, copying all input bytes. No ISO registry lookup.
  * Numeric fields retain the core's signed integer semantics.
  * # Safety
@@ -4273,6 +4460,23 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
                                            struct ItofinError *error);
 
 /**
+ * # Safety
+ * Pointers must be live, valid, aligned, and non-overlapping.
+ */
+int32_t itofin_implied_forward_calculate(const double *strikes,
+                                         const double *call_bids,
+                                         const double *call_asks,
+                                         const double *put_bids,
+                                         const double *put_asks,
+                                         size_t count,
+                                         int32_t convention_code,
+                                         const double *spot,
+                                         const double *discount_factor,
+                                         double expiry_years,
+                                         struct ItofinImpliedForwardResult *out,
+                                         struct ItofinError *error);
+
+/**
  * Retain both live curves and copy both currencies and the spot snapshot.
  * # Safety
  * Follow the crate-level pointer and owning-thread contract. Output on success only.
@@ -4381,6 +4585,8 @@ int32_t itofin_g2_process_matrix(struct ItofinContext *ctx,
 
 /**
  * Fit a stationary GARCH(1,1) model to a return series and forecast one variance.
+ * `out_omega` is the variance intercept. Filter and forecast want the long-run
+ * variance `omega / (1 - alpha - beta)`, not this intercept.
  * # Safety
  * `returns` holds `len` doubles. All output pointers hold one double and
  * follow the crate-level non-overlap contract.
@@ -4397,6 +4603,7 @@ int32_t itofin_garch11_fit(const ItofinReal *returns,
 /**
  * Filter returns into conditional volatility and forecast the next variance.
  * The first output slot is a zero warmup placeholder; `first_valid` is one.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
  * # Safety
  * `returns` holds `len` doubles and `out` holds `capacity` doubles. All
  * pointers follow the crate-level non-overlap contract.
@@ -4414,6 +4621,7 @@ int32_t itofin_garch11_filter(const ItofinReal *returns,
 
 /**
  * Forecast one variance from the latest return and current variance.
+ * `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
  * # Safety
  * `out_variance` is writable and follows the crate-level pointer contract.
  */

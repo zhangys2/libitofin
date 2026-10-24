@@ -104,6 +104,3 @@ impl<USG: LowDiscrepancySequence, IC: DefaultInverseCumulative> McRngTraits
         Self::with_inverse(dimension, seed, IC::default_inverse())
     }
 }
-
-/// QuantLib's default Sobol/Jaeckel standard-normal low-discrepancy policy.
-pub type LowDiscrepancy = GenericLowDiscrepancy<SobolSequence, InverseCumulativeNormal>;

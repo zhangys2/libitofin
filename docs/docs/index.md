@@ -46,7 +46,7 @@ separate binding work.
     Then add the module to your application:
 
     ```sh
-    go get github.com/benbenbang/libitofin/sdk/go@v0.24.0
+    go get github.com/benbenbang/libitofin/sdk/go@v0.43.0
     ```
 
     Go requires cgo, a C compiler, and the `itofin_external` build tag for
@@ -120,6 +120,8 @@ links to the language guides and project documentation.
 - [Asset-or-nothing payoff](asset-or-nothing-payoff.md): strict digital asset payment.
 
 - [Gap payoff](gap-payoff.md): separate trigger and payment strikes.
+
+- [Superfund and supershare payoffs](super-payoffs.md): call-only corridors. QuantLib's analytic visitor does not price them.
 
 - [Cap/floor optionlets](capfloor-optionlets.md): shared coupon extraction and pricing decomposition.
 

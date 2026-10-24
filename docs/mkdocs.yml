@@ -88,6 +88,7 @@ nav:
   - Getting started: getting-started.md
   - Go SDK: go.md
   - Standalone currencies: currency-bindings.md
+  - .NET SDK: dotnet.md
   - Finite-difference options: finite-difference.md
   - Exotic option scope: exotic-options.md
   - Variance swaps: variance-swaps.md
@@ -153,6 +154,7 @@ nav:
   - Standalone MF state bindings: mf-state-process-bindings.md
   - Asset-or-nothing payoff: asset-or-nothing-payoff.md
   - Gap payoff: gap-payoff.md
+  - Superfund and supershare payoffs: super-payoffs.md
   - Cap/floor optionlets: capfloor-optionlets.md
   - Rust API: rust.md
   - Project:

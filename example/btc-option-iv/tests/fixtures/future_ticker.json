@@ -1,0 +1,14 @@
+{
+  "jsonrpc": "2.0",
+  "method": "subscription",
+  "params": {
+    "channel": "ticker.BTC-27DEC24.100ms",
+    "data": {
+      "best_ask_price": 101300.0,
+      "best_bid_price": 101200.0,
+      "instrument_name": "BTC-27DEC24",
+      "mark_price": 101250.0,
+      "timestamp": 1700000000000
+    }
+  }
+}

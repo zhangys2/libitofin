@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "c": [
+        "itofin_black_formula_implied_std_dev"
+      ],
+      "go": "BlackFormulaImpliedStdDev",
+      "python": "itofin.pricingengines.black_formula_implied_std_dev",
+      "status": "implemented",
+      "tests": [
+        "black_implied_std_dev_matches_core"
+      ]
+    },
+    {
+      "c": [
+        "itofin_black_formula_implied_volatility"
+      ],
+      "go": "BlackFormulaImpliedVolatility",
+      "python": "itofin.pricingengines.black_formula_implied_volatility",
+      "status": "implemented",
+      "tests": [
+        "black_implied_volatility_matches_core"
+      ]
+    }
+  ]
+}

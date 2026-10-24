@@ -34,7 +34,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::shared::{Shared, SharedMut, shared, shared_mut};
 use crate::time::businessdayconvention::BusinessDayConvention;
 use crate::time::date::{Date, Day, SerialNumber, Year};
 use crate::time::period::Period;
@@ -93,6 +93,16 @@ impl Calendar {
             added_holidays: shared_mut(BTreeSet::new()),
             removed_holidays: shared_mut(BTreeSet::new()),
         }
+    }
+
+    /// Builds an empty calendar (port of QuantLib's default `Calendar()`).
+    pub fn empty() -> Calendar {
+        Calendar::from_impl(shared(EmptyImpl))
+    }
+
+    /// Whether this calendar is empty.
+    pub fn is_empty(&self) -> bool {
+        self.imp.name().is_empty()
     }
 
     /// The name of the calendar.
@@ -240,16 +250,38 @@ impl Calendar {
 
     /// Rolls `d` to the nearest business day per the given convention.
     ///
+    /// An empty calendar accepts only [`BusinessDayConvention::Unadjusted`].
+    /// [`try_adjust`](Self::try_adjust) reports any other convention as an error.
+    /// This method panics with that same message so existing `Date`-returning
+    /// callers keep their type.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `d` is the null date, on an unknown convention, or when the
+    /// calendar is empty and `c` is not `Unadjusted`.
+    pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
+        self.try_adjust(d, c)
+            .unwrap_or_else(|err| panic!("{}", err.message()))
+    }
+
+    /// [`adjust`](Self::adjust) as a [`QlResult`].
+    ///
     /// # Panics
     ///
     /// Panics if `d` is the null date, or on an unknown convention.
-    pub fn adjust(&self, d: Date, c: BusinessDayConvention) -> Date {
+    ///
+    /// # Errors
+    ///
+    /// Errors when the calendar is empty and `c` is not `Unadjusted`.
+    pub fn try_adjust(&self, d: Date, c: BusinessDayConvention) -> crate::errors::QlResult<Date> {
         use BusinessDayConvention::*;
         assert!(d != Date::null(), "null date");
 
         if c == Unadjusted {
-            return d;
+            return Ok(d);
         }
+
+        crate::require!(!self.is_empty(), "no calendar implementation provided");
 
         let mut d1 = d;
         if c == Following || c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
@@ -258,31 +290,31 @@ impl Calendar {
             }
             if c == ModifiedFollowing || c == HalfMonthModifiedFollowing {
                 if d1.month() != d.month() {
-                    return self.adjust(d, Preceding);
+                    return self.try_adjust(d, Preceding);
                 }
                 if c == HalfMonthModifiedFollowing
                     && d.day_of_month() <= 15
                     && d1.day_of_month() > 15
                 {
-                    return self.adjust(d, Preceding);
+                    return self.try_adjust(d, Preceding);
                 }
             }
-            d1
+            Ok(d1)
         } else if c == Preceding || c == ModifiedPreceding {
             while self.is_holiday(d1) {
                 d1 -= 1;
             }
             if c == ModifiedPreceding && d1.month() != d.month() {
-                return self.adjust(d, Following);
+                return self.try_adjust(d, Following);
             }
-            d1
+            Ok(d1)
         } else if c == Nearest {
             let mut d2 = d;
             while self.is_holiday(d1) && self.is_holiday(d2) {
                 d1 += 1;
                 d2 -= 1;
             }
-            if self.is_holiday(d1) { d2 } else { d1 }
+            Ok(if self.is_holiday(d1) { d2 } else { d1 })
         } else {
             panic!("unknown business-day convention");
         }
@@ -306,6 +338,7 @@ impl Calendar {
         end_of_month: bool,
     ) -> Date {
         assert!(d != Date::null(), "null date");
+        assert!(!self.is_empty(), "no calendar implementation provided");
 
         if n == 0 {
             return self.adjust(d, c);
@@ -506,6 +539,28 @@ pub fn orthodox_easter_monday(y: Year) -> Day {
     Day::from(EASTER_MONDAY[(y - 1901) as usize])
 }
 
+struct EmptyImpl;
+
+impl CalendarImpl for EmptyImpl {
+    fn name(&self) -> String {
+        String::new()
+    }
+
+    fn is_business_day(&self, _date: Date) -> bool {
+        false
+    }
+
+    fn is_weekend(&self, _weekday: Weekday) -> bool {
+        false
+    }
+}
+
+impl Default for Calendar {
+    fn default() -> Self {
+        Calendar::empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,5 +757,42 @@ mod tests {
         assert_eq!(western_easter_monday(2000), 115);
         // Orthodox Easter Monday 2000 was May 1st -> day of year 122.
         assert_eq!(orthodox_easter_monday(2000), 122);
+    }
+
+    #[test]
+    fn empty_calendar_properties() {
+        let empty = Calendar::empty();
+        assert!(empty.is_empty());
+        assert_eq!(empty.name(), "");
+
+        let default_cal = Calendar::default();
+        assert!(default_cal.is_empty());
+
+        let weekends = cal();
+        assert!(!weekends.is_empty());
+        assert_eq!(weekends.name(), "Weekends test");
+    }
+
+    #[test]
+    fn empty_calendar_adjust_is_an_error() {
+        let err = Calendar::empty()
+            .try_adjust(
+                Date::new(5, Month::January, 2023),
+                BusinessDayConvention::Following,
+            )
+            .expect_err("empty calendar must not roll a business day");
+        assert!(
+            err.message()
+                .contains("no calendar implementation provided")
+        );
+        assert_eq!(
+            Calendar::empty()
+                .try_adjust(
+                    Date::new(5, Month::January, 2023),
+                    BusinessDayConvention::Unadjusted,
+                )
+                .unwrap(),
+            Date::new(5, Month::January, 2023)
+        );
     }
 }

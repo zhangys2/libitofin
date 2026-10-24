@@ -39,14 +39,14 @@ fn null_payoff_names_and_failure_match_quantlib() {
 fn hull_white_sigma_tracks_parameters_without_shadowing_affine_a() {
     let model = HullWhite::new(curve(0.03), 0.1, 0.01).unwrap();
     assert_eq!(model.borrow().sigma(), 0.01);
-    let original_affine_a = model.borrow().a(0.0, 2.0);
+    let original_affine_a = OneFactorAffineModel::a(&*model.borrow(), 0.0, 2.0);
     assert!(original_affine_a.is_finite());
     model
         .borrow_mut()
         .set_params(&Array::from([0.2, 0.025]))
         .unwrap();
     assert_eq!(model.borrow().sigma(), 0.025);
-    assert!(model.borrow().a(0.0, 2.0).is_finite());
+    assert!(OneFactorAffineModel::a(&*model.borrow(), 0.0, 2.0).is_finite());
 }
 
 #[test]

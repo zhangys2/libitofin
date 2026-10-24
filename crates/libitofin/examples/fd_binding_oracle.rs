@@ -49,8 +49,9 @@ fn price(
         exercise,
         Shared::clone(settings),
     );
-    let engine = shared_mut(FdBlackScholesVanillaEngine::new(
+    let engine = shared_mut(FdBlackScholesVanillaEngine::with_params(
         Shared::clone(process),
+        Vec::new(),
         200,
         200,
         0,

@@ -140,6 +140,56 @@ pub fn erf(x: Real) -> Real {
     if x >= 0.0 { ONE - r / ax } else { r / ax - ONE }
 }
 
+/// The complementary error function `erfc(x) = 1 − erf(x) = (2/√π) ∫ₓ^∞ e^(−t²) dt`.
+pub fn erfc(x: Real) -> Real {
+    if !x.is_finite() {
+        return if x.is_nan() {
+            x
+        } else if x > 0.0 {
+            0.0
+        } else {
+            2.0
+        };
+    }
+
+    if x < 0.0 {
+        return 2.0 - erfc(-x);
+    }
+
+    if x < 0.84375 {
+        return ONE - erf(x);
+    }
+
+    if x < 1.25 {
+        let s = x - ONE;
+        let p = PA0 + s * (PA1 + s * (PA2 + s * (PA3 + s * (PA4 + s * (PA5 + s * PA6)))));
+        let q = ONE + s * (QA1 + s * (QA2 + s * (QA3 + s * (QA4 + s * (QA5 + s * QA6)))));
+        return (ONE - ERX) - p / q;
+    }
+
+    if x >= 28.0 {
+        return 0.0;
+    }
+
+    let ax = x;
+    let s = ONE / (ax * ax);
+    let (r, denom) = if ax < 2.85714285714285 {
+        let r =
+            RA0 + s * (RA1 + s * (RA2 + s * (RA3 + s * (RA4 + s * (RA5 + s * (RA6 + s * RA7))))));
+        let denom = ONE
+            + s * (SA1
+                + s * (SA2 + s * (SA3 + s * (SA4 + s * (SA5 + s * (SA6 + s * (SA7 + s * SA8)))))));
+        (r, denom)
+    } else {
+        let r = RB0 + s * (RB1 + s * (RB2 + s * (RB3 + s * (RB4 + s * (RB5 + s * RB6)))));
+        let denom =
+            ONE + s * (SB1 + s * (SB2 + s * (SB3 + s * (SB4 + s * (SB5 + s * (SB6 + s * SB7))))));
+        (r, denom)
+    };
+    let r = (-ax * ax - 0.5625 + r / denom).exp();
+    r / ax
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +239,18 @@ mod tests {
         assert_eq!(erf(Real::INFINITY), 1.0);
         assert_eq!(erf(Real::NEG_INFINITY), -1.0);
         assert!(erf(Real::NAN).is_nan());
+    }
+
+    #[test]
+    fn erfc_known_values() {
+        assert_eq!(erfc(0.0), 1.0);
+        assert!(close(erfc(0.1), 1.0 - 0.112_462_916_018_284_89));
+        assert!(close(erfc(1.0), 1.0 - 0.842_700_792_949_714_9));
+        assert!(close(erfc(1.5), 1.0 - 0.966_105_146_475_310_7));
+        assert!(close(erfc(2.0), 1.0 - 0.995_322_265_018_952_7));
+        assert!(close(erfc(-1.0), 2.0 - erfc(1.0)));
+        assert_eq!(erfc(Real::INFINITY), 0.0);
+        assert_eq!(erfc(Real::NEG_INFINITY), 2.0);
+        assert!(erfc(Real::NAN).is_nan());
     }
 }

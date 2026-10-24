@@ -39,12 +39,15 @@ pub use inversecumulativerng::{
 };
 pub use inversecumulativersg::InverseCumulativeRsg;
 pub use knuthuniformrng::KnuthUniformRng;
-pub use lowdiscrepancy::{GenericLowDiscrepancy, LowDiscrepancy, SobolSequence};
+pub use lowdiscrepancy::{GenericLowDiscrepancy, SobolSequence};
 pub use mt19937uniformrng::MersenneTwisterUniformRng;
 pub use poissonpolicy::{PoissonPseudoRandom, PoissonRng, PoissonRsg};
 pub use randomsequencegenerator::RandomSequenceGenerator;
 pub use ranluxuniformrng::{Ranlux3UniformRng, Ranlux4UniformRng, Ranlux64UniformRng};
-pub use rngtraits::{InverseCumulative, McRngTraits, PseudoRandom, SequenceGenerator};
+pub use rngtraits::{
+    InverseCumulative, LowDiscrepancy, McRngTraits, PseudoRandom, SequenceGenerator,
+    SobolSequenceGenerator,
+};
 pub use xoshiro256starstaruniformrng::Xoshiro256StarStarUniformRng;
 pub use zigguratgaussianrng::ZigguratGaussianRng;
 

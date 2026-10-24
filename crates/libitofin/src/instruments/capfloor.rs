@@ -18,8 +18,12 @@
 //! - Arbitrary user-defined floating coupon types are not accepted.
 //! - [`MakeCapFloor`](super::MakeCapFloor) builds the market cap/floor and
 //!   [`CapFloor::last_floating_rate_coupon`] exposes the trailing coupon the
-//!   optionlet stripper reads; `impliedVolatility` and `deepUpdate` remain unported.
-//!   [`CapFloor::optionlet`] retains a shared coupon without inheriting an engine.
+//!   optionlet stripper reads; [`CapFloor::implied_volatility`] pins
+//!   `testImpliedVolatility`; [`CapFloor::optionlet`] pins the
+//!   `testConsistency` recomposition. [`CapFloor::deep_update`] pins the
+//!   LazyObject invalidation half of C++ `CapFloor::deepUpdate` (coupon-level
+//!   deepUpdate remains deferred with the cash-flow surface, as on
+//!   [`Swap::deep_update`](crate::instruments::Swap::deep_update)).
 //! - The `CapFloor::arguments` bundle carries `start_dates` (read by the analytic
 //!   Hull-White engine to form each optionlet's exercise maturity, #438); the C++
 //!   `spreads` and `indexes` are filled but unread by any ported engine, so they
@@ -28,19 +32,27 @@
 //!   date the expiry check and the forward guard read.
 
 use std::any::Any;
+use std::cell::RefCell;
 
 use crate::cashflow::{CashFlow, Leg};
 use crate::cashflows::{CashFlows, Coupon, IborCoupon, OvernightIndexedCoupon};
 use crate::errors::QlResult;
 use crate::event::Event;
+use crate::handle::Handle;
 use crate::instrument::{Instrument, InstrumentBase};
+use crate::math::solver1d::{DerivativeSolver, Function1D};
+use crate::math::solvers1d::newtonsafe::NewtonSafe;
 use crate::patterns::observable::AsObservable;
-use crate::pricingengine::Arguments;
+use crate::pricingengine::{Arguments, PricingEngine};
+use crate::pricingengines::capfloor::{BachelierCapFloorEngine, BlackCapFloorEngine};
+use crate::quotes::{Quote, SimpleQuote};
 use crate::settings::Settings;
-use crate::shared::Shared;
+use crate::shared::{Shared, shared};
+use crate::termstructures::volatility::VolatilityType;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::date::Date;
-use crate::types::{Rate, Real, Time};
+use crate::time::daycounters::actual365fixed::Actual365Fixed;
+use crate::types::{Rate, Real, Size, Time, Volatility};
 use crate::{fail, require};
 
 /// Whether the instrument caps, floors or collars its floating leg
@@ -61,7 +73,7 @@ pub enum CapFloorType {
 /// nominal, gearing, the coupon's adjusted forward (`None` for a past-fixing
 /// coupon, the C++ `Null<Rate>`), and the de-spread cap and floor strikes
 /// (`None` where the type has none).
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CapFloorArguments {
     /// The instrument type, set by `setup_arguments`.
     pub cap_floor_type: Option<CapFloorType>,
@@ -247,76 +259,75 @@ impl CapFloor {
         self.coupons.len() + self.overnight_coupons.len()
     }
 
-    /// Extracts the zero-based optionlet, retaining its shared coupon and settings.
+    /// The floating coupons.
+    pub fn coupons(&self) -> &[Shared<IborCoupon>] {
+        &self.coupons
+    }
+
+    /// The last Ibor coupon (`lastFloatingRateCoupon`), the coupon the
+    /// optionlet stripper and [`MakeCapFloor`](super::MakeCapFloor) read.
+    /// `None` on an overnight-only instrument; use
+    /// [`last_overnight_coupon`](Self::last_overnight_coupon) there.
+    pub fn last_floating_rate_coupon(&self) -> Option<&Shared<IborCoupon>> {
+        self.coupons.last()
+    }
+
+    /// The last overnight coupon, or `None` on an Ibor-only instrument.
+    pub fn last_overnight_coupon(&self) -> Option<&Shared<OvernightIndexedCoupon>> {
+        self.overnight_coupons.last()
+    }
+
+    /// The `i`-th optionlet as a cap/floor over that one coupon
+    /// (`CapFloor::optionlet`, `capfloor.cpp:195-208`).
     ///
-    /// Only the strikes relevant to this instrument's type are copied. The new
-    /// instrument has no pricing engine or cached results, matching QuantLib;
-    /// attach an engine explicitly before pricing a live optionlet.
+    /// Index `i` runs over [`coupon_count`](Self::coupon_count): Ibor coupons
+    /// first, then overnight coupons. Keeps the parent's type and carries only
+    /// the strikes that type uses, so summing the optionlets' NPVs recomposes
+    /// the parent's (`testConsistency` recomposition, un-nested here as in the
+    /// YoY pin).
     ///
     /// # Errors
-    /// Returns an error when `index` is outside the floating leg, including an
-    /// empty leg.
-    pub fn optionlet(&self, index: usize) -> QlResult<Self> {
+    ///
+    /// When `i` is past the end of the leg.
+    pub fn optionlet(&self, i: usize) -> QlResult<CapFloor> {
         require!(
-            index < self.coupon_count(),
-            "optionlet index {index} does not exist, only {} coupons",
+            i < self.coupon_count(),
+            "optionlet {i} does not exist, only {}",
             self.coupon_count()
         );
-        let cap_rates = if matches!(
+        let mut cap_rates = Vec::new();
+        let mut floor_rates = Vec::new();
+        if matches!(
             self.cap_floor_type,
             CapFloorType::Cap | CapFloorType::Collar
         ) {
-            vec![self.cap_rates[index]]
-        } else {
-            Vec::new()
-        };
-        let floor_rates = if matches!(
+            cap_rates.push(self.cap_rates[i]);
+        }
+        if matches!(
             self.cap_floor_type,
             CapFloorType::Floor | CapFloorType::Collar
         ) {
-            vec![self.floor_rates[index]]
-        } else {
-            Vec::new()
-        };
-        if let Some(coupon) = self.coupons.get(index) {
-            Self::new(
+            floor_rates.push(self.floor_rates[i]);
+        }
+        if i < self.coupons.len() {
+            CapFloor::new(
                 self.cap_floor_type,
-                vec![Shared::clone(coupon)],
+                vec![Shared::clone(&self.coupons[i])],
                 cap_rates,
                 floor_rates,
                 Shared::clone(&self.settings),
             )
         } else {
-            Self::from_overnight(
+            CapFloor::from_overnight(
                 self.cap_floor_type,
                 vec![Shared::clone(
-                    &self.overnight_coupons[index - self.coupons.len()],
+                    &self.overnight_coupons[i - self.coupons.len()],
                 )],
                 cap_rates,
                 floor_rates,
                 Shared::clone(&self.settings),
             )
         }
-    }
-
-    /// The floating coupons.
-    pub fn coupons(&self) -> &[Shared<IborCoupon>] {
-        &self.coupons
-    }
-
-    /// The last floating coupon (`lastFloatingRateCoupon`), the coupon the
-    /// optionlet stripper reads its fixing date, payment date and accrual period
-    /// off. Returns `None` for an empty Ibor store, including overnight legs.
-    /// See [`Self::last_overnight_coupon`] for overnight instruments.
-    pub fn last_floating_rate_coupon(&self) -> Option<&Shared<IborCoupon>> {
-        self.coupons.last()
-    }
-
-    /// The last retained overnight coupon, or `None` on Ibor or empty legs.
-    ///
-    /// This borrows the same shared coupon held in [`Self::overnight_coupons`].
-    pub fn last_overnight_coupon(&self) -> Option<&Shared<OvernightIndexedCoupon>> {
-        self.overnight_coupons.last()
     }
 
     /// The leg's earliest accrual start (`startDate`).
@@ -344,6 +355,77 @@ impl CapFloor {
         )
     }
 
+    /// Implied term volatility that reprices this instrument to `target_value`
+    /// (`CapFloor::impliedVolatility`).
+    ///
+    /// Uses [`NewtonSafe`] on a temporary Black or Bachelier engine whose flat
+    /// vol is a [`SimpleQuote`], matching `ImpliedCapVolHelper` /
+    /// `capfloor.cpp:39-109`. Defaults in C++: `accuracy = 1e-4`,
+    /// `max_evaluations = 100`, `min_vol = 1e-7`, `max_vol = 4.0`,
+    /// `ShiftedLognormal`, `displacement = 0.0`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn implied_volatility(
+        &self,
+        target_value: Real,
+        discount_curve: Handle<dyn YieldTermStructure>,
+        guess: Volatility,
+        accuracy: Real,
+        max_evaluations: Size,
+        min_vol: Volatility,
+        max_vol: Volatility,
+        vol_type: VolatilityType,
+        displacement: Real,
+    ) -> QlResult<Volatility> {
+        require!(!self.is_expired()?, "instrument expired");
+
+        // Implausible seed so the first evaluation always recalculates
+        // (`ImpliedCapVolHelper` ctor, `capfloor.cpp:63-66`).
+        let vol = shared(SimpleQuote::new(-1.0));
+        let vol_handle = Handle::new(Shared::clone(&vol) as Shared<dyn Quote>);
+        let mut engine: Box<dyn PricingEngine> = match vol_type {
+            VolatilityType::ShiftedLognormal => Box::new(BlackCapFloorEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                displacement,
+                Shared::clone(&self.settings),
+            )?),
+            VolatilityType::Normal => Box::new(BachelierCapFloorEngine::with_flat_vol(
+                discount_curve,
+                vol_handle,
+                Actual365Fixed::new(),
+                Shared::clone(&self.settings),
+            )?),
+        };
+        self.setup_arguments(engine.arguments_mut())?;
+        engine.arguments_mut().validate()?;
+
+        let failure = RefCell::new(None);
+        let helper = ImpliedCapVolHelper {
+            engine,
+            vol,
+            target_value,
+            failure: &failure,
+        };
+        let solver = NewtonSafe::new().with_max_evaluations(max_evaluations);
+        let root = solver.solve_bracketed(helper, accuracy, guess, min_vol, max_vol);
+        match failure.into_inner() {
+            Some(error) => Err(error),
+            None => root,
+        }
+    }
+
+    /// Invalidates the cached results and notifies observers (the C++
+    /// `CapFloor::deepUpdate`, `capfloor.cpp:271-276`).
+    ///
+    /// C++ additionally walks `floatingLeg_` calling `deepUpdate` on each flow
+    /// to refresh coupon pricer caches; the crate's cash-flow surface exposes no
+    /// such hook yet, so the walk reduces to the instrument `update` step until
+    /// one lands — the same reduction as [`Swap::deep_update`].
+    pub fn deep_update(&mut self) {
+        self.base().observer().borrow_mut().update();
+    }
+
     /// The concrete coupons erased to a [`Leg`] for the [`CashFlows`] analytics.
     fn cash_flows(&self) -> Leg {
         self.coupons
@@ -355,6 +437,73 @@ impl CapFloor {
                     .map(|coupon| Shared::clone(coupon) as Shared<dyn CashFlow>),
             )
             .collect()
+    }
+}
+
+/// Newton objective for [`CapFloor::implied_volatility`] (`ImpliedCapVolHelper`).
+struct ImpliedCapVolHelper<'a> {
+    engine: Box<dyn PricingEngine>,
+    vol: Shared<SimpleQuote>,
+    target_value: Real,
+    failure: &'a RefCell<Option<crate::errors::QlError>>,
+}
+
+impl ImpliedCapVolHelper<'_> {
+    fn ensure_priced(&mut self, x: Volatility) {
+        let current = self.vol.value().ok();
+        if current != Some(x) {
+            self.vol.set_value(x);
+            if let Err(error) = self.engine.calculate() {
+                self.failure.borrow_mut().get_or_insert(error);
+            }
+        }
+    }
+
+    fn npv(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.value)
+    }
+
+    fn vega(&self) -> Option<Real> {
+        self.engine
+            .results()
+            .as_instrument_results()
+            .and_then(|r| r.additional_results.get("vega"))
+            .and_then(|v| v.as_ref().downcast_ref::<Real>().copied())
+    }
+}
+
+impl Function1D for ImpliedCapVolHelper<'_> {
+    fn value(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.npv() {
+            Some(value) => value - self.target_value,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new(
+                        "no results returned from pricing engine",
+                        file!(),
+                        line!(),
+                    )
+                });
+                Real::NAN
+            }
+        }
+    }
+
+    fn derivative(&mut self, x: Real) -> Real {
+        self.ensure_priced(x);
+        match self.vega() {
+            Some(vega) => vega,
+            None => {
+                self.failure.borrow_mut().get_or_insert_with(|| {
+                    crate::errors::QlError::new("vega not provided", file!(), line!())
+                });
+                Real::NAN
+            }
+        }
     }
 }
 
@@ -498,6 +647,25 @@ mod tests {
             .unwrap()
     }
 
+    /// A three-coupon 9-month overnight leg over unlinked SOFR.
+    fn overnight_leg(settings: Shared<Settings<Date>>) -> Vec<Shared<OvernightIndexedCoupon>> {
+        let index = shared(Sofr::new(
+            Handle::<dyn YieldTermStructure>::empty(),
+            settings,
+        ));
+        let schedule = MakeSchedule::new()
+            .from(Date::new(15, Month::January, 2026))
+            .to(Date::new(15, Month::October, 2026))
+            .with_frequency(Frequency::Quarterly)
+            .with_calendar(Target::new())
+            .with_convention(BusinessDayConvention::ModifiedFollowing)
+            .build();
+        OvernightLeg::new(schedule, index)
+            .with_notional(100.0)
+            .coupons()
+            .unwrap()
+    }
+
     #[test]
     fn a_cap_pads_the_strike_to_the_leg_length() {
         let settings = settings_on(Date::new(2, Month::January, 2026));
@@ -520,6 +688,73 @@ mod tests {
         assert_eq!(collar.cap_floor_type(), CapFloorType::Collar);
         assert_eq!(collar.cap_rates(), vec![0.06; n].as_slice());
         assert_eq!(collar.floor_rates(), vec![0.02; n].as_slice());
+    }
+
+    /// `optionlet(i)` keeps the parent's type and carries coupon `i` / strike `i`
+    /// (`capfloor.cpp:195-208`). Distinct per-coupon strikes + `Shared::ptr_eq`
+    /// pin the index map (a constant-strike / coupons[0] bug would still pass
+    /// a padded-strike / len-only check).
+    #[test]
+    fn an_optionlet_carries_one_coupon_and_its_own_strike() {
+        let settings = settings_on(Date::new(2, Month::January, 2026));
+        let coupons = leg(settings.clone());
+        let n = coupons.len();
+        assert_eq!(n, 3, "fixture is the documented 3-coupon leg");
+        let collar = CapFloor::collar(
+            coupons.clone(),
+            vec![0.04, 0.05, 0.06],
+            vec![0.01, 0.02, 0.03],
+            settings,
+        )
+        .unwrap();
+
+        let optionlet = collar.optionlet(1).unwrap();
+        assert_eq!(optionlet.cap_floor_type(), CapFloorType::Collar);
+        assert_eq!(optionlet.coupons().len(), 1);
+        assert!(Shared::ptr_eq(&optionlet.coupons()[0], &coupons[1]));
+        assert_eq!(optionlet.cap_rates(), [0.05].as_slice());
+        assert_eq!(optionlet.floor_rates(), [0.02].as_slice());
+
+        let err = collar.optionlet(n).err().expect("past the leg");
+        assert!(err.message().contains("does not exist"), "err was: {err}");
+    }
+
+    /// Overnight `from_overnight` instruments index `optionlet` by
+    /// `coupon_count()`, not the empty Ibor store.
+    #[test]
+    fn an_overnight_optionlet_carries_one_coupon_and_its_own_strike() {
+        let settings = settings_on(Date::new(2, Month::January, 2026));
+        let coupons = overnight_leg(settings.clone());
+        let n = coupons.len();
+        assert_eq!(n, 3, "fixture is a 3-coupon overnight leg");
+        let cap = CapFloor::from_overnight(
+            CapFloorType::Cap,
+            coupons.clone(),
+            vec![0.04, 0.05, 0.06],
+            Vec::new(),
+            settings,
+        )
+        .unwrap();
+
+        assert_eq!(cap.coupon_count(), n);
+        assert!(cap.last_floating_rate_coupon().is_none());
+        assert!(Shared::ptr_eq(
+            cap.last_overnight_coupon().expect("overnight cap"),
+            &coupons[n - 1]
+        ));
+
+        let optionlet = cap.optionlet(1).unwrap();
+        assert_eq!(optionlet.cap_floor_type(), CapFloorType::Cap);
+        assert!(optionlet.coupons().is_empty());
+        assert_eq!(optionlet.overnight_coupons().len(), 1);
+        assert!(Shared::ptr_eq(
+            &optionlet.overnight_coupons()[0],
+            &coupons[1]
+        ));
+        assert_eq!(optionlet.cap_rates(), [0.05].as_slice());
+
+        let err = cap.optionlet(n).err().expect("past the leg");
+        assert!(err.message().contains("does not exist"), "err was: {err}");
     }
 
     #[test]
@@ -586,60 +821,5 @@ mod tests {
 
         settings.set_evaluation_date(Date::new(15, Month::August, 2027));
         assert!(cap.is_expired().unwrap());
-    }
-
-    #[test]
-    fn last_overnight_coupon_retains_the_trailing_coupon_identity() {
-        let settings = settings_on(Date::new(2, Month::January, 2026));
-        let index = shared(Sofr::new(Handle::empty(), settings.clone()));
-        let schedule = MakeSchedule::new()
-            .from(Date::new(15, Month::January, 2026))
-            .to(Date::new(15, Month::October, 2026))
-            .with_frequency(Frequency::Quarterly)
-            .with_calendar(Target::new())
-            .with_convention(BusinessDayConvention::ModifiedFollowing)
-            .build();
-        let coupons = OvernightLeg::new(schedule, index)
-            .with_notional(100.0)
-            .coupons()
-            .unwrap();
-        assert_eq!(coupons.len(), 3);
-        let cap = CapFloor::from_overnight(
-            CapFloorType::Cap,
-            coupons.clone(),
-            vec![0.03],
-            Vec::new(),
-            settings,
-        )
-        .unwrap();
-        let last = cap.last_overnight_coupon().unwrap();
-        assert!(Shared::ptr_eq(last, &coupons[2]));
-        assert!(std::ptr::eq(last, &cap.overnight_coupons()[2]));
-        assert!(!Shared::ptr_eq(last, &coupons[0]));
-        assert!(cap.last_floating_rate_coupon().is_none());
-        assert_eq!(last.accrual_end_date(), Date::new(15, Month::October, 2026));
-    }
-
-    #[test]
-    fn last_overnight_coupon_is_none_on_ibor_and_empty_legs() {
-        let settings = settings_on(Date::new(2, Month::January, 2026));
-        let coupons = leg(settings.clone());
-        let last = coupons.last().unwrap().clone();
-        let cap = CapFloor::cap(coupons, vec![0.03], settings.clone()).unwrap();
-        assert!(cap.last_overnight_coupon().is_none());
-        assert!(Shared::ptr_eq(
-            cap.last_floating_rate_coupon().unwrap(),
-            &last
-        ));
-        let empty = CapFloor::from_overnight(
-            CapFloorType::Cap,
-            Vec::new(),
-            vec![0.03],
-            Vec::new(),
-            settings,
-        )
-        .unwrap();
-        assert!(empty.last_overnight_coupon().is_none());
-        assert!(empty.last_floating_rate_coupon().is_none());
     }
 }

@@ -163,11 +163,19 @@ impl FixedRateBond {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shared::shared;
+    use crate::handle::Handle;
+    use crate::instrument::Instrument;
+    use crate::interestrate::Compounding;
+    use crate::pricingengine::PricingEngine;
+    use crate::pricingengines::bond::DiscountingBondEngine;
+    use crate::shared::{SharedMut, shared, shared_mut};
+    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::nullcalendar::NullCalendar;
     use crate::time::calendars::unitedstates::{Market, UnitedStates};
     use crate::time::date::Month;
     use crate::time::daycounters::actual360::Actual360;
+    use crate::time::daycounters::actual365fixed::Actual365Fixed;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
     use crate::time::schedule::MakeSchedule;
 
@@ -305,6 +313,61 @@ mod tests {
         assert_ne!(
             maturity, last_payment,
             "the explicit schedule-end maturity wins over the derived last-payment date"
+        );
+    }
+
+    /// `bonds.cpp` testFixedRateBondWithArbitrarySchedule (`:1677`): a
+    /// date-vector schedule with no tenor reports [`Frequency::NoFrequency`]
+    /// and still prices under a discounting engine.
+    #[test]
+    fn fixed_rate_bond_with_arbitrary_schedule_prices_at_no_frequency() {
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(Date::new(1, Month::January, 2019));
+        let dates = vec![
+            Date::new(1, Month::February, 2019),
+            Date::new(7, Month::February, 2019),
+            Date::new(1, Month::April, 2019),
+            Date::new(27, Month::May, 2019),
+        ];
+        let schedule = Schedule::from_dates(dates);
+        let mut bond = FixedRateBond::new(
+            3,
+            100.0,
+            schedule,
+            vec![0.01],
+            Actual365Fixed::new(),
+            BusinessDayConvention::Following,
+            100.0,
+            None,
+            None,
+            None,
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        assert_eq!(bond.frequency(), Frequency::NoFrequency);
+
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                Date::new(1, Month::January, 2019),
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let engine = shared_mut(DiscountingBondEngine::new(
+            discount_curve,
+            None,
+            Shared::clone(&settings),
+        )) as SharedMut<dyn PricingEngine>;
+        bond.bond_mut().base_mut().set_pricing_engine(engine);
+        let price = bond.bond_mut().clean_price().unwrap();
+        assert!(
+            price.is_finite() && price > 0.0,
+            "arbitrary-schedule clean price should be a positive finite number, got {price}"
         );
     }
 }

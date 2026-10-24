@@ -5,6 +5,8 @@ use libitofin::math::garch::Garch11;
 use libitofin::types::Real;
 
 /// Fit a stationary GARCH(1,1) model to a return series and forecast one variance.
+/// `out_omega` is the variance intercept. Filter and forecast want the long-run
+/// variance `omega / (1 - alpha - beta)`, not this intercept.
 /// # Safety
 /// `returns` holds `len` doubles. All output pointers hold one double and
 /// follow the crate-level non-overlap contract.
@@ -48,6 +50,7 @@ pub unsafe extern "C" fn itofin_garch11_fit(
 
 /// Filter returns into conditional volatility and forecast the next variance.
 /// The first output slot is a zero warmup placeholder; `first_valid` is one.
+/// `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
 /// # Safety
 /// `returns` holds `len` doubles and `out` holds `capacity` doubles. All
 /// pointers follow the crate-level non-overlap contract.
@@ -92,6 +95,7 @@ pub unsafe extern "C" fn itofin_garch11_filter(
 }
 
 /// Forecast one variance from the latest return and current variance.
+/// `long_run_variance` is not the fitted intercept: pass `omega / (1 - alpha - beta)`.
 /// # Safety
 /// `out_variance` is writable and follows the crate-level pointer contract.
 #[unsafe(no_mangle)]

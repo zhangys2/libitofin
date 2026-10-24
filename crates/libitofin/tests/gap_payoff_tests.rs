@@ -133,11 +133,18 @@ fn nonfinite_inputs_preserve_quantlib_difference_comparison_semantics() {
 }
 
 #[test]
-fn analytic_calculator_rejects_unsupported_payoff_instead_of_pricing_as_vanilla() {
+fn analytic_calculator_prices_gap_rather_than_vanilla() {
     for option_type in [OptionType::Call, OptionType::Put] {
         let payoff = GapPayoff::new(option_type, 100.0, 110.0);
-        let error = BlackCalculator::with_striked_payoff(&payoff, 105.0, 0.2, 0.95)
-            .expect_err("this scalar payoff does not extend analytic visitor dispatch");
-        assert_eq!(error.message(), "unsupported payoff type: Gap");
+        let gap = BlackCalculator::with_striked_payoff(&payoff, 105.0, 0.2, 0.95).unwrap();
+        let vanilla = BlackCalculator::with_striked_payoff(
+            &PlainVanillaPayoff::new(option_type, 100.0),
+            105.0,
+            0.2,
+            0.95,
+        )
+        .unwrap();
+        assert!(gap.value().is_finite());
+        assert_ne!(gap.value(), vanilla.value());
     }
 }

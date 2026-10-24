@@ -1,41 +1,18 @@
 //! Payoffs for various options.
 //!
-//! Port of the scalar payoff subset of `ql/instruments/payoffs.{hpp,cpp}`:
+//! Port of the plain-vanilla subset of `ql/instruments/payoffs.{hpp,cpp}`:
 //! the [`TypePayoff`] and [`StrikedTypePayoff`] intermediate contracts, the
-//! [`PlainVanillaPayoff`], [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`],
-//! [`GapPayoff`], [`PercentageStrikePayoff`], [`FloatingTypePayoff`] and [`NullPayoff`]. The remaining payoffs
-//! (`SuperFundPayoff`,
-//! `SuperSharePayoff`) are follow-up work.
+//! [`PlainVanillaPayoff`], [`FloatingTypePayoff`], [`PercentageStrikePayoff`],
+//! [`CashOrNothingPayoff`], [`AssetOrNothingPayoff`], [`GapPayoff`],
+//! [`SuperFundPayoff`], [`SuperSharePayoff`], and [`NullPayoff`].
 
 use std::any::Any;
 
+use crate::errors::QlResult;
 use crate::option::OptionType;
 use crate::payoff::Payoff;
+use crate::require;
 use crate::types::Real;
-
-/// Dummy payoff for engines that define settlement independently of a scalar payoff.
-///
-/// Matches QuantLib's `NullPayoff` name and deliberate evaluation failure.
-/// It is not a zero payoff and does not enable an additional pricing engine.
-///
-/// # Panics
-/// [`Payoff::value`] always panics with `dummy payoff given`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct NullPayoff;
-
-impl Payoff for NullPayoff {
-    fn name(&self) -> String {
-        "Null".into()
-    }
-
-    fn description(&self) -> String {
-        self.name()
-    }
-
-    fn value(&self, _price: Real) -> Real {
-        panic!("dummy payoff given")
-    }
-}
 
 /// Intermediate contract for put/call payoffs (QuantLib's `TypePayoff`).
 pub trait TypePayoff: Payoff {
@@ -104,6 +81,113 @@ impl TypePayoff for PlainVanillaPayoff {
 impl StrikedTypePayoff for PlainVanillaPayoff {
     fn strike(&self) -> Real {
         self.strike
+    }
+}
+
+/// Percentage-strike payoff: strike is a moneyness multiplier on spot.
+///
+/// Ports `PercentageStrikePayoff` (`ql/instruments/payoffs.hpp:119`,
+/// `payoffs.cpp:110-118`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PercentageStrikePayoff {
+    option_type: OptionType,
+    moneyness: Real,
+}
+
+impl PercentageStrikePayoff {
+    /// Builds a percentage-strike payoff with the given type and moneyness.
+    pub fn new(option_type: OptionType, moneyness: Real) -> Self {
+        Self {
+            option_type,
+            moneyness,
+        }
+    }
+}
+
+impl Payoff for PercentageStrikePayoff {
+    fn name(&self) -> String {
+        "PercentageStrike".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!(
+            "{} {}, {} strike",
+            self.name(),
+            self.option_type,
+            self.moneyness
+        )
+    }
+
+    fn value(&self, price: Real) -> Real {
+        // `payoffs.cpp` uses `std::max(factor, 0)`, which keeps a NaN factor.
+        // `f64::max` would replace that NaN with 0.
+        let factor = match self.option_type {
+            OptionType::Call => 1.0 - self.moneyness,
+            OptionType::Put => self.moneyness - 1.0,
+        };
+        let clipped = if factor < 0.0 { 0.0 } else { factor };
+        price * clipped
+    }
+}
+
+impl TypePayoff for PercentageStrikePayoff {
+    fn option_type(&self) -> OptionType {
+        self.option_type
+    }
+}
+
+impl StrikedTypePayoff for PercentageStrikePayoff {
+    fn strike(&self) -> Real {
+        self.moneyness
+    }
+}
+
+/// Floating-strike payoff: needs both terminal price and strike at exercise.
+///
+/// Ports `FloatingTypePayoff` (`ql/instruments/payoffs.hpp:75`,
+/// `payoffs.cpp:61-74`). Single-argument [`Payoff::value`] always fails;
+/// use [`FloatingTypePayoff::value_with_strike`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloatingTypePayoff {
+    option_type: OptionType,
+}
+
+impl FloatingTypePayoff {
+    /// Builds a floating-type payoff of the given put/call type.
+    pub fn new(option_type: OptionType) -> FloatingTypePayoff {
+        FloatingTypePayoff { option_type }
+    }
+
+    /// Payoff given both the underlying price and the floating strike.
+    pub fn value_with_strike(&self, price: Real, strike: Real) -> Real {
+        let intrinsic = match self.option_type {
+            OptionType::Call => price - strike,
+            OptionType::Put => strike - price,
+        };
+        if intrinsic < 0.0 { 0.0 } else { intrinsic }
+    }
+}
+
+impl Payoff for FloatingTypePayoff {
+    fn name(&self) -> String {
+        "FloatingType".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!("{} {}", self.name(), self.option_type)
+    }
+
+    fn value(&self, _price: Real) -> Real {
+        // QuantLib's single-argument `operator()` raises
+        // `QL_FAIL("floating payoff not handled")`. `unimplemented!` would
+        // prefix that message, which the native contract does not.
+        panic!("floating payoff not handled")
+    }
+}
+
+impl TypePayoff for FloatingTypePayoff {
+    fn option_type(&self) -> OptionType {
+        self.option_type
     }
 }
 
@@ -177,12 +261,12 @@ impl StrikedTypePayoff for CashOrNothingPayoff {
     }
 }
 
-/// Binary asset-or-nothing payoff, paying the underlying price strictly beyond
-/// the strike and zero otherwise.
+/// Binary asset-or-nothing payoff: the terminal price when the option finishes
+/// in the money, otherwise zero.
 ///
-/// Matches QuantLib's `AssetOrNothingPayoff`. At the strike both call and put
-/// pay zero. Construction follows the existing infallible payoff contract;
-/// no positivity or finiteness validation is imposed.
+/// Ports `AssetOrNothingPayoff` (`ql/instruments/payoffs.hpp:138`,
+/// `payoffs.cpp:129-137`). The comparison is strict on both sides, so a price
+/// exactly at the strike pays nothing for either option type.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AssetOrNothingPayoff {
     option_type: OptionType,
@@ -190,9 +274,9 @@ pub struct AssetOrNothingPayoff {
 }
 
 impl AssetOrNothingPayoff {
-    /// Builds an asset-or-nothing payoff with the given type and strike.
-    pub fn new(option_type: OptionType, strike: Real) -> Self {
-        Self {
+    /// Builds an asset-or-nothing payoff of the given type and strike.
+    pub fn new(option_type: OptionType, strike: Real) -> AssetOrNothingPayoff {
+        AssetOrNothingPayoff {
             option_type,
             strike,
         }
@@ -201,7 +285,7 @@ impl AssetOrNothingPayoff {
 
 impl Payoff for AssetOrNothingPayoff {
     fn name(&self) -> String {
-        "AssetOrNothing".into()
+        "AssetOrNothing".to_string()
     }
 
     fn description(&self) -> String {
@@ -234,12 +318,14 @@ impl StrikedTypePayoff for AssetOrNothingPayoff {
     }
 }
 
-/// Gap payoff with a trigger strike and a separate payment strike.
+/// Binary gap payoff: pays `price - secondStrike` (call) or
+/// `secondStrike - price` (put) when the option finishes in the money versus
+/// the first strike, otherwise zero.
 ///
-/// A call pays `price - second_strike` when `price - strike >= 0`; a put
-/// pays `second_strike - price` when `strike - price >= 0`. The trigger is
-/// inclusive, and negative payments are not floored. Matches QuantLib's
-/// `GapPayoff` and the existing infallible payoff construction contract.
+/// Ports `GapPayoff` (`ql/instruments/payoffs.hpp:170`, `payoffs.cpp:177-196`).
+/// The comparison is non-strict (`>= 0.0`), unlike the cash-or-nothing and
+/// asset-or-nothing siblings, so a price exactly at the strike is in the money
+/// and can pay a negative amount when the two strikes differ.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GapPayoff {
     option_type: OptionType,
@@ -248,18 +334,16 @@ pub struct GapPayoff {
 }
 
 impl GapPayoff {
-    /// Builds a gap payoff with a trigger `strike` and payment `second_strike`.
-    /// No positivity or finiteness validation is imposed.
-    pub fn new(option_type: OptionType, strike: Real, second_strike: Real) -> Self {
-        Self {
+    /// Builds a gap payoff of the given type, exercise strike and payoff strike.
+    pub fn new(option_type: OptionType, strike: Real, second_strike: Real) -> GapPayoff {
+        GapPayoff {
             option_type,
             strike,
             second_strike,
         }
     }
 
-    /// The payment strike, distinct from the trigger returned by
-    /// [`StrikedTypePayoff::strike`].
+    /// The strike that sizes the cash amount of the payoff (`payoffs.hpp:182`).
     pub fn second_strike(&self) -> Real {
         self.second_strike
     }
@@ -267,7 +351,7 @@ impl GapPayoff {
 
 impl Payoff for GapPayoff {
     fn name(&self) -> String {
-        "Gap".into()
+        "Gap".to_string()
     }
 
     fn description(&self) -> String {
@@ -282,9 +366,20 @@ impl Payoff for GapPayoff {
 
     fn value(&self, price: Real) -> Real {
         match self.option_type {
-            OptionType::Call if price - self.strike >= 0.0 => price - self.second_strike,
-            OptionType::Put if self.strike - price >= 0.0 => self.second_strike - price,
-            OptionType::Call | OptionType::Put => 0.0,
+            OptionType::Call => {
+                if price - self.strike >= 0.0 {
+                    price - self.second_strike
+                } else {
+                    0.0
+                }
+            }
+            OptionType::Put => {
+                if self.strike - price >= 0.0 {
+                    self.second_strike - price
+                } else {
+                    0.0
+                }
+            }
         }
     }
 }
@@ -301,132 +396,170 @@ impl StrikedTypePayoff for GapPayoff {
     }
 }
 
-/// Payoff with a dimensionless strike expressed as moneyness.
+/// Binary superfund payoff: `price / strike` while `strike <= price < second_strike`,
+/// otherwise zero.
 ///
-/// A call pays `price * max(1 - moneyness, 0)` and a put pays
-/// `price * max(moneyness - 1, 0)`. The factor is floored before
-/// multiplication, so a negative price can produce a negative payoff.
-/// Matches QuantLib's `PercentageStrikePayoff` without positivity or
-/// finiteness validation, following the existing infallible payoff API.
+/// Ports `SuperFundPayoff` (`ql/instruments/payoffs.hpp:207`,
+/// `payoffs.cpp:197-199`). The option type is always call. The lower strike is
+/// inclusive and the upper strike is exclusive. QuantLib's `BlackCalculator`
+/// visitor does not handle this payoff.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PercentageStrikePayoff {
-    option_type: OptionType,
-    moneyness: Real,
+pub struct SuperFundPayoff {
+    strike: Real,
+    second_strike: Real,
 }
 
-impl PercentageStrikePayoff {
-    /// Builds a percentage-strike payoff. `moneyness` is a ratio, not an
-    /// absolute strike or a percentage scaled by 100.
-    pub fn new(option_type: OptionType, moneyness: Real) -> Self {
-        Self {
-            option_type,
-            moneyness,
+impl SuperFundPayoff {
+    /// Builds a superfund payoff.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-positive strike, and a second strike that is not strictly
+    /// above the first (`payoffs.hpp:213-218`).
+    pub fn new(strike: Real, second_strike: Real) -> QlResult<Self> {
+        require!(strike > 0.0, "strike ({strike}) must be positive");
+        require!(
+            second_strike > strike,
+            "second strike ({second_strike}) must be higher than first strike ({strike})"
+        );
+        Ok(Self {
+            strike,
+            second_strike,
+        })
+    }
+
+    /// The exclusive upper strike (`payoffs.hpp:226`).
+    pub fn second_strike(&self) -> Real {
+        self.second_strike
+    }
+}
+
+impl Payoff for SuperFundPayoff {
+    fn name(&self) -> String {
+        "SuperFund".to_string()
+    }
+
+    fn description(&self) -> String {
+        format!("{} Call, {} strike", self.name(), self.strike)
+    }
+
+    fn value(&self, price: Real) -> Real {
+        if price >= self.strike && price < self.second_strike {
+            price / self.strike
+        } else {
+            0.0
         }
     }
 }
 
-impl Payoff for PercentageStrikePayoff {
+impl TypePayoff for SuperFundPayoff {
+    fn option_type(&self) -> OptionType {
+        OptionType::Call
+    }
+}
+
+impl StrikedTypePayoff for SuperFundPayoff {
+    fn strike(&self) -> Real {
+        self.strike
+    }
+}
+
+/// Binary supershare payoff: a fixed cash amount while
+/// `strike <= price < second_strike`, otherwise zero.
+///
+/// Ports `SuperSharePayoff` (`ql/instruments/payoffs.hpp:232`,
+/// `payoffs.cpp:208-216`). The option type is always call. QuantLib's
+/// `BlackCalculator` visitor does not handle this payoff.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SuperSharePayoff {
+    strike: Real,
+    second_strike: Real,
+    cash_payoff: Real,
+}
+
+impl SuperSharePayoff {
+    /// Builds a supershare payoff.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a second strike that is not strictly above the first
+    /// (`payoffs.hpp:240-242`).
+    pub fn new(strike: Real, second_strike: Real, cash_payoff: Real) -> QlResult<Self> {
+        require!(
+            second_strike > strike,
+            "second strike ({second_strike}) must be higher than first strike ({strike})"
+        );
+        Ok(Self {
+            strike,
+            second_strike,
+            cash_payoff,
+        })
+    }
+
+    /// The exclusive upper strike (`payoffs.hpp:251`).
+    pub fn second_strike(&self) -> Real {
+        self.second_strike
+    }
+
+    /// The cash amount paid inside the corridor (`payoffs.hpp:252`).
+    pub fn cash_payoff(&self) -> Real {
+        self.cash_payoff
+    }
+}
+
+impl Payoff for SuperSharePayoff {
     fn name(&self) -> String {
-        "PercentageStrike".into()
+        "SuperShare".to_string()
     }
 
     fn description(&self) -> String {
         format!(
-            "{} {}, {} strike",
+            "{} Call, {} strike, {} second strike, {} amount",
             self.name(),
-            self.option_type,
-            self.moneyness
+            self.strike,
+            self.second_strike,
+            self.cash_payoff
         )
     }
 
     fn value(&self, price: Real) -> Real {
-        let factor = match self.option_type {
-            OptionType::Call => 1.0 - self.moneyness,
-            OptionType::Put => self.moneyness - 1.0,
-        };
-        price * if factor < 0.0 { 0.0 } else { factor }
+        if price >= self.strike && price < self.second_strike {
+            self.cash_payoff
+        } else {
+            0.0
+        }
     }
 }
 
-impl TypePayoff for PercentageStrikePayoff {
+impl TypePayoff for SuperSharePayoff {
     fn option_type(&self) -> OptionType {
-        self.option_type
+        OptionType::Call
     }
 }
 
-impl StrikedTypePayoff for PercentageStrikePayoff {
+impl StrikedTypePayoff for SuperSharePayoff {
     fn strike(&self) -> Real {
-        self.moneyness
+        self.strike
     }
 }
 
-/// Vanilla payoff with its strike supplied at evaluation rather than stored.
-///
-/// Matches QuantLib's `FloatingTypePayoff`. Use [`Self::value_with_strike`]
-/// to evaluate a call or put. This is a [`TypePayoff`], not a
-/// [`StrikedTypePayoff`], and does not enable an additional pricing engine.
-/// The scalar Black calculator rejects it at compile time:
-///
-/// ```compile_fail
-/// use libitofin::instruments::FloatingTypePayoff;
-/// use libitofin::option::OptionType;
-/// use libitofin::pricingengines::BlackCalculator;
-/// let payoff = FloatingTypePayoff::new(OptionType::Call);
-/// BlackCalculator::with_striked_payoff(&payoff, 100.0, 0.2, 1.0);
-/// ```
-///
-/// # Panics
-///
-/// [`Payoff::value`] always panics with `floating payoff not handled` because
-/// its one-input contract cannot supply the strike. This mirrors QuantLib's
-/// deliberate evaluation failure and the existing [`NullPayoff`] convention.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FloatingTypePayoff {
-    option_type: OptionType,
-}
+/// Dummy payoff (`ql/instruments/payoffs.hpp:56`). Margrabe constructs this
+/// internally. [`Payoff::value`] panics like [`FloatingTypePayoff::value`]
+/// (QuantLib `operator()` raises `QL_FAIL("dummy payoff given")`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NullPayoff;
 
-impl FloatingTypePayoff {
-    /// Builds a floating-strike payoff of the given option type.
-    pub fn new(option_type: OptionType) -> Self {
-        Self { option_type }
-    }
-
-    /// Evaluates `max(price - strike, 0)` for a call or
-    /// `max(strike - price, 0)` for a put, using this evaluation's strike.
-    ///
-    /// Neither input is validated. Negative values are supported; NaN,
-    /// infinity and signed zero preserve QuantLib's subtraction followed by
-    /// `std::max` comparison semantics. In particular, NaN is not floored.
-    pub fn value_with_strike(&self, price: Real, strike: Real) -> Real {
-        let intrinsic = match self.option_type {
-            OptionType::Call => price - strike,
-            OptionType::Put => strike - price,
-        };
-        if intrinsic < 0.0 { 0.0 } else { intrinsic }
-    }
-}
-
-impl Payoff for FloatingTypePayoff {
+impl Payoff for NullPayoff {
     fn name(&self) -> String {
-        "FloatingType".into()
+        "Null".to_string()
     }
 
     fn description(&self) -> String {
-        format!("{} {}", self.name(), self.option_type)
+        self.name()
     }
 
-    /// # Panics
-    ///
-    /// Always panics because no strike is provided. Use
-    /// [`Self::value_with_strike`] for supported evaluation.
     fn value(&self, _price: Real) -> Real {
-        panic!("floating payoff not handled")
-    }
-}
-
-impl TypePayoff for FloatingTypePayoff {
-    fn option_type(&self) -> OptionType {
-        self.option_type
+        panic!("dummy payoff given")
     }
 }
 
@@ -525,5 +658,95 @@ mod tests {
         assert_eq!(dynamic.value(107.0), 10.0);
         assert_eq!(dynamic.option_type(), OptionType::Call);
         assert_eq!(dynamic.strike(), 100.0);
+    }
+
+    #[test]
+    fn asset_or_nothing_pays_the_spot_when_in_the_money() {
+        let call = AssetOrNothingPayoff::new(OptionType::Call, 100.0);
+        assert_eq!(call.value(110.0), 110.0);
+        assert_eq!(call.value(100.0), 0.0);
+        assert_eq!(call.value(90.0), 0.0);
+        let put = AssetOrNothingPayoff::new(OptionType::Put, 100.0);
+        assert_eq!(put.value(90.0), 90.0);
+        assert_eq!(put.value(100.0), 0.0);
+        assert_eq!(put.value(110.0), 0.0);
+        assert_eq!(put.name(), "AssetOrNothing");
+        assert_eq!(put.description(), "AssetOrNothing Put, 100 strike");
+    }
+
+    /// `payoffs.cpp:185,187` uses `>= 0.0`, so the strike itself is in the
+    /// money and a call with a higher payoff strike can pay a negative amount.
+    #[test]
+    fn gap_pays_against_the_second_strike_when_in_the_money() {
+        let call = GapPayoff::new(OptionType::Call, 100.0, 110.0);
+        assert_eq!(call.value(120.0), 10.0);
+        assert_eq!(call.value(100.0), -10.0);
+        assert_eq!(call.value(90.0), 0.0);
+
+        let put = GapPayoff::new(OptionType::Put, 100.0, 90.0);
+        assert_eq!(put.value(80.0), 10.0);
+        assert_eq!(put.value(100.0), -10.0);
+        assert_eq!(put.value(110.0), 0.0);
+        assert_eq!(put.name(), "Gap");
+        assert_eq!(put.description(), "Gap Put, 100 strike, 90 strike payoff");
+        assert_eq!(put.second_strike(), 90.0);
+    }
+
+    /// `payoffs.cpp:197-199`: inclusive lower strike, exclusive upper strike,
+    /// payment `price / strike`.
+    #[test]
+    fn superfund_pays_spot_over_strike_inside_the_corridor() {
+        let payoff = SuperFundPayoff::new(100.0, 120.0).unwrap();
+        assert_eq!(payoff.value(100.0), 1.0);
+        assert_eq!(payoff.value(110.0), 1.1);
+        assert_eq!(payoff.value(119.999), 1.19999);
+        assert_eq!(payoff.value(120.0), 0.0);
+        assert_eq!(payoff.value(90.0), 0.0);
+        assert_eq!(payoff.value(Real::NAN), 0.0);
+        assert_eq!(payoff.option_type(), OptionType::Call);
+        assert_eq!(payoff.strike(), 100.0);
+        assert_eq!(payoff.second_strike(), 120.0);
+        assert_eq!(payoff.name(), "SuperFund");
+        assert_eq!(payoff.description(), "SuperFund Call, 100 strike");
+    }
+
+    #[test]
+    fn superfund_rejects_a_non_positive_or_unordered_strike() {
+        let non_positive = SuperFundPayoff::new(0.0, 10.0).unwrap_err();
+        assert_eq!(non_positive.message(), "strike (0) must be positive");
+        let inverted = SuperFundPayoff::new(100.0, 100.0).unwrap_err();
+        assert_eq!(
+            inverted.message(),
+            "second strike (100) must be higher than first strike (100)"
+        );
+    }
+
+    /// `payoffs.cpp:214-216`: the same corridor pays the fixed cash amount.
+    #[test]
+    fn supershare_pays_cash_inside_the_corridor() {
+        let payoff = SuperSharePayoff::new(90.0, 110.0, 15.0).unwrap();
+        assert_eq!(payoff.value(90.0), 15.0);
+        assert_eq!(payoff.value(109.0), 15.0);
+        assert_eq!(payoff.value(110.0), 0.0);
+        assert_eq!(payoff.value(80.0), 0.0);
+        assert_eq!(payoff.value(Real::NAN), 0.0);
+        assert_eq!(payoff.option_type(), OptionType::Call);
+        assert_eq!(payoff.strike(), 90.0);
+        assert_eq!(payoff.second_strike(), 110.0);
+        assert_eq!(payoff.cash_payoff(), 15.0);
+        assert_eq!(payoff.name(), "SuperShare");
+        assert_eq!(
+            payoff.description(),
+            "SuperShare Call, 90 strike, 110 second strike, 15 amount"
+        );
+    }
+
+    #[test]
+    fn supershare_rejects_an_unordered_strike() {
+        let error = SuperSharePayoff::new(10.0, 10.0, 1.0).unwrap_err();
+        assert_eq!(
+            error.message(),
+            "second strike (10) must be higher than first strike (10)"
+        );
     }
 }

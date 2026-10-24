@@ -5,8 +5,11 @@
 //! fractionary parts per unit. It is a value type, exercised through the indexes
 //! and (later) money rather than by any dedicated numeric test.
 //!
-//! Selected source-pinned presets supplement the currencies needed by indexes. The full
-//! `ql/currencies/*` catalogue is deferred to a later ticket.
+//! Named constructors cover the currencies concrete indexes need today
+//! ([`eur`](Currency::eur), [`usd`](Currency::usd), [`aud`](Currency::aud),
+//! [`gbp`](Currency::gbp), [`jpy`](Currency::jpy)). Selected source-pinned
+//! presets supplement those. The full `ql/currencies/*` catalogue is deferred
+//! to a later ticket.
 //!
 //! ## Divergences from QuantLib
 //!
@@ -82,6 +85,15 @@ impl Currency {
         Currency::new("U.S. dollar", "USD", 840, "$", "\u{a2}", 100)
     }
 
+    /// The Australian dollar (ISO code `AUD`, numeric `36`, 100 cents per unit).
+    ///
+    /// Values match `AUDCurrency` in QuantLib's `ql/currencies/oceania.cpp`. Its
+    /// default `Rounding()` convention is dropped along with the `rounding`
+    /// field (see the module divergences).
+    pub fn aud() -> Self {
+        Currency::new("Australian dollar", "AUD", 36, "A$", "", 100)
+    }
+
     /// The British pound sterling (ISO code `GBP`, numeric `826`, 100 pence
     /// per unit).
     ///
@@ -109,11 +121,6 @@ impl Currency {
     /// The Swiss franc, matching QuantLib `CHFCurrency`.
     pub fn chf() -> Self {
         Self::new("Swiss franc", "CHF", 756, "SwF", "", 100)
-    }
-
-    /// The Australian dollar, matching QuantLib `AUDCurrency`.
-    pub fn aud() -> Self {
-        Self::new("Australian dollar", "AUD", 36, "A$", "", 100)
     }
 
     /// The Canadian dollar, matching QuantLib `CADCurrency`.
@@ -270,6 +277,17 @@ mod tests {
         assert_eq!(usd.symbol(), "$");
         assert_eq!(usd.fraction_symbol(), "\u{a2}");
         assert_eq!(usd.fractions_per_unit(), 100);
+    }
+
+    #[test]
+    fn aud_fields_match_quantlib() {
+        let aud = Currency::aud();
+        assert_eq!(aud.name(), "Australian dollar");
+        assert_eq!(aud.code(), "AUD");
+        assert_eq!(aud.numeric_code(), 36);
+        assert_eq!(aud.symbol(), "A$");
+        assert_eq!(aud.fraction_symbol(), "");
+        assert_eq!(aud.fractions_per_unit(), 100);
     }
 
     #[test]

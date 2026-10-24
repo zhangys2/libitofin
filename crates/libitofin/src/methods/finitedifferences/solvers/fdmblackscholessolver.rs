@@ -1,468 +1,129 @@
-//! The Black-Scholes wrapper around the one-dimensional solver.
+//! One-dimensional Black–Scholes finite-difference solver.
 //!
-//! Port of `ql/methods/finitedifferences/solvers/fdmblackscholessolver.hpp:40`
-//! and its `.cpp`.
-
-use std::cell::{Cell, RefCell};
+//! Port of `ql/methods/finitedifferences/solvers/fdmblackscholessolver.{hpp,cpp}`:
+//! builds an [`FdmBlackScholesOp`] and delegates interpolation to
+//! [`Fdm1DimSolver`]. The local-vol branch of the operator is wired through
+//! [`with_local_vol`](FdmBlackScholesSolver::with_local_vol);
+//! quanto is [`with_quanto`](FdmBlackScholesSolver::with_quanto).
 
 use crate::errors::QlResult;
 use crate::methods::finitedifferences::operators::{FdmBlackScholesOp, FdmLinearOpComposite};
-use crate::patterns::observable::{AsObservable, Observer};
+use crate::methods::finitedifferences::utilities::FdmQuantoHelper;
 use crate::processes::GeneralizedBlackScholesProcess;
-use crate::require;
-use crate::shared::{Shared, SharedMut, shared, shared_mut};
-use crate::types::{Real, Size};
+use crate::shared::{Shared, SharedMut, shared_mut};
+use crate::types::Real;
+use crate::utilities::null::Null;
 
-use super::{Fdm1DimSolver, FdmSchemeDesc, FdmSolverDesc};
+use super::fdm1dimsolver::Fdm1DimSolver;
+use super::fdmschemedesc::FdmSchemeDesc;
+use super::fdmsolverdesc::FdmSolverDesc;
 
-/// The direction of the mesh the generator is built over (`cpp:49`).
-const DIRECTION: Size = 0;
-
-/// Builds the Black-Scholes generator over a mesh, rolls it back through
-/// [`Fdm1DimSolver`] and answers value and greeks at a spot.
-///
-/// The grid is laid out in `ln(S)`, so every accessor takes a spot and passes
-/// its logarithm down (`cpp:57-75`); delta and gamma carry the chain rule for
-/// that change of variable.
-///
-/// Process notifications invalidate the cached rollback. Direct queries can
-/// reuse the wrapper after quote changes or handle relinking, while engines
-/// may continue constructing a fresh wrapper for each calculation.
-///
-/// Deferred to #636, and omitted rather than accepted and ignored:
-///
-/// - the local-volatility branch, the `localVol` flag and its
-///   `illegalLocalVolOverwrite` fallback (`cpp:49`);
-/// - the quanto branch and the `FdmQuantoHelper` it adjusts the drift through
-///   (`cpp:50-52`); that helper is not ported.
-///
-/// [`FdmBlackScholesOp`] takes neither, so both are absent from this
-/// constructor rather than accepted and dropped on the floor.
+/// Lazy Black–Scholes 1-D solver (`fdmblackscholessolver.hpp`).
 pub struct FdmBlackScholesSolver {
-    process: Shared<GeneralizedBlackScholesProcess>,
-    strike: Real,
-    solver_desc: FdmSolverDesc,
-    scheme_desc: FdmSchemeDesc,
-    solver: RefCell<Option<Fdm1DimSolver>>,
-    dirty: Shared<Cell<bool>>,
-    _listener: SharedMut<SolverInvalidator>,
-}
-
-struct SolverInvalidator {
-    dirty: Shared<Cell<bool>>,
-}
-
-impl Observer for SolverInvalidator {
-    fn update(&mut self) {
-        self.dirty.set(true);
-    }
+    solver: Fdm1DimSolver,
 }
 
 impl FdmBlackScholesSolver {
-    /// The solver pricing off `process` at `strike`, over the grid
-    /// `solver_desc` describes and under the scheme `scheme_desc` names
-    /// (`cpp:30-43`).
-    ///
-    /// C++ defaults the scheme to `FdmSchemeDesc::Douglas()` (`hpp:45`); the
-    /// scheme is named explicitly here, as its one caller already does.
-    ///
-    /// The process is held by [`Shared`] rather than C++'s
-    /// `Handle<GeneralizedBlackScholesProcess>` (`hpp:59`). The handle buys
-    /// relinking the process itself. Its market-input handle relinks and quote
-    /// updates still reach this solver through process notifications.
+    /// `FdmBlackScholesSolver(process, strike, solverDesc, schemeDesc)`
+    /// (`cpp:32-45`), with local-vol off.
     pub fn new(
-        process: Shared<GeneralizedBlackScholesProcess>,
+        process: &GeneralizedBlackScholesProcess,
         strike: Real,
         solver_desc: FdmSolverDesc,
         scheme_desc: FdmSchemeDesc,
-    ) -> Self {
-        let dirty = shared(Cell::new(true));
-        let listener = shared_mut(SolverInvalidator {
-            dirty: Shared::clone(&dirty),
-        });
-        process
-            .observable()
-            .register_observer(&(listener.clone() as SharedMut<dyn Observer>));
-        FdmBlackScholesSolver {
+    ) -> QlResult<Self> {
+        Self::with_local_vol(
             process,
             strike,
             solver_desc,
             scheme_desc,
-            solver: RefCell::new(None),
-            dirty,
-            _listener: listener,
-        }
+            false,
+            -Real::null(),
+        )
     }
 
-    /// The option value at spot `s` (`cpp:57-60`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the generator cannot be built or the rollback fails.
-    pub fn value_at(&self, s: Real) -> QlResult<Real> {
-        require!(s.is_finite() && s > 0.0, "spot must be positive and finite");
-        self.with_solver(|solver| solver.interpolate_at(s.ln()))
+    /// As [`new`](Self::new), with the C++ `localVol` /
+    /// `illegalLocalVolOverwrite` arguments (`cpp:32-45`).
+    pub fn with_local_vol(
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+    ) -> QlResult<Self> {
+        Self::with_quanto(
+            process,
+            strike,
+            solver_desc,
+            scheme_desc,
+            local_vol,
+            illegal_local_vol_overwrite,
+            None,
+        )
     }
 
-    /// The delta at spot `s` (`cpp:62-65`), the grid's derivative in `ln(S)`
-    /// over `s`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the generator cannot be built or the rollback fails.
-    pub fn delta_at(&self, s: Real) -> QlResult<Real> {
-        require!(s.is_finite() && s > 0.0, "spot must be positive and finite");
-        self.with_solver(|solver| Ok(solver.derivative_x(s.ln())? / s))
-    }
-
-    /// The gamma at spot `s` (`cpp:67-71`), the second derivative in `ln(S)`
-    /// less the first, over `s` squared.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the generator cannot be built or the rollback fails.
-    pub fn gamma_at(&self, s: Real) -> QlResult<Real> {
-        require!(s.is_finite() && s > 0.0, "spot must be positive and finite");
-        self.with_solver(|solver| {
-            let x = s.ln();
-
-            Ok((solver.derivative_xx(x)? - solver.derivative_x(x)?) / (s * s))
+    /// As [`with_local_vol`](Self::with_local_vol), with the C++ `quantoHelper`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_quanto(
+        process: &GeneralizedBlackScholesProcess,
+        strike: Real,
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        local_vol: bool,
+        illegal_local_vol_overwrite: Real,
+        quanto: Option<Shared<FdmQuantoHelper>>,
+    ) -> QlResult<Self> {
+        let op = shared_mut(FdmBlackScholesOp::with_quanto(
+            Shared::clone(&solver_desc.mesher),
+            process,
+            strike,
+            local_vol,
+            illegal_local_vol_overwrite,
+            0,
+            quanto,
+        )?);
+        Ok(Self {
+            solver: Fdm1DimSolver::new(
+                solver_desc,
+                scheme_desc,
+                op as SharedMut<dyn FdmLinearOpComposite>,
+            ),
         })
     }
 
-    /// The theta at spot `s` (`cpp:73-75`).
+    /// Solver on an operator the caller has already built.
     ///
-    /// [`None`] is C++'s `Null<Real>`, which
-    /// [`Fdm1DimSolver::theta_at`] returns when the capture would sit on today.
-    ///
-    /// A deliberate divergence from `cpp:74`: C++ dereferences `solver_`
-    /// without calling `calculate()` first, unlike the other three accessors,
-    /// and so relies on the engine's fixed value, delta, gamma, theta call
-    /// order (`fdblackscholesvanillaengine.cpp:211-214`) having built the
-    /// solver already. Ported literally that would leave a caller who asks for
-    /// the theta first reading an absent solver. This builds it like the other
-    /// three; the numbers are unchanged, only the order they may be asked in.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the generator cannot be built or the rollback fails.
-    pub fn theta_at(&self, s: Real) -> QlResult<Option<Real>> {
-        require!(s.is_finite() && s > 0.0, "spot must be positive and finite");
-        self.with_solver(|solver| solver.theta_at(s.ln()))
-    }
-
-    /// Builds the generator and the solver over it, once (`cpp:45-55`).
-    fn calculate(&self) -> QlResult<()> {
-        if self.dirty.replace(false) {
-            *self.solver.borrow_mut() = None;
-        }
-        if self.solver.borrow().is_some() {
-            return Ok(());
-        }
-
-        let op = shared_mut(FdmBlackScholesOp::new(
-            Shared::clone(&self.solver_desc.mesher),
-            &self.process,
-            self.strike,
-            DIRECTION,
-        )?) as SharedMut<dyn FdmLinearOpComposite>;
-        let solver = Fdm1DimSolver::new(self.solver_desc.clone(), self.scheme_desc, op);
-
-        *self.solver.borrow_mut() = Some(solver);
-
-        Ok(())
-    }
-
-    fn with_solver<T>(&self, read: impl FnOnce(&Fdm1DimSolver) -> QlResult<T>) -> QlResult<T> {
-        self.calculate()?;
-
-        let cached = self.solver.borrow();
-        let solver = cached.as_ref().expect("calculate leaves the solver built");
-
-        read(solver)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use crate::handle::Handle;
-    use crate::instruments::PlainVanillaPayoff;
-    use crate::interestrate::Compounding;
-    use crate::methods::finitedifferences::meshers::FdmMesher;
-    use crate::methods::finitedifferences::schemes::testops;
-    use crate::methods::finitedifferences::stepconditions::FdmStepConditionComposite;
-    use crate::methods::finitedifferences::utilities::fdm_log_inner_value;
-    use crate::option::OptionType::Call;
-    use crate::payoff::Payoff;
-    use crate::quotes::make_quote_handle;
-    use crate::shared::shared;
-    use crate::termstructures::volatility::{BlackConstantVol, BlackVolTermStructure};
-    use crate::termstructures::yields::FlatForward;
-    use crate::termstructures::yieldtermstructure::YieldTermStructure;
-    use crate::time::date::{Date, Month};
-    use crate::time::daycounter::DayCounter;
-    use crate::time::daycounters::actual365fixed::Actual365Fixed;
-    use crate::time::frequency::Frequency;
-    use crate::types::{Rate, Time, Volatility};
-
-    const R: Rate = 0.05;
-    const Q: Rate = 0.02;
-    const VOL: Volatility = 0.2;
-    const STRIKE: Real = 100.0;
-    const MATURITY: Time = 0.75;
-    const STEPS: Size = 10;
-    const DAMPING_STEPS: Size = 2;
-
-    /// A spot inside the grid: [`testops::mesher`] spans `(4.0, 5.0)` in
-    /// `ln(S)`, so the read-offs are interpolations rather than extrapolations
-    /// for any spot between `e^4` and `e^5`.
-    const SPOT: Real = 90.0;
-
-    fn process() -> Shared<GeneralizedBlackScholesProcess> {
-        let dc = Actual365Fixed::new();
-        let today = Date::new(11, Month::February, 2018);
-
-        shared(GeneralizedBlackScholesProcess::new(
-            make_quote_handle(100.0).handle(),
-            flat_rate(today, Q, dc.clone()),
-            flat_rate(today, R, dc.clone()),
-            flat_vol(today, VOL, dc),
-        ))
-    }
-
-    fn flat_rate(reference: Date, rate: Rate, dc: DayCounter) -> Handle<dyn YieldTermStructure> {
-        Handle::new(shared(FlatForward::with_rate(
-            reference,
-            rate,
-            dc,
-            Compounding::Continuous,
-            Frequency::Annual,
-        )) as Shared<dyn YieldTermStructure>)
-    }
-
-    fn flat_vol(
-        reference: Date,
-        vol: Volatility,
-        dc: DayCounter,
-    ) -> Handle<dyn BlackVolTermStructure> {
-        Handle::new(shared(BlackConstantVol::new(reference, None, vol, dc))
-            as Shared<dyn BlackVolTermStructure>)
-    }
-
-    /// A call struck inside the grid, so the seed carries the kink and the
-    /// rolled grid is curved where it is read.
-    fn desc(mesher: &Shared<dyn FdmMesher>) -> FdmSolverDesc {
-        let payoff = shared(PlainVanillaPayoff::new(Call, STRIKE)) as Shared<dyn Payoff>;
-
-        FdmSolverDesc {
-            mesher: Shared::clone(mesher),
-            bc_set: Vec::new(),
-            condition: shared(FdmStepConditionComposite::new(&[], Vec::new())),
-            calculator: shared(fdm_log_inner_value(payoff, Shared::clone(mesher), 0)),
-            maturity: MATURITY,
-            time_steps: STEPS,
-            damping_steps: DAMPING_STEPS,
+    /// The jump-to-default engine attaches [`FdmBlackScholesOp::with_jump_to_default`]
+    /// before the rollback; the greek queries are the same as [`with_quanto`](Self::with_quanto).
+    pub(crate) fn from_operator(
+        solver_desc: FdmSolverDesc,
+        scheme_desc: FdmSchemeDesc,
+        op: SharedMut<dyn FdmLinearOpComposite>,
+    ) -> Self {
+        Self {
+            solver: Fdm1DimSolver::new(solver_desc, scheme_desc, op),
         }
     }
 
-    fn solver(mesher: &Shared<dyn FdmMesher>) -> FdmBlackScholesSolver {
-        FdmBlackScholesSolver::new(process(), STRIKE, desc(mesher), FdmSchemeDesc::douglas())
+    /// Option value at spot `s` (`cpp:59-62`).
+    pub fn value_at(&self, s: Real) -> QlResult<Real> {
+        self.solver.interpolate_at(s.ln())
     }
 
-    /// The same wiring by hand: the generator of #656 over the same mesh and
-    /// process, handed to the driver of #666 with the same descriptor. Every
-    /// number the wrapper answers has to come off this, which is what
-    /// separates the transforms from the raw log-space read-offs.
-    fn driven_by_hand(mesher: &Shared<dyn FdmMesher>) -> Fdm1DimSolver {
-        let op = shared_mut(
-            FdmBlackScholesOp::new(Shared::clone(mesher), &process(), STRIKE, DIRECTION).unwrap(),
-        ) as SharedMut<dyn FdmLinearOpComposite>;
-
-        Fdm1DimSolver::new(desc(mesher), FdmSchemeDesc::douglas(), op)
+    /// Delta at spot `s` (`cpp:64-67`).
+    pub fn delta_at(&self, s: Real) -> QlResult<Real> {
+        Ok(self.solver.derivative_x(s.ln())? / s)
     }
 
-    /// `cpp:57-60`: the value is the driver's read-off at the log of the spot,
-    /// which pins that the wrapper takes a spot and the driver a log-spot.
-    #[test]
-    fn the_value_is_the_read_off_at_the_log_of_the_spot() {
-        let mesher = testops::mesher();
-
-        assert_eq!(
-            solver(&mesher).value_at(SPOT).unwrap(),
-            driven_by_hand(&mesher).interpolate_at(SPOT.ln()).unwrap()
-        );
+    /// Gamma at spot `s` (`cpp:67-71`): `(d²V/d(ln S)² − dV/d(ln S)) / S²`.
+    pub fn gamma_at(&self, s: Real) -> QlResult<Real> {
+        let x = s.ln();
+        Ok((self.solver.derivative_xx(x)? - self.solver.derivative_x(x)?) / (s * s))
     }
 
-    /// The two log-space derivatives at the probe are non-zero and differ from
-    /// each other, without which the chain rules below could not fail: a gamma
-    /// reading `dxx / s^2` or the subtraction the wrong way round would pass,
-    /// and a delta dividing by `s^2` would too.
-    #[test]
-    fn the_probe_tells_the_two_derivatives_apart() {
-        let mesher = testops::mesher();
-        let hand = driven_by_hand(&mesher);
-
-        let dx = hand.derivative_x(SPOT.ln()).unwrap();
-        let dxx = hand.derivative_xx(SPOT.ln()).unwrap();
-
-        assert!(dx.abs() > 1e-3, "the first derivative is degenerate: {dx}");
-        assert!(
-            dxx.abs() > 1e-3,
-            "the second derivative is degenerate: {dxx}"
-        );
-        assert!(
-            (dxx - dx).abs() > 1e-3,
-            "the two derivatives do not discriminate: {dx} against {dxx}"
-        );
-    }
-
-    /// `cpp:62-65`: the delta is the log-space first derivative over the spot.
-    #[test]
-    fn the_delta_carries_the_chain_rule_for_the_log_grid() {
-        let mesher = testops::mesher();
-        let hand = driven_by_hand(&mesher);
-
-        assert_eq!(
-            solver(&mesher).delta_at(SPOT).unwrap(),
-            hand.derivative_x(SPOT.ln()).unwrap() / SPOT
-        );
-    }
-
-    /// `cpp:67-71`: the gamma is the second log-space derivative less the
-    /// first, over the spot squared.
-    #[test]
-    fn the_gamma_carries_the_second_chain_rule_term() {
-        let mesher = testops::mesher();
-        let hand = driven_by_hand(&mesher);
-
-        let expected = (hand.derivative_xx(SPOT.ln()).unwrap()
-            - hand.derivative_x(SPOT.ln()).unwrap())
-            / (SPOT * SPOT);
-
-        assert_eq!(solver(&mesher).gamma_at(SPOT).unwrap(), expected);
-    }
-
-    /// `cpp:73-75`: the theta is the driver's, at the log of the spot and
-    /// untransformed - time is not the variable the grid was changed in.
-    #[test]
-    fn the_theta_is_the_read_off_at_the_log_of_the_spot() {
-        let mesher = testops::mesher();
-
-        let expected = driven_by_hand(&mesher)
-            .theta_at(SPOT.ln())
-            .unwrap()
-            .expect("a capture away from today has a theta");
-
-        assert_eq!(
-            solver(&mesher)
-                .theta_at(SPOT)
-                .unwrap()
-                .expect("a capture away from today has a theta"),
-            expected
-        );
-    }
-
-    /// The divergence from `cpp:74`, where the theta reads `solver_` without
-    /// building it and only the engine's call order saves it: asked first, the
-    /// theta is the same number it is when the other three have run before it.
-    ///
-    /// Equality is exact because both wrappers build the same generator over
-    /// the same descriptor, so the divergence is pinned to be about when the
-    /// solver is built and not about what it answers.
-    #[test]
-    fn the_theta_asked_first_is_the_theta_asked_last() {
-        let mesher = testops::mesher();
-
-        let asked_first = solver(&mesher)
-            .theta_at(SPOT)
-            .unwrap()
-            .expect("a capture away from today has a theta");
-
-        let in_order = solver(&mesher);
-        in_order.value_at(SPOT).unwrap();
-        in_order.delta_at(SPOT).unwrap();
-        in_order.gamma_at(SPOT).unwrap();
-
-        assert_eq!(
-            in_order
-                .theta_at(SPOT)
-                .unwrap()
-                .expect("a capture away from today has a theta"),
-            asked_first
-        );
-    }
-    #[test]
-    fn invalid_spots_fail_before_building_the_solver() {
-        let mesher = testops::mesher();
-        let solver = solver(&mesher);
-        for spot in [0.0, -1.0, Real::NAN, Real::INFINITY, Real::NEG_INFINITY] {
-            assert!(solver.value_at(spot).is_err());
-            assert!(solver.delta_at(spot).is_err());
-            assert!(solver.gamma_at(spot).is_err());
-            assert!(solver.theta_at(spot).is_err());
-        }
-        assert!(solver.solver.borrow().is_none());
-    }
-
-    #[test]
-    fn volatility_quote_updates_and_handle_relinks_refresh_cached_queries() {
-        use crate::handle::RelinkableHandle;
-        use crate::quotes::{Quote, SimpleQuote};
-        let dc = Actual365Fixed::new();
-        let today = Date::new(11, Month::February, 2018);
-        let volatility = shared(SimpleQuote::new(VOL));
-        let volatility_handle =
-            RelinkableHandle::new(Shared::clone(&volatility) as Shared<dyn Quote>);
-        let process = shared(GeneralizedBlackScholesProcess::new(
-            make_quote_handle(100.0).handle(),
-            flat_rate(today, Q, dc.clone()),
-            flat_rate(today, R, dc.clone()),
-            Handle::new(shared(BlackConstantVol::with_quote(
-                today,
-                None,
-                volatility_handle.handle(),
-                dc,
-            )) as Shared<dyn BlackVolTermStructure>),
-        ));
-        let mesher = testops::mesher();
-        let solver = FdmBlackScholesSolver::new(
-            Shared::clone(&process),
-            STRIKE,
-            desc(&mesher),
-            FdmSchemeDesc::douglas(),
-        );
-        let original = solver.value_at(SPOT).unwrap();
-        volatility.set_value(0.3);
-        let fresh = FdmBlackScholesSolver::new(
-            Shared::clone(&process),
-            STRIKE,
-            desc(&mesher),
-            FdmSchemeDesc::douglas(),
-        );
-        let changed = solver.value_at(SPOT).unwrap();
-        assert!((changed - original).abs() > 1e-3);
-        assert_eq!(changed, fresh.value_at(SPOT).unwrap());
-        assert_eq!(
-            solver.delta_at(SPOT).unwrap(),
-            fresh.delta_at(SPOT).unwrap()
-        );
-        assert_eq!(
-            solver.gamma_at(SPOT).unwrap(),
-            fresh.gamma_at(SPOT).unwrap()
-        );
-        assert_eq!(
-            solver.theta_at(SPOT).unwrap(),
-            fresh.theta_at(SPOT).unwrap()
-        );
-        volatility_handle.link_to(shared(SimpleQuote::new(0.15)) as Shared<dyn Quote>);
-        let fresh =
-            FdmBlackScholesSolver::new(process, STRIKE, desc(&mesher), FdmSchemeDesc::douglas());
-        assert_eq!(
-            solver.theta_at(SPOT).unwrap(),
-            fresh.theta_at(SPOT).unwrap()
-        );
-        assert!((solver.value_at(SPOT).unwrap() - changed).abs() > 1e-3);
+    /// Theta at spot `s` (`cpp:75-77`).
+    pub fn theta_at(&self, s: Real) -> QlResult<Real> {
+        self.solver.theta_at(s.ln())
     }
 }

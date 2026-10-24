@@ -1,9 +1,11 @@
-//! Discount-curve, yield and Z-spread bond analytics.
+//! Discount-curve and yield bond analytics.
 //!
 //! Port of the `YieldTermStructure` and yield (IRR) subsets of
 //! `ql/pricingengines/bond/bondfunctions.{hpp,cpp}`: the price, accrued, rate
-//! and yield/duration/convexity/Z-spread wrappers that add a tradability guard and
-//! delegate to the matching [`CashFlows`] overload (`bondfunctions.cpp:224-580`).
+//! and yield/duration/convexity wrappers that add a tradability guard and
+//! delegate to the matching [`CashFlows`] overload (`bondfunctions.cpp:224-486`).
+//! Yield-based clean/dirty prices (`cleanPrice`/`dirtyPrice` over
+//! [`InterestRate`]) sit alongside the discount-curve overloads.
 //! Each reads the bond's own cash flows and settings rather than a global
 //! evaluation date (D5).
 //!
@@ -12,13 +14,11 @@
 //!   carries the tradability guard and the `100 / notional` scaling
 //!   (`bond.cpp` delegates the same call to `BondFunctions` in reverse); the
 //!   wrapper here is the free-function surface over it.
-//! - `atmRate` takes no [`BondPrice`]: the type lands with the yield wrappers
-//!   below (#290), but the price-fed curve round trip of `bonds.cpp:241` stays
-//!   a discount-curve follow-up and is unreachable here. The
-//!   port ports the discount-curve `atmRate` at its `price = {}` default,
-//!   whose target NPV is the leg's own; with one coupon rate that recovers the
-//!   coupon exactly for any curve (a curve-independent invariant, not a curve
-//!   oracle - the clean-price tests are the curve oracles).
+//! - `atmRate`'s optional [`BondPrice`] maps C++'s default-constructed
+//!   `Bond::Price{}` (unset) to [`None`]: the target NPV is then the leg's own.
+//!   With one coupon and `price = None` that recovers the coupon for any curve
+//!   (a curve-independent invariant). The price-fed path of `bonds.cpp:241`
+//!   passes `Some(Clean|Dirty)`.
 
 use crate::cashflows::{CashFlows, Duration};
 use crate::errors::QlResult;
@@ -126,7 +126,12 @@ impl BondFunctions {
     }
 
     /// The at-the-money coupon rate that reprices the bond on `discount_curve`
-    /// (`bondfunctions.cpp:280`, at the `price = {}` default).
+    /// (`bondfunctions.cpp:280`).
+    ///
+    /// When `price` is [`None`] (C++'s default-constructed `Bond::Price{}`),
+    /// the target NPV is the leg's own. When set, a clean quote is grossed up
+    /// by accrued interest and scaled from per-100 to the bond's notional
+    /// before the solve.
     ///
     /// # Errors
     ///
@@ -136,9 +141,20 @@ impl BondFunctions {
         bond: &Bond,
         discount_curve: &dyn YieldTermStructure,
         settlement: Option<Date>,
+        price: Option<BondPrice>,
     ) -> QlResult<Rate> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
-        Self::require_tradable(bond, settlement)?;
+        let notional = Self::require_tradable(bond, settlement)?;
+        let target_npv = match price {
+            None => None,
+            Some(quote) => {
+                let mut dirty = quote.amount();
+                if matches!(quote, BondPrice::Clean(_)) {
+                    dirty += bond.accrued_amount(Some(settlement))?;
+                }
+                Some(dirty / 100.0 * notional)
+            }
+        };
         CashFlows::atm_rate(
             bond.cashflows(),
             discount_curve,
@@ -146,7 +162,7 @@ impl BondFunctions {
             Some(false),
             Some(settlement),
             Some(settlement),
-            None,
+            target_npv,
         )
     }
 
@@ -364,7 +380,7 @@ impl BondFunctions {
     ///
     /// # Errors
     ///
-    /// Propagates [`InterestRate::new`] and [`dirty_price_at_yield`](Self::dirty_price_at_yield).
+    /// Propagates [`InterestRate::new`] and [`dirty_price_at_yield`].
     #[allow(clippy::too_many_arguments)]
     pub fn dirty_price_from_yield(
         bond: &Bond,
@@ -383,7 +399,7 @@ impl BondFunctions {
     ///
     /// # Errors
     ///
-    /// Propagates [`InterestRate::new`] and [`clean_price_at_yield`](Self::clean_price_at_yield).
+    /// Propagates [`InterestRate::new`] and [`clean_price_at_yield`].
     #[allow(clippy::too_many_arguments)]
     pub fn clean_price_from_yield(
         bond: &Bond,
@@ -402,8 +418,8 @@ impl BondFunctions {
     ///
     /// # Errors
     ///
-    /// The bond must be tradable, the spread and result finite, and the
-    /// spreaded discount curve must accept the requested dates/conventions.
+    /// The bond must be tradable at the settlement date.
+    #[allow(clippy::too_many_arguments)]
     pub fn dirty_price_at_z_spread(
         bond: &Bond,
         discount_curve: Handle<dyn YieldTermStructure>,
@@ -414,7 +430,6 @@ impl BondFunctions {
     ) -> QlResult<Real> {
         let settlement = Self::settlement_or_eval(bond, settlement)?;
         let notional = Self::require_tradable(bond, settlement)?;
-        require!(z_spread.is_finite(), "z-spread must be finite");
         let npv = CashFlows::npv_at_z_spread(
             bond.cashflows(),
             discount_curve,
@@ -436,8 +451,8 @@ impl BondFunctions {
     ///
     /// # Errors
     ///
-    /// The bond must be tradable, the spread and result finite, and the
-    /// spreaded discount curve must accept the requested dates/conventions.
+    /// The bond must be tradable at the settlement date.
+    #[allow(clippy::too_many_arguments)]
     pub fn clean_price_at_z_spread(
         bond: &Bond,
         discount_curve: Handle<dyn YieldTermStructure>,
@@ -469,8 +484,7 @@ impl BondFunctions {
     /// # Errors
     ///
     /// The bond must be tradable at the settlement date, and the solve must
-    /// converge. Non-finite prices/guesses, non-positive or non-finite accuracy,
-    /// zero evaluation limits, and non-finite scaled targets are rejected.
+    /// converge.
     #[allow(clippy::too_many_arguments)]
     pub fn z_spread(
         bond: &Bond,
@@ -527,7 +541,6 @@ impl BondFunctions {
 
     fn require_tradable(bond: &Bond, settlement: Date) -> QlResult<Real> {
         let notional = bond.notional(Some(settlement))?;
-        require!(notional.is_finite(), "bond notional must be finite");
         require!(
             notional != 0.0,
             "non tradable at {settlement} settlement date (maturity being {})",
@@ -541,23 +554,30 @@ impl BondFunctions {
 mod tests {
     use super::*;
     use crate::cashflows::FixedRateLeg;
-    use crate::instruments::Bond;
-    use crate::interestrate::Compounding;
+    use crate::handle::Handle;
+    use crate::instruments::{Bond, BondPrice, FixedRateBond};
+    use crate::interestrate::{Compounding, InterestRate};
     use crate::settings::Settings;
     use crate::shared::{Shared, shared};
     use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::businessdayconvention::BusinessDayConvention;
     use crate::time::calendar::Calendar;
+    use crate::time::calendars::brazil::{self, Brazil};
+    use crate::time::calendars::nullcalendar::NullCalendar;
+    use crate::time::calendars::target::Target;
     use crate::time::calendars::unitedstates::{self, UnitedStates};
     use crate::time::date::Month;
     use crate::time::dategenerationrule::DateGeneration;
     use crate::time::daycounters::actual360::Actual360;
     use crate::time::daycounters::actualactual::{ActualActual, Convention};
+    use crate::time::daycounters::business252::Business252;
+    use crate::time::daycounters::thirty360::{Convention as Thirty360Convention, Thirty360};
     use crate::time::frequency::Frequency;
     use crate::time::period::Period;
     use crate::time::schedule::Schedule;
     use crate::time::timeunit::TimeUnit;
-    use crate::types::Rate;
+    use crate::types::{Integer, Rate};
 
     fn today() -> Date {
         Date::new(22, Month::November, 2004)
@@ -651,20 +671,701 @@ mod tests {
         assert!((clean - 100.334149).abs() < 1e-6, "clean price {clean}");
     }
 
+    /// The stub-schedule bond of `testCachedFixed` bond3 (`:916`, 100.382794
+    /// at 1e-6): varying coupons on a schedule to 30 Mar 2009 with next-to-last
+    /// date 30 Nov 2008.
+    #[test]
+    fn the_stub_schedule_bond_reproduces_its_cached_clean_price() {
+        let unadjusted = BusinessDayConvention::Unadjusted;
+        let schedule = Schedule::new(
+            Date::new(30, Month::November, 2004),
+            Date::new(30, Month::March, 2009),
+            Period::new(6, TimeUnit::Months),
+            us_gov(),
+            unadjusted,
+            unadjusted,
+            DateGeneration::Backward,
+            false,
+            Date::null(),
+            Date::new(30, Month::November, 2008),
+        );
+        let day_counter = ActualActual::with_schedule(Convention::ISMA, schedule.clone());
+        let leg = FixedRateLeg::new(schedule)
+            .with_notional(100.0)
+            .with_coupon_rates(
+                vec![0.02875, 0.03, 0.03125, 0.0325],
+                day_counter,
+                Compounding::Simple,
+                Frequency::Annual,
+            )
+            .unwrap()
+            .with_payment_calendar(us_gov())
+            .with_payment_adjustment(BusinessDayConvention::ModifiedFollowing)
+            .build()
+            .unwrap();
+        let bond = Bond::from_coupons(
+            1,
+            us_gov(),
+            Some(Date::new(30, Month::November, 2004)),
+            leg,
+            settings(),
+        )
+        .unwrap();
+        let clean = BondFunctions::clean_price(&bond, &discount_curve(), None).unwrap();
+        assert!((clean - 100.382794).abs() < 1e-6, "clean price {clean}");
+    }
+
+    /// `bonds.cpp` testBrazilianCached (`:1068`): Andima NTN-F dirty cash prices
+    /// from yield-based `cleanPrice` + accrued, tolerance 1e-4 (Andima truncates
+    /// yields).
+    #[test]
+    fn brazilian_ntn_f_bonds_reproduce_andima_cached_prices() {
+        let today = Date::new(6, Month::June, 2007);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let face_amount = 1000.0;
+        let issue = Date::new(1, Month::January, 2007);
+        let calendar = Brazil::new(brazil::Market::Settlement);
+        let coupon_rate = InterestRate::new(
+            0.1,
+            Thirty360::with_convention(Thirty360Convention::BondBasis),
+            Compounding::Compounded,
+            Frequency::Annual,
+        )
+        .unwrap();
+
+        let cases = [
+            (Date::new(1, Month::January, 2008), 0.114614, 1034.63031372),
+            (Date::new(1, Month::January, 2010), 0.105726, 1030.09919487),
+            (Date::new(1, Month::July, 2010), 0.105328, 1029.98307160),
+            (Date::new(1, Month::January, 2012), 0.104283, 1028.13585068),
+            (Date::new(1, Month::January, 2014), 0.103218, 1028.33383817),
+            (Date::new(1, Month::January, 2017), 0.102948, 1026.19716497),
+        ];
+        let tol = 1.0e-4;
+
+        for (maturity, yield_rate, cached) in cases {
+            let schedule = Schedule::new(
+                Date::new(1, Month::January, 2007),
+                maturity,
+                Period::new(6, TimeUnit::Months),
+                calendar.clone(),
+                BusinessDayConvention::Unadjusted,
+                BusinessDayConvention::Unadjusted,
+                DateGeneration::Backward,
+                false,
+                Date::null(),
+                Date::null(),
+            );
+            let coupons = FixedRateLeg::new(schedule)
+                .with_notional(face_amount)
+                .with_interest_rate(coupon_rate.clone())
+                .with_payment_adjustment(BusinessDayConvention::Following)
+                .build()
+                .unwrap();
+            let bond = Bond::from_coupons(
+                1,
+                calendar.clone(),
+                Some(issue),
+                coupons,
+                Shared::clone(&settings),
+            )
+            .unwrap();
+
+            let clean = BondFunctions::clean_price_from_yield(
+                &bond,
+                yield_rate,
+                Business252::new(),
+                Compounding::Compounded,
+                Frequency::Annual,
+                Some(today),
+            )
+            .unwrap();
+            let accrued = bond.accrued_amount(Some(today)).unwrap();
+            let price = face_amount * (clean + accrued) / 100.0;
+            assert!(
+                (price - cached).abs() <= tol,
+                "maturity {maturity}: dirty cash {price} vs Andima {cached} (error {})",
+                (price - cached).abs()
+            );
+        }
+    }
+
+    /// `bonds.cpp` testBondFromScheduleWithDateVector (`:1415`): South African
+    /// R2048 dirty price 95.75706 @ 1e-5 after rewriting schedule Feb-29 →
+    /// Feb-28 and rebuilding via the date-vector constructor.
+    #[test]
+    fn south_african_r2048_reproduces_the_cached_dirty_price() {
+        let calendar = NullCalendar::new();
+        let settlement_days = 3;
+        let issue = Date::new(29, Month::June, 2012);
+        let today = Date::new(7, Month::September, 2015);
+        let evaluation_date = calendar.adjust(today, BusinessDayConvention::Following);
+        let settlement_date = calendar.advance(
+            evaluation_date,
+            settlement_days as Integer,
+            TimeUnit::Days,
+            BusinessDayConvention::Following,
+            false,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(evaluation_date);
+
+        // Maturity on 29 Feb so EOM schedule generation lands on Feb ends;
+        // the bond pays on 28 Feb in every year, leap or not.
+        let maturity = Date::new(29, Month::February, 2048);
+        let schedule = Schedule::new(
+            issue,
+            maturity,
+            Period::new(6, TimeUnit::Months),
+            NullCalendar::new(),
+            BusinessDayConvention::Unadjusted,
+            BusinessDayConvention::Unadjusted,
+            DateGeneration::Backward,
+            true,
+            Date::null(),
+            Date::null(),
+        );
+        let dates: Vec<Date> = schedule
+            .dates()
+            .iter()
+            .copied()
+            .map(|d| {
+                if d.month() == Month::February && d.day_of_month() == 29 {
+                    Date::new(28, Month::February, d.year())
+                } else {
+                    d
+                }
+            })
+            .collect();
+        let schedule = Schedule::with_metadata(
+            dates,
+            schedule.calendar().clone(),
+            schedule.business_day_convention(),
+            Some(schedule.termination_date_business_day_convention()),
+            Some(schedule.tenor()),
+            Some(schedule.rule()),
+            Some(schedule.end_of_month()),
+            schedule.is_regular().to_vec(),
+        );
+        let day_counter = ActualActual::with_schedule(Convention::Bond, schedule.clone());
+        let bond = FixedRateBond::new(
+            0,
+            100.0,
+            schedule,
+            vec![0.0875],
+            day_counter.clone(),
+            BusinessDayConvention::Following,
+            100.0,
+            Some(issue),
+            Some(calendar.clone()),
+            Some(Period::new(10, TimeUnit::Days)),
+            calendar,
+            BusinessDayConvention::Unadjusted,
+            false,
+            None,
+            settings,
+        )
+        .unwrap();
+        let yield_rate = InterestRate::new(
+            0.09185,
+            day_counter,
+            Compounding::Compounded,
+            Frequency::Semiannual,
+        )
+        .unwrap();
+        let price =
+            BondFunctions::dirty_price_at_yield(bond.bond(), &yield_rate, Some(settlement_date))
+                .unwrap();
+        assert!(
+            (price - 95.75706).abs() <= 1.0e-5,
+            "R2048 dirty {price} vs cached 95.75706 (error {})",
+            (price - 95.75706).abs()
+        );
+    }
+
+    /// `bonds.cpp` testZspread (`:275`): clean/dirty price ↔ z-spread
+    /// round-trips within 1e-7 (reprice relative error when the solved spread
+    /// drifts) over the QuantLib issue/length/coupon/frequency/compounding
+    /// grid on a flat 3% Actual360 curve.
+    #[test]
+    fn bond_price_z_spread_round_trips_consistently() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let max_evaluations = 100usize;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Thirty360::with_convention(Thirty360Convention::BondBasis);
+        let discount_curve: Handle<dyn YieldTermStructure> =
+            Handle::new(shared(FlatForward::with_rate(
+                today,
+                0.03,
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>);
+        let issue_months: [Integer; 9] = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+        let spreads = [-0.01, -0.005, 0.0, 0.005, 0.01];
+        let compoundings = [Compounding::Compounded, Compounding::Continuous];
+
+        for &issue_month in &issue_months {
+            for &length in &lengths {
+                for &coupon in &coupons {
+                    for &frequency in &frequencies {
+                        for &compounding in &compoundings {
+                            let dated = calendar.advance(
+                                today,
+                                issue_month,
+                                TimeUnit::Months,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let issue = dated;
+                            let maturity = calendar.advance(
+                                issue,
+                                length,
+                                TimeUnit::Years,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let tenor = Period::try_from(frequency).unwrap();
+                            let schedule = Schedule::new(
+                                dated,
+                                maturity,
+                                tenor,
+                                calendar.clone(),
+                                BusinessDayConvention::Unadjusted,
+                                BusinessDayConvention::Unadjusted,
+                                DateGeneration::Backward,
+                                false,
+                                Date::null(),
+                                Date::null(),
+                            );
+                            let bond = FixedRateBond::new(
+                                settlement_days,
+                                face_amount,
+                                schedule,
+                                vec![coupon],
+                                bond_day_count.clone(),
+                                BusinessDayConvention::ModifiedFollowing,
+                                100.0,
+                                Some(issue),
+                                None,
+                                None,
+                                NullCalendar::new(),
+                                BusinessDayConvention::Unadjusted,
+                                false,
+                                None,
+                                Shared::clone(&settings),
+                            )
+                            .unwrap();
+                            let bond = bond.bond();
+
+                            for &spread in &spreads {
+                                let clean = BondFunctions::clean_price_at_z_spread(
+                                    bond,
+                                    discount_curve.clone(),
+                                    spread,
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::z_spread(
+                                    bond,
+                                    BondPrice::Clean(clean),
+                                    discount_curve.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    None,
+                                )
+                                .unwrap();
+                                if (spread - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::clean_price_at_z_spread(
+                                        bond,
+                                        discount_curve.clone(),
+                                        calculated,
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (clean - price2).abs() / clean;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "clean z-spread round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         spread={spread} compounding={compounding:?} clean={clean} \
+                                         spread'={calculated} clean'={price2} rel={rel}"
+                                    );
+                                }
+
+                                let dirty = BondFunctions::dirty_price_at_z_spread(
+                                    bond,
+                                    discount_curve.clone(),
+                                    spread,
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::z_spread(
+                                    bond,
+                                    BondPrice::Dirty(dirty),
+                                    discount_curve.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    None,
+                                )
+                                .unwrap();
+                                if (spread - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::dirty_price_at_z_spread(
+                                        bond,
+                                        discount_curve.clone(),
+                                        calculated,
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (dirty - price2).abs() / dirty;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "dirty z-spread round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         spread={spread} compounding={compounding:?} dirty={dirty} \
+                                         spread'={calculated} dirty'={price2} rel={rel}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// `bonds.cpp` testYield (`:95`): clean/dirty price ↔ yield round-trips
+    /// within 1e-7 (reprice relative error when the solved yield drifts).
+    ///
+    /// Pins a fixed TARGET-adjusted evaluation date in place of C++
+    /// `Date::todaysDate()` for determinism; the check is date-independent.
+    #[test]
+    fn bond_price_yield_round_trips_consistently() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let max_evaluations = 100usize;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Thirty360::with_convention(Thirty360Convention::BondBasis);
+        let issue_months: [Integer; 9] = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+        let yields = [0.03, 0.04, 0.05, 0.06, 0.07];
+        let compoundings = [Compounding::Compounded, Compounding::Continuous];
+
+        for &issue_month in &issue_months {
+            for &length in &lengths {
+                for &coupon in &coupons {
+                    for &frequency in &frequencies {
+                        for &compounding in &compoundings {
+                            let dated = calendar.advance(
+                                today,
+                                issue_month,
+                                TimeUnit::Months,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let issue = dated;
+                            let maturity = calendar.advance(
+                                issue,
+                                length,
+                                TimeUnit::Years,
+                                BusinessDayConvention::Following,
+                                false,
+                            );
+                            let tenor = Period::try_from(frequency).unwrap();
+                            let schedule = Schedule::new(
+                                dated,
+                                maturity,
+                                tenor,
+                                calendar.clone(),
+                                BusinessDayConvention::Unadjusted,
+                                BusinessDayConvention::Unadjusted,
+                                DateGeneration::Backward,
+                                false,
+                                Date::null(),
+                                Date::null(),
+                            );
+                            let bond = FixedRateBond::new(
+                                settlement_days,
+                                face_amount,
+                                schedule,
+                                vec![coupon],
+                                bond_day_count.clone(),
+                                BusinessDayConvention::ModifiedFollowing,
+                                100.0,
+                                Some(issue),
+                                None,
+                                None,
+                                NullCalendar::new(),
+                                BusinessDayConvention::Unadjusted,
+                                false,
+                                None,
+                                Shared::clone(&settings),
+                            )
+                            .unwrap();
+                            let bond = bond.bond();
+
+                            for &m in &yields {
+                                let clean = BondFunctions::clean_price_from_yield(
+                                    bond,
+                                    m,
+                                    bond_day_count.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::yield_rate(
+                                    bond,
+                                    BondPrice::Clean(clean),
+                                    bond_day_count.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    Some(0.05),
+                                )
+                                .unwrap();
+                                if (m - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::clean_price_from_yield(
+                                        bond,
+                                        calculated,
+                                        bond_day_count.clone(),
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (clean - price2).abs() / clean;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "clean yield round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         yield={m} compounding={compounding:?} clean={clean} \
+                                         yield'={calculated} clean'={price2} rel={rel}"
+                                    );
+                                }
+
+                                let dirty = BondFunctions::dirty_price_from_yield(
+                                    bond,
+                                    m,
+                                    bond_day_count.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                )
+                                .unwrap();
+                                let calculated = BondFunctions::yield_rate(
+                                    bond,
+                                    BondPrice::Dirty(dirty),
+                                    bond_day_count.clone(),
+                                    compounding,
+                                    frequency,
+                                    None,
+                                    Some(tolerance),
+                                    Some(max_evaluations),
+                                    Some(0.05),
+                                )
+                                .unwrap();
+                                if (m - calculated).abs() > tolerance {
+                                    let price2 = BondFunctions::dirty_price_from_yield(
+                                        bond,
+                                        calculated,
+                                        bond_day_count.clone(),
+                                        compounding,
+                                        frequency,
+                                        None,
+                                    )
+                                    .unwrap();
+                                    let rel = (dirty - price2).abs() / dirty;
+                                    assert!(
+                                        rel <= tolerance,
+                                        "dirty yield round-trip failed: issue={issue} \
+                                         maturity={maturity} coupon={coupon} freq={frequency:?} \
+                                         yield={m} compounding={compounding:?} dirty={dirty} \
+                                         yield'={calculated} dirty'={price2} rel={rel}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A single-rate bond's at-the-money rate is its coupon, and the
-    /// default-price `atmRate` recovers it regardless of the discount curve:
-    /// the target NPV is the leg's own, so the numerator and denominator
-    /// discount factors cancel and the rate is `coupon-leg PV / bps = coupon`
-    /// for any curve. This is a coupon-recovery invariant, not a curve oracle -
-    /// the curve oracles are the two clean-price tests above. The price-fed
-    /// `atmRate` round trip of `bonds.cpp:241` needs the `Bond::Price` argument
-    /// deferred to #290.
+    /// default-price `atmRate` (`price = None`) recovers it regardless of the
+    /// discount curve: the target NPV is the leg's own, so the numerator and
+    /// denominator discount factors cancel and the rate is
+    /// `coupon-leg PV / bps = coupon` for any curve.
     #[test]
     fn the_atm_rate_recovers_the_single_coupon_rate() {
         let bond = plain_bond();
         let curve = discount_curve();
-        let atm = BondFunctions::atm_rate(&bond, &curve, None).unwrap();
+        let atm = BondFunctions::atm_rate(&bond, &curve, None, None).unwrap();
         assert!((atm - 0.02875).abs() < 1e-10, "atm rate {atm}");
+    }
+
+    /// `bonds.cpp` testAtmRate (`:201`): clean/dirty prices on a flat 3%
+    /// Actual360 curve fed into `atmRate` recover the coupon to 1e-7 over the
+    /// issue/length/coupon/frequency grid. C++ prices via
+    /// `DiscountingBondEngine`; the free-function discount-curve prices are the
+    /// same NPV.
+    #[test]
+    fn bond_price_atm_rate_round_trips_consistently() {
+        let calendar = Target::new();
+        let today = calendar.adjust(
+            Date::new(15, Month::June, 2026),
+            BusinessDayConvention::Following,
+        );
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+
+        let tolerance = 1.0e-7;
+        let face_amount = 1_000_000.0;
+        let settlement_days = 3;
+        let bond_day_count = Thirty360::with_convention(Thirty360Convention::BondBasis);
+        let discount_curve = FlatForward::with_rate(
+            today,
+            0.03,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        );
+        let issue_months: [Integer; 9] = [-24, -18, -12, -6, 0, 6, 12, 18, 24];
+        let lengths: [Integer; 5] = [3, 5, 10, 15, 20];
+        let coupons = [0.02, 0.05, 0.08];
+        let frequencies = [Frequency::Semiannual, Frequency::Annual];
+
+        for &issue_month in &issue_months {
+            for &length in &lengths {
+                for &coupon in &coupons {
+                    for &frequency in &frequencies {
+                        let dated = calendar.advance(
+                            today,
+                            issue_month,
+                            TimeUnit::Months,
+                            BusinessDayConvention::Following,
+                            false,
+                        );
+                        let issue = dated;
+                        let maturity = calendar.advance(
+                            issue,
+                            length,
+                            TimeUnit::Years,
+                            BusinessDayConvention::Following,
+                            false,
+                        );
+                        let tenor = Period::try_from(frequency).unwrap();
+                        let schedule = Schedule::new(
+                            dated,
+                            maturity,
+                            tenor,
+                            calendar.clone(),
+                            BusinessDayConvention::Unadjusted,
+                            BusinessDayConvention::Unadjusted,
+                            DateGeneration::Backward,
+                            false,
+                            Date::null(),
+                            Date::null(),
+                        );
+                        let bond = FixedRateBond::new(
+                            settlement_days,
+                            face_amount,
+                            schedule,
+                            vec![coupon],
+                            bond_day_count.clone(),
+                            BusinessDayConvention::ModifiedFollowing,
+                            100.0,
+                            Some(issue),
+                            None,
+                            None,
+                            NullCalendar::new(),
+                            BusinessDayConvention::Unadjusted,
+                            false,
+                            None,
+                            Shared::clone(&settings),
+                        )
+                        .unwrap();
+                        let bond = bond.bond();
+                        let settlement = bond.settlement_date(None).unwrap();
+
+                        let clean =
+                            BondFunctions::clean_price(bond, &discount_curve, Some(settlement))
+                                .unwrap();
+                        let atm = BondFunctions::atm_rate(
+                            bond,
+                            &discount_curve,
+                            Some(settlement),
+                            Some(BondPrice::Clean(clean)),
+                        )
+                        .unwrap();
+                        assert!(
+                            (coupon - atm).abs() <= tolerance,
+                            "clean atm round-trip failed: today={today} settlement={settlement} \
+                             issue={issue} maturity={maturity} coupon={coupon} freq={frequency:?} \
+                             clean={clean} atm={atm}"
+                        );
+
+                        let dirty =
+                            BondFunctions::dirty_price(bond, &discount_curve, Some(settlement))
+                                .unwrap();
+                        let atm = BondFunctions::atm_rate(
+                            bond,
+                            &discount_curve,
+                            Some(settlement),
+                            Some(BondPrice::Dirty(dirty)),
+                        )
+                        .unwrap();
+                        assert!(
+                            (coupon - atm).abs() <= tolerance,
+                            "dirty atm round-trip failed: today={today} settlement={settlement} \
+                             issue={issue} maturity={maturity} coupon={coupon} freq={frequency:?} \
+                             dirty={dirty} atm={atm}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// The basis-point value equals the dirty-price change for a one-basis-point

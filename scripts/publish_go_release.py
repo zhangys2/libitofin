@@ -155,7 +155,18 @@ def publish_optional(repository: str, tag: str, directory: Path, version: str,
             verify_checksum(staged / name, digest)
             return {"status": "published", "sha256": digest}
     except Exception as error:
-        return {"status": "skipped", "reason": f"{type(error).__name__}: {error}"}
+        reason = f"{type(error).__name__}: {error}"
+        try:
+            present = {asset["name"] for asset in api(endpoint)["assets"]}
+            for asset_name in (name, checksum_name):
+                if asset_name in present:
+                    command(
+                        "gh", "release", "delete-asset", tag, asset_name,
+                        "--repo", repository, "--yes",
+                    )
+        except Exception as cleanup_error:
+            reason = f"{reason}; cleanup {type(cleanup_error).__name__}: {cleanup_error}"
+        return {"status": "skipped", "reason": reason}
 
 
 def publish(repository: str, tag: str, directory: Path, root: Path) -> dict:

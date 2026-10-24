@@ -1,6 +1,7 @@
-# itofin library
+# standard library
 from importlib.metadata import version
 
+# itofin library
 import itofin
 
 

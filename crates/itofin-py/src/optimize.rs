@@ -117,6 +117,49 @@ struct PyObjective<'py> {
     jac: Option<Bound<'py, PyAny>>,
     callback: Option<Bound<'py, PyAny>>,
     constraints: PyConstraints<'py>,
+    /// One vector callback per distinct `(descriptor, x)`, reused across the
+    /// scalar components SLSQP asks for separately.
+    values: Option<PyEvalCache<Vec<f64>>>,
+    jacobian: Option<PyEvalCache<Vec<Vec<f64>>>>,
+}
+
+struct PyEvalCache<T> {
+    descriptor: usize,
+    points: Vec<(Vec<f64>, T)>,
+}
+
+fn cached_eval<T: Clone>(
+    cache: &Option<PyEvalCache<T>>,
+    descriptor: usize,
+    x: &[f64],
+) -> Option<T> {
+    let cache = cache.as_ref()?;
+    if cache.descriptor != descriptor {
+        return None;
+    }
+    cache
+        .points
+        .iter()
+        .find(|(point, _)| point.as_slice() == x)
+        .map(|(_, values)| values.clone())
+}
+
+fn remember_eval<T>(cache: &mut Option<PyEvalCache<T>>, descriptor: usize, x: &[f64], values: T) {
+    let cap = x.len().saturating_add(2).max(4);
+    match cache {
+        Some(slot) if slot.descriptor == descriptor => {
+            if slot.points.len() >= cap {
+                slot.points.remove(0);
+            }
+            slot.points.push((x.to_vec(), values));
+        }
+        _ => {
+            *cache = Some(PyEvalCache {
+                descriptor,
+                points: vec![(x.to_vec(), values)],
+            });
+        }
+    }
 }
 
 struct PyConstraints<'py> {
@@ -245,6 +288,9 @@ impl Objective for PyObjective<'_> {
 
     fn constraint(&mut self, i: usize, x: &[f64]) -> PyResult<f64> {
         let (index, row) = self.constraints.components[i];
+        if let Some(values) = cached_eval(&self.values, index, x) {
+            return Ok(values[row]);
+        }
         let descriptor = &self.constraints.descriptors[index];
         let point = PyArray1::from_slice(descriptor.fun.py(), x);
         let values = constraint_values(&descriptor.fun.call1((point,))?)?;
@@ -253,7 +299,9 @@ impl Objective for PyObjective<'_> {
                 "constraint fun changed output dimension",
             ));
         }
-        Ok(values[row])
+        let value = values[row];
+        remember_eval(&mut self.values, index, x, values);
+        Ok(value)
     }
 
     fn constraint_jacobian(&mut self, i: usize, x: &[f64], out: &mut [f64]) -> PyResult<bool> {
@@ -262,15 +310,24 @@ impl Objective for PyObjective<'_> {
         let Some(jac) = &descriptor.jac else {
             return Ok(false);
         };
+        if let Some(rows) = cached_eval(&self.jacobian, index, x) {
+            if rows[row].len() != out.len() {
+                return Err(PyValueError::new_err(
+                    "constraint jac returned the wrong gradient length",
+                ));
+            }
+            out.copy_from_slice(&rows[row]);
+            return Ok(true);
+        }
         let point = PyArray1::from_slice(jac.py(), x);
         let value = jac.call1((point,))?;
-        let values = if let Ok(values) = value.extract::<Vec<f64>>() {
+        let rows = if let Ok(values) = value.extract::<Vec<f64>>() {
             if descriptor.dimension != 1 {
                 return Err(PyValueError::new_err(
                     "constraint jac must return one row per constraint component",
                 ));
             }
-            values
+            vec![values]
         } else {
             let rows: Vec<Vec<f64>> = value.extract()?;
             if rows.len() != descriptor.dimension {
@@ -278,14 +335,15 @@ impl Objective for PyObjective<'_> {
                     "constraint jac returned the wrong row count",
                 ));
             }
-            rows[row].clone()
+            rows
         };
-        if values.len() != out.len() {
+        if rows[row].len() != out.len() {
             return Err(PyValueError::new_err(
                 "constraint jac returned the wrong gradient length",
             ));
         }
-        out.copy_from_slice(&values);
+        out.copy_from_slice(&rows[row]);
+        remember_eval(&mut self.jacobian, index, x, rows);
         Ok(true)
     }
 }
@@ -377,6 +435,26 @@ pub(crate) fn strict_global_seed(value: &Bound<'_, PyAny>) -> PyResult<u64> {
     value.extract()
 }
 
+pub(crate) fn strict_global_f64(value: &Bound<'_, PyAny>, name: &str) -> PyResult<f64> {
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(format!(
+            "option {name} must be a float, not bool"
+        )));
+    }
+    value.extract()
+}
+
+pub(crate) fn strict_global_optional_f64(
+    value: &Bound<'_, PyAny>,
+    name: &str,
+) -> PyResult<Option<f64>> {
+    if value.is_none() {
+        Ok(None)
+    } else {
+        strict_global_f64(value, name).map(Some)
+    }
+}
+
 fn reject_global_bool(value: &Bound<'_, PyAny>, name: &str) -> PyResult<()> {
     if value.is_instance_of::<PyBool>() {
         return Err(PyValueError::new_err(format!(
@@ -402,10 +480,10 @@ fn differential_evolution(
                     Some(strict_global_usize(&value, "population_size")?)
             }
             "initial_population" => method.global.initial_population = Some(value.extract()?),
-            "xatol" => method.global.xatol = Some(value.extract()?),
-            "fatol" => method.global.fatol = Some(value.extract()?),
-            "mutation" => method.mutation = value.extract()?,
-            "recombination" => method.recombination = value.extract()?,
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "mutation" => method.mutation = strict_global_f64(&value, "mutation")?,
+            "recombination" => method.recombination = strict_global_f64(&value, "recombination")?,
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Differential-Evolution does not support option {other}"
@@ -435,12 +513,14 @@ fn particle_swarm(options: Option<&Bound<'_, PyDict>>) -> PyResult<(ParticleSwar
                     Some(strict_global_usize(&value, "population_size")?)
             }
             "initial_population" => method.global.initial_population = Some(value.extract()?),
-            "xatol" => method.global.xatol = Some(value.extract()?),
-            "fatol" => method.global.fatol = Some(value.extract()?),
-            "inertia" => method.inertia = value.extract()?,
-            "cognitive" => method.cognitive = value.extract()?,
-            "social" => method.social = value.extract()?,
-            "velocity_clamp" => method.velocity_clamp = value.extract()?,
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "inertia" => method.inertia = strict_global_f64(&value, "inertia")?,
+            "cognitive" => method.cognitive = strict_global_f64(&value, "cognitive")?,
+            "social" => method.social = strict_global_f64(&value, "social")?,
+            "velocity_clamp" => {
+                method.velocity_clamp = strict_global_f64(&value, "velocity_clamp")?
+            }
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Particle-Swarm does not support option {other}"
@@ -470,12 +550,12 @@ fn firefly(options: Option<&Bound<'_, PyDict>>) -> PyResult<(FireflyOptions, Com
                     Some(strict_global_usize(&value, "population_size")?)
             }
             "initial_population" => method.global.initial_population = Some(value.extract()?),
-            "xatol" => method.global.xatol = Some(value.extract()?),
-            "fatol" => method.global.fatol = Some(value.extract()?),
-            "alpha" => method.alpha = value.extract()?,
-            "beta0" => method.beta0 = value.extract()?,
-            "gamma" => method.gamma = value.extract()?,
-            "alpha_decay" => method.alpha_decay = value.extract()?,
+            "xatol" => method.global.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.global.fatol = Some(strict_global_f64(&value, "fatol")?),
+            "alpha" => method.alpha = strict_global_f64(&value, "alpha")?,
+            "beta0" => method.beta0 = strict_global_f64(&value, "beta0")?,
+            "gamma" => method.gamma = strict_global_f64(&value, "gamma")?,
+            "alpha_decay" => method.alpha_decay = strict_global_f64(&value, "alpha_decay")?,
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Firefly does not support option {other}"
@@ -502,9 +582,11 @@ fn hybrid_simulated_annealing(
             "maxiter" => common.maxiter = Some(strict_global_usize(&value, "maxiter")?),
             "maxfev" => common.maxfev = Some(strict_global_usize(&value, "maxfev")?),
             "seed" => method.seed = strict_global_seed(&value)?,
-            "initial_temperature" => method.initial_temperature = value.extract()?,
-            "cooling_rate" => method.cooling_rate = value.extract()?,
-            "step_size" => method.step_size = value.extract()?,
+            "initial_temperature" => {
+                method.initial_temperature = strict_global_f64(&value, "initial_temperature")?
+            }
+            "cooling_rate" => method.cooling_rate = strict_global_f64(&value, "cooling_rate")?,
+            "step_size" => method.step_size = strict_global_f64(&value, "step_size")?,
             "local_search_interval" => {
                 method.local_search_interval = strict_global_usize(&value, "local_search_interval")?
             }
@@ -514,8 +596,8 @@ fn hybrid_simulated_annealing(
             "reanneal_interval" => {
                 method.reanneal_interval = strict_global_usize(&value, "reanneal_interval")?
             }
-            "xatol" => method.xatol = Some(value.extract()?),
-            "fatol" => method.fatol = Some(value.extract()?),
+            "xatol" => method.xatol = Some(strict_global_f64(&value, "xatol")?),
+            "fatol" => method.fatol = Some(strict_global_f64(&value, "fatol")?),
             other => {
                 return Err(PyValueError::new_err(format!(
                     "method Hybrid-Simulated-Annealing does not support option {other}"
@@ -702,6 +784,8 @@ pub(crate) fn minimize(
         jac,
         callback,
         constraints,
+        values: None,
+        jacobian: None,
     };
     let result: Minimize = match run(&mut objective, &problem, &method, &common) {
         Ok(result) => result,

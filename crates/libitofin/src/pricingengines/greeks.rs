@@ -19,8 +19,9 @@ use crate::types::Real;
 ///
 /// # Errors
 /// Returns an error for non-finite arguments or market inputs, non-positive
-/// spot, negative local volatility, unreadable/empty market handles, unsupported
-/// derived local volatility, curve range errors or a non-finite formula result.
+/// spot, negative local volatility, unreadable/empty market handles, a local
+/// volatility that cannot be formed, curve range errors or a non-finite formula
+/// result. A general Black surface is derived as Dupire local vol.
 /// These checks deliberately replace QuantLib's unchecked IEEE propagation.
 /// Signed values, deltas, gammas and negative interest rates remain supported.
 pub fn black_scholes_theta(

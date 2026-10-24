@@ -35,6 +35,7 @@
 pub mod bootstraphelper;
 pub mod bootstraptraits;
 pub mod credit;
+pub mod forward;
 pub mod globalbootstrap;
 pub mod globalbootstrapvars;
 pub mod inflation;

@@ -6,6 +6,7 @@ use libitofin::interestrate::Compounding;
 use libitofin::models::{HestonModel, model::CalibratedModelHolder};
 use libitofin::option::OptionType;
 use libitofin::pricingengine::PricingEngine;
+use libitofin::pricingengines::vanilla::analytichestonengine::AnalyticHestonEngine;
 use libitofin::pricingengines::vanilla::coshestonengine::CosHestonEngine;
 use libitofin::pricingengines::vanilla::exponentialfittinghestonengine::{
     ExponentialFittingControlVariate as Cv, ExponentialFittingHestonEngine,
@@ -18,6 +19,7 @@ use libitofin::termstructures::yields::FlatForward;
 use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
 use libitofin::time::date::{Date, Month};
 use libitofin::time::daycounters::actual365fixed::Actual365Fixed;
+use libitofin::time::daycounters::actualactual::{ActualActual, Convention};
 use libitofin::time::frequency::Frequency;
 
 fn market(
@@ -322,5 +324,96 @@ fn heston_exponential_fitting_extreme_moneyness_grid() {
                 );
             }
         }
+    }
+}
+
+/// `hestonmodel.cpp` `testAlanLewisReferencePrices` for engines that do not
+/// need Gauss-Lobatto. Lobatto, Andersen-Piterbarg, angled contour, and
+/// optimal-CV Lobatto arms stay in #418.
+#[test]
+fn alan_lewis_reference_prices_for_laguerre_cos_and_exponential_fitting() {
+    let settlement = Date::new(5, Month::July, 2002);
+    let maturity = Date::new(5, Month::July, 2003);
+    let (model, settings, _) = market(
+        settlement,
+        [0.01, 0.02],
+        100.0,
+        [0.04, 4.0, 0.25, 1.0, -0.5],
+    );
+    let engines: [SharedMut<dyn PricingEngine>; 3] = [
+        shared_mut(AnalyticHestonEngine::new(model.clone(), 128).unwrap()),
+        shared_mut(CosHestonEngine::new(model.clone(), 20.0, 400).unwrap()),
+        shared_mut(ExponentialFittingHestonEngine::new(model, Cv::Optimal, None, -0.5).unwrap()),
+    ];
+    let expected = [
+        [7.958878113256768, 26.774758743998856],
+        [12.017966707346305, 20.93334900059671],
+        [17.05527096127011, 16.070154917028834],
+        [23.0178258984428, 12.132211516709845],
+        [29.811026202682473, 9.024913483457835],
+    ];
+    for (strike, row) in [80.0, 90.0, 100.0, 110.0, 120.0].into_iter().zip(expected) {
+        for (kind, price) in [OptionType::Put, OptionType::Call].into_iter().zip(row) {
+            for engine in &engines {
+                let calculated = option(
+                    settings.clone(),
+                    maturity,
+                    strike,
+                    kind,
+                    SharedMut::clone(engine),
+                )
+                .npv()
+                .unwrap();
+                let rel = (calculated - price).abs() / price;
+                assert!(
+                    rel <= 1e-12,
+                    "strike {strike} {kind:?} calculated {calculated} expected {price} rel {rel}"
+                );
+            }
+        }
+    }
+}
+
+/// `hestonmodel.cpp` `testKahlJaeckelCase` cosine and exponential-fitting arms.
+/// The Gauss-Lobatto analytic arm needs the deferred adaptive integrator.
+#[test]
+fn kahl_jaeckel_cosine_and_exponential_fitting_match_cached_price() {
+    let settlement = Date::new(30, Month::March, 2007);
+    let exercise = Date::new(30, Month::March, 2017);
+    let settings = shared(Settings::new());
+    settings.set_evaluation_date(settlement);
+    let day_counter = ActualActual::with_convention(Convention::ISDA);
+    let curve = |rate| {
+        Handle::new(shared(FlatForward::with_rate(
+            settlement,
+            rate,
+            day_counter.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>)
+    };
+    let model = HestonModel::new(shared(HestonProcess::new(
+        curve(0.0),
+        curve(0.0),
+        Handle::new(shared(SimpleQuote::new(100.0)) as Shared<dyn Quote>),
+        0.16,
+        1.0,
+        0.16,
+        2.0,
+        -0.8,
+    )))
+    .unwrap();
+    let expected = 4.95212;
+    for engine in [
+        shared_mut(CosHestonEngine::new(model.clone(), 16.0, 400).unwrap())
+            as SharedMut<dyn PricingEngine>,
+        shared_mut(
+            ExponentialFittingHestonEngine::new(model.clone(), Cv::Optimal, None, -0.5).unwrap(),
+        ),
+    ] {
+        let calculated = option(settings.clone(), exercise, 200.0, OptionType::Call, engine)
+            .npv()
+            .unwrap();
+        close(calculated, expected, 0.00002);
     }
 }

@@ -1,7 +1,7 @@
 //! Standalone constant-parameter GSR process bindings.
 use crate::PyQlError;
+use libitofin::processes::GsrProcess;
 use libitofin::processes::forwardmeasureprocess::ForwardMeasureProcess1D;
-use libitofin::processes::gsrprocess::GsrProcess;
 use libitofin::stochasticprocess::StochasticProcess1D;
 use pyo3::prelude::*;
 use pyo3_stub_gen::derive::{gen_stub_pyclass, gen_stub_pymethods};
@@ -31,6 +31,16 @@ impl PyGsrProcess {
         reversions: Vec<f64>,
         t_measure: f64,
     ) -> PyResult<Self> {
+        if vols.windows(2).any(|pair| pair[0] != pair[1])
+            || reversions.windows(2).any(|pair| pair[0] != pair[1])
+        {
+            return Err(PyQlError::from(libitofin::errors::QlError::new(
+                "GSR binding accepts only constant volatility and reversion",
+                file!(),
+                line!(),
+            ))
+            .into());
+        }
         Ok(Self {
             inner: GsrProcess::new(times, vols, reversions, t_measure).map_err(PyQlError::from)?,
         })

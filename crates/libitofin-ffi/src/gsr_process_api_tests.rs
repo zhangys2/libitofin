@@ -109,6 +109,13 @@ fn constructor_grid_and_pointer_errors_preserve_output() {
         (vec![], vec![-0.03], vec![0.1], 10.),
         (vec![], vec![0.03], vec![f64::NAN], 10.),
         (vec![], vec![0.03], vec![0.1], -1.),
+        (vec![1.], vec![0.2, 0.3], vec![0.1], 10.),
+        (
+            vec![1.],
+            vec![0.2, 0.2],
+            vec![1e-8, 1e-8_f64.next_up()],
+            10.,
+        ),
     ] {
         let mut out = 91;
         assert_eq!(

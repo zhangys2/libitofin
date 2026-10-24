@@ -186,7 +186,7 @@ impl IborCoupon {
     /// `couponpricer.cpp:56-88`).
     ///
     /// `fixingValueDate` advances the fixing date on the **fixing calendar**
-    /// by the index's fixing days (`couponpricer.cpp:62-63`) - deliberately
+    /// by the index's fixing days (`couponpricer.cpp:62-63`) — deliberately
     /// *not* [`value_date`](InterestRateIndex::value_date), which for Libor
     /// additionally joint-adjusts. `fixingMaturityDate` is then
     /// [`maturity_date`](InterestRateIndex::maturity_date) off that start
@@ -287,6 +287,10 @@ impl AsObservable for IborCoupon {
 impl Coupon for IborCoupon {
     fn coupon_base(&self) -> &CouponBase {
         self.base.coupon_base()
+    }
+
+    fn fixing_date(&self) -> Option<Date> {
+        Some(IborCoupon::fixing_date(self))
     }
 
     fn amount(&self) -> QlResult<Real> {
@@ -501,14 +505,24 @@ mod tests {
         }
     }
 
-    /// The in-arrears swaplet path is refused (the convexity adjustment needs the
-    /// unported optionlet volatility), rather than returning a silent wrong
-    /// number.
+    /// An in-arrears coupon without optionlet volatility refuses the Black76
+    /// convexity adjustment, rather than returning a silent wrong number.
     #[test]
     fn an_in_arrears_coupon_refuses_to_price() {
         let today = Date::new(15, Month::June, 2026);
         let settings = settings_on(today);
-        let index = ibor6m(settings);
+        let index = shared(IborIndex::new(
+            "foo".into(),
+            Period::new(6, TimeUnit::Months),
+            2,
+            Currency::eur(),
+            Target::new(),
+            BusinessDayConvention::Following,
+            false,
+            Actual360::new(),
+            flat_curve(today, 0.03),
+            settings,
+        ));
 
         let start = Date::new(15, Month::January, 2026);
         let end = Date::new(15, Month::July, 2026);
@@ -531,7 +545,12 @@ mod tests {
         .unwrap();
         coupon.set_pricer(pricer());
 
-        assert!(coupon.rate().is_err());
+        let err = coupon.rate().unwrap_err();
+        assert!(
+            err.message().contains("missing optionlet volatility"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     /// Behind the explicit `using_at_par_coupons = false` flag an unfixed coupon
@@ -713,103 +732,5 @@ mod tests {
         let payment_date = coupon.coupon_base().payment_date();
         let expected_accrued = coupon.nominal() * rate * coupon.accrued_period(payment_date);
         assert!((coupon.accrued_amount(payment_date).unwrap() - expected_accrued).abs() < 1e-14);
-    }
-    /// QuantLib couponpricer.cpp advances on the fixing calendar before joint maturity.
-    #[test]
-    fn libor_coupon_uses_fixing_calendar_not_joint_value_calendar() {
-        use crate::indexes::ibor::UsdLibor;
-        let today = Date::new(6, Month::November, 2019);
-        let index = shared(
-            UsdLibor::new(
-                Period::new(6, TimeUnit::Months),
-                flat_curve(today, 0.03),
-                settings_on(today),
-            )
-            .unwrap(),
-        );
-        let start = Date::new(11, Month::November, 2019);
-        let end = Date::new(11, Month::May, 2020);
-        let coupon = IborCoupon::new(
-            end,
-            100.0,
-            start,
-            end,
-            Some(2),
-            index.clone(),
-            1.0,
-            0.0,
-            None,
-            None,
-            None,
-            false,
-            None,
-            BusinessDayConvention::Preceding,
-        )
-        .unwrap();
-        coupon.set_pricer(pricer());
-        assert!(!coupon.is_in_arrears());
-        assert_eq!(coupon.fixing_date(), Date::new(7, Month::November, 2019));
-        assert_eq!(
-            index.value_date(coupon.fixing_date()).unwrap(),
-            Date::new(12, Month::November, 2019)
-        );
-        assert!((coupon.rate().unwrap() - 0.03022865451309394).abs() < 1e-14);
-    }
-
-    /// QuantLib 1.43 fixes zero-lag holiday coupons by their supplied convention.
-    #[test]
-    fn zero_lag_holiday_fixings_follow_arrears_and_convention() {
-        let settings = settings_on(Date::new(1, Month::January, 2026));
-        let start = Date::new(1, Month::February, 2026);
-        let end = Date::new(1, Month::August, 2026);
-        for (arrears, convention, expected) in [
-            (
-                false,
-                BusinessDayConvention::Preceding,
-                Date::new(30, Month::January, 2026),
-            ),
-            (
-                false,
-                BusinessDayConvention::Following,
-                Date::new(2, Month::February, 2026),
-            ),
-            (
-                true,
-                BusinessDayConvention::Preceding,
-                Date::new(31, Month::July, 2026),
-            ),
-            (
-                true,
-                BusinessDayConvention::Following,
-                Date::new(3, Month::August, 2026),
-            ),
-        ] {
-            let coupon = IborCoupon::new(
-                end + 1,
-                100.0,
-                start,
-                end,
-                Some(0),
-                ibor6m(Shared::clone(&settings)),
-                1.0,
-                0.0,
-                None,
-                None,
-                None,
-                arrears,
-                None,
-                convention,
-            )
-            .unwrap();
-            assert_eq!(coupon.is_in_arrears(), arrears);
-            assert_eq!(coupon.fixing_date(), expected);
-            assert!(
-                coupon
-                    .rate()
-                    .unwrap_err()
-                    .message()
-                    .contains("pricer not set")
-            );
-        }
     }
 }

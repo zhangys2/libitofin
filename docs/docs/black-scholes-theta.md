@@ -54,10 +54,10 @@ fn theta(
   converted to zero.
 - Rejects non-finite value/delta/gamma/rates/local volatility, non-positive spot,
   negative local volatility and a non-finite floating-point formula result.
-- Empty handles, invalid quotes, curve range errors and unsupported derived local
-  volatility propagate as errors. The process currently derives local volatility
-  from constant Black volatility and linear Black variance curves only; use an
-  explicit local-volatility handle for other supported local-volatility models.
+- Empty handles, invalid quotes, and curve range errors propagate as errors.
+  The process derives local volatility from constant Black volatility, a linear
+  Black variance curve, and Dupire local vol for any other Black surface. An
+  explicit local-volatility handle still takes precedence.
 - This is checked evaluation in ordinary floating-point source order, not an
   arbitrary-precision identity. Intermediate overflow or extreme cancellation
   can make an otherwise mathematically meaningful calculation return an error.

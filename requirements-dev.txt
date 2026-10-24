@@ -1,0 +1,5 @@
+# Pinned Python tooling for local binding builds and CI (python-bindings job).
+# Install into a venv: pip install -r requirements-dev.txt
+# maturin must stay within the pyproject range: >=1.5,<2
+maturin==1.14.1
+pytest==9.1.1

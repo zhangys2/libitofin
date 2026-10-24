@@ -49,7 +49,10 @@ impl PyAssetSwap {
         if !self.frozen && self.flags != flags(&self.settings) {
             self.inner.base().observer().borrow_mut().update();
         }
-        if !force && (self.frozen || self.inner.base().is_calculated()) {
+        if !force
+            && (self.frozen
+                || (self.inner.base().is_calculated() && self.flags == flags(&self.settings)))
+        {
             return Ok(());
         }
         if self.inner.is_expired().map_err(PyQlError::from)? {

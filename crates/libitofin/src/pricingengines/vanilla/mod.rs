@@ -17,38 +17,67 @@
 //!   does not handle is an explicit error from there rather than a silently
 //!   wrong price.
 
+pub mod analyticdigitalamericanengine;
 pub mod analytichestonengine;
+pub mod baroneadesiwhaleyengine;
 pub mod batesengine;
+pub mod binomialvanillaengine;
+pub mod bjerksundstenslandengine;
 pub mod coshestonengine;
 pub mod exponentialfittinghestonengine;
 pub mod fdblackscholesvanillaengine;
+pub mod fdhestonvanillaengine;
+pub mod fdjumptodefaultvanillaengine;
+pub mod fdmamericanengine;
+pub mod fdmbermudanengine;
+pub mod fdmeuropeanengine;
+pub mod fdsimplebsswingengine;
 mod heston_fitting_table;
 mod hestoncumulants;
 mod hestonmarket;
 pub mod jumpdiffusionengine;
+pub mod juquadraticengine;
 pub mod mcamericanengine;
 pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
+pub mod mcslvjumptodefaultvanillaengine;
 pub mod mcvanillaengine;
+pub mod quantoengine;
 
+pub use analyticdigitalamericanengine::{
+    AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine,
+};
 pub use analytichestonengine::HestonChf;
+pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
-pub use fdblackscholesvanillaengine::FdBlackScholesVanillaEngine;
+pub use binomialvanillaengine::BinomialVanillaEngine;
+pub use bjerksundstenslandengine::BjerksundStenslandApproximationEngine;
+pub use fdblackscholesvanillaengine::{CashDividendModel, FdBlackScholesVanillaEngine};
+pub use fdhestonvanillaengine::FdHestonVanillaEngine;
+pub use fdjumptodefaultvanillaengine::FdJumpToDefaultVanillaEngine;
+pub use fdmamericanengine::FdmAmericanEngine;
+pub use fdmbermudanengine::FdmBermudanEngine;
+pub use fdmeuropeanengine::FdmEuropeanEngine;
+pub use fdsimplebsswingengine::{FdSimpleBSSwingEngine, set_fd_simple_bs_swing_engine};
 pub use jumpdiffusionengine::JumpDiffusionEngine;
+pub use juquadraticengine::JuQuadraticApproximationEngine;
 pub use mcamericanengine::{AmericanPathPricer, MCAmericanEngine, MakeMcAmericanEngine};
 pub use mceuropeanengine::{EuropeanPathPricer, MCEuropeanEngine, MakeMcEuropeanEngine};
 pub use mceuropeanhestonengine::{
     EuropeanHestonPathPricer, MCEuropeanHestonEngine, MakeMcEuropeanHestonEngine,
 };
+pub use mcslvjumptodefaultvanillaengine::McSlvJumpToDefaultVanillaEngine;
 pub use mcvanillaengine::McVanillaEngineBase;
+pub use quantoengine::QuantoEuropeanEngine;
 
 use std::any::Any;
 
 use crate::errors::QlResult;
-use crate::exercise::ExerciseType;
+use crate::exercise::{Exercise, ExerciseType};
 use crate::fail;
 use crate::instruments::{
     Greeks, MoreGreeks, OneAssetOptionEngine, OneAssetOptionResults, OptionArguments,
+    StrikedTypePayoff,
 };
 use crate::patterns::observable::{AsObservable, Observable};
 use crate::pricingengine::{Arguments, PricingEngine, Results};
@@ -71,6 +100,22 @@ impl AnalyticEuropeanEngine {
             OneAssetOptionEngine::new(OptionArguments::default(), OneAssetOptionResults::default());
         base.register_with(process.observable());
         AnalyticEuropeanEngine { base, process }
+    }
+
+    /// Fills the arguments and calculates; used by
+    /// [`QuantoEuropeanEngine`](quantoengine::QuantoEuropeanEngine).
+    pub(crate) fn calculate_from_arguments(
+        &mut self,
+        payoff: Shared<dyn StrikedTypePayoff>,
+        exercise: Shared<dyn Exercise>,
+    ) -> QlResult<&OneAssetOptionResults> {
+        {
+            let args = self.base.arguments_mut();
+            args.payoff = Some(payoff);
+            args.exercise = Some(exercise);
+        }
+        PricingEngine::calculate(self)?;
+        Ok(self.base.results())
     }
 }
 
@@ -1071,20 +1116,288 @@ mod test_cash_or_nothing {
 }
 
 #[cfg(test)]
+mod test_asset_or_nothing {
+    //! The `testAssetOrNothingEuropeanValues` oracle of
+    //! `test-suite/digitaloption.cpp:131-183`.
+
+    use super::test_market::{market, time_to_days, today};
+    use crate::instrument::Instrument;
+    use crate::instruments::{AssetOrNothingPayoff, EuropeanOption};
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::shared::shared;
+    use crate::types::{Rate, Real, Time, Volatility};
+
+    fn asset_or_nothing(
+        option_type: OptionType,
+        strike: Real,
+        expiry_time: Time,
+        market: &super::test_market::Market,
+    ) -> EuropeanOption {
+        let expiry = today() + time_to_days(expiry_time);
+        market.option_with_payoff(
+            shared(AssetOrNothingPayoff::new(option_type, strike)),
+            expiry,
+        )
+    }
+
+    /// The single row of the C++ fixture (`digitaloption.cpp:136-139`): a Haug
+    /// p.90 put, asserted at the C++ tolerance of 1e-4. The published figure
+    /// is paired with a full-precision reference at 1e-12:
+    /// `discount * F * N(-d1)` on Actual360.
+    #[test]
+    fn value_matches_the_haug_asset_or_nothing_row() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (65.0, 70.0, 0.05, 0.07, 0.50, 0.27);
+        let haug: Real = 20.2069;
+        let precise: Real = 20.206947298368533;
+
+        let market = market();
+        market.set(spot, q, r, vol);
+        let mut option = asset_or_nothing(Put, strike, t, &market);
+
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - haug).abs() <= 1.0e-4,
+            "asset-or-nothing put K={strike} S={spot}: {calculated} vs Haug {haug} \
+             (error {})",
+            (calculated - haug).abs()
+        );
+        assert!(
+            (calculated - precise).abs() <= 1.0e-12,
+            "asset-or-nothing put K={strike} S={spot}: {calculated} vs reference {precise} \
+             (error {})",
+            (calculated - precise).abs()
+        );
+    }
+
+    /// Call and put asset-or-nothings together pay the asset almost surely,
+    /// so their NPVs sum to `S e^{-q t}`.
+    #[test]
+    fn call_and_put_asset_or_nothings_sum_to_the_prepaid_spot() {
+        let q: Rate = 0.04;
+        let t: Time = 0.5;
+        let market = market();
+        market.set(100.0, q, 0.06, 0.30);
+        for strike in [80.0, 100.0, 120.0] {
+            let mut call = asset_or_nothing(Call, strike, t, &market);
+            let mut put = asset_or_nothing(Put, strike, t, &market);
+            let prepaid = 100.0 * (-q * t).exp();
+            let total = call.npv().unwrap() + put.npv().unwrap();
+            assert!(
+                (total - prepaid).abs() <= 1.0e-12,
+                "asset-or-nothing call+put K={strike}: {total} vs prepaid spot {prepaid}"
+            );
+        }
+    }
+
+    /// Pins put/call `DalphaDd1` (`blackcalculator.cpp:181,185`): value()
+    /// reads only α/β, so a vanilla-put `+n(d1)` on the asset-or-nothing put
+    /// would still match Haug NPV. Delta/gamma vs central differences of NPV
+    /// on a `q != r` fixture, both types, same bump as the cash-or-nothing
+    /// sibling.
+    #[test]
+    fn asset_or_nothing_greeks_match_central_differences() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let tolerance: Real = 1.0e-7;
+        let market = market();
+        market.set(spot, q, r, vol);
+        for option_type in [Call, Put] {
+            let mut option = asset_or_nothing(option_type, strike, t, &market);
+            let delta = option.delta().unwrap();
+            let gamma = option.gamma().unwrap();
+            assert!(
+                gamma.abs() > 1.0e-4,
+                "the fixture must have a gamma worth pinning, got {gamma}"
+            );
+            let h = spot * 1.0e-4;
+            market.spot.set_value(spot + h);
+            let value_up = option.npv().unwrap();
+            market.spot.set_value(spot - h);
+            let value_down = option.npv().unwrap();
+            market.spot.set_value(spot);
+            let value = option.npv().unwrap();
+            let fd_delta = (value_up - value_down) / (2.0 * h);
+            let fd_gamma = (value_up - 2.0 * value + value_down) / (h * h);
+            for (name, analytic, finite_difference) in
+                [("delta", delta, fd_delta), ("gamma", gamma, fd_gamma)]
+            {
+                assert!(
+                    (analytic - finite_difference).abs() <= tolerance,
+                    "{name} of the {option_type:?} asset-or-nothing: analytic {analytic} vs \
+                     finite difference {finite_difference} (error {})",
+                    (analytic - finite_difference).abs()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod test_gap {
+    //! The `testGapEuropeanValues` oracle of
+    //! `test-suite/digitaloption.cpp:184-235`.
+
+    use super::test_market::{market, time_to_days, today};
+    use crate::instrument::Instrument;
+    use crate::instruments::{CashOrNothingPayoff, EuropeanOption, GapPayoff, PlainVanillaPayoff};
+    use crate::option::OptionType::{self, Call, Put};
+    use crate::shared::shared;
+    use crate::types::{Rate, Real, Time, Volatility};
+
+    const SECOND_STRIKE: Real = 57.0;
+
+    fn gap(
+        option_type: OptionType,
+        strike: Real,
+        second_strike: Real,
+        expiry_time: Time,
+        market: &super::test_market::Market,
+    ) -> EuropeanOption {
+        let expiry = today() + time_to_days(expiry_time);
+        market.option_with_payoff(
+            shared(GapPayoff::new(option_type, strike, second_strike)),
+            expiry,
+        )
+    }
+
+    /// The single row of the C++ fixture (`digitaloption.cpp:189-191`): a Haug
+    /// p.88 call with payoff strike 57, asserted at the C++ tolerance of 1e-4.
+    /// The published figure is paired with a full-precision reference at
+    /// 1e-12: `discount * (F N(d1) - 57 N(d2))` on Actual360.
+    #[test]
+    fn value_matches_the_haug_gap_row() {
+        let (strike, spot, q, r, t, vol): (Real, Real, Rate, Rate, Time, Volatility) =
+            (50.0, 50.0, 0.00, 0.09, 0.50, 0.20);
+        let haug: Real = -0.0053;
+        let precise: Real = -0.0052524892587822595;
+
+        let market = market();
+        market.set(spot, q, r, vol);
+        let mut option = gap(Call, strike, SECOND_STRIKE, t, &market);
+
+        let calculated = option.npv().unwrap();
+        assert!(
+            (calculated - haug).abs() <= 1.0e-4,
+            "gap call K={strike} K2={SECOND_STRIKE} S={spot}: {calculated} vs Haug {haug} \
+             (error {})",
+            (calculated - haug).abs()
+        );
+        assert!(
+            (calculated - precise).abs() <= 1.0e-12,
+            "gap call K={strike} K2={SECOND_STRIKE} S={spot}: {calculated} vs reference {precise} \
+             (error {})",
+            (calculated - precise).abs()
+        );
+    }
+
+    /// A gap is a vanilla struck at K1 plus or minus a cash-or-nothing of
+    /// size `K2 - K1` (`payoffs.hpp:170-176`): short the cash for a call,
+    /// long it for a put. Pins both types of the visitor, which only rewrites
+    /// `x` and `DxDstrike`.
+    #[test]
+    fn gap_matches_vanilla_plus_or_minus_the_cash_leg() {
+        let (strike, second, spot, q, r, t, vol): (Real, Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 110.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let cash = second - strike;
+        let market = market();
+        market.set(spot, q, r, vol);
+        let expiry = today() + time_to_days(t);
+        for option_type in [Call, Put] {
+            let mut gap_opt = gap(option_type, strike, second, t, &market);
+            let mut vanilla = market
+                .option_with_payoff(shared(PlainVanillaPayoff::new(option_type, strike)), expiry);
+            let mut digital = market.option_with_payoff(
+                shared(CashOrNothingPayoff::new(option_type, strike, cash)),
+                expiry,
+            );
+            let expected = match option_type {
+                Call => vanilla.npv().unwrap() - digital.npv().unwrap(),
+                Put => vanilla.npv().unwrap() + digital.npv().unwrap(),
+            };
+            let calculated = gap_opt.npv().unwrap();
+            assert!(
+                (calculated - expected).abs() <= 1.0e-12,
+                "{option_type:?} gap {calculated} vs vanilla±cash {expected}"
+            );
+        }
+    }
+
+    /// Pins `DxDstrike_ = 0` (`blackcalculator.cpp:194`): value() does not
+    /// see it, so a leftover vanilla `dx_dstrike = 1` still matches Haug NPV.
+    /// Delta/gamma vs spot bumps and strikeSensitivity vs K1 bumps (K2
+    /// fixed), both types, same relative bump as the cash-or-nothing sibling.
+    #[test]
+    fn gap_greeks_match_central_differences() {
+        let (strike, second, spot, q, r, t, vol): (Real, Real, Real, Rate, Rate, Time, Volatility) =
+            (100.0, 90.0, 100.0, 0.04, 0.06, 0.75, 0.35);
+        let tolerance: Real = 1.0e-7;
+        let market = market();
+        market.set(spot, q, r, vol);
+        for option_type in [Call, Put] {
+            let mut option = gap(option_type, strike, second, t, &market);
+            let delta = option.delta().unwrap();
+            let gamma = option.gamma().unwrap();
+            let strike_sensitivity = option.strike_sensitivity().unwrap();
+            assert!(
+                gamma.abs() > 1.0e-4,
+                "the fixture must have a gamma worth pinning, got {gamma}"
+            );
+            let h = spot * 1.0e-4;
+            market.spot.set_value(spot + h);
+            let value_up = option.npv().unwrap();
+            market.spot.set_value(spot - h);
+            let value_down = option.npv().unwrap();
+            market.spot.set_value(spot);
+            let value = option.npv().unwrap();
+            let fd_delta = (value_up - value_down) / (2.0 * h);
+            let fd_gamma = (value_up - 2.0 * value + value_down) / (h * h);
+            let hk = strike * 1.0e-4;
+            let fd_strike_sensitivity = (gap(option_type, strike + hk, second, t, &market)
+                .npv()
+                .unwrap()
+                - gap(option_type, strike - hk, second, t, &market)
+                    .npv()
+                    .unwrap())
+                / (2.0 * hk);
+            for (name, analytic, finite_difference) in [
+                ("delta", delta, fd_delta),
+                ("gamma", gamma, fd_gamma),
+                (
+                    "strikeSensitivity",
+                    strike_sensitivity,
+                    fd_strike_sensitivity,
+                ),
+            ] {
+                assert!(
+                    (analytic - finite_difference).abs() <= tolerance,
+                    "{name} of the {option_type:?} gap: analytic {analytic} vs finite \
+                     difference {finite_difference} (error {})",
+                    (analytic - finite_difference).abs()
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod test_greeks {
     //! The `testGreeks` oracle of `test-suite/europeanoption.cpp`: analytic
-    //! greeks against central finite differences over the full plain-vanilla
-    //! grid, on curves moving off the evaluation date. The C++ test also
-    //! sweeps asset-or-nothing and gap payoffs; those payoffs are follow-up
-    //! work and their sweeps come with them. The cash-or-nothing sweep is
-    //! covered by `test_cash_or_nothing` above.
+    //! greeks against central finite differences on curves moving off the
+    //! evaluation date. The sweep is QuantLib's `kk == 0..3`: plain vanilla,
+    //! cash-or-nothing (cash 100), asset-or-nothing, and gap (second strike
+    //! 100). Haug NPV pins for the digital and gap payoffs stay in
+    //! `test_cash_or_nothing`, `test_asset_or_nothing`, and `test_gap`.
 
     use super::AnalyticEuropeanEngine;
     use super::test_market::{quote_handle, time_to_days, today};
-    use crate::exercise::EuropeanExercise;
+    use crate::exercise::{EuropeanExercise, Exercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
-    use crate::instruments::{EuropeanOption, PlainVanillaPayoff};
+    use crate::instruments::{
+        AssetOrNothingPayoff, CashOrNothingPayoff, EuropeanOption, GapPayoff, PlainVanillaPayoff,
+        StrikedTypePayoff,
+    };
     use crate::interestrate::Compounding;
     use crate::option::OptionType;
     use crate::pricingengine::PricingEngine;
@@ -1179,96 +1492,116 @@ mod test_greeks {
             for strike in strikes {
                 for residual_time in residual_times {
                     let expiry = today() + time_to_days(residual_time);
-                    let payoff = shared(PlainVanillaPayoff::new(option_type, strike));
-                    let exercise = shared(EuropeanExercise::new(expiry));
-                    let mut option =
-                        EuropeanOption::new(payoff, exercise, Shared::clone(&market.settings));
-                    let engine =
-                        shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&market.process)));
-                    option
-                        .base_mut()
-                        .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
+                    let exercise: Shared<dyn Exercise> = shared(EuropeanExercise::new(expiry));
+                    let payoffs: [(&str, Shared<dyn StrikedTypePayoff>); 4] = [
+                        (
+                            "vanilla",
+                            shared(PlainVanillaPayoff::new(option_type, strike)),
+                        ),
+                        (
+                            "cash-or-nothing",
+                            shared(CashOrNothingPayoff::new(option_type, strike, 100.0)),
+                        ),
+                        (
+                            "asset-or-nothing",
+                            shared(AssetOrNothingPayoff::new(option_type, strike)),
+                        ),
+                        ("gap", shared(GapPayoff::new(option_type, strike, 100.0))),
+                    ];
+                    for (payoff_name, payoff) in payoffs {
+                        let mut option = EuropeanOption::new(
+                            payoff,
+                            Shared::clone(&exercise),
+                            Shared::clone(&market.settings),
+                        );
+                        let engine =
+                            shared_mut(AnalyticEuropeanEngine::new(Shared::clone(&market.process)));
+                        option
+                            .base_mut()
+                            .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
 
-                    for q in q_rates {
-                        for r in r_rates {
-                            for vol in vols {
-                                let u = UNDERLYING;
-                                market.spot.set_value(u);
-                                market.q_rate.set_value(q);
-                                market.r_rate.set_value(r);
-                                market.vol.set_value(vol);
+                        for q in q_rates {
+                            for r in r_rates {
+                                for vol in vols {
+                                    let u = UNDERLYING;
+                                    market.spot.set_value(u);
+                                    market.q_rate.set_value(q);
+                                    market.r_rate.set_value(r);
+                                    market.vol.set_value(vol);
 
-                                let value = option.npv().unwrap();
-                                let delta = option.delta().unwrap();
-                                let gamma = option.gamma().unwrap();
-                                let theta = option.theta().unwrap();
-                                let rho = option.rho().unwrap();
-                                let dividend_rho = option.dividend_rho().unwrap();
-                                let vega = option.vega().unwrap();
+                                    let value = option.npv().unwrap();
+                                    let delta = option.delta().unwrap();
+                                    let gamma = option.gamma().unwrap();
+                                    let theta = option.theta().unwrap();
+                                    let rho = option.rho().unwrap();
+                                    let dividend_rho = option.dividend_rho().unwrap();
+                                    let vega = option.vega().unwrap();
 
-                                if value <= u * 1.0e-5 {
-                                    continue;
-                                }
+                                    if value <= u * 1.0e-5 {
+                                        continue;
+                                    }
 
-                                let du = u * 1.0e-4;
-                                market.spot.set_value(u + du);
-                                let value_p = option.npv().unwrap();
-                                let delta_p = option.delta().unwrap();
-                                market.spot.set_value(u - du);
-                                let value_m = option.npv().unwrap();
-                                let delta_m = option.delta().unwrap();
-                                market.spot.set_value(u);
-                                let expected_delta = (value_p - value_m) / (2.0 * du);
-                                let expected_gamma = (delta_p - delta_m) / (2.0 * du);
+                                    let du = u * 1.0e-4;
+                                    market.spot.set_value(u + du);
+                                    let value_p = option.npv().unwrap();
+                                    let delta_p = option.delta().unwrap();
+                                    market.spot.set_value(u - du);
+                                    let value_m = option.npv().unwrap();
+                                    let delta_m = option.delta().unwrap();
+                                    market.spot.set_value(u);
+                                    let expected_delta = (value_p - value_m) / (2.0 * du);
+                                    let expected_gamma = (delta_p - delta_m) / (2.0 * du);
 
-                                let dr = r * 1.0e-4;
-                                market.r_rate.set_value(r + dr);
-                                let value_p = option.npv().unwrap();
-                                market.r_rate.set_value(r - dr);
-                                let value_m = option.npv().unwrap();
-                                market.r_rate.set_value(r);
-                                let expected_rho = (value_p - value_m) / (2.0 * dr);
+                                    let dr = r * 1.0e-4;
+                                    market.r_rate.set_value(r + dr);
+                                    let value_p = option.npv().unwrap();
+                                    market.r_rate.set_value(r - dr);
+                                    let value_m = option.npv().unwrap();
+                                    market.r_rate.set_value(r);
+                                    let expected_rho = (value_p - value_m) / (2.0 * dr);
 
-                                let dq = q * 1.0e-4;
-                                market.q_rate.set_value(q + dq);
-                                let value_p = option.npv().unwrap();
-                                market.q_rate.set_value(q - dq);
-                                let value_m = option.npv().unwrap();
-                                market.q_rate.set_value(q);
-                                let expected_dividend_rho = (value_p - value_m) / (2.0 * dq);
+                                    let dq = q * 1.0e-4;
+                                    market.q_rate.set_value(q + dq);
+                                    let value_p = option.npv().unwrap();
+                                    market.q_rate.set_value(q - dq);
+                                    let value_m = option.npv().unwrap();
+                                    market.q_rate.set_value(q);
+                                    let expected_dividend_rho = (value_p - value_m) / (2.0 * dq);
 
-                                let dv = vol * 1.0e-4;
-                                market.vol.set_value(vol + dv);
-                                let value_p = option.npv().unwrap();
-                                market.vol.set_value(vol - dv);
-                                let value_m = option.npv().unwrap();
-                                market.vol.set_value(vol);
-                                let expected_vega = (value_p - value_m) / (2.0 * dv);
+                                    let dv = vol * 1.0e-4;
+                                    market.vol.set_value(vol + dv);
+                                    let value_p = option.npv().unwrap();
+                                    market.vol.set_value(vol - dv);
+                                    let value_m = option.npv().unwrap();
+                                    market.vol.set_value(vol);
+                                    let expected_vega = (value_p - value_m) / (2.0 * dv);
 
-                                let dt = day_counter.year_fraction(today() - 1, today() + 1);
-                                market.settings.set_evaluation_date(today() - 1);
-                                let value_m = option.npv().unwrap();
-                                market.settings.set_evaluation_date(today() + 1);
-                                let value_p = option.npv().unwrap();
-                                market.settings.set_evaluation_date(today());
-                                let expected_theta = (value_p - value_m) / dt;
+                                    let dt = day_counter.year_fraction(today() - 1, today() + 1);
+                                    market.settings.set_evaluation_date(today() - 1);
+                                    let value_m = option.npv().unwrap();
+                                    market.settings.set_evaluation_date(today() + 1);
+                                    let value_p = option.npv().unwrap();
+                                    market.settings.set_evaluation_date(today());
+                                    let expected_theta = (value_p - value_m) / dt;
 
-                                let checks = [
-                                    ("delta", expected_delta, delta),
-                                    ("gamma", expected_gamma, gamma),
-                                    ("theta", expected_theta, theta),
-                                    ("rho", expected_rho, rho),
-                                    ("divRho", expected_dividend_rho, dividend_rho),
-                                    ("vega", expected_vega, vega),
-                                ];
-                                for (name, expected, calculated) in checks {
-                                    let error = relative_error(expected, calculated, u);
-                                    assert!(
-                                        error <= TOLERANCE,
-                                        "{name} of {option_type:?} K={strike} T={residual_time} \
-                                         q={q} r={r} v={vol}: analytic {calculated} vs finite \
-                                         difference {expected} (relative error {error})"
-                                    );
+                                    let checks = [
+                                        ("delta", expected_delta, delta),
+                                        ("gamma", expected_gamma, gamma),
+                                        ("theta", expected_theta, theta),
+                                        ("rho", expected_rho, rho),
+                                        ("divRho", expected_dividend_rho, dividend_rho),
+                                        ("vega", expected_vega, vega),
+                                    ];
+                                    for (name, expected, calculated) in checks {
+                                        let error = relative_error(expected, calculated, u);
+                                        assert!(
+                                            error <= TOLERANCE,
+                                            "{name} of {payoff_name} {option_type:?} K={strike} \
+                                         T={residual_time} q={q} r={r} v={vol}: analytic \
+                                         {calculated} vs finite difference {expected} \
+                                         (relative error {error})"
+                                        );
+                                    }
                                 }
                             }
                         }

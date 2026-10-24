@@ -20,35 +20,35 @@ and macOS amd64 (Intel, macOS 15 or newer).
 The Linux arm64 and macOS amd64 packages are published from the release after
 v0.27.0; earlier releases ship only Linux amd64 and macOS arm64.
 
-The following commands pin the v0.24.0 release. With the GitHub CLI
+The following commands pin the v0.43.0 release. This fork tracks that upstream version and does not publish it. With the GitHub CLI
 installed, run them in your application's module directory. For a new project,
 first run `go mod init example.com/pricing`.
 
 === "macOS arm64"
 
     ```sh
-    version=0.24.0
+    version=0.43.0
     platform=darwin-arm64
     ```
 
 === "macOS amd64"
 
     ```sh
-    version=0.24.0
+    version=0.43.0
     platform=darwin-amd64
     ```
 
 === "Linux amd64"
 
     ```sh
-    version=0.24.0
+    version=0.43.0
     platform=linux-amd64
     ```
 
 === "Linux arm64"
 
     ```sh
-    version=0.24.0
+    version=0.43.0
     platform=linux-arm64
     ```
 
@@ -180,7 +180,7 @@ run reproducible; its stream is not promised to match NumPy.
 --8<-- "sdk/go/examples/portfolio/main.go"
 ```
 
-With v0.24.0, it prints `native 0.24.0; 1000 paths; mean terminal portfolio 10525.33`.
+With v0.26.0, it prints `native 0.26.0; 1000 paths; mean terminal portfolio 10525.33`.
 
 ## Sessions and errors
 

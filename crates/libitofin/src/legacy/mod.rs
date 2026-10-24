@@ -1,6 +1,10 @@
-//! Standalone immutable numerical components from QuantLib's legacy models.
+//! Legacy QuantLib modules.
 //!
-//! These components do not provide calibration, a Libor market-model process,
-//! pricing engines, integrated covariance or observable market-data inputs.
+//! Port of `ql/legacy/`: APIs kept for oracle parity with deprecated QL
+//! suites. The first resident is the Libor market model covariance spine.
 
 pub mod libormarketmodels;
+
+pub use libormarketmodels::{
+    LfmCovarianceProxy, LmExponentialCorrelationModel, LmLinearExponentialVolatilityModel,
+};

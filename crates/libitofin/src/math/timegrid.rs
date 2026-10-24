@@ -95,8 +95,8 @@ impl TimeGrid {
         })
     }
 
-    /// Grid through a set of mandatory times, with regularly spaced interior
-    /// points (`timegrid.hpp:87`, the `(begin, end, steps)` ctor).
+    /// Time grid with mandatory time points plus regular interior fill
+    /// (`timegrid.hpp:87`).
     ///
     /// The sorted, `close_enough`-deduped `times` become grid nodes *verbatim*
     /// (so a later `index`/`initialize` resolves them exactly); between each
@@ -374,6 +374,13 @@ mod tests {
         // mandatory times (min(1, 1, 2) = 1 here).
         let grid = TimeGrid::with_mandatory_times(&[1.0, 2.0, 4.0], 0).unwrap();
         assert_eq!(grid.times(), &[0.0, 1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(grid.mandatory_times(), &[1.0, 2.0, 4.0]);
+    }
+
+    #[test]
+    fn from_mandatory_times_places_only_input_nodes() {
+        let grid = TimeGrid::from_mandatory_times(&[1.0, 2.0, 4.0]).unwrap();
+        assert_eq!(grid.times(), &[0.0, 1.0, 2.0, 4.0]);
         assert_eq!(grid.mandatory_times(), &[1.0, 2.0, 4.0]);
     }
 

@@ -75,6 +75,48 @@ def test_invalid_inputs_do_not_invoke_the_objective(method: str, overrides: dict
     assert not calls
 
 
+@pytest.mark.parametrize(
+    ("method", "key"),
+    [
+        (solver, key)
+        for solver, keys in (
+            ("Differential-Evolution", ("xatol", "fatol", "mutation", "recombination")),
+            (
+                "Particle-Swarm",
+                ("xatol", "fatol", "inertia", "cognitive", "social", "velocity_clamp"),
+            ),
+            (
+                "Firefly",
+                ("xatol", "fatol", "alpha", "beta0", "gamma", "alpha_decay"),
+            ),
+            (
+                "Hybrid-Simulated-Annealing",
+                (
+                    "xatol",
+                    "fatol",
+                    "initial_temperature",
+                    "cooling_rate",
+                    "step_size",
+                ),
+            ),
+        )
+        for key in keys
+    ],
+)
+@pytest.mark.parametrize("value", [True, False])
+def test_float_options_reject_bool(method: str, key: str, value: bool) -> None:
+    """Bool is not a float tolerance or global-solver coefficient."""
+    calls = []
+
+    def objective(x: np.ndarray) -> float:
+        calls.append(x.copy())
+        return float(x[0] ** 2)
+
+    with pytest.raises(ValueError, match="must be a float, not bool"):
+        minimize(objective, [0.0], method=method, bounds=[(-1.0, 1.0)], options={key: value})
+    assert not calls
+
+
 @pytest.mark.parametrize("key", ["seed", "population_size", "maxiter", "maxfev"])
 @pytest.mark.parametrize("value", [-1, True, False, 1.5, 2**65])
 def test_unsigned_integer_options_reject_lossy_or_boolean_conversion(method: str, key: str, value: object) -> None:

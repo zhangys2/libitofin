@@ -117,18 +117,16 @@ def test_invalid_log_price_process_state_is_not_published(spot):
     assert not swap.is_calculated()
 
 
-def test_unsupported_black_surface_does_not_implicitly_add_local_vol_surface():
-    """Only the documented constant and linear variance-curve dispatch exists."""
+def test_black_variance_surface_prices_through_dupire_local_vol():
+    """This fork maps a general Black surface to Dupire local vol instead of rejecting it."""
     _, _, _, swap = market()
     dc = DayCounter.actual365_fixed()
     surface = BlackVarianceSurface(REFERENCE, [REFERENCE + 365], [90.0, 110.0], [[0.2], [0.2]], dc)
     process = BlackScholesProcess.from_curves(
         100.0, FlatForward(REFERENCE, 0.03, dc), FlatForward(REFERENCE, 0.0, dc), surface
     )
-    with pytest.raises(ItofinError):
-        engine = MCVarianceSwapEngine(process, steps=12, samples=32, seed=42)
-        swap.set_engine(engine)
-        swap.variance()
+    swap.set_engine(MCVarianceSwapEngine(process, steps=12, samples=32, seed=42))
+    assert math.isfinite(swap.variance())
 
 
 def test_missing_settings_or_engine_cannot_publish_mc_statistics():

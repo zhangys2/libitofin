@@ -13,6 +13,18 @@
 //! what the C++ engines see when their `dynamic_pointer_cast<EarlyExercise>`
 //! is not attempted.
 //!
+//! Deferred, omitted visibly rather than accepted and ignored:
+//! - **the Bermudan simulation grid of the Monte Carlo engines**
+//!   (`mclongstaffschwartzengine.hpp:218-231`). [`BermudanExercise`] itself is
+//!   ported and prices under the finite-difference engine; only the path
+//!   generator that would exercise it along a simulated path is missing.
+//!
+//! The latest-date-only [`AmericanExercise::from_latest`] constructor
+//! (`exercise.cpp:43-50`) is ported: it opens the window at
+//! [`Date::min_date()`](crate::time::date::Date::min_date)
+//! (`MINIMUM_SERIAL_NUMBER`). FD engines clamp
+//! `process.time(earliest).max(0.0)` so the unbounded start becomes t=0.
+
 use crate::errors::QlResult;
 use crate::require;
 use crate::time::date::Date;
@@ -123,6 +135,14 @@ impl AmericanExercise {
     /// As [`new`](AmericanExercise::new).
     pub fn over(earliest: Date, latest: Date) -> QlResult<AmericanExercise> {
         AmericanExercise::new(earliest, latest, false)
+    }
+
+    /// Builds an American exercise from the minimum date through `latest`.
+    pub fn from_latest(latest: Date, payoff_at_expiry: bool) -> AmericanExercise {
+        AmericanExercise {
+            dates: [Date::min_date(), latest],
+            payoff_at_expiry,
+        }
     }
 }
 
@@ -289,6 +309,15 @@ mod tests {
                 .unwrap()
                 .payoff_at_expiry()
         );
+    }
+
+    #[test]
+    fn american_from_latest_starts_at_min_date() {
+        let latest = Date::new(31, Month::December, 2030);
+        let exercise = AmericanExercise::from_latest(latest, true);
+        assert_eq!(exercise.dates()[0], Date::min_date());
+        assert_eq!(exercise.last_date(), latest);
+        assert!(exercise.payoff_at_expiry());
     }
 
     #[test]

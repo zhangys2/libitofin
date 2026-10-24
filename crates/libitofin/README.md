@@ -17,10 +17,13 @@ use libitofin::time::Date;
 
 Early, pre-1.0, and under active development. Milestone 1 is complete: a European option prices
 end-to-end (quote -> flat yield/vol curves -> Black-Scholes process -> analytic engine -> lazy
-instrument greeks), matching QuantLib's `europeanoption.cpp` at double-rounding precision. Layers L4
-through L11 (term structures, processes, instruments, models, engines) are being filled out.
+instrument greeks), matching QuantLib's `europeanoption.cpp` at double-rounding precision. Layers L0
+through L4 and L10–L11 have core coverage; L5–L9 continue to expand.
 
-The public API will change until 1.0. Language bindings (Python, C ABI) are planned as separate crates.
+The public API will change until 1.0. Language bindings live in sibling crates:
+
+- [`itofin`](https://pypi.org/project/itofin/) — Python (PyO3 + maturin), published on PyPI
+- `libitofin-ffi` — minimal C ABI stub today; a fuller `cbindgen` surface is planned
 
 ## License
 

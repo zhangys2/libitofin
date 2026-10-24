@@ -16,11 +16,13 @@ __all__ = [
     "BlackVolTermStructure",
     "BlackVolTimeExtrapolation",
     "BondPriceType",
+    "ButterflyArbitrageReport",
     "CapFloorTermVolCurve",
     "CapFloorTermVolSurface",
     "ConstantOptionletVolatility",
     "ConstantSwaptionVolatility",
     "ConstantYoYOptionletVolatility",
+    "CubicSmileSection",
     "DefaultProbabilityHelper",
     "DefaultProbabilityTermStructure",
     "DepositRateHelper",
@@ -29,10 +31,12 @@ __all__ = [
     "FlatForward",
     "FlatHazardRate",
     "ForwardCurve",
+    "ForwardDiagnostics",
     "FraRateHelper",
     "FuturesRateHelper",
     "FuturesType",
     "IborIborBasisSwapRateHelper",
+    "ImpliedForwardResult",
     "InterpolatedDefaultDensityCurve",
     "InterpolatedHazardRateCurve",
     "InterpolatedSwaptionVolatilityCube",
@@ -44,6 +48,7 @@ __all__ = [
     "KerkhofSeasonality",
     "MultiplicativePriceSeasonality",
     "OISRateHelper",
+    "OptionQuotePair",
     "OptionletSmileSection",
     "OptionletStripper1",
     "OptionletStripper2",
@@ -72,6 +77,7 @@ __all__ = [
     "SwapRateHelper",
     "SwaptionVolatilityMatrix",
     "SwaptionVolatilityStructure",
+    "TotalVarianceCubicSmileSection",
     "UpfrontCdsHelper",
     "VolatilityType",
     "YearOnYearInflationSwapHelper",
@@ -83,6 +89,7 @@ __all__ = [
     "ZeroCurve",
     "ZeroInflationHelper",
     "ZeroInflationTermStructure",
+    "implied_forward",
 ]
 
 @typing.final
@@ -320,6 +327,47 @@ class BlackVolTermStructure:
     def disable_extrapolation(self) -> None:
         r"""
         Forbid extrapolation past the maximum date and time.
+        """
+
+@typing.final
+class ButterflyArbitrageReport:
+    r"""
+    Diagnostic report for butterfly arbitrage verification across a smile section.
+    """
+    @property
+    def min_density(self) -> builtins.float:
+        r"""
+        Global minimum of the Durrleman density function g(k).
+        """
+    @property
+    def argmin_k(self) -> builtins.float:
+        r"""
+        Log-moneyness coordinate k where min_density occurs.
+        """
+    @property
+    def has_arbitrage(self) -> builtins.bool:
+        r"""
+        Whether butterfly arbitrage was detected: min_density < -tolerance.
+        """
+    @property
+    def tolerance(self) -> builtins.float:
+        r"""
+        Numerical tolerance threshold applied (default 1e-8).
+        """
+    @property
+    def points_checked(self) -> builtins.int:
+        r"""
+        Total evaluation points checked (knots + interior + wings).
+        """
+    @property
+    def ramp_iterations(self) -> builtins.int:
+        r"""
+        Number of regularization ramp iterations executed.
+        """
+    @property
+    def final_smoothing(self) -> builtins.float:
+        r"""
+        Final smoothing parameter lambda used for the fit.
         """
 
 @typing.final
@@ -892,6 +940,157 @@ class ConstantYoYOptionletVolatility:
             ItofinError: On the same conditions volatility() reports.
         """
 
+@typing.final
+class CubicSmileSection:
+    r"""
+    A curvature-regularized natural cubic fit of one expiry's mid implied volatilities.
+
+    Source strikes are mapped to signed standard-deviation log-moneyness using
+    the supplied forward, expiry time, and fixed ATM volatility. The default
+    nine spline knots are `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`.
+    """
+    @property
+    def sampled_mid_ivs(self) -> builtins.list[typing.Optional[builtins.float]]:
+        r"""
+        Fitted volatilities at each configured knot location.
+        """
+    @property
+    def std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Fixed spline knots, sorted in increasing order.
+        """
+    @property
+    def node_std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Fixed knot coordinates used by the fitted spline.
+        """
+    @property
+    def node_mid_ivs(self) -> builtins.list[builtins.float]:
+        r"""
+        Fitted IV ordinates paired with `node_std_dev_points`.
+        """
+    @property
+    def observed_strikes(self) -> builtins.list[builtins.float]:
+        r"""
+        Sorted source market strikes.
+        """
+    @property
+    def observed_std_dev_points(self) -> builtins.list[builtins.float]:
+        r"""
+        Standard-deviation coordinates of source market observations.
+        """
+    @property
+    def observed_mid_ivs(self) -> builtins.list[builtins.float]:
+        r"""
+        Source mid-IVs paired with `observed_strikes`.
+        """
+    @property
+    def observation_residuals(self) -> builtins.list[typing.Optional[builtins.float]]:
+        r"""
+        Fitted-minus-observed IVs at source observations. Entries outside the
+        fixed knot range are `None` because those observations are not fitted.
+        """
+    @property
+    def segment_coefficients(self) -> builtins.list[tuple[builtins.float, builtins.float, builtins.float]]:
+        r"""
+        Per-segment `[a, b, c]` coefficients in the local polynomial basis.
+
+        Entry `i` applies on `[x_i, x_{i+1}]`:
+        `sigma(x) = sigma_i + a*dx + b*dx**2 + c*dx**3`, where `dx = x - x_i`.
+        """
+    @property
+    def node_residuals(self) -> builtins.list[builtins.float]:
+        r"""
+        Fitted-minus-ordinate residuals at the fixed knot locations.
+
+        These are zero up to floating-point rounding. Use `observation_residuals`
+        to inspect fit errors against source market quotes.
+        """
+    @property
+    def forward(self) -> builtins.float:
+        r"""
+        Forward/ATM level used to standardize strikes.
+        """
+    @property
+    def atm_vol(self) -> builtins.float:
+        r"""
+        Fixed ATM volatility used to standardize strikes.
+        """
+    @property
+    def smoothing(self) -> builtins.float:
+        r"""
+        Nonnegative curvature penalty weight; zero disables regularization.
+        """
+    @property
+    def exercise_time(self) -> builtins.float:
+        r"""
+        Expiry time in years.
+        """
+    @property
+    def min_strike(self) -> builtins.float:
+        r"""
+        Strike mapped from the lower fitted knot-domain boundary.
+        """
+    @property
+    def max_strike(self) -> builtins.float:
+        r"""
+        Strike mapped from the upper fitted knot-domain boundary.
+        """
+    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, extrapolate: builtins.bool = False, smoothing: builtins.float = 0.01) -> None:
+        r"""
+        Fit a natural cubic smile to paired strike/mid-IV observations.
+
+        Args:
+            strikes (list[float]): Positive strikes, in any order.
+            mid_ivs (list[float]): Annualized decimal Black mid implied
+                volatilities paired with `strikes`. Duplicate strikes must be
+                consolidated by the caller.
+            forward (float): Positive expiry forward used as the ATM level.
+            exercise_time (float): Positive expiry time in years.
+            atm_vol (float): Positive annualized ATM volatility used to scale
+                log-moneyness into standard-deviation units.
+            std_dev_points (list[float] | None): Fixed spline-knot locations.
+                Defaults to `[-3, -1.5, -1, -0.6, 0, 0.6, 1, 1.5, 3]`;
+                input locations are sorted before fitting.
+            extrapolate (bool): Extend the end cubic segments for out-of-range
+                queries and samples. Defaults to False.
+            smoothing (float): Nonnegative weight on integrated squared curvature.
+                Defaults to 0.01. The data term is mean squared IV error. Positive
+                smoothing needs at least two distinct in-range observations;
+                zero disables regularization and requires full observation rank.
+                Unsampled wings are model-dependent, not measured quote IVs.
+
+        Raises:
+            ItofinError: If inputs are invalid, source points are duplicated,
+                or the in-range data and penalty do not determine a full-rank fit.
+                Direct out-of-domain queries fail unless extrapolation is enabled.
+        """
+    def volatility(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a strike.
+        """
+    def variance(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the Black variance at a strike.
+
+        Args:
+            strike (float): The strike the variance is read at.
+
+        Returns:
+            float: The squared volatility times the exercise time.
+
+        Raises:
+            ItofinError: On the same conditions volatility() reports.
+        """
+    def volatility_at_std_dev(self, point: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a signed standard-deviation point.
+        """
+    def strike_at_std_dev(self, point: builtins.float) -> builtins.float:
+        r"""
+        Map a signed standard-deviation point back to its strike.
+        """
+
 class DefaultProbabilityHelper:
     r"""
     Shared base for every credit bootstrap helper.
@@ -1317,6 +1516,32 @@ class ForwardCurve(YieldTermStructure):
         """
 
 @typing.final
+class ForwardDiagnostics:
+    r"""
+    Diagnostic health metrics for the calculated forward.
+    """
+    @property
+    def status(self) -> builtins.str: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    @property
+    def total_pairs_received(self) -> builtins.int: ...
+    @property
+    def pairs_used(self) -> builtins.int: ...
+    @property
+    def pairs_pruned(self) -> builtins.int: ...
+    @property
+    def is_crossed(self) -> builtins.bool: ...
+    @property
+    def box_arbitrage_violations(self) -> builtins.int: ...
+    @property
+    def wls_rmse(self) -> builtins.float: ...
+    @property
+    def min_spread(self) -> builtins.float: ...
+    @property
+    def max_spread(self) -> builtins.float: ...
+
+@typing.final
 class FraRateHelper(RateHelper):
     r"""
     A helper fitting a forward-rate-agreement rate over the window starting
@@ -1505,6 +1730,35 @@ class IborIborBasisSwapRateHelper(RateHelper):
         r"""
         Construct a live basis helper fitting either the base or other index.
         """
+
+@typing.final
+class ImpliedForwardResult:
+    r"""
+    Result of the implied forward estimation.
+    """
+    @property
+    def forward(self) -> builtins.float: ...
+    @property
+    def forward_bid_strict(self) -> builtins.float: ...
+    @property
+    def forward_ask_strict(self) -> builtins.float: ...
+    @property
+    def forward_bid_robust(self) -> builtins.float: ...
+    @property
+    def forward_ask_robust(self) -> builtins.float: ...
+    @property
+    def discount_factor(self) -> builtins.float: ...
+    @property
+    def implied_carry_rate(self) -> typing.Optional[builtins.float]: ...
+    @property
+    def diagnostics(self) -> ForwardDiagnostics: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    @property
+    def pairs_used(self) -> builtins.int: ...
+    @property
+    def status(self) -> builtins.str: ...
+    def __repr__(self) -> builtins.str: ...
 
 @typing.final
 class InterpolatedDefaultDensityCurve(DefaultProbabilityTermStructure):
@@ -2052,6 +2306,26 @@ class OISRateHelper(RateHelper):
             averaging_method (RateAveraging): How the daily fixings combine;
                 defaults to Compound.
         """
+
+@typing.final
+class OptionQuotePair:
+    r"""
+    A two-sided option quote pair at a single strike.
+    """
+    @property
+    def strike(self) -> builtins.float: ...
+    @property
+    def call_bid(self) -> builtins.float: ...
+    @property
+    def call_ask(self) -> builtins.float: ...
+    @property
+    def put_bid(self) -> builtins.float: ...
+    @property
+    def put_ask(self) -> builtins.float: ...
+    @property
+    def is_valid(self) -> builtins.bool: ...
+    def __new__(cls, strike: builtins.float, call_bid: builtins.float, call_ask: builtins.float, put_bid: builtins.float, put_ask: builtins.float) -> OptionQuotePair: ...
+    def __repr__(self) -> builtins.str: ...
 
 @typing.final
 class OptionletSmileSection:
@@ -3471,6 +3745,95 @@ class SwaptionVolatilityStructure:
         """
 
 @typing.final
+class TotalVarianceCubicSmileSection:
+    r"""
+    Total implied variance cubic smile with Roger Lee wing asymptotics.
+    """
+    @property
+    def butterfly_report(self) -> ButterflyArbitrageReport:
+        r"""
+        Return the butterfly arbitrage verification report.
+        """
+    @property
+    def forward(self) -> builtins.float:
+        r"""
+        Forward price.
+        """
+    @property
+    def atm_vol(self) -> builtins.float:
+        r"""
+        ATM volatility.
+        """
+    @property
+    def exercise_time(self) -> builtins.float:
+        r"""
+        Expiry time in years.
+        """
+    @property
+    def smoothing(self) -> builtins.float:
+        r"""
+        Smoothing parameter lambda.
+        """
+    @property
+    def min_strike(self) -> builtins.float:
+        r"""
+        Minimum knot strike.
+        """
+    @property
+    def max_strike(self) -> builtins.float:
+        r"""
+        Maximum knot strike.
+        """
+    @property
+    def knots_k(self) -> builtins.list[builtins.float]:
+        r"""
+        Knots in log-moneyness coordinates.
+        """
+    @property
+    def fitted_total_variances(self) -> builtins.list[builtins.float]:
+        r"""
+        Fitted total variance ordinates at knots.
+        """
+    @property
+    def right_wing_slope(self) -> builtins.float:
+        r"""
+        Right wing asymptotic slope beta_R.
+        """
+    @property
+    def left_wing_slope(self) -> builtins.float:
+        r"""
+        Left wing asymptotic slope beta_L.
+        """
+    def __init__(self, strikes: typing.Sequence[builtins.float], mid_ivs: typing.Sequence[builtins.float], forward: builtins.float, exercise_time: builtins.float, atm_vol: builtins.float, std_dev_points: typing.Optional[typing.Sequence[builtins.float]] = None, smoothing: builtins.float = 0.01, arbitrage_repair: builtins.bool = True) -> None:
+        r"""
+        Fit a total variance cubic smile to paired strike/mid-IV observations.
+        """
+    def volatility(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the fitted volatility at a strike.
+        """
+    def variance(self, strike: builtins.float) -> builtins.float:
+        r"""
+        Return the Black variance at a strike.
+        """
+    def total_variance(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return total variance w(k) at log-moneyness k = ln(K/F).
+        """
+    def total_variance_derivative(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return first derivative w'(k) = dw/dk at log-moneyness k.
+        """
+    def total_variance_second_derivative(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return second derivative w''(k) = d^2w/dk^2 at log-moneyness k.
+        """
+    def durrleman_density(self, log_moneyness: builtins.float) -> builtins.float:
+        r"""
+        Return Durrleman risk-neutral density g(k) at log-moneyness k.
+        """
+
+@typing.final
 class UpfrontCdsHelper(DefaultProbabilityHelper):
     r"""
     Bootstrap helper fitting an upfront CDS quote with explicit model conventions.
@@ -4187,3 +4550,20 @@ class VolatilityType:
     def __new__(cls, _unconstructible: typing.NoReturn) -> VolatilityType: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5) -> ImpliedForwardResult:
+    r"""
+    Calculate implied forward price and discount factor from option quotes.
+
+    Args:
+        quotes: A list of OptionQuotePair instances or (strike, call_bid, call_ask, put_bid, put_ask) tuples.
+        expiry_years: Time to expiration in years.
+        convention: "european" (default), "crypto_inverse", or "american".
+        spot: Underlying spot price (optional; required for American options).
+        discount_factor: Pre-specified discount factor D = exp(-r*T) (optional; if None, fits jointly).
+        min_pairs: Minimum valid strike pairs required (default: 2).
+        max_pairs: Maximum number of ATM strike pairs used (default: 50).
+        spread_floor: Spread floor regularizer (default: 1e-4).
+        max_spot_deviation: Maximum relative deviation from spot (default: 0.10).
+        american_kappa: American ATM moneyness corridor multiplier (default: 0.5).
+    """
