@@ -1629,11 +1629,10 @@ mod test_fd_bermudan {
     #[test]
     fn binding_market_regressions_cover_european_american_and_quarterly_bermudan() {
         let (settings, process) = fixture();
-        let (european_theta, bermudan_theta) = if cfg!(target_os = "linux") {
-            (0.377_587_111_592_534_55, 0.385_210_817_371_187)
-        } else {
-            (0.377_587_111_591_224_7, 0.385_210_817_369_876_67)
-        };
+        // Theta is a finite difference of two rollbacks, so it carries the last-bit differences
+        // between libm builds (about 1.3e-12 between glibc versions) and is compared at 1e-10;
+        // price, delta and gamma stay at 1e-12.
+        let (european_theta, bermudan_theta) = (0.377_587_111_592_534_55, 0.385_210_817_371_187);
         let rows: [(&str, Shared<dyn Exercise>, [Real; 4]); 3] = [
             (
                 "European",
@@ -1691,8 +1690,9 @@ mod test_fd_bermudan {
                 option.theta().unwrap(),
             ];
             for (field, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
+                let tolerance = if field == 3 { 1.0e-10 } else { 1.0e-12 };
                 assert!(
-                    (actual - expected).abs() <= 1.0e-12,
+                    (actual - expected).abs() <= tolerance,
                     "{name} field {field}: {actual} != {expected}"
                 );
             }
