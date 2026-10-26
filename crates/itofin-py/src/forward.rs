@@ -2,8 +2,8 @@
 
 use crate::PyQlError;
 use libitofin::termstructures::forward::{
-    AmericanModelConfig, ForwardStatus, ImpliedForward, ImpliedForwardConfig, MarketConvention,
-    OptionQuotePair,
+    AmericanLevel, AmericanModelConfig, ForwardStatus, ImpliedForward, ImpliedForwardConfig,
+    MarketConvention, OptionQuotePair,
 };
 use pyo3::prelude::*;
 #[allow(unused_imports)]
@@ -139,6 +139,27 @@ pub struct PyImpliedForwardResult {
     pub implied_carry_rate: Option<f64>,
     #[pyo3(get)]
     pub diagnostics: PyForwardDiagnostics,
+    /// Estimator that produced an American forward: "corridor", "model_fast" or
+    /// "model_accurate"; None for other conventions.
+    #[pyo3(get)]
+    pub tier: Option<String>,
+    /// Independent signals about an American forward: "schedule_ignored", "latency_fallback",
+    /// "non_converged".
+    #[pyo3(get)]
+    pub flags: Vec<String>,
+    /// Solved continuous yield, or the residual carry beside a dividend schedule; None on the
+    /// corridor tier and for other conventions.
+    #[pyo3(get)]
+    pub solved_carry: Option<f64>,
+    /// Mean call minus put implied volatility at the solution (model tiers only).
+    #[pyo3(get)]
+    pub call_put_iv_gap: Option<f64>,
+    /// Gap evaluations spent by the carry solve (model tiers only).
+    #[pyo3(get)]
+    pub iterations: Option<usize>,
+    /// Accurate-pricer evaluations spent on correction (model tiers only).
+    #[pyo3(get)]
+    pub accurate_prices_used: Option<usize>,
 }
 
 #[gen_stub_pymethods]
@@ -182,10 +203,27 @@ impl PyImpliedForwardResult {
 ///     max_pairs: Maximum number of ATM strike pairs used (default: 50).
 ///     spread_floor: Spread floor regularizer (default: 1e-4).
 ///     max_spot_deviation: Maximum relative deviation from spot (default: 0.10).
-///     american_kappa: American ATM moneyness corridor multiplier (default: 0.5).
+///     american_kappa: American ATM moneyness corridor multiplier of the corridor tier (default: 0.5).
+///     atm_vol: Annualized ATM volatility sizing the American strike window; estimated from the
+///         quotes when omitted and a discount factor is given, otherwise 0.30.
+///     dividends: Discrete cash dividends as (time_years, amount) pairs on the time basis of
+///         `expiry_years`, each time in (0, expiry_years] (American model path only).
+///     level: "auto" (default), "fast" or "accurate". Auto uses the accurate level when
+///         dividends are given. Fast ignores a dividend schedule and flags it.
+///     carry_search_range: (low, high) interval searched for the solved carry per year.
+///     carry_flag_range: (low, high) interval outside of which the status is
+///         WarningImplausibleCarry; must lie inside the search range.
+///     correction_passes: Premium-correction passes of the accurate level (default: one, or
+///         two with dividends; 0 means fast).
+///     corridor_kappa: Strike window of the model path in standard deviations (default: 1.0).
+///     max_accurate_prices: Work budget of accurate-pricer evaluations (default: 64).
+///
+/// For the American convention with a `discount_factor` the quotes are de-Americanized before
+/// the parity estimate (tier "model_fast" or "model_accurate"); otherwise, or if the model cannot
+/// be solved, the model-free corridor estimate is returned (tier "corridor").
 #[gen_stub_pyfunction(module = "itofin.termstructures")]
 #[pyfunction]
-#[pyo3(signature = (quotes, expiry_years, convention="european", spot=None, discount_factor=None, min_pairs=2, max_pairs=50, spread_floor=1e-4, max_spot_deviation=Some(0.10), american_kappa=0.5))]
+#[pyo3(signature = (quotes, expiry_years, convention="european", spot=None, discount_factor=None, min_pairs=2, max_pairs=50, spread_floor=1e-4, max_spot_deviation=Some(0.10), american_kappa=0.5, atm_vol=None, dividends=None, level="auto", carry_search_range=(-0.10, 0.25), carry_flag_range=(-0.05, 0.15), correction_passes=None, corridor_kappa=1.0, max_accurate_prices=64))]
 #[allow(clippy::too_many_arguments)]
 pub fn implied_forward(
     quotes: &Bound<'_, PyAny>,
@@ -198,7 +236,26 @@ pub fn implied_forward(
     spread_floor: f64,
     max_spot_deviation: Option<f64>,
     american_kappa: f64,
+    atm_vol: Option<f64>,
+    dividends: Option<Vec<(f64, f64)>>,
+    level: &str,
+    carry_search_range: (f64, f64),
+    carry_flag_range: (f64, f64),
+    correction_passes: Option<usize>,
+    corridor_kappa: f64,
+    max_accurate_prices: usize,
 ) -> PyResult<PyImpliedForwardResult> {
+    let american_level = match level.to_lowercase().as_str() {
+        "auto" => AmericanLevel::Auto,
+        "fast" => AmericanLevel::Fast,
+        "accurate" => AmericanLevel::Accurate,
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "unknown level: {level}. Expected 'auto', 'fast' or 'accurate'"
+            )));
+        }
+    };
+
     let mut pairs = Vec::new();
     for item in quotes.try_iter()? {
         let item = item?;
@@ -226,10 +283,7 @@ pub fn implied_forward(
                     "American equity convention requires spot price",
                 )
             })?;
-            MarketConvention::AmericanEquity {
-                spot: s,
-                atm_vol: None,
-            }
+            MarketConvention::AmericanEquity { spot: s, atm_vol }
         }
         _ => {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -246,7 +300,16 @@ pub fn implied_forward(
         spread_floor,
         max_spot_deviation,
         american_kappa,
-        american: AmericanModelConfig::default(),
+        american: AmericanModelConfig {
+            level: american_level,
+            dividends: dividends.unwrap_or_default(),
+            corridor_kappa,
+            carry_search_range,
+            carry_flag_range,
+            correction_passes,
+            max_accurate_prices,
+            ..AmericanModelConfig::default()
+        },
     };
 
     let res = ImpliedForward::calculate(&pairs, m_convention, &config, expiry_years)
@@ -284,5 +347,11 @@ pub fn implied_forward(
             min_spread: res.diagnostics.min_spread,
             max_spread: res.diagnostics.max_spread,
         },
+        tier: res.tier.map(|tier| tier.as_str().to_string()),
+        flags: res.flags.names().into_iter().map(String::from).collect(),
+        solved_carry: res.american.map(|a| a.solved_carry),
+        call_put_iv_gap: res.american.map(|a| a.call_put_iv_gap),
+        iterations: res.american.map(|a| a.iterations),
+        accurate_prices_used: res.american.map(|a| a.accurate_prices_used),
     })
 }
