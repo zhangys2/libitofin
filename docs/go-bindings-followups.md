@@ -94,8 +94,11 @@ consumers verify the published module and assets without local replacements. Leg
 evidence is recorded in
 [#1025](https://github.com/benbenbang/libitofin/issues/1025); private application
 migration and production budgets remain separate acceptance work.
-The Go/C ABI matrix checks both clean and incremental Python/stub/C ABI build
-orders on Linux and macOS with `scripts/check_go_mixed_builds.sh`. It uses fresh
+The Go/C ABI job checks both clean and incremental Python/stub/C ABI build
+orders on Linux with `scripts/check_go_mixed_builds.sh`. Its macOS leg was dropped
+because the hosted macOS runner could not be scheduled; macOS is still built and
+checked with an external consumer by the `go-package` workflow, but the full
+Go/C ABI suite no longer runs there. It uses fresh
 Cargo target directories, then verifies Python imports, stubs, and C/C++ callers
 after each order and a workspace build. Run it in a Python virtual environment
 with maturin, numpy, and pytest installed.
