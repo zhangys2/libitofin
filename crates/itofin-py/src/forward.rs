@@ -2,7 +2,8 @@
 
 use crate::PyQlError;
 use libitofin::termstructures::forward::{
-    ForwardStatus, ImpliedForward, ImpliedForwardConfig, MarketConvention, OptionQuotePair,
+    AmericanModelConfig, ForwardStatus, ImpliedForward, ImpliedForwardConfig, MarketConvention,
+    OptionQuotePair,
 };
 use pyo3::prelude::*;
 #[allow(unused_imports)]
@@ -245,6 +246,7 @@ pub fn implied_forward(
         spread_floor,
         max_spot_deviation,
         american_kappa,
+        american: AmericanModelConfig::default(),
     };
 
     let res = ImpliedForward::calculate(&pairs, m_convention, &config, expiry_years)
@@ -257,6 +259,7 @@ pub fn implied_forward(
         ForwardStatus::WarningImplausibleDiscountFactor => "WarningImplausibleDiscountFactor",
         ForwardStatus::WarningSpotDeviationExceeded => "WarningSpotDeviationExceeded",
         ForwardStatus::DegradedAmericanBounds => "DegradedAmericanBounds",
+        ForwardStatus::WarningImplausibleCarry => "WarningImplausibleCarry",
     };
 
     let is_valid = res.diagnostics.status == ForwardStatus::Valid;

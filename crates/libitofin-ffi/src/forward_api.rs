@@ -5,6 +5,19 @@ use libitofin::termstructures::forward::{
     ForwardStatus, ImpliedForward, ImpliedForwardConfig, MarketConvention, OptionQuotePair,
 };
 
+/// Stable status codes of the C ABI; new variants take the next free value.
+fn status_code(status: ForwardStatus) -> i32 {
+    match status {
+        ForwardStatus::Valid => 0,
+        ForwardStatus::WarningCrossedSyntheticQuotes => 1,
+        ForwardStatus::WarningBoxSpreadArbitrage => 2,
+        ForwardStatus::WarningImplausibleDiscountFactor => 3,
+        ForwardStatus::WarningSpotDeviationExceeded => 4,
+        ForwardStatus::DegradedAmericanBounds => 5,
+        ForwardStatus::WarningImplausibleCarry => 6,
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct ItofinImpliedForwardResult {
@@ -98,14 +111,7 @@ pub unsafe extern "C" fn itofin_implied_forward_calculate(
 
             let res = ImpliedForward::calculate(&quotes, convention, &config, expiry_years)?;
 
-            let status_code = match res.diagnostics.status {
-                ForwardStatus::Valid => 0,
-                ForwardStatus::WarningCrossedSyntheticQuotes => 1,
-                ForwardStatus::WarningBoxSpreadArbitrage => 2,
-                ForwardStatus::WarningImplausibleDiscountFactor => 3,
-                ForwardStatus::WarningSpotDeviationExceeded => 4,
-                ForwardStatus::DegradedAmericanBounds => 5,
-            };
+            let status_code = status_code(res.diagnostics.status);
 
             output(
                 out,
@@ -131,6 +137,22 @@ pub unsafe extern "C" fn itofin_implied_forward_calculate(
 mod tests {
     use super::*;
     use std::ptr::{null, null_mut};
+
+    #[test]
+    fn status_codes_are_stable() {
+        let codes = [
+            (ForwardStatus::Valid, 0),
+            (ForwardStatus::WarningCrossedSyntheticQuotes, 1),
+            (ForwardStatus::WarningBoxSpreadArbitrage, 2),
+            (ForwardStatus::WarningImplausibleDiscountFactor, 3),
+            (ForwardStatus::WarningSpotDeviationExceeded, 4),
+            (ForwardStatus::DegradedAmericanBounds, 5),
+            (ForwardStatus::WarningImplausibleCarry, 6),
+        ];
+        for (status, code) in codes {
+            assert_eq!(status_code(status), code, "{status:?}");
+        }
+    }
 
     #[test]
     fn test_c_ffi_european_forward() {

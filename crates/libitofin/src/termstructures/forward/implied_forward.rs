@@ -9,6 +9,9 @@
 //! - American equity/ETF options (SPY, AAPL) via model-free ATM strike filtering and
 //!   Merton early-exercise arbitrage bounds.
 
+use super::american_model::{
+    AmericanModelConfig, AmericanModelDiagnostics, ForwardFlags, ForwardTier,
+};
 use crate::errors::QlResult;
 use crate::types::{DiscountFactor, Rate, Real, Time};
 use crate::{fail, require};
@@ -109,6 +112,8 @@ pub enum ForwardStatus {
     WarningSpotDeviationExceeded,
     /// American options early-exercise bounds widened.
     DegradedAmericanBounds,
+    /// Solved carry outside the plausible range `AmericanModelConfig::carry_flag_range`.
+    WarningImplausibleCarry,
 }
 
 /// Detailed diagnostic metrics accompanying the forward estimation.
@@ -142,6 +147,8 @@ pub struct ImpliedForwardConfig {
     pub max_spot_deviation: Option<Real>,
     /// Multiplier for American ATM corridor: $|\ln(K/S)| \le \kappa \sigma \sqrt{T}$ (default: 0.5).
     pub american_kappa: Real,
+    /// Settings of the model-based American path (ignored for other conventions).
+    pub american: AmericanModelConfig,
 }
 
 impl Default for ImpliedForwardConfig {
@@ -154,6 +161,7 @@ impl Default for ImpliedForwardConfig {
             spread_floor: 1e-4,
             max_spot_deviation: Some(0.10),
             american_kappa: 0.5,
+            american: AmericanModelConfig::default(),
         }
     }
 }
@@ -177,6 +185,12 @@ pub struct ImpliedForwardResult {
     pub implied_carry_rate: Option<Rate>,
     /// Diagnostics on quote quality, crossed quotes, and box arbitrage.
     pub diagnostics: ForwardDiagnostics,
+    /// Estimator that produced the forward; `None` unless the convention is American.
+    pub tier: Option<ForwardTier>,
+    /// Independent signals about how an American forward was produced.
+    pub flags: ForwardFlags,
+    /// Numeric diagnostics of the model-based solve; `None` on the corridor tier.
+    pub american: Option<AmericanModelDiagnostics>,
 }
 
 impl ImpliedForwardResult {
@@ -230,6 +244,8 @@ impl ImpliedForward {
                 spot > 0.0 && spot.is_finite(),
                 "AmericanEquity spot must be positive, got {spot}"
             );
+            config.american.validate()?;
+            config.american.validate_dividends(expiry_years)?;
             let vol = atm_vol.unwrap_or(0.30);
             let window = config.american_kappa * vol * expiry_years.sqrt();
             valid_pairs.retain(|q| (q.strike / spot).ln().abs() <= window.max(0.05));
@@ -531,6 +547,10 @@ impl ImpliedForward {
                 min_spread,
                 max_spread,
             },
+            tier: matches!(convention, MarketConvention::AmericanEquity { .. })
+                .then_some(ForwardTier::Corridor),
+            flags: ForwardFlags::NONE,
+            american: None,
         })
     }
 
@@ -708,6 +728,9 @@ impl ImpliedForward {
                 min_spread,
                 max_spread,
             },
+            tier: None,
+            flags: ForwardFlags::NONE,
+            american: None,
         })
     }
 
@@ -992,5 +1015,103 @@ mod tests {
         let err =
             ImpliedForward::calculate(&quotes, MarketConvention::EuropeanVanilla, &config, 0.1);
         assert!(err.is_err());
+    }
+
+    fn american_parity_quotes(forward: Real, strikes: &[Real]) -> Vec<OptionQuotePair> {
+        strikes
+            .iter()
+            .map(|&k| {
+                let diff = forward - k;
+                let c = diff.max(0.0) + 2.0;
+                let p = c - diff;
+                OptionQuotePair::new(k, c - 0.05, c + 0.05, p - 0.05, p + 0.05)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_american_convention_reports_corridor_tier_without_model_diagnostics() {
+        let quotes = american_parity_quotes(101.0, &[95.0, 97.5, 100.0, 102.5, 105.0]);
+        let config = ImpliedForwardConfig {
+            discount_factor: Some(1.0),
+            ..Default::default()
+        };
+        let res = ImpliedForward::calculate(
+            &quotes,
+            MarketConvention::AmericanEquity {
+                spot: 100.0,
+                atm_vol: Some(0.25),
+            },
+            &config,
+            0.25,
+        )
+        .unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::Corridor));
+        assert!(res.flags.is_empty());
+        assert!(res.american.is_none());
+    }
+
+    #[test]
+    fn test_non_american_results_carry_no_tier() {
+        let quotes = american_parity_quotes(5000.0, &[4900.0, 5000.0, 5100.0]);
+        let config = ImpliedForwardConfig::default();
+        let res =
+            ImpliedForward::calculate(&quotes, MarketConvention::EuropeanVanilla, &config, 0.25)
+                .unwrap();
+        assert_eq!(res.tier, None);
+        assert!(res.flags.is_empty());
+        assert!(res.american.is_none());
+    }
+
+    #[test]
+    fn test_invalid_american_config_is_rejected_only_for_american() {
+        let quotes = american_parity_quotes(101.0, &[95.0, 97.5, 100.0, 102.5, 105.0]);
+        let config = ImpliedForwardConfig {
+            discount_factor: Some(1.0),
+            american: AmericanModelConfig {
+                carry_search_range: (0.25, -0.10),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let american = MarketConvention::AmericanEquity {
+            spot: 100.0,
+            atm_vol: None,
+        };
+        assert!(ImpliedForward::calculate(&quotes, american, &config, 0.25).is_err());
+        // The American settings are ignored for the other conventions.
+        assert!(
+            ImpliedForward::calculate(&quotes, MarketConvention::EuropeanVanilla, &config, 0.25)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_dividend_schedule_must_fall_inside_the_expiry() {
+        let quotes = american_parity_quotes(101.0, &[95.0, 97.5, 100.0, 102.5, 105.0]);
+        let american = MarketConvention::AmericanEquity {
+            spot: 100.0,
+            atm_vol: None,
+        };
+        let with_dividend = |time: Real, amount: Real| ImpliedForwardConfig {
+            discount_factor: Some(1.0),
+            american: AmericanModelConfig {
+                dividends: vec![(time, amount)],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            ImpliedForward::calculate(&quotes, american, &with_dividend(0.10, 0.5), 0.25).is_ok()
+        );
+        assert!(
+            ImpliedForward::calculate(&quotes, american, &with_dividend(0.30, 0.5), 0.25).is_err()
+        );
+        assert!(
+            ImpliedForward::calculate(&quotes, american, &with_dividend(0.0, 0.5), 0.25).is_err()
+        );
+        assert!(
+            ImpliedForward::calculate(&quotes, american, &with_dividend(0.10, -0.5), 0.25).is_err()
+        );
     }
 }
