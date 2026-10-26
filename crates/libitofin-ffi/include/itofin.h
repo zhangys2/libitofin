@@ -693,6 +693,54 @@ typedef struct ItofinImpliedForwardResult {
 } ItofinImpliedForwardResult;
 
 /**
+ * Settings of the model-based American path. `itofin_implied_forward_options_default` fills
+ * the defaults; the dividend arrays are read during the call and not retained.
+ *
+ * `level` is 0 auto, 1 fast, 2 accurate. Optional numbers use a `has_*` flag that must be 0 or 1.
+ */
+typedef struct ItofinImpliedForwardOptions {
+  double atm_vol;
+  int32_t has_atm_vol;
+  const double *dividend_times;
+  const double *dividend_amounts;
+  size_t dividend_count;
+  int32_t level;
+  double carry_search_low;
+  double carry_search_high;
+  double carry_flag_low;
+  double carry_flag_high;
+  size_t correction_passes;
+  int32_t has_correction_passes;
+  double carry_tolerance;
+  double corridor_kappa;
+  size_t max_accurate_prices;
+} ItofinImpliedForwardOptions;
+
+/**
+ * The result of `itofin_implied_forward_calculate` plus the model-path outputs.
+ *
+ * `tier_code` is -1 (no tier), 0 corridor, 1 model fast, 2 model accurate. `flags` bits:
+ * 1 schedule ignored, 2 latency fallback, 4 not converged. `has_model` is 1 when the
+ * `solved_carry`, `call_put_iv_gap`, `iterations` and `accurate_prices_used` fields are
+ * meaningful (NaN or 0 otherwise).
+ */
+typedef struct ItofinImpliedForwardResultEx {
+  struct ItofinImpliedForwardResult core;
+  int32_t tier_code;
+  uint32_t flags;
+  int32_t has_model;
+  double solved_carry;
+  double call_put_iv_gap;
+  uint32_t iterations;
+  uint32_t accurate_prices_used;
+  uint32_t total_pairs_received;
+  int32_t is_crossed;
+  uint32_t box_arbitrage_violations;
+  double min_spread;
+  double max_spread;
+} ItofinImpliedForwardResultEx;
+
+/**
  * Quote-per-base spot/strike, positive base notional, fixed unadjusted dates.
  */
 typedef struct ItofinFxForwardConfig {
@@ -4475,6 +4523,35 @@ int32_t itofin_implied_forward_calculate(const double *strikes,
                                          double expiry_years,
                                          struct ItofinImpliedForwardResult *out,
                                          struct ItofinError *error);
+
+/**
+ * Write the default settings of the model-based American path.
+ * # Safety
+ * Output and error pointers must follow the crate C caller contract.
+ */
+int32_t itofin_implied_forward_options_default(struct ItofinImpliedForwardOptions *out,
+                                               struct ItofinError *error);
+
+/**
+ * Like `itofin_implied_forward_calculate`, with the model-path settings and extended result.
+ * The options and their dividend arrays are copied and not retained; `out` is written only on
+ * success.
+ * # Safety
+ * Pointers must be live, valid, aligned, and non-overlapping.
+ */
+int32_t itofin_implied_forward_calculate_with_options(const double *strikes,
+                                                      const double *call_bids,
+                                                      const double *call_asks,
+                                                      const double *put_bids,
+                                                      const double *put_asks,
+                                                      size_t count,
+                                                      int32_t convention_code,
+                                                      const double *spot,
+                                                      const double *discount_factor,
+                                                      double expiry_years,
+                                                      const struct ItofinImpliedForwardOptions *options,
+                                                      struct ItofinImpliedForwardResultEx *out,
+                                                      struct ItofinError *error);
 
 /**
  * Retain both live curves and copy both currencies and the spot snapshot.
