@@ -110,6 +110,11 @@ pub struct AmericanModelConfig {
     /// Discrete cash dividends as `(time in years, amount)`, on the same time basis as
     /// `expiry_years`. Each time must lie in `(0, expiry]` and each amount must be non-negative.
     pub dividends: Vec<(Time, Real)>,
+    /// Strike window of the model path, in standard deviations: strikes with
+    /// `|ln(K/S)| <= corridor_kappa * sigma_atm * sqrt(T)` are used (at least 0.05 in log
+    /// moneyness). Wider than the corridor tier's `american_kappa`, since the model removes
+    /// the early-exercise premium instead of avoiding it.
+    pub corridor_kappa: Real,
     /// Interval searched for the solved carry (continuous yield), per year.
     pub carry_search_range: (Rate, Rate),
     /// Solved carries outside this interval are reported with `WarningImplausibleCarry`.
@@ -128,6 +133,7 @@ impl Default for AmericanModelConfig {
         Self {
             level: AmericanLevel::Auto,
             dividends: Vec::new(),
+            corridor_kappa: 1.0,
             carry_search_range: (-0.10, 0.25),
             carry_flag_range: (-0.05, 0.15),
             correction_passes: None,
@@ -143,6 +149,11 @@ const MAX_CORRECTION_PASSES: Size = 5;
 impl AmericanModelConfig {
     /// Checks the settings that do not depend on the expiry.
     pub fn validate(&self) -> QlResult<()> {
+        require!(
+            self.corridor_kappa.is_finite() && self.corridor_kappa > 0.0,
+            "corridor_kappa must be finite and positive, got {}",
+            self.corridor_kappa
+        );
         let (lo, hi) = self.carry_search_range;
         require!(
             lo.is_finite() && hi.is_finite() && lo < hi,
@@ -207,6 +218,7 @@ mod tests {
     #[test]
     fn defaults_match_the_agreed_settings() {
         let config = AmericanModelConfig::default();
+        assert_eq!(config.corridor_kappa, 1.0);
         assert_eq!(config.level, AmericanLevel::Auto);
         assert!(config.dividends.is_empty());
         assert_eq!(config.carry_search_range, (-0.10, 0.25));
@@ -229,6 +241,8 @@ mod tests {
         assert!(bad(&|c| c.carry_flag_range = (0.15, -0.05)));
         assert!(bad(&|c| c.carry_flag_range = (-0.20, 0.15)));
         assert!(bad(&|c| c.carry_flag_range = (-0.05, 0.30)));
+        assert!(bad(&|c| c.corridor_kappa = 0.0));
+        assert!(bad(&|c| c.corridor_kappa = Real::NAN));
         assert!(bad(&|c| c.carry_tolerance = 0.0));
         assert!(bad(&|c| c.carry_tolerance = Real::NAN));
         assert!(bad(&|c| c.correction_passes = Some(6)));

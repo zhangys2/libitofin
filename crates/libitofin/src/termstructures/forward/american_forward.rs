@@ -226,6 +226,37 @@ fn solve_carry(
     Ok((carry, evaluations.get()))
 }
 
+/// At-the-money volatility implied by the quotes, or `None` when none can be inverted.
+///
+/// Takes the mid-price implied vols of the (up to three) strikes nearest the money forward at a
+/// zero yield; the yield barely moves a window-sizing estimate.
+pub(crate) fn estimate_atm_vol(
+    pairs: &[OptionQuotePair],
+    spot: Real,
+    discount_factor: DiscountFactor,
+    expiry_years: Time,
+) -> Option<Volatility> {
+    if !(discount_factor.is_finite() && discount_factor > 0.0 && expiry_years > 0.0) {
+        return None;
+    }
+    let rate = -discount_factor.ln() / expiry_years;
+    let pricer = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[]).ok()?;
+    let money = spot * (rate * expiry_years).exp();
+    for pair in nearest_to(pairs, money, 3) {
+        let vols: Vec<Volatility> = [
+            american_iv(&pricer, Call, pair.strike, spot, rate, 0.0, pair.call_mid()),
+            american_iv(&pricer, Put, pair.strike, spot, rate, 0.0, pair.put_mid()),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !vols.is_empty() {
+            return Some(vols.iter().sum::<Volatility>() / vols.len() as Real);
+        }
+    }
+    None
+}
+
 /// Premium corrections of one strike: accurate minus cheap model price, for each right.
 #[derive(Clone, Copy, Default)]
 struct Shift {
@@ -564,5 +595,41 @@ mod tests {
                 reduced: false
             })
         );
+    }
+
+    fn ju_quotes(vol: Volatility, rate: Rate, carry: Rate, expiry: Time) -> Vec<OptionQuotePair> {
+        let pricer = AmericanPricer::new(PricerKind::JuQuadratic, expiry, &[]).unwrap();
+        [90.0, 95.0, 100.0, 105.0, 110.0]
+            .iter()
+            .map(|&k| {
+                let c = pricer.price(Call, k, 100.0, rate, carry, vol).unwrap();
+                let p = pricer.price(Put, k, 100.0, rate, carry, vol).unwrap();
+                OptionQuotePair::new(k, c - 0.01, c + 0.01, p - 0.01, p + 0.01)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn atm_vol_is_recovered_from_the_quotes() {
+        for &(vol, rate, carry, expiry) in &[
+            (0.40, 0.03, 0.01, 0.5),
+            (0.12, 0.05, 0.0, 1.0),
+            (0.25, 0.01, 0.03, 0.25),
+        ] {
+            let quotes = ju_quotes(vol, rate, carry, expiry);
+            let estimate =
+                estimate_atm_vol(&quotes, 100.0, (-rate * expiry).exp(), expiry).unwrap();
+            assert!((estimate - vol).abs() < 0.015, "{estimate} vs {vol}");
+        }
+    }
+
+    #[test]
+    fn atm_vol_is_none_when_nothing_can_be_inverted() {
+        let quotes = vec![
+            OptionQuotePair::new(100.0, 119.0, 121.0, 0.001, 0.002),
+            OptionQuotePair::new(105.0, 119.0, 121.0, 0.001, 0.002),
+        ];
+        assert_eq!(estimate_atm_vol(&quotes, 100.0, 0.98, 0.5), None);
+        assert_eq!(estimate_atm_vol(&[], 100.0, 0.98, 0.5), None);
     }
 }

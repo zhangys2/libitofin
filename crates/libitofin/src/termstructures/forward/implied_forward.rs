@@ -131,6 +131,12 @@ pub struct ForwardDiagnostics {
     pub max_spread: Real,
 }
 
+/// Volatility assumed for the American strike window when neither the caller nor the quotes
+/// provide one.
+const DEFAULT_ATM_VOL: Real = 0.30;
+/// Narrowest American strike window, in log moneyness.
+const MIN_CORRIDOR_WINDOW: Real = 0.05;
+
 /// Configuration options for the implied forward estimator.
 #[derive(Debug, Clone)]
 pub struct ImpliedForwardConfig {
@@ -236,10 +242,14 @@ impl ImpliedForward {
         let total_received = quotes.len();
 
         // 1. Initial sanity filter: drop non-positive or inverted quotes
-        let mut valid_pairs: Vec<OptionQuotePair> =
+        let valid_all: Vec<OptionQuotePair> =
             quotes.iter().copied().filter(|q| q.is_valid()).collect();
 
-        // 2. Convention-specific strike filtering
+        // 2. Convention-specific strike filtering and the model-based American path. The model
+        // needs a discount factor; without one, or when it cannot be solved, the corridor
+        // estimate further down is returned and labeled.
+        let mut model_failed = false;
+        let mut corridor_window = None;
         if let MarketConvention::AmericanEquity { spot, atm_vol } = convention {
             require!(
                 spot > 0.0 && spot.is_finite(),
@@ -247,64 +257,37 @@ impl ImpliedForward {
             );
             config.american.validate()?;
             config.american.validate_dividends(expiry_years)?;
-            let vol = atm_vol.unwrap_or(0.30);
-            let window = config.american_kappa * vol * expiry_years.sqrt();
-            valid_pairs.retain(|q| (q.strike / spot).ln().abs() <= window.max(0.05));
+            let estimated = config.discount_factor.and_then(|discount_factor| {
+                american_forward::estimate_atm_vol(&valid_all, spot, discount_factor, expiry_years)
+            });
+            let vol = atm_vol.or(estimated).unwrap_or(DEFAULT_ATM_VOL);
+            if let Some(discount_factor) = config.discount_factor {
+                let window = (config.american.corridor_kappa * vol * expiry_years.sqrt())
+                    .max(MIN_CORRIDOR_WINDOW);
+                let attempt = Self::select_pairs(&valid_all, Some((spot, window)), config)
+                    .and_then(|pairs| {
+                        Self::calculate_american_model(
+                            &pairs,
+                            spot,
+                            discount_factor,
+                            config,
+                            expiry_years,
+                            total_received,
+                        )
+                    });
+                match attempt {
+                    Ok(result) => return Ok(result),
+                    Err(_) => model_failed = true,
+                }
+            }
+            let window =
+                (config.american_kappa * vol * expiry_years.sqrt()).max(MIN_CORRIDOR_WINDOW);
+            corridor_window = Some((spot, window));
         }
 
-        // Sort by strike ascending
-        valid_pairs.sort_by(|a, b| {
-            a.strike
-                .partial_cmp(&b.strike)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Cap to max_pairs closest to spot (or median strike)
-        if valid_pairs.len() > config.max_pairs {
-            let center = config
-                .spot
-                .unwrap_or_else(|| valid_pairs[valid_pairs.len() / 2].strike);
-            valid_pairs.sort_by(|a, b| {
-                let da = (a.strike - center).abs();
-                let db = (b.strike - center).abs();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            valid_pairs.truncate(config.max_pairs);
-            valid_pairs.sort_by(|a, b| {
-                a.strike
-                    .partial_cmp(&b.strike)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-        }
-
-        require!(
-            valid_pairs.len() >= config.min_pairs,
-            "insufficient valid strike pairs: expected at least {}, found {}",
-            config.min_pairs,
-            valid_pairs.len()
-        );
-
+        let valid_pairs = Self::select_pairs(&valid_all, corridor_window, config)?;
         let pairs_used = valid_pairs.len();
         let pairs_pruned = total_received - pairs_used;
-
-        // The model-based American path needs a discount factor; without one, or when the
-        // model cannot be solved, the corridor estimate below is returned and labeled.
-        let mut model_failed = false;
-        if let (MarketConvention::AmericanEquity { spot, .. }, Some(discount_factor)) =
-            (convention, config.discount_factor)
-        {
-            match Self::calculate_american_model(
-                &valid_pairs,
-                spot,
-                discount_factor,
-                config,
-                expiry_years,
-                total_received,
-            ) {
-                Ok(result) => return Ok(result),
-                Err(_) => model_failed = true,
-            }
-        }
 
         let mut result = match convention {
             MarketConvention::CryptoInverse => Self::calculate_crypto_inverse(
@@ -329,6 +312,53 @@ impl ImpliedForward {
             result.flags.insert(ForwardFlags::NON_CONVERGED);
         }
         Ok(result)
+    }
+
+    /// Keeps the quotes inside the log-moneyness `window` around `spot` (when given), sorted by
+    /// strike and capped to `max_pairs` nearest the center.
+    fn select_pairs(
+        valid: &[OptionQuotePair],
+        window: Option<(Real, Real)>,
+        config: &ImpliedForwardConfig,
+    ) -> QlResult<Vec<OptionQuotePair>> {
+        let mut pairs: Vec<OptionQuotePair> = valid.to_vec();
+        if let Some((spot, window)) = window {
+            pairs.retain(|q| (q.strike / spot).ln().abs() <= window);
+        }
+
+        // Sort by strike ascending
+        pairs.sort_by(|a, b| {
+            a.strike
+                .partial_cmp(&b.strike)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Cap to max_pairs closest to spot (or median strike)
+        if pairs.len() > config.max_pairs {
+            let center = config
+                .spot
+                .or(window.map(|(spot, _)| spot))
+                .unwrap_or_else(|| pairs[pairs.len() / 2].strike);
+            pairs.sort_by(|a, b| {
+                let da = (a.strike - center).abs();
+                let db = (b.strike - center).abs();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            pairs.truncate(config.max_pairs);
+            pairs.sort_by(|a, b| {
+                a.strike
+                    .partial_cmp(&b.strike)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        require!(
+            pairs.len() >= config.min_pairs,
+            "insufficient valid strike pairs: expected at least {}, found {}",
+            config.min_pairs,
+            pairs.len()
+        );
+        Ok(pairs)
     }
 
     /// Model-based American estimate: de-Americanize the quotes under the solved carry and run
@@ -1241,7 +1271,6 @@ mod tests {
     fn model_config(rate: Real, expiry: Real) -> ImpliedForwardConfig {
         ImpliedForwardConfig {
             discount_factor: Some((-rate * expiry).exp()),
-            american_kappa: 1.5,
             // Long expiries at 5% rates put the forward more than 10% from spot.
             max_spot_deviation: None,
             ..Default::default()
@@ -1597,5 +1626,110 @@ mod tests {
         let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
         assert_eq!(res.tier, Some(ForwardTier::ModelFast));
         assert!(res.flags.is_empty());
+    }
+
+    fn wide_strikes() -> Vec<Real> {
+        (0..17).map(|i| 80.0 + 2.5 * i as Real).collect()
+    }
+
+    #[test]
+    fn test_model_path_uses_a_wider_corridor_than_the_corridor_tier() {
+        let (rate, carry, expiry) = (0.04, 0.01, 0.5);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &wide_strikes(),
+        );
+        let with_discount = model_config(rate, expiry);
+        let mut without_discount = with_discount.clone();
+        without_discount.discount_factor = None;
+        let model =
+            ImpliedForward::calculate(&quotes, american(100.0), &with_discount, expiry).unwrap();
+        let corridor =
+            ImpliedForward::calculate(&quotes, american(100.0), &without_discount, expiry).unwrap();
+        assert_eq!(model.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(corridor.tier, Some(ForwardTier::Corridor));
+        assert!(
+            model.diagnostics.pairs_used > corridor.diagnostics.pairs_used,
+            "{} vs {}",
+            model.diagnostics.pairs_used,
+            corridor.diagnostics.pairs_used
+        );
+    }
+
+    #[test]
+    fn test_missing_atm_vol_is_estimated_from_the_quotes() {
+        // Quotes at 10% volatility: the estimated vol gives a narrower window than the 30%
+        // fallback, so fewer strikes are used.
+        let (rate, carry, expiry) = (0.04, 0.01, 0.5);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.10,
+            &wide_strikes(),
+        );
+        let config = model_config(rate, expiry);
+        let estimated = ImpliedForward::calculate(
+            &quotes,
+            MarketConvention::AmericanEquity {
+                spot: 100.0,
+                atm_vol: None,
+            },
+            &config,
+            expiry,
+        )
+        .unwrap();
+        let fixed = ImpliedForward::calculate(
+            &quotes,
+            MarketConvention::AmericanEquity {
+                spot: 100.0,
+                atm_vol: Some(0.30),
+            },
+            &config,
+            expiry,
+        )
+        .unwrap();
+        assert_eq!(estimated.tier, Some(ForwardTier::ModelFast));
+        assert!(
+            estimated.diagnostics.pairs_used < fixed.diagnostics.pairs_used,
+            "{} vs {}",
+            estimated.diagnostics.pairs_used,
+            fixed.diagnostics.pairs_used
+        );
+    }
+
+    #[test]
+    fn test_corridor_tier_without_a_discount_factor_keeps_the_default_vol() {
+        // Without a discount factor no vol can be estimated; the 30% default window applies.
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            0.04,
+            0.01,
+            0.5,
+            0.10,
+            &wide_strikes(),
+        );
+        let config = ImpliedForwardConfig::default();
+        let res = ImpliedForward::calculate(
+            &quotes,
+            MarketConvention::AmericanEquity {
+                spot: 100.0,
+                atm_vol: None,
+            },
+            &config,
+            0.5,
+        )
+        .unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::Corridor));
+        // window = 0.5 * 0.30 * sqrt(0.5) = 0.106: strikes 90 .. 110 inclusive, nine of them.
+        assert_eq!(res.diagnostics.pairs_used, 9);
     }
 }
