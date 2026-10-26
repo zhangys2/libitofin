@@ -31,7 +31,7 @@ int main(void) {
     ItofinImpliedForwardOptions options;
     assert(itofin_implied_forward_options_default(&options, &error) == 0);
     assert(options.level == 0 && options.dividend_count == 0 && options.has_atm_vol == 0);
-    assert(options.max_accurate_prices == 64);
+    assert(options.max_accurate_prices == 100);
     assert(fabs(options.carry_flag_high - 0.15) < 1e-15);
     assert(itofin_implied_forward_options_default(NULL, &error) == ITOFIN_INVALID_ARGUMENT);
 

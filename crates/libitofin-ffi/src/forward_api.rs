@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(o.has_correction_passes, 0);
         assert_eq!(o.carry_tolerance, 1e-7);
         assert_eq!(o.corridor_kappa, 1.0);
-        assert_eq!(o.max_accurate_prices, 64);
+        assert_eq!(o.max_accurate_prices, 100);
     }
 
     #[test]

@@ -1732,4 +1732,58 @@ mod tests {
         // window = 0.5 * 0.30 * sqrt(0.5) = 0.106: strikes 90 .. 110 inclusive, nine of them.
         assert_eq!(res.diagnostics.pairs_used, 9);
     }
+
+    #[test]
+    fn test_zero_rate_quotes_are_solved_instead_of_falling_back() {
+        // At r = 0 the closed forms divide 0 by 0; the adapter nudges the rate off zero.
+        let (rate, carry, expiry) = (0.0, 0.0, 1.0);
+        let quotes = priced_quotes(
+            PricerKind::Binomial(400),
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let res = ImpliedForward::calculate(
+            &quotes,
+            american(100.0),
+            &model_config(rate, expiry),
+            expiry,
+        )
+        .unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert!(
+            forward_error_bp(&res, 100.0).abs() < 2.0,
+            "{}",
+            forward_error_bp(&res, 100.0)
+        );
+    }
+
+    #[test]
+    fn test_accurate_level_drops_strikes_it_cannot_invert() {
+        let (rate, carry, expiry) = (0.05, 0.0, 1.0);
+        let mut quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        // A put priced far below any volatility the pricer can produce.
+        quotes.push(OptionQuotePair::new(120.0, 0.001, 0.002, 0.0005, 0.001));
+        let res = ImpliedForward::calculate(
+            &quotes,
+            american(100.0),
+            &accurate_config(rate, expiry),
+            expiry,
+        )
+        .unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelAccurate));
+        assert_eq!(res.diagnostics.pairs_used, STRIKES.len());
+        assert!(!res.flags.contains(ForwardFlags::NON_CONVERGED));
+    }
 }

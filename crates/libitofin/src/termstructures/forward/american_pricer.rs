@@ -87,6 +87,19 @@ fn reference_date() -> Date {
     Date::new(15, Month::June, 2026)
 }
 
+/// Smallest magnitude of the virtual-time rate. The closed forms divide by `1 - exp(-r T)`, which
+/// is 0/0 at a zero rate; a rate of 1e-6 over the two-year virtual expiry moves prices by about
+/// 2e-6 of their size.
+const MIN_VIRTUAL_RATE: Rate = 1e-6;
+
+fn nudge_rate(rate: Rate) -> Rate {
+    if rate.abs() < MIN_VIRTUAL_RATE {
+        MIN_VIRTUAL_RATE
+    } else {
+        rate
+    }
+}
+
 impl AmericanPricer {
     /// Builds a pricer for `expiry_years` (> 0) with an optional discrete cash-dividend
     /// schedule of `(time in years, amount)` pairs, each time in `(0, expiry_years]`.
@@ -221,7 +234,7 @@ impl AmericanPricer {
             "rate and carry must be finite"
         );
         self.spot.set_value(spot);
-        self.rate.set_value(rate / self.scale);
+        self.rate.set_value(nudge_rate(rate / self.scale));
         self.carry.set_value(carry / self.scale);
         self.vol.set_value(vol / self.scale.sqrt());
 
@@ -348,6 +361,21 @@ mod tests {
         let plain = AmericanPricer::new(fd, 1.0, &[]).unwrap();
         let plain_put = plain.price(Put, 100.0, SPOT, 0.04, 0.0, VOL).unwrap();
         assert!(put > plain_put + 0.3, "put {put} vs {plain_put}");
+    }
+
+    #[test]
+    fn a_zero_rate_prices_like_a_tiny_one() {
+        for kind in [
+            PricerKind::JuQuadratic,
+            PricerKind::BaroneAdesiWhaley,
+            PricerKind::Binomial(200),
+        ] {
+            let pricer = AmericanPricer::new(kind, 1.0, &[]).unwrap();
+            let zero = pricer.price(Put, 100.0, SPOT, 0.0, 0.0, VOL).unwrap();
+            let tiny = pricer.price(Put, 100.0, SPOT, 1e-5, 0.0, VOL).unwrap();
+            assert!(zero.is_finite() && zero > 0.0, "{kind:?}: {zero}");
+            assert!((zero - tiny).abs() < 1e-3, "{kind:?}: {zero} vs {tiny}");
+        }
     }
 
     #[test]

@@ -254,7 +254,7 @@ type ImpliedForwardOptions struct {
 	CarryTolerance *float64
 	// CorridorKappa sizes the model path's strike window in standard deviations (default 1.0).
 	CorridorKappa *float64
-	// MaxAccuratePrices is the work budget of accurate-pricer evaluations (default 64).
+	// MaxAccuratePrices is the work budget of accurate-pricer evaluations (default 100).
 	MaxAccuratePrices *int
 }
 

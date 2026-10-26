@@ -216,14 +216,14 @@ impl PyImpliedForwardResult {
 ///     correction_passes: Premium-correction passes of the accurate level (default: one, or
 ///         two with dividends; 0 means fast).
 ///     corridor_kappa: Strike window of the model path in standard deviations (default: 1.0).
-///     max_accurate_prices: Work budget of accurate-pricer evaluations (default: 64).
+///     max_accurate_prices: Work budget of accurate-pricer evaluations (default: 100).
 ///
 /// For the American convention with a `discount_factor` the quotes are de-Americanized before
 /// the parity estimate (tier "model_fast" or "model_accurate"); otherwise, or if the model cannot
 /// be solved, the model-free corridor estimate is returned (tier "corridor").
 #[gen_stub_pyfunction(module = "itofin.termstructures")]
 #[pyfunction]
-#[pyo3(signature = (quotes, expiry_years, convention="european", spot=None, discount_factor=None, min_pairs=2, max_pairs=50, spread_floor=1e-4, max_spot_deviation=Some(0.10), american_kappa=0.5, atm_vol=None, dividends=None, level="auto", carry_search_range=(-0.10, 0.25), carry_flag_range=(-0.05, 0.15), correction_passes=None, corridor_kappa=1.0, max_accurate_prices=64))]
+#[pyo3(signature = (quotes, expiry_years, convention="european", spot=None, discount_factor=None, min_pairs=2, max_pairs=50, spread_floor=1e-4, max_spot_deviation=Some(0.10), american_kappa=0.5, atm_vol=None, dividends=None, level="auto", carry_search_range=(-0.10, 0.25), carry_flag_range=(-0.05, 0.15), correction_passes=None, corridor_kappa=1.0, max_accurate_prices=100))]
 #[allow(clippy::too_many_arguments)]
 pub fn implied_forward(
     quotes: &Bound<'_, PyAny>,

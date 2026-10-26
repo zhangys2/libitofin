@@ -4584,7 +4584,7 @@ class VolatilityType:
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 
-def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5, atm_vol: typing.Optional[builtins.float] = None, dividends: typing.Optional[typing.Sequence[tuple[builtins.float, builtins.float]]] = None, level: builtins.str = 'auto', carry_search_range: tuple[builtins.float, builtins.float] = (-0.1, 0.25), carry_flag_range: tuple[builtins.float, builtins.float] = (-0.05, 0.15), correction_passes: typing.Optional[builtins.int] = None, corridor_kappa: builtins.float = 1.0, max_accurate_prices: builtins.int = 64) -> ImpliedForwardResult:
+def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5, atm_vol: typing.Optional[builtins.float] = None, dividends: typing.Optional[typing.Sequence[tuple[builtins.float, builtins.float]]] = None, level: builtins.str = 'auto', carry_search_range: tuple[builtins.float, builtins.float] = (-0.1, 0.25), carry_flag_range: tuple[builtins.float, builtins.float] = (-0.05, 0.15), correction_passes: typing.Optional[builtins.int] = None, corridor_kappa: builtins.float = 1.0, max_accurate_prices: builtins.int = 100) -> ImpliedForwardResult:
     r"""
     Calculate implied forward price and discount factor from option quotes.
 
@@ -4611,7 +4611,7 @@ def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention
         correction_passes: Premium-correction passes of the accurate level (default: one, or
             two with dividends; 0 means fast).
         corridor_kappa: Strike window of the model path in standard deviations (default: 1.0).
-        max_accurate_prices: Work budget of accurate-pricer evaluations (default: 64).
+        max_accurate_prices: Work budget of accurate-pricer evaluations (default: 100).
 
     For the American convention with a `discount_factor` the quotes are de-Americanized before
     the parity estimate (tier "model_fast" or "model_accurate"); otherwise, or if the model cannot

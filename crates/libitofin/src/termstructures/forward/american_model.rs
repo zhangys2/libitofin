@@ -138,7 +138,7 @@ impl Default for AmericanModelConfig {
             carry_flag_range: (-0.05, 0.15),
             correction_passes: None,
             carry_tolerance: 1e-7,
-            max_accurate_prices: 64,
+            max_accurate_prices: 100,
         }
     }
 }
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(config.carry_search_range, (-0.10, 0.25));
         assert_eq!(config.carry_flag_range, (-0.05, 0.15));
         assert_eq!(config.correction_passes, None);
-        assert_eq!(config.max_accurate_prices, 64);
+        assert_eq!(config.max_accurate_prices, 100);
         config.validate().unwrap();
         config.validate_dividends(1.0).unwrap();
     }

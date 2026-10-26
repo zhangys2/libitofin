@@ -427,27 +427,40 @@ pub(crate) fn solve(
 
     let mut carry = carry0;
     let mut iterations = iterations0;
-    let mut prices_used = 0usize;
+    let prices_used = Cell::new(0usize);
+    let mut corrected = corrected;
     let mut shifts = vec![Shift::default(); corrected.len()];
     let mut last_change = Real::INFINITY;
     for _ in 0..plan.passes {
-        for (pair, shift) in corrected.iter().zip(shifts.iter_mut()) {
+        // Strikes whose mids the closed form cannot invert are dropped from the correction.
+        let mut kept = Vec::with_capacity(corrected.len());
+        let mut kept_shifts = Vec::with_capacity(corrected.len());
+        for (pair, shift) in corrected.iter().zip(&shifts) {
             let target = shifted(pair, *shift);
-            let correction = |ty: OptionType, mid: Real| -> QlResult<Real> {
-                let Some(vol) = american_iv(&cheap, ty, pair.strike, spot, rate, carry, mid) else {
-                    fail!("cannot invert the {ty:?} mid at strike {}", pair.strike);
-                };
-                let accurate = accurate_price(ty, pair.strike, carry, vol)?;
-                let closed = cheap.price(ty, pair.strike, spot, rate, carry, vol)?;
-                Ok(accurate - closed)
+            let correction = |ty: OptionType, mid: Real| -> Option<Real> {
+                let vol = american_iv(&cheap, ty, pair.strike, spot, rate, carry, mid)?;
+                let closed = cheap.price(ty, pair.strike, spot, rate, carry, vol).ok()?;
+                prices_used.set(prices_used.get() + 1);
+                let exact = accurate_price(ty, pair.strike, carry, vol).ok()?;
+                Some(exact - closed)
             };
-            let call = correction(Call, target.call_mid())?;
-            let put = correction(Put, target.put_mid())?;
-            prices_used += 2;
-            // The correction is a difference of prices at the cheap pricer's implied vol, so it
-            // replaces (not adds to) the previous one.
-            *shift = Shift { call, put };
+            if let (Some(call), Some(put)) = (
+                correction(Call, target.call_mid()),
+                correction(Put, target.put_mid()),
+            ) {
+                // The correction is a difference of prices at the cheap pricer's implied vol, so
+                // it replaces (not adds to) the previous one.
+                kept.push(*pair);
+                kept_shifts.push(Shift { call, put });
+            }
         }
+        require!(
+            kept.len() >= min_pairs,
+            "only {} strikes could be corrected, need {min_pairs}",
+            kept.len()
+        );
+        corrected = kept;
+        shifts = kept_shifts;
         let adjusted: Vec<OptionQuotePair> = corrected
             .iter()
             .zip(&shifts)
@@ -467,6 +480,7 @@ pub(crate) fn solve(
             break;
         }
     }
+    let prices_used = prices_used.get();
     if plan.passes >= 2 && last_change > CORRECTION_CONVERGENCE {
         flags.insert(ForwardFlags::NON_CONVERGED);
     }
@@ -631,5 +645,86 @@ mod tests {
         ];
         assert_eq!(estimate_atm_vol(&quotes, 100.0, 0.98, 0.5), None);
         assert_eq!(estimate_atm_vol(&[], 100.0, 0.98, 0.5), None);
+    }
+
+    /// Quotes priced by a 1000-step tree with a wide spread: 3% of the mid plus a cent.
+    fn wide_spread_quotes(rate: Rate, carry: Rate, expiry: Time) -> Vec<OptionQuotePair> {
+        let pricer = AmericanPricer::new(PricerKind::Binomial(1000), expiry, &[]).unwrap();
+        [90.0, 95.0, 97.5, 100.0, 102.5, 105.0, 110.0]
+            .iter()
+            .map(|&k| {
+                let c = pricer.price(Call, k, 100.0, rate, carry, 0.25).unwrap();
+                let p = pricer.price(Put, k, 100.0, rate, carry, 0.25).unwrap();
+                let (hc, hp) = (0.01 + 0.03 * c, 0.01 + 0.03 * p);
+                OptionQuotePair::new(k, c - hc, c + hc, p - hp, p + hp)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn mid_correction_matches_a_per_side_correction_within_a_fraction_of_the_spread() {
+        // The correction is computed at the mid and applied to the bid and the ask. Per-side
+        // truth: invert each of the four prices with the accurate pricer at the solved carry.
+        for &(rate, carry, expiry) in &[(0.05, 0.0, 2.0), (0.03, 0.06, 1.0), (0.05, 0.0, 0.5)] {
+            let quotes = wide_spread_quotes(rate, carry, expiry);
+            let discount = (-rate * expiry).exp();
+            let config = AmericanModelConfig {
+                level: AmericanLevel::Accurate,
+                ..AmericanModelConfig::default()
+            };
+            let solution = solve(&quotes, 100.0, discount, expiry, 2, &config).unwrap();
+            assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+
+            let accurate = AmericanPricer::new(PricerKind::Binomial(400), expiry, &[]).unwrap();
+            let market = Market {
+                spot: 100.0,
+                rate,
+                expiry,
+                discount,
+            };
+            let mut worst: Real = 0.0;
+            for model in &solution.pairs {
+                let quote = quotes.iter().find(|q| q.strike == model.strike).unwrap();
+                let sides = [
+                    (
+                        Call,
+                        quote.call_bid,
+                        model.call_bid,
+                        0.01 + 0.03 * quote.call_mid(),
+                    ),
+                    (
+                        Call,
+                        quote.call_ask,
+                        model.call_ask,
+                        0.01 + 0.03 * quote.call_mid(),
+                    ),
+                    (
+                        Put,
+                        quote.put_bid,
+                        model.put_bid,
+                        0.01 + 0.03 * quote.put_mid(),
+                    ),
+                    (
+                        Put,
+                        quote.put_ask,
+                        model.put_ask,
+                        0.01 + 0.03 * quote.put_mid(),
+                    ),
+                ];
+                for (ty, price, modeled, half_spread) in sides {
+                    let reference = european_equivalent(
+                        &accurate,
+                        market,
+                        ty,
+                        quote.strike,
+                        solution.carry,
+                        price,
+                    );
+                    let Some(reference) = reference else { continue };
+                    worst = worst.max((modeled - reference).abs() / half_spread);
+                }
+            }
+            assert!(worst < 0.05, "r={rate} q={carry} T={expiry}: {worst}");
+        }
     }
 }
