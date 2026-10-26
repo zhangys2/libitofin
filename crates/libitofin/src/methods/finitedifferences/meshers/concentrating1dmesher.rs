@@ -196,10 +196,12 @@ mod tests {
                 concentrating_1d_mesher(start, end, size, Some((c_point, 0.1)), true).unwrap();
 
             assert!(is_increasing(&mesher));
-            assert!(
-                mesher.locations().iter().any(|&x| close(x, c_point)),
-                "cPoint {c_point} is not on the grid"
-            );
+            let nearest = mesher
+                .locations()
+                .iter()
+                .map(|&x| (x - c_point).abs())
+                .fold(Real::INFINITY, Real::min);
+            assert!(nearest < 1e-12, "cPoint {c_point} is not on the grid");
         }
     }
 
