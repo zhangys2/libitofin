@@ -65,8 +65,6 @@ fn load() -> Vec<Scenario> {
 fn config(s: &Scenario, level: AmericanLevel, with_schedule: bool) -> ImpliedForwardConfig {
     ImpliedForwardConfig {
         discount_factor: Some((-s.rate * s.expiry).exp()),
-        // Forwards of long expiries sit more than 10% from spot.
-        max_spot_deviation: None,
         american: AmericanModelConfig {
             level,
             dividends: if with_schedule {

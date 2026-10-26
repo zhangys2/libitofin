@@ -150,7 +150,9 @@ pub struct ImpliedForwardConfig {
     pub max_pairs: usize,
     /// Relative spread floor regularizer $\epsilon = \text{spread\_floor} \cdot \max(K, 1.0)$ (default: 1e-4).
     pub spread_floor: Real,
-    /// Maximum allowable relative deviation from spot $|F/S - 1.0|$ (default: 0.10).
+    /// Maximum allowable relative deviation from spot $|F/S - 1.0|$ (default: 0.10). Not applied
+    /// to the model-based American estimate, which judges the solved carry against
+    /// `AmericanModelConfig::carry_flag_range` instead.
     pub max_spot_deviation: Option<Real>,
     /// Multiplier for American ATM corridor: $|\ln(K/S)| \le \kappa \sigma \sqrt{T}$ (default: 0.5).
     pub american_kappa: Real,
@@ -382,6 +384,11 @@ impl ImpliedForward {
         let backend = ImpliedForwardConfig {
             discount_factor: Some(discount_factor),
             spot: config.spot.or(Some(spot)),
+            // The spot gate of the parity back-end compares the forward with the spot, but the
+            // forward of an equity follows the rate and the carry, so it would reject a correct
+            // long-dated forward. The model path judges plausibility by the solved carry per
+            // year (`carry_flag_range`) instead.
+            max_spot_deviation: None,
             american: AmericanModelConfig::default(),
             ..config.clone()
         };
@@ -1271,13 +1278,33 @@ mod tests {
     fn model_config(rate: Real, expiry: Real) -> ImpliedForwardConfig {
         ImpliedForwardConfig {
             discount_factor: Some((-rate * expiry).exp()),
-            // Long expiries at 5% rates put the forward more than 10% from spot.
-            max_spot_deviation: None,
             ..Default::default()
         }
     }
 
     const STRIKES: [Real; 9] = [90.0, 92.5, 95.0, 97.5, 100.0, 102.5, 105.0, 107.5, 110.0];
+
+    #[test]
+    fn test_model_path_does_not_flag_a_long_forward_that_follows_the_rate() {
+        // F = 100 * exp(0.05 * 2) = 110.5 is 10.5% above the spot, but it is exactly the carry
+        // of the market, so the default spot gate must not flag it.
+        let (rate, expiry) = (0.05, 2.0);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            0.0,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let config = model_config(rate, expiry);
+        assert_eq!(config.max_spot_deviation, Some(0.10));
+        let result = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(result.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(result.diagnostics.status, ForwardStatus::Valid);
+        assert!((result.forward / (100.0 * (rate * expiry).exp()) - 1.0).abs() < 1e-3);
+    }
 
     #[test]
     fn test_model_path_recovers_the_carry_of_its_own_pricer_exactly() {

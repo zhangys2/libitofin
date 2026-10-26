@@ -153,7 +153,10 @@ impl AmericanPricer {
             Handle::new(vol_curve),
         ));
 
-        let mut cash_dividends: Vec<Shared<dyn Dividend>> = Vec::with_capacity(dividends.len());
+        // Several dividends can fall on one virtual day once the expiry is longer than the
+        // virtual horizon (the engine applies only one dividend per date), so their amounts are
+        // added.
+        let mut by_day: std::collections::BTreeMap<i32, Real> = std::collections::BTreeMap::new();
         for &(time, amount) in dividends {
             require!(
                 time.is_finite() && time > 0.0 && time <= expiry_years,
@@ -164,9 +167,14 @@ impl AmericanPricer {
                 "dividend amount must be finite and non-negative, got {amount}"
             );
             let days = ((time * scale * DAYS_PER_YEAR).round() as i32).clamp(1, VIRTUAL_DAYS);
-            cash_dividends
-                .push(shared(FixedDividend::new(amount, today + days)) as Shared<dyn Dividend>);
+            *by_day.entry(days).or_insert(0.0) += amount;
         }
+        let cash_dividends: Vec<Shared<dyn Dividend>> = by_day
+            .into_iter()
+            .map(|(days, amount)| {
+                shared(FixedDividend::new(amount, today + days)) as Shared<dyn Dividend>
+            })
+            .collect();
 
         let engine: SharedMut<dyn PricingEngine> = match kind {
             PricerKind::JuQuadratic => shared_mut(JuQuadraticApproximationEngine::new(process)),
@@ -277,6 +285,33 @@ mod tests {
     // come from a finite-difference grid of 800 x 1600 (6.021901) and a CRR tree of 8000 steps
     // (6.022181); the engine errors are those measured against it in the pricer inventory.
     const PUT_REFERENCE: Real = 6.0219;
+
+    #[test]
+    fn dividends_on_one_virtual_day_are_added() {
+        // Over three years the 720-day virtual horizon compresses the calendar by 1.5, so
+        // real days 100 and 101 land on one virtual day; together they must act as one dividend
+        // of the sum.
+        let expiry = 3.0;
+        let day = 1.0 / 360.0;
+        let price = |dividends: &[(Time, Real)]| {
+            let kind = PricerKind::FiniteDifference {
+                t_grid: 60,
+                x_grid: 120,
+            };
+            AmericanPricer::new(kind, expiry, dividends)
+                .unwrap()
+                .price(Put, 100.0, SPOT, RATE, 0.0, VOL)
+                .unwrap()
+        };
+        let split = price(&[(100.0 * day, 1.0), (101.0 * day, 2.0)]);
+        let merged = price(&[(100.0 * day, 3.0)]);
+        let first_only = price(&[(100.0 * day, 1.0)]);
+        assert!((split - merged).abs() < 1e-3, "{split} vs {merged}");
+        assert!(
+            (split - first_only).abs() > 1e-2,
+            "the second dividend must matter"
+        );
+    }
 
     #[test]
     fn engines_reproduce_the_reference_put_within_their_measured_error() {

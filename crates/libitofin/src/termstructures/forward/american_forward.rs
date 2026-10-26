@@ -345,15 +345,40 @@ pub(crate) fn solve(
     let cheap = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[])?;
     let money = spot * (rate * expiry_years).exp();
 
+    // Beside a schedule the flat yield q the closed form fits maps to the residual carry
+    // b = q - ln(S / (S - PV)) / T, which leaves the forward unchanged. The search and flag
+    // ranges are ranges of b, so the search over q is shifted by the same offset.
+    let has_schedule = !config.dividends.is_empty();
+    let offset = if has_schedule {
+        let pv: Real = config
+            .dividends
+            .iter()
+            .map(|&(time, amount)| amount * (-rate * time).exp())
+            .sum();
+        require!(
+            pv < spot,
+            "present value of dividends ({pv}) must be below the spot ({spot})"
+        );
+        (spot / (spot - pv)).ln() / expiry_years
+    } else {
+        0.0
+    };
+    let search = AmericanModelConfig {
+        carry_search_range: (
+            config.carry_search_range.0 + offset,
+            config.carry_search_range.1 + offset,
+        ),
+        ..config.clone()
+    };
+
     let (carry0, iterations0) = solve_carry(
         &cheap,
         &nearest_to(pairs, money, SOLVE_STRIKES),
         spot,
         rate,
-        config,
+        &search,
     )?;
 
-    let has_schedule = !config.dividends.is_empty();
     let level = match config.level {
         AmericanLevel::Auto if has_schedule => AmericanLevel::Accurate,
         AmericanLevel::Auto => AmericanLevel::Fast,
@@ -371,8 +396,10 @@ pub(crate) fn solve(
             flags.insert(ForwardFlags::LATENCY_FALLBACK);
         }
     }
-    let Some(plan) = plan else {
-        // Fast: either requested, or the budget could not pay for a correction.
+
+    // Fast: either requested, the budget could not pay for a correction, or the correction
+    // failed after the closed-form carry was solved.
+    let fast = |mut flags: ForwardFlags| -> QlResult<ModelSolution> {
         if has_schedule {
             flags.insert(ForwardFlags::SCHEDULE_IGNORED);
         }
@@ -385,40 +412,71 @@ pub(crate) fn solve(
         );
         let nearest = nearest_to(pairs, money, SOLVE_STRIKES);
         let iv_gap = mean_iv_gap(&cheap, &nearest, spot, rate, carry0).unwrap_or(Real::NAN);
-        return Ok(ModelSolution {
+        Ok(ModelSolution {
             pairs: equivalent,
-            carry: carry0,
+            carry: carry0 - offset,
             iv_gap,
             iterations: iterations0,
             accurate_prices_used: 0,
             tier: ForwardTier::ModelFast,
             flags,
-        });
+        })
     };
+    let Some(plan) = plan else {
+        return fast(flags);
+    };
+    let accurate = accurate_stage(
+        &cheap,
+        market,
+        pairs,
+        (carry0, iterations0),
+        offset,
+        plan,
+        min_pairs,
+        config,
+        &search,
+        flags,
+    );
+    match accurate {
+        Ok(solution) => Ok(solution),
+        Err(_) => {
+            flags.insert(ForwardFlags::NON_CONVERGED);
+            fast(flags)
+        }
+    }
+}
 
-    // Accurate: the correction pricer is a tree, or a grid when dividends are given. Beside a
-    // schedule the flat yield q maps to the residual carry b = q - ln(S / (S - PV)) / T, which
-    // leaves the forward unchanged.
+/// The Accurate level: premium corrections from a tree (or a grid beside a schedule) on the
+/// strikes the plan pays for, each followed by a new carry solve.
+#[allow(clippy::too_many_arguments)]
+fn accurate_stage(
+    cheap: &AmericanPricer,
+    market: Market,
+    pairs: &[OptionQuotePair],
+    (carry0, iterations0): (Rate, usize),
+    offset: Rate,
+    plan: CorrectionPlan,
+    min_pairs: usize,
+    config: &AmericanModelConfig,
+    search: &AmericanModelConfig,
+    mut flags: ForwardFlags,
+) -> QlResult<ModelSolution> {
+    let Market {
+        spot,
+        rate,
+        expiry: expiry_years,
+        ..
+    } = market;
+    let money = spot * (rate * expiry_years).exp();
+    let has_schedule = !config.dividends.is_empty();
     let corrected = nearest_to(pairs, money, plan.strikes);
-    let (accurate_kind, offset) = if has_schedule {
-        let pv: Real = config
-            .dividends
-            .iter()
-            .map(|&(time, amount)| amount * (-rate * time).exp())
-            .sum();
-        require!(
-            pv < spot,
-            "present value of dividends ({pv}) must be below the spot ({spot})"
-        );
-        (
-            PricerKind::FiniteDifference {
-                t_grid: 100,
-                x_grid: 200,
-            },
-            (spot / (spot - pv)).ln() / expiry_years,
-        )
+    let accurate_kind = if has_schedule {
+        PricerKind::FiniteDifference {
+            t_grid: 100,
+            x_grid: 200,
+        }
     } else {
-        (PricerKind::Binomial(400), 0.0)
+        PricerKind::Binomial(400)
     };
     let accurate = AmericanPricer::new(accurate_kind, expiry_years, &config.dividends)?;
     let accurate_price = |ty: OptionType, strike: Real, carry: Rate, vol: Volatility| {
@@ -438,7 +496,7 @@ pub(crate) fn solve(
         for (pair, shift) in corrected.iter().zip(&shifts) {
             let target = shifted(pair, *shift);
             let correction = |ty: OptionType, mid: Real| -> Option<Real> {
-                let vol = american_iv(&cheap, ty, pair.strike, spot, rate, carry, mid)?;
+                let vol = american_iv(cheap, ty, pair.strike, spot, rate, carry, mid)?;
                 let closed = cheap.price(ty, pair.strike, spot, rate, carry, vol).ok()?;
                 prices_used.set(prices_used.get() + 1);
                 let exact = accurate_price(ty, pair.strike, carry, vol).ok()?;
@@ -467,11 +525,11 @@ pub(crate) fn solve(
             .map(|(pair, &shift)| shifted(pair, shift))
             .collect();
         let (next, spent) = solve_carry(
-            &cheap,
+            cheap,
             &nearest_to(&adjusted, money, SOLVE_STRIKES),
             spot,
             rate,
-            config,
+            search,
         )?;
         iterations += spent;
         last_change = (next - carry).abs();
@@ -488,7 +546,7 @@ pub(crate) fn solve(
         flags.insert(ForwardFlags::LATENCY_FALLBACK);
     }
 
-    let equivalent = deamericanize(&cheap, market, &corrected, &shifts, carry);
+    let equivalent = deamericanize(cheap, market, &corrected, &shifts, carry);
     require!(
         equivalent.len() >= min_pairs,
         "only {} strikes could be de-Americanized, need {min_pairs}",
@@ -500,7 +558,7 @@ pub(crate) fn solve(
         .map(|(pair, &shift)| shifted(pair, shift))
         .collect();
     let iv_gap = mean_iv_gap(
-        &cheap,
+        cheap,
         &nearest_to(&adjusted, money, SOLVE_STRIKES),
         spot,
         rate,
@@ -621,6 +679,57 @@ mod tests {
                 OptionQuotePair::new(k, c - 0.01, c + 0.01, p - 0.01, p + 0.01)
             })
             .collect()
+    }
+
+    #[test]
+    fn an_accurate_stage_failure_keeps_the_fast_solution() {
+        // A dividend after the expiry makes the grid pricer refuse to build, after the
+        // closed-form carry has been solved: the Fast result is returned, flagged.
+        let (rate, carry, expiry) = (0.03, 0.01, 0.5);
+        let quotes = ju_quotes(0.25, rate, carry, expiry);
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            dividends: vec![(expiry + 0.1, 1.0)],
+            ..AmericanModelConfig::default()
+        };
+        let solution = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 2, &config).unwrap();
+        assert_eq!(solution.tier, ForwardTier::ModelFast);
+        assert!(solution.flags.contains(ForwardFlags::NON_CONVERGED));
+        assert!(solution.flags.contains(ForwardFlags::SCHEDULE_IGNORED));
+        assert!(solution.pairs.len() >= 2);
+    }
+
+    #[test]
+    fn a_large_short_dated_special_dividend_stays_inside_the_default_carry_search() {
+        // PV of the dividend is about 8, so the flat yield that matches the quotes is near
+        // 0.33 a year: outside the default (-0.10, 0.25) unless the search follows the schedule.
+        let (rate, expiry, dividends) = (0.03, 0.25, vec![(0.1, 8.0)]);
+        let pricer = AmericanPricer::new(
+            PricerKind::FiniteDifference {
+                t_grid: 100,
+                x_grid: 200,
+            },
+            expiry,
+            &dividends,
+        )
+        .unwrap();
+        let quotes: Vec<OptionQuotePair> = [90.0, 95.0, 100.0, 105.0, 110.0]
+            .iter()
+            .map(|&k| {
+                let c = pricer.price(Call, k, 100.0, rate, 0.0, 0.3).unwrap();
+                let p = pricer.price(Put, k, 100.0, rate, 0.0, 0.3).unwrap();
+                OptionQuotePair::new(k, c - 0.01, c + 0.01, p - 0.01, p + 0.01)
+            })
+            .collect();
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            dividends,
+            ..AmericanModelConfig::default()
+        };
+        let solution = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 2, &config).unwrap();
+        assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+        // The residual carry is the one quoted without the schedule: about zero.
+        assert!(solution.carry.abs() < 0.02, "carry {}", solution.carry);
     }
 
     #[test]
