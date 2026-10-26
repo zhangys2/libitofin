@@ -78,28 +78,31 @@ func (r *ImpliedForwardResult) Repr() string {
 // 0 Valid, 1 CrossedSyntheticQuotes, 2 BoxSpreadArbitrage, 3 ImplausibleDiscountFactor,
 // 4 SpotDeviationExceeded, 5 DegradedAmericanBounds. The name of code 0 stays "Ok" for
 // existing callers; the others are the core's ForwardStatus names, as in the Python binding.
-func forwardStatus(code int32) (name string, valid, crossed bool) {
+// Only code 0 is valid, as in Python's is_valid. A new Rust ForwardStatus variant needs a case here
+// (and a code in forward_api.rs); until then it decodes as Unknown(code).
+func forwardStatus(code int32) (name string, valid bool) {
 	switch code {
 	case 0:
-		return "Ok", true, false
+		return "Ok", true
 	case 1:
-		return "WarningCrossedSyntheticQuotes", false, true
+		return "WarningCrossedSyntheticQuotes", false
 	case 2:
-		return "WarningBoxSpreadArbitrage", false, false
+		return "WarningBoxSpreadArbitrage", false
 	case 3:
-		return "WarningImplausibleDiscountFactor", false, false
+		return "WarningImplausibleDiscountFactor", false
 	case 4:
-		return "WarningSpotDeviationExceeded", false, false
+		return "WarningSpotDeviationExceeded", false
 	case 5:
-		return "DegradedAmericanBounds", false, false
+		return "DegradedAmericanBounds", false
 	default:
-		return fmt.Sprintf("Unknown(%d)", code), false, false
+		return fmt.Sprintf("Unknown(%d)", code), false
 	}
 }
 
-// forwardCarryRate returns nil when the core reports no carry rate (NaN) or a non-finite one.
+// forwardCarryRate returns nil when the core reports no carry rate. The FFI encodes None as NaN;
+// an infinite value is a computed rate and is passed through, as in the Python binding.
 func forwardCarryRate(v float64) *float64 {
-	if math.IsNaN(v) || math.IsInf(v, 0) {
+	if math.IsNaN(v) {
 		return nil
 	}
 	return &v
@@ -162,7 +165,10 @@ func ImpliedForward(pairs []OptionQuotePair, expiryYears float64, convention int
 		return nil, err
 	}
 
-	statusStr, isValid, isCrossed := forwardStatus(int32(out.status_code))
+	statusStr, isValid := forwardStatus(int32(out.status_code))
+	// The core sets is_crossed from the strict bounds whatever the status: a warning raised earlier
+	// (e.g. an implausible discount factor) hides the crossed status but not the crossed book.
+	isCrossed := float64(out.forward_bid_strict) > float64(out.forward_ask_strict)
 	carryRate := forwardCarryRate(float64(out.implied_carry_rate))
 
 	diag := ForwardDiagnostics{

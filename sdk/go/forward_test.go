@@ -31,25 +31,23 @@ func TestImpliedForward(t *testing.T) {
 func TestForwardStatusDecodesEveryFFICode(t *testing.T) {
 	// Codes are those of itofin_implied_forward_calculate (forward_api.rs).
 	cases := []struct {
-		code    int32
-		name    string
-		valid   bool
-		crossed bool
+		code  int32
+		name  string
+		valid bool
 	}{
-		{0, "Ok", true, false},
-		{1, "WarningCrossedSyntheticQuotes", false, true},
-		{2, "WarningBoxSpreadArbitrage", false, false},
-		{3, "WarningImplausibleDiscountFactor", false, false},
-		{4, "WarningSpotDeviationExceeded", false, false},
-		{5, "DegradedAmericanBounds", false, false},
-		{99, "Unknown(99)", false, false},
-		{-1, "Unknown(-1)", false, false},
+		{0, "Ok", true},
+		{1, "WarningCrossedSyntheticQuotes", false},
+		{2, "WarningBoxSpreadArbitrage", false},
+		{3, "WarningImplausibleDiscountFactor", false},
+		{4, "WarningSpotDeviationExceeded", false},
+		{5, "DegradedAmericanBounds", false},
+		{99, "Unknown(99)", false},
+		{-1, "Unknown(-1)", false},
 	}
 	for _, c := range cases {
-		name, valid, crossed := forwardStatus(c.code)
-		if name != c.name || valid != c.valid || crossed != c.crossed {
-			t.Errorf("code %d: got (%q, valid=%v, crossed=%v), want (%q, valid=%v, crossed=%v)",
-				c.code, name, valid, crossed, c.name, c.valid, c.crossed)
+		name, valid := forwardStatus(c.code)
+		if name != c.name || valid != c.valid {
+			t.Errorf("code %d: got (%q, valid=%v), want (%q, valid=%v)", c.code, name, valid, c.name, c.valid)
 		}
 	}
 }
@@ -58,8 +56,8 @@ func TestForwardCarryRateIsNilWhenNotFinite(t *testing.T) {
 	if got := forwardCarryRate(math.NaN()); got != nil {
 		t.Errorf("NaN carry must be nil, got %v", *got)
 	}
-	if got := forwardCarryRate(math.Inf(1)); got != nil {
-		t.Errorf("Inf carry must be nil, got %v", *got)
+	if got := forwardCarryRate(math.Inf(1)); got == nil || !math.IsInf(*got, 1) {
+		t.Errorf("a computed infinite carry must be passed through, got %v", got)
 	}
 	got := forwardCarryRate(0.0123)
 	if got == nil || *got != 0.0123 {
@@ -89,8 +87,13 @@ func TestImpliedForwardWarningStatusesThroughFFI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.Status != "WarningImplausibleDiscountFactor" || res.IsValid || res.Diagnostics.IsCrossed {
-		t.Errorf("implausible D: status=%q valid=%v crossed=%v", res.Status, res.IsValid, res.Diagnostics.IsCrossed)
+	if res.Status != "WarningImplausibleDiscountFactor" || res.IsValid {
+		t.Errorf("implausible D: status=%q valid=%v", res.Status, res.IsValid)
+	}
+	// The fit falls back to D = 1, where this book is crossed; the status keeps the earlier warning.
+	if !res.Diagnostics.IsCrossed || res.ForwardBidStrict <= res.ForwardAskStrict {
+		t.Errorf("implausible D: crossed=%v strict bid=%v ask=%v, want a crossed book",
+			res.Diagnostics.IsCrossed, res.ForwardBidStrict, res.ForwardAskStrict)
 	}
 
 	// Forward 5000 against spot 3000 deviates by far more than 10% -> code 4.
@@ -117,11 +120,14 @@ func TestImpliedForwardCrossedQuotesFlagIsCrossed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.IsValid {
-		t.Fatalf("crossed quotes must not be valid, status=%q", res.Status)
+	if res.Status != "WarningCrossedSyntheticQuotes" {
+		t.Errorf("status=%q, want WarningCrossedSyntheticQuotes", res.Status)
 	}
-	if want := res.Status == "WarningCrossedSyntheticQuotes"; res.Diagnostics.IsCrossed != want {
-		t.Errorf("IsCrossed=%v but status=%q", res.Diagnostics.IsCrossed, res.Status)
+	if !res.Diagnostics.IsCrossed {
+		t.Error("IsCrossed must be true")
+	}
+	if res.ForwardBidStrict <= res.ForwardAskStrict {
+		t.Errorf("strict bid %v must exceed strict ask %v", res.ForwardBidStrict, res.ForwardAskStrict)
 	}
 }
 
@@ -143,6 +149,17 @@ func TestImpliedForwardConventionCodes(t *testing.T) {
 	}
 	if !res.IsValid || math.Abs(res.Forward-trueForward) > 5 {
 		t.Errorf("crypto convention (1): forward=%v status=%q, want ~%v", res.Forward, res.Status, trueForward)
+	}
+	if want := math.Log(res.Forward/spot) / 0.25; res.ImpliedCarryRate == nil || math.Abs(*res.ImpliedCarryRate-want) > 1e-12 {
+		t.Errorf("crypto carry with spot: got %v, want ln(F/S)/T = %v", res.ImpliedCarryRate, want)
+	}
+	// Without spot the crypto convention has no carry: the core sends NaN, which must surface as nil.
+	res, err = ImpliedForward(inverse, 0.25, 1, nil, nil)
+	if err != nil {
+		t.Fatalf("crypto convention without spot: %v", err)
+	}
+	if res.ImpliedCarryRate != nil {
+		t.Errorf("crypto carry without spot must be nil, got %v", *res.ImpliedCarryRate)
 	}
 
 	// Code 2 is the American equity convention and requires spot.
