@@ -31,6 +31,11 @@ const SOLVE_STRIKES: usize = 5;
 const BRACKET_STEP: Rate = 0.02;
 /// A call/put implied-vol gap this small (1e-9 volatility) counts as zero.
 const GAP_TOLERANCE: Real = 1e-9;
+/// With two or more correction passes, a last pass that still moves the carry by more than
+/// this (per year) leaves the result flagged as not converged. Each pass removes roughly
+/// four fifths of the remaining carry error, so the error left is about a quarter of the
+/// last move: 5e-4 per year keeps it near a basis point of the forward per year of expiry.
+const CORRECTION_CONVERGENCE: Rate = 5e-4;
 
 /// Result of a model-based solve.
 #[derive(Debug, Clone)]
@@ -221,47 +226,51 @@ fn solve_carry(
     Ok((carry, evaluations.get()))
 }
 
-/// Fast-level solve: closed-form pricer only.
-///
-/// `pairs` are the (already filtered) American quotes, sorted by strike.
-pub(crate) fn solve_fast(
-    pairs: &[OptionQuotePair],
-    spot: Real,
-    discount_factor: DiscountFactor,
-    expiry_years: Time,
-    min_pairs: usize,
-    config: &AmericanModelConfig,
-) -> QlResult<ModelSolution> {
-    require!(
-        discount_factor.is_finite() && discount_factor > 0.0,
-        "discount factor must be finite and positive, got {discount_factor}"
-    );
-    let rate = -discount_factor.ln() / expiry_years;
-    let pricer = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[])?;
-    let market = Market {
-        spot,
-        rate,
-        expiry: expiry_years,
-        discount: discount_factor,
-    };
+/// Premium corrections of one strike: accurate minus cheap model price, for each right.
+#[derive(Clone, Copy, Default)]
+struct Shift {
+    call: Real,
+    put: Real,
+}
 
-    // The strikes nearest the money drive the carry solve.
-    let money = spot * (rate * expiry_years).exp();
+/// The pair with the strike's premium correction removed from every bid and ask.
+fn shifted(pair: &OptionQuotePair, shift: Shift) -> OptionQuotePair {
+    OptionQuotePair::new(
+        pair.strike,
+        pair.call_bid - shift.call,
+        pair.call_ask - shift.call,
+        pair.put_bid - shift.put,
+        pair.put_ask - shift.put,
+    )
+}
+
+/// The `count` pairs nearest the money (by log distance), in ascending strike order.
+fn nearest_to(pairs: &[OptionQuotePair], money: Real, count: usize) -> Vec<OptionQuotePair> {
     let mut nearest: Vec<OptionQuotePair> = pairs.to_vec();
     nearest.sort_by(|a, b| {
         let da = (a.strike / money).ln().abs();
         let db = (b.strike / money).ln().abs();
         da.total_cmp(&db)
     });
-    nearest.truncate(SOLVE_STRIKES);
-    let (carry, iterations) = solve_carry(&pricer, &nearest, spot, rate, config)?;
-    let iv_gap = mean_iv_gap(&pricer, &nearest, spot, rate, carry).unwrap_or(Real::NAN);
+    nearest.truncate(count);
+    nearest.sort_by(|a, b| a.strike.total_cmp(&b.strike));
+    nearest
+}
 
-    // De-Americanize every quote at the solved carry.
+/// Converts every quote to European-equivalent bid/ask under the solved carry, with the
+/// strike's premium correction removed first. Strikes that cannot be inverted are dropped.
+fn deamericanize(
+    pricer: &AmericanPricer,
+    market: Market,
+    pairs: &[OptionQuotePair],
+    shifts: &[Shift],
+    carry: Rate,
+) -> Vec<OptionQuotePair> {
     let mut equivalent = Vec::with_capacity(pairs.len());
-    for pair in pairs {
+    for (pair, &shift) in pairs.iter().zip(shifts) {
+        let pair = shifted(pair, shift);
         let convert = |ty: OptionType, price: Real| {
-            european_equivalent(&pricer, market, ty, pair.strike, carry, price)
+            european_equivalent(pricer, market, ty, pair.strike, carry, price)
         };
         if let (Some(cb), Some(ca), Some(pb), Some(pa)) = (
             convert(Call, pair.call_bid),
@@ -275,25 +284,285 @@ pub(crate) fn solve_fast(
             }
         }
     }
+    equivalent
+}
+
+/// Solves one model-based American forward.
+///
+/// `pairs` are the (already filtered) American quotes, sorted by strike. The Fast level uses the
+/// Ju closed form alone; the Accurate level adds premium-correction passes with a tree (or a
+/// grid, when a dividend schedule is given) on the strikes the work budget affords.
+pub(crate) fn solve(
+    pairs: &[OptionQuotePair],
+    spot: Real,
+    discount_factor: DiscountFactor,
+    expiry_years: Time,
+    min_pairs: usize,
+    config: &AmericanModelConfig,
+) -> QlResult<ModelSolution> {
+    require!(
+        discount_factor.is_finite() && discount_factor > 0.0,
+        "discount factor must be finite and positive, got {discount_factor}"
+    );
+    let rate = -discount_factor.ln() / expiry_years;
+    let market = Market {
+        spot,
+        rate,
+        expiry: expiry_years,
+        discount: discount_factor,
+    };
+    let cheap = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[])?;
+    let money = spot * (rate * expiry_years).exp();
+
+    let (carry0, iterations0) = solve_carry(
+        &cheap,
+        &nearest_to(pairs, money, SOLVE_STRIKES),
+        spot,
+        rate,
+        config,
+    )?;
+
+    let has_schedule = !config.dividends.is_empty();
+    let level = match config.level {
+        AmericanLevel::Auto if has_schedule => AmericanLevel::Accurate,
+        AmericanLevel::Auto => AmericanLevel::Fast,
+        level => level,
+    };
+    let passes = config
+        .correction_passes
+        .unwrap_or(if has_schedule { 2 } else { 1 });
+
+    let mut flags = ForwardFlags::NONE;
+    let mut plan = None;
+    if level == AmericanLevel::Accurate && passes > 0 {
+        plan = plan_correction(pairs.len(), passes, config.max_accurate_prices, min_pairs);
+        if plan.is_none() {
+            flags.insert(ForwardFlags::LATENCY_FALLBACK);
+        }
+    }
+    let Some(plan) = plan else {
+        // Fast: either requested, or the budget could not pay for a correction.
+        if has_schedule {
+            flags.insert(ForwardFlags::SCHEDULE_IGNORED);
+        }
+        let shifts = vec![Shift::default(); pairs.len()];
+        let equivalent = deamericanize(&cheap, market, pairs, &shifts, carry0);
+        require!(
+            equivalent.len() >= min_pairs,
+            "only {} strikes could be de-Americanized, need {min_pairs}",
+            equivalent.len()
+        );
+        let nearest = nearest_to(pairs, money, SOLVE_STRIKES);
+        let iv_gap = mean_iv_gap(&cheap, &nearest, spot, rate, carry0).unwrap_or(Real::NAN);
+        return Ok(ModelSolution {
+            pairs: equivalent,
+            carry: carry0,
+            iv_gap,
+            iterations: iterations0,
+            accurate_prices_used: 0,
+            tier: ForwardTier::ModelFast,
+            flags,
+        });
+    };
+
+    // Accurate: the correction pricer is a tree, or a grid when dividends are given. Beside a
+    // schedule the flat yield q maps to the residual carry b = q - ln(S / (S - PV)) / T, which
+    // leaves the forward unchanged.
+    let corrected = nearest_to(pairs, money, plan.strikes);
+    let (accurate_kind, offset) = if has_schedule {
+        let pv: Real = config
+            .dividends
+            .iter()
+            .map(|&(time, amount)| amount * (-rate * time).exp())
+            .sum();
+        require!(
+            pv < spot,
+            "present value of dividends ({pv}) must be below the spot ({spot})"
+        );
+        (
+            PricerKind::FiniteDifference {
+                t_grid: 100,
+                x_grid: 200,
+            },
+            (spot / (spot - pv)).ln() / expiry_years,
+        )
+    } else {
+        (PricerKind::Binomial(400), 0.0)
+    };
+    let accurate = AmericanPricer::new(accurate_kind, expiry_years, &config.dividends)?;
+    let accurate_price = |ty: OptionType, strike: Real, carry: Rate, vol: Volatility| {
+        accurate.price(ty, strike, spot, rate, carry - offset, vol)
+    };
+
+    let mut carry = carry0;
+    let mut iterations = iterations0;
+    let mut prices_used = 0usize;
+    let mut shifts = vec![Shift::default(); corrected.len()];
+    let mut last_change = Real::INFINITY;
+    for _ in 0..plan.passes {
+        for (pair, shift) in corrected.iter().zip(shifts.iter_mut()) {
+            let target = shifted(pair, *shift);
+            let correction = |ty: OptionType, mid: Real| -> QlResult<Real> {
+                let Some(vol) = american_iv(&cheap, ty, pair.strike, spot, rate, carry, mid) else {
+                    fail!("cannot invert the {ty:?} mid at strike {}", pair.strike);
+                };
+                let accurate = accurate_price(ty, pair.strike, carry, vol)?;
+                let closed = cheap.price(ty, pair.strike, spot, rate, carry, vol)?;
+                Ok(accurate - closed)
+            };
+            let call = correction(Call, target.call_mid())?;
+            let put = correction(Put, target.put_mid())?;
+            prices_used += 2;
+            // The correction is a difference of prices at the cheap pricer's implied vol, so it
+            // replaces (not adds to) the previous one.
+            *shift = Shift { call, put };
+        }
+        let adjusted: Vec<OptionQuotePair> = corrected
+            .iter()
+            .zip(&shifts)
+            .map(|(pair, &shift)| shifted(pair, shift))
+            .collect();
+        let (next, spent) = solve_carry(
+            &cheap,
+            &nearest_to(&adjusted, money, SOLVE_STRIKES),
+            spot,
+            rate,
+            config,
+        )?;
+        iterations += spent;
+        last_change = (next - carry).abs();
+        carry = next;
+        if last_change <= config.carry_tolerance {
+            break;
+        }
+    }
+    if plan.passes >= 2 && last_change > CORRECTION_CONVERGENCE {
+        flags.insert(ForwardFlags::NON_CONVERGED);
+    }
+    if plan.reduced {
+        flags.insert(ForwardFlags::LATENCY_FALLBACK);
+    }
+
+    let equivalent = deamericanize(&cheap, market, &corrected, &shifts, carry);
     require!(
         equivalent.len() >= min_pairs,
         "only {} strikes could be de-Americanized, need {min_pairs}",
         equivalent.len()
     );
-
-    let mut flags = ForwardFlags::NONE;
-    if !config.dividends.is_empty()
-        && matches!(config.level, AmericanLevel::Auto | AmericanLevel::Fast)
-    {
-        flags.insert(ForwardFlags::SCHEDULE_IGNORED);
-    }
+    let adjusted: Vec<OptionQuotePair> = corrected
+        .iter()
+        .zip(&shifts)
+        .map(|(pair, &shift)| shifted(pair, shift))
+        .collect();
+    let iv_gap = mean_iv_gap(
+        &cheap,
+        &nearest_to(&adjusted, money, SOLVE_STRIKES),
+        spot,
+        rate,
+        carry,
+    )
+    .unwrap_or(Real::NAN);
     Ok(ModelSolution {
         pairs: equivalent,
-        carry,
+        carry: carry - offset,
         iv_gap,
         iterations,
-        accurate_prices_used: 0,
-        tier: ForwardTier::ModelFast,
+        accurate_prices_used: prices_used,
+        tier: ForwardTier::ModelAccurate,
         flags,
     })
+}
+
+/// How much correction the work budget pays for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CorrectionPlan {
+    /// Strikes corrected, nearest the money first.
+    strikes: usize,
+    passes: usize,
+    /// True when the budget forced fewer strikes or passes than requested.
+    reduced: bool,
+}
+
+/// Two accurate prices (call and put) are spent per strike and pass. Fewer strikes are corrected
+/// before fewer passes are run, and no plan is returned when not even `min_pairs` strikes can
+/// be corrected in a single pass.
+fn plan_correction(
+    pairs: usize,
+    requested_passes: usize,
+    budget: usize,
+    min_pairs: usize,
+) -> Option<CorrectionPlan> {
+    let mut passes = requested_passes;
+    loop {
+        let strikes = pairs.min(budget / (2 * passes));
+        if strikes >= min_pairs {
+            return Some(CorrectionPlan {
+                strikes,
+                passes,
+                reduced: strikes < pairs || passes < requested_passes,
+            });
+        }
+        if passes == 1 {
+            return None;
+        }
+        passes -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_budget_cuts_strikes_before_passes() {
+        let plan = |pairs, passes, budget| plan_correction(pairs, passes, budget, 2);
+        // 9 strikes, 1 pass need 18 prices.
+        assert_eq!(
+            plan(9, 1, 18),
+            Some(CorrectionPlan {
+                strikes: 9,
+                passes: 1,
+                reduced: false
+            })
+        );
+        // 8 prices afford 4 strikes in one pass.
+        assert_eq!(
+            plan(9, 1, 8),
+            Some(CorrectionPlan {
+                strikes: 4,
+                passes: 1,
+                reduced: true
+            })
+        );
+        // Two passes over 9 strikes need 36; 8 afford 2 strikes in two passes.
+        assert_eq!(
+            plan(9, 2, 8),
+            Some(CorrectionPlan {
+                strikes: 2,
+                passes: 2,
+                reduced: true
+            })
+        );
+        // 5 prices cannot pay two passes over 2 strikes (8), so one pass over 2 strikes is run.
+        assert_eq!(
+            plan(9, 2, 5),
+            Some(CorrectionPlan {
+                strikes: 2,
+                passes: 1,
+                reduced: true
+            })
+        );
+        // Fewer than min_pairs strikes in one pass: no plan.
+        assert_eq!(plan(9, 1, 3), None);
+        assert_eq!(plan(9, 2, 0), None);
+        // Fewer quotes than the budget could pay for are not "reduced".
+        assert_eq!(
+            plan(3, 2, 100),
+            Some(CorrectionPlan {
+                strikes: 3,
+                passes: 2,
+                reduced: false
+            })
+        );
+    }
 }

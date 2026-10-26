@@ -341,7 +341,7 @@ impl ImpliedForward {
         expiry_years: Time,
         total_received: usize,
     ) -> QlResult<ImpliedForwardResult> {
-        let solution = american_forward::solve_fast(
+        let solution = american_forward::solve(
             pairs,
             spot,
             discount_factor,
@@ -1201,7 +1201,21 @@ mod tests {
         vol: Real,
         strikes: &[Real],
     ) -> Vec<OptionQuotePair> {
-        let pricer = AmericanPricer::new(kind, expiry, &[]).unwrap();
+        priced_quotes_with_dividends(kind, &[], spot, rate, carry, expiry, vol, strikes)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn priced_quotes_with_dividends(
+        kind: PricerKind,
+        dividends: &[(Real, Real)],
+        spot: Real,
+        rate: Real,
+        carry: Real,
+        expiry: Real,
+        vol: Real,
+        strikes: &[Real],
+    ) -> Vec<OptionQuotePair> {
+        let pricer = AmericanPricer::new(kind, expiry, dividends).unwrap();
         let half = 0.01;
         strikes
             .iter()
@@ -1228,6 +1242,8 @@ mod tests {
         ImpliedForwardConfig {
             discount_factor: Some((-rate * expiry).exp()),
             american_kappa: 1.5,
+            // Long expiries at 5% rates put the forward more than 10% from spot.
+            max_spot_deviation: None,
             ..Default::default()
         }
     }
@@ -1395,5 +1411,191 @@ mod tests {
         let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
         assert_eq!(res.tier, Some(ForwardTier::ModelFast));
         assert!(res.flags.contains(ForwardFlags::SCHEDULE_IGNORED));
+    }
+
+    fn accurate_config(rate: Real, expiry: Real) -> ImpliedForwardConfig {
+        let mut config = model_config(rate, expiry);
+        config.american.level = AmericanLevel::Accurate;
+        config
+    }
+
+    fn forward_error_bp(result: &ImpliedForwardResult, true_forward: Real) -> Real {
+        (result.forward / true_forward - 1.0) * 1e4
+    }
+
+    #[test]
+    fn test_accurate_level_corrects_the_closed_form_bias() {
+        // Quotes from a 1000-step CRR tree. The correction pass uses a 400-step tree.
+        for &(rate, carry, expiry) in &[(0.05, 0.0, 2.0), (0.03, 0.06, 2.0), (0.05, 0.0, 0.5)] {
+            let quotes = priced_quotes(
+                PricerKind::Binomial(1000),
+                100.0,
+                rate,
+                carry,
+                expiry,
+                0.25,
+                &STRIKES,
+            );
+            let true_forward = 100.0 * ((rate - carry) * expiry).exp();
+            let fast = ImpliedForward::calculate(
+                &quotes,
+                american(100.0),
+                &model_config(rate, expiry),
+                expiry,
+            )
+            .unwrap();
+            let accurate = ImpliedForward::calculate(
+                &quotes,
+                american(100.0),
+                &accurate_config(rate, expiry),
+                expiry,
+            )
+            .unwrap();
+            assert_eq!(fast.tier, Some(ForwardTier::ModelFast));
+            assert_eq!(accurate.tier, Some(ForwardTier::ModelAccurate));
+            let fast_error = forward_error_bp(&fast, true_forward).abs();
+            let accurate_error = forward_error_bp(&accurate, true_forward).abs();
+            assert!(
+                accurate_error < 1.5,
+                "r={rate} q={carry} T={expiry}: accurate {accurate_error} bp"
+            );
+            assert!(
+                accurate_error < fast_error,
+                "r={rate} q={carry} T={expiry}: accurate {accurate_error} vs fast {fast_error}"
+            );
+            let diag = accurate.american.unwrap();
+            // One pass, two accurate prices per strike, all nine strikes.
+            assert_eq!(diag.accurate_prices_used, 2 * STRIKES.len());
+            assert!(accurate.flags.is_empty());
+            assert!(accurate.is_valid(), "{:?}", accurate.diagnostics.status);
+        }
+    }
+
+    #[test]
+    fn test_auto_level_chooses_accurate_only_with_a_schedule() {
+        let (rate, carry, expiry) = (0.04, 0.0, 1.0);
+        let dividends = [(0.25, 1.0), (0.75, 1.0)];
+        let quotes = priced_quotes_with_dividends(
+            PricerKind::FiniteDifference {
+                t_grid: 100,
+                x_grid: 200,
+            },
+            &dividends,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let auto_plain = model_config(rate, expiry);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &auto_plain, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert!(res.flags.is_empty());
+
+        let mut auto_with_schedule = model_config(rate, expiry);
+        auto_with_schedule.american.dividends = dividends.to_vec();
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &auto_with_schedule, expiry)
+            .unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelAccurate));
+        assert!(res.flags.is_empty());
+    }
+
+    #[test]
+    fn test_schedule_recovers_a_lumpy_dividend_that_flat_carry_cannot() {
+        // A special dividend of 3.0 at day 100 of a 1-year option (r = 4%, vol 25%). Flat carry
+        // misses the early exercise just before the ex-date by tens of basis points.
+        let (rate, expiry) = (0.04, 1.0);
+        let dividends = [(100.0 / 360.0, 3.0)];
+        let quotes = priced_quotes_with_dividends(
+            PricerKind::FiniteDifference {
+                t_grid: 200,
+                x_grid: 400,
+            },
+            &dividends,
+            100.0,
+            rate,
+            0.0,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let pv = 3.0 * (-rate * 100.0 / 360.0_f64).exp();
+        let true_forward = (100.0 - pv) * (rate * expiry).exp();
+
+        let mut accurate = accurate_config(rate, expiry);
+        accurate.american.dividends = dividends.to_vec();
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &accurate, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelAccurate));
+        assert!(
+            forward_error_bp(&res, true_forward).abs() < 3.0,
+            "{}",
+            forward_error_bp(&res, true_forward)
+        );
+        // The reported carry is the residual on top of the schedule, close to zero here.
+        assert!(res.american.unwrap().solved_carry.abs() < 2e-3);
+        assert!(res.flags.is_empty());
+
+        let mut fast = model_config(rate, expiry);
+        fast.american.dividends = dividends.to_vec();
+        fast.american.level = AmericanLevel::Fast;
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &fast, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert!(res.flags.contains(ForwardFlags::SCHEDULE_IGNORED));
+        assert!(forward_error_bp(&res, true_forward).abs() > 15.0);
+    }
+
+    #[test]
+    fn test_work_budget_limits_the_correction_deterministically() {
+        let (rate, carry, expiry) = (0.05, 0.0, 1.0);
+        let quotes = priced_quotes(
+            PricerKind::Binomial(600),
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let run = |budget: usize| {
+            let mut config = accurate_config(rate, expiry);
+            config.american.max_accurate_prices = budget;
+            ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap()
+        };
+
+        // Eight accurate prices pay for four strikes: still Accurate, but reduced and flagged.
+        let reduced = run(8);
+        assert_eq!(reduced.tier, Some(ForwardTier::ModelAccurate));
+        assert!(reduced.flags.contains(ForwardFlags::LATENCY_FALLBACK));
+        assert_eq!(reduced.american.unwrap().accurate_prices_used, 8);
+        assert_eq!(reduced.diagnostics.pairs_used, 4);
+
+        // One accurate price pays for no strike: Fast, flagged.
+        let none = run(1);
+        assert_eq!(none.tier, Some(ForwardTier::ModelFast));
+        assert!(none.flags.contains(ForwardFlags::LATENCY_FALLBACK));
+        assert_eq!(none.american.unwrap().accurate_prices_used, 0);
+
+        // The same budget gives the same answer.
+        assert_eq!(run(8), reduced);
+    }
+
+    #[test]
+    fn test_zero_correction_passes_means_fast() {
+        let (rate, carry, expiry) = (0.05, 0.0, 1.0);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let mut config = accurate_config(rate, expiry);
+        config.american.correction_passes = Some(0);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert!(res.flags.is_empty());
     }
 }

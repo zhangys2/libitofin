@@ -45,8 +45,7 @@ const DAYS_PER_YEAR: Real = 360.0;
 
 /// Which American engine prices.
 ///
-/// `Binomial` and `FiniteDifference` are used by the Accurate level (next commit), and
-/// `BaroneAdesiWhaley` is the documented alternative closed form; none is selectable from
+/// `BaroneAdesiWhaley` is the documented alternative closed form and is not selectable from
 /// `AmericanModelConfig` yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
