@@ -6,6 +6,7 @@ package itofin
 import "C"
 import (
 	"fmt"
+	"math"
 	"unsafe"
 )
 
@@ -73,8 +74,40 @@ func (r *ImpliedForwardResult) Repr() string {
 	return fmt.Sprintf("ImpliedForwardResult(forward=%v, discount_factor=%v, status=%s)", r.Forward, r.DiscountFactor, r.Status)
 }
 
+// forwardStatus decodes the status_code of itofin_implied_forward_calculate:
+// 0 Valid, 1 CrossedSyntheticQuotes, 2 BoxSpreadArbitrage, 3 ImplausibleDiscountFactor,
+// 4 SpotDeviationExceeded, 5 DegradedAmericanBounds. The name of code 0 stays "Ok" for
+// existing callers; the others are the core's ForwardStatus names, as in the Python binding.
+func forwardStatus(code int32) (name string, valid, crossed bool) {
+	switch code {
+	case 0:
+		return "Ok", true, false
+	case 1:
+		return "WarningCrossedSyntheticQuotes", false, true
+	case 2:
+		return "WarningBoxSpreadArbitrage", false, false
+	case 3:
+		return "WarningImplausibleDiscountFactor", false, false
+	case 4:
+		return "WarningSpotDeviationExceeded", false, false
+	case 5:
+		return "DegradedAmericanBounds", false, false
+	default:
+		return fmt.Sprintf("Unknown(%d)", code), false, false
+	}
+}
+
+// forwardCarryRate returns nil when the core reports no carry rate (NaN) or a non-finite one.
+func forwardCarryRate(v float64) *float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return nil
+	}
+	return &v
+}
+
 // ImpliedForward calculates the implied forward price and discount factor from option quote pairs.
-// convention: 0 for EuropeanVanilla, 1 for American, 2 for CryptoInverse.
+// convention: 0 for EuropeanVanilla, 1 for CryptoInverse, 2 for AmericanEquity (which requires spot).
+// MinSpread, MaxSpread and BoxArbitrageViolations are not reported by this entry point and stay 0.
 func ImpliedForward(pairs []OptionQuotePair, expiryYears float64, convention int32, spot *float64, discountFactor *float64) (*ImpliedForwardResult, error) {
 	if len(pairs) == 0 {
 		return nil, fmt.Errorf("quotes slice cannot be empty")
@@ -129,27 +162,8 @@ func ImpliedForward(pairs []OptionQuotePair, expiryYears float64, convention int
 		return nil, err
 	}
 
-	statusStr := "Ok"
-	isValid := true
-	if out.status_code != 0 {
-		isValid = false
-		switch out.status_code {
-		case 1:
-			statusStr = "InsufficientPairs"
-		case 2:
-			statusStr = "ArbitrageViolations"
-		case 3:
-			statusStr = "CrossedMarket"
-		default:
-			statusStr = "FailedFit"
-		}
-	}
-
-	var carryRate *float64
-	if expiryYears > 0 {
-		r := float64(out.implied_carry_rate)
-		carryRate = &r
-	}
+	statusStr, isValid, isCrossed := forwardStatus(int32(out.status_code))
+	carryRate := forwardCarryRate(float64(out.implied_carry_rate))
 
 	diag := ForwardDiagnostics{
 		Status:                 statusStr,
@@ -157,7 +171,7 @@ func ImpliedForward(pairs []OptionQuotePair, expiryYears float64, convention int
 		TotalPairsReceived:     count,
 		PairsUsed:              int(out.pairs_used),
 		PairsPruned:            int(out.pairs_pruned),
-		IsCrossed:              out.status_code == 3,
+		IsCrossed:              isCrossed,
 		BoxArbitrageViolations: 0,
 		WlsRmse:                float64(out.wls_rmse),
 		MinSpread:              0,
