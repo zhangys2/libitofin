@@ -241,6 +241,16 @@ def test_implausible_carry_range_flags_the_status():
     assert not res.is_valid
 
 
+def test_model_failure_is_reported_as_a_fallback_status():
+    # The quotes carry about zero, outside the search range: the model fails and the clean
+    # corridor estimate is returned, which must not read as valid.
+    res = _american(carry_search_range=(0.20, 0.25), carry_flag_range=(0.21, 0.24))
+    assert res.tier == "corridor"
+    assert res.flags == ["non_converged"]
+    assert res.status == "WarningModelFallback"
+    assert not res.is_valid
+
+
 def test_invalid_american_arguments_are_rejected():
     with pytest.raises(ValueError, match="level"):
         _american(level="bogus")

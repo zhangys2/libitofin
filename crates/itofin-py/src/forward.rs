@@ -323,6 +323,7 @@ pub fn implied_forward(
         ForwardStatus::WarningSpotDeviationExceeded => "WarningSpotDeviationExceeded",
         ForwardStatus::DegradedAmericanBounds => "DegradedAmericanBounds",
         ForwardStatus::WarningImplausibleCarry => "WarningImplausibleCarry",
+        ForwardStatus::WarningModelFallback => "WarningModelFallback",
     };
 
     let is_valid = res.diagnostics.status == ForwardStatus::Valid;

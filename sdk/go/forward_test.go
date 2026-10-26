@@ -42,6 +42,7 @@ func TestForwardStatusDecodesEveryFFICode(t *testing.T) {
 		{4, "WarningSpotDeviationExceeded", false},
 		{5, "DegradedAmericanBounds", false},
 		{6, "WarningImplausibleCarry", false},
+		{7, "WarningModelFallback", false},
 		{99, "Unknown(99)", false},
 		{-1, "Unknown(-1)", false},
 	}

@@ -115,6 +115,9 @@ pub enum ForwardStatus {
     DegradedAmericanBounds,
     /// Solved carry outside the plausible range `AmericanModelConfig::carry_flag_range`.
     WarningImplausibleCarry,
+    /// The model-based American estimate failed and the corridor estimate is reported in its
+    /// place (the `NON_CONVERGED` flag is set as well).
+    WarningModelFallback,
 }
 
 /// Detailed diagnostic metrics accompanying the forward estimation.
@@ -312,6 +315,9 @@ impl ImpliedForward {
         }?;
         if model_failed {
             result.flags.insert(ForwardFlags::NON_CONVERGED);
+            if result.diagnostics.status == ForwardStatus::Valid {
+                result.diagnostics.status = ForwardStatus::WarningModelFallback;
+            }
         }
         Ok(result)
     }
@@ -1447,6 +1453,45 @@ mod tests {
         assert_eq!(res.tier, Some(ForwardTier::Corridor));
         assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
         assert!(res.american.is_none());
+    }
+
+    #[test]
+    fn test_a_model_fallback_is_not_reported_as_valid() {
+        // Clean quotes whose carry (zero) lies outside the search range: the model fails, the
+        // corridor fit itself is clean, and the result must still not read as Valid.
+        let (rate, expiry) = (0.05, 0.5);
+        // A wide spread keeps the corridor's synthetic bounds from crossing.
+        let quotes: Vec<OptionQuotePair> = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            0.0,
+            expiry,
+            0.25,
+            &STRIKES,
+        )
+        .iter()
+        .map(|q| {
+            OptionQuotePair::new(
+                q.strike,
+                q.call_bid - 0.3,
+                q.call_ask + 0.3,
+                q.put_bid - 0.3,
+                q.put_ask + 0.3,
+            )
+        })
+        .collect();
+        let mut config = model_config(rate, expiry);
+        let valid = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(valid.diagnostics.status, ForwardStatus::Valid);
+
+        config.american.carry_search_range = (0.20, 0.25);
+        config.american.carry_flag_range = (0.21, 0.24);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::Corridor));
+        assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
+        assert_eq!(res.diagnostics.status, ForwardStatus::WarningModelFallback);
+        assert!(!res.is_valid());
     }
 
     #[test]

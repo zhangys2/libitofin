@@ -18,6 +18,7 @@ fn status_code(status: ForwardStatus) -> i32 {
         ForwardStatus::WarningSpotDeviationExceeded => 4,
         ForwardStatus::DegradedAmericanBounds => 5,
         ForwardStatus::WarningImplausibleCarry => 6,
+        ForwardStatus::WarningModelFallback => 7,
     }
 }
 
@@ -380,6 +381,7 @@ mod tests {
             (ForwardStatus::WarningSpotDeviationExceeded, 4),
             (ForwardStatus::DegradedAmericanBounds, 5),
             (ForwardStatus::WarningImplausibleCarry, 6),
+            (ForwardStatus::WarningModelFallback, 7),
         ];
         for (status, code) in codes {
             assert_eq!(status_code(status), code, "{status:?}");

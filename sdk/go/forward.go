@@ -76,7 +76,7 @@ func (r *ImpliedForwardResult) Repr() string {
 
 // forwardStatus decodes the status_code of itofin_implied_forward_calculate:
 // 0 Valid, 1 CrossedSyntheticQuotes, 2 BoxSpreadArbitrage, 3 ImplausibleDiscountFactor,
-// 4 SpotDeviationExceeded, 5 DegradedAmericanBounds, 6 ImplausibleCarry. The name of code 0 stays "Ok" for
+// 4 SpotDeviationExceeded, 5 DegradedAmericanBounds, 6 ImplausibleCarry, 7 ModelFallback. The name of code 0 stays "Ok" for
 // existing callers; the others are the core's ForwardStatus names, as in the Python binding.
 // Only code 0 is valid, as in Python's is_valid. A new Rust ForwardStatus variant needs a case here
 // (and a code in forward_api.rs); until then it decodes as Unknown(code).
@@ -96,6 +96,8 @@ func forwardStatus(code int32) (name string, valid bool) {
 		return "DegradedAmericanBounds", false
 	case 6:
 		return "WarningImplausibleCarry", false
+	case 7:
+		return "WarningModelFallback", false
 	default:
 		return fmt.Sprintf("Unknown(%d)", code), false
 	}
