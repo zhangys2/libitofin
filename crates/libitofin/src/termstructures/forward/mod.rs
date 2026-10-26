@@ -1,8 +1,7 @@
 //! Forward term structure representations and implied forward estimation.
 
+pub(crate) mod american_forward;
 pub mod american_model;
-// Wired into `ImpliedForward` by the next commit.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) mod american_pricer;
 pub mod implied_forward;
 

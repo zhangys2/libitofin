@@ -9,6 +9,7 @@
 //! - American equity/ETF options (SPY, AAPL) via model-free ATM strike filtering and
 //!   Merton early-exercise arbitrage bounds.
 
+use super::american_forward;
 use super::american_model::{
     AmericanModelConfig, AmericanModelDiagnostics, ForwardFlags, ForwardTier,
 };
@@ -286,7 +287,26 @@ impl ImpliedForward {
         let pairs_used = valid_pairs.len();
         let pairs_pruned = total_received - pairs_used;
 
-        match convention {
+        // The model-based American path needs a discount factor; without one, or when the
+        // model cannot be solved, the corridor estimate below is returned and labeled.
+        let mut model_failed = false;
+        if let (MarketConvention::AmericanEquity { spot, .. }, Some(discount_factor)) =
+            (convention, config.discount_factor)
+        {
+            match Self::calculate_american_model(
+                &valid_pairs,
+                spot,
+                discount_factor,
+                config,
+                expiry_years,
+                total_received,
+            ) {
+                Ok(result) => return Ok(result),
+                Err(_) => model_failed = true,
+            }
+        }
+
+        let mut result = match convention {
             MarketConvention::CryptoInverse => Self::calculate_crypto_inverse(
                 &valid_pairs,
                 config,
@@ -304,7 +324,62 @@ impl ImpliedForward {
                     pairs_pruned,
                 )
             }
+        }?;
+        if model_failed {
+            result.flags.insert(ForwardFlags::NON_CONVERGED);
         }
+        Ok(result)
+    }
+
+    /// Model-based American estimate: de-Americanize the quotes under the solved carry and run
+    /// the parity estimator on the European-equivalent prices.
+    fn calculate_american_model(
+        pairs: &[OptionQuotePair],
+        spot: Real,
+        discount_factor: DiscountFactor,
+        config: &ImpliedForwardConfig,
+        expiry_years: Time,
+        total_received: usize,
+    ) -> QlResult<ImpliedForwardResult> {
+        let solution = american_forward::solve_fast(
+            pairs,
+            spot,
+            discount_factor,
+            expiry_years,
+            config.min_pairs,
+            &config.american,
+        )?;
+        let backend = ImpliedForwardConfig {
+            discount_factor: Some(discount_factor),
+            spot: config.spot.or(Some(spot)),
+            american: AmericanModelConfig::default(),
+            ..config.clone()
+        };
+        let pairs_pruned = total_received.saturating_sub(solution.pairs.len());
+        let mut result = Self::calculate_linear(
+            &solution.pairs,
+            MarketConvention::EuropeanVanilla,
+            &backend,
+            expiry_years,
+            total_received,
+            pairs_pruned,
+        )?;
+
+        let (flag_low, flag_high) = config.american.carry_flag_range;
+        if (solution.carry < flag_low || solution.carry > flag_high)
+            && result.diagnostics.status == ForwardStatus::Valid
+        {
+            result.diagnostics.status = ForwardStatus::WarningImplausibleCarry;
+        }
+        result.tier = Some(solution.tier);
+        result.flags = solution.flags;
+        result.american = Some(AmericanModelDiagnostics {
+            solved_carry: solution.carry,
+            call_put_iv_gap: solution.iv_gap,
+            iterations: solution.iterations,
+            accurate_prices_used: solution.accurate_prices_used,
+        });
+        Ok(result)
     }
 
     /// Parity calculation for European vanilla and American equity options.
@@ -1030,12 +1105,9 @@ mod tests {
     }
 
     #[test]
-    fn test_american_convention_reports_corridor_tier_without_model_diagnostics() {
+    fn test_american_convention_without_discount_factor_reports_corridor_tier() {
         let quotes = american_parity_quotes(101.0, &[95.0, 97.5, 100.0, 102.5, 105.0]);
-        let config = ImpliedForwardConfig {
-            discount_factor: Some(1.0),
-            ..Default::default()
-        };
+        let config = ImpliedForwardConfig::default();
         let res = ImpliedForward::calculate(
             &quotes,
             MarketConvention::AmericanEquity {
@@ -1113,5 +1185,215 @@ mod tests {
         assert!(
             ImpliedForward::calculate(&quotes, american, &with_dividend(0.10, -0.5), 0.25).is_err()
         );
+    }
+
+    use super::super::american_model::AmericanLevel;
+    use super::super::american_pricer::{AmericanPricer, PricerKind};
+    use crate::option::OptionType;
+
+    /// Mid prices from `kind` at a flat vol, with a fixed absolute half spread.
+    fn priced_quotes(
+        kind: PricerKind,
+        spot: Real,
+        rate: Real,
+        carry: Real,
+        expiry: Real,
+        vol: Real,
+        strikes: &[Real],
+    ) -> Vec<OptionQuotePair> {
+        let pricer = AmericanPricer::new(kind, expiry, &[]).unwrap();
+        let half = 0.01;
+        strikes
+            .iter()
+            .map(|&k| {
+                let c = pricer
+                    .price(OptionType::Call, k, spot, rate, carry, vol)
+                    .unwrap();
+                let p = pricer
+                    .price(OptionType::Put, k, spot, rate, carry, vol)
+                    .unwrap();
+                OptionQuotePair::new(k, c - half, c + half, p - half, p + half)
+            })
+            .collect()
+    }
+
+    fn american(spot: Real) -> MarketConvention {
+        MarketConvention::AmericanEquity {
+            spot,
+            atm_vol: Some(0.25),
+        }
+    }
+
+    fn model_config(rate: Real, expiry: Real) -> ImpliedForwardConfig {
+        ImpliedForwardConfig {
+            discount_factor: Some((-rate * expiry).exp()),
+            american_kappa: 1.5,
+            ..Default::default()
+        }
+    }
+
+    const STRIKES: [Real; 9] = [90.0, 92.5, 95.0, 97.5, 100.0, 102.5, 105.0, 107.5, 110.0];
+
+    #[test]
+    fn test_model_path_recovers_the_carry_of_its_own_pricer_exactly() {
+        // Quotes priced by the Ju pricer the Fast level uses: only the algorithm is under test.
+        for &(rate, carry, expiry) in &[(0.05, 0.0, 0.5), (0.01, 0.03, 1.0), (0.04, 0.015, 0.25)] {
+            let quotes = priced_quotes(
+                PricerKind::JuQuadratic,
+                100.0,
+                rate,
+                carry,
+                expiry,
+                0.25,
+                &STRIKES,
+            );
+            let config = model_config(rate, expiry);
+            let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+            let true_forward = 100.0 * ((rate - carry) * expiry).exp();
+            assert_eq!(res.tier, Some(ForwardTier::ModelFast), "r={rate} q={carry}");
+            assert!(
+                res.is_valid(),
+                "r={rate} q={carry}: {:?}",
+                res.diagnostics.status
+            );
+            assert!(
+                (res.forward / true_forward - 1.0).abs() < 2e-4,
+                "r={rate} q={carry}: {} vs {true_forward}",
+                res.forward
+            );
+            let diag = res.american.unwrap();
+            assert!(
+                (diag.solved_carry - carry).abs() < 1e-5,
+                "{}",
+                diag.solved_carry
+            );
+            assert!(
+                diag.call_put_iv_gap.abs() < 1e-6,
+                "{}",
+                diag.call_put_iv_gap
+            );
+            assert_eq!(diag.accurate_prices_used, 0);
+            assert!(diag.iterations >= 1);
+            assert!(res.flags.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_model_path_beats_plain_parity_on_independently_priced_quotes() {
+        // Quotes from a 1000-step CRR tree, a pricer independent of the Fast level's Ju engine.
+        // (r = 5%, q = 0, 2 years) is where early exercise biases plain parity the most.
+        for &(rate, carry, expiry) in &[(0.05, 0.0, 2.0), (0.03, 0.06, 2.0), (0.05, 0.0, 0.5)] {
+            let quotes = priced_quotes(
+                PricerKind::Binomial(1000),
+                100.0,
+                rate,
+                carry,
+                expiry,
+                0.25,
+                &STRIKES,
+            );
+            let true_forward = 100.0 * ((rate - carry) * expiry).exp();
+            let config = model_config(rate, expiry);
+            let model =
+                ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+            let plain = ImpliedForward::calculate(
+                &quotes,
+                MarketConvention::EuropeanVanilla,
+                &config,
+                expiry,
+            )
+            .unwrap();
+            let model_error = (model.forward / true_forward - 1.0).abs();
+            let plain_error = (plain.forward / true_forward - 1.0).abs();
+            assert_eq!(model.tier, Some(ForwardTier::ModelFast));
+            assert!(
+                model_error < 8e-4,
+                "r={rate} q={carry} T={expiry}: {model_error}"
+            );
+            assert!(
+                plain_error > 2.0 * model_error,
+                "r={rate} q={carry} T={expiry}: plain {plain_error} vs model {model_error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_model_path_keeps_the_synthetic_bounds_around_the_forward() {
+        let (rate, carry, expiry) = (0.05, 0.0, 1.0);
+        let quotes = priced_quotes(
+            PricerKind::Binomial(600),
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let config = model_config(rate, expiry);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert!(res.forward_bid_strict <= res.forward_ask_strict);
+        assert!(
+            res.forward_bid_strict - 0.2 <= res.forward
+                && res.forward <= res.forward_ask_strict + 0.2
+        );
+        assert!(res.diagnostics.pairs_used >= 5);
+    }
+
+    #[test]
+    fn test_implausible_carry_is_reported_as_a_warning() {
+        // A 20% yield is inside the 25% search range but outside the 15% plausibility range.
+        let (rate, carry, expiry) = (0.05, 0.20, 0.5);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let config = model_config(rate, expiry);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(
+            res.diagnostics.status,
+            ForwardStatus::WarningImplausibleCarry
+        );
+        assert!((res.american.unwrap().solved_carry - carry).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_unsolvable_quotes_fall_back_to_the_corridor_and_say_so() {
+        // Put quotes far below intrinsic value cannot be inverted by any pricer.
+        let strikes = [95.0, 97.5, 100.0, 102.5, 105.0];
+        let quotes: Vec<OptionQuotePair> = strikes
+            .iter()
+            .map(|&k| OptionQuotePair::new(k, 12.0, 12.1, 0.001, 0.002))
+            .collect();
+        let config = model_config(0.05, 0.5);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, 0.5).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::Corridor));
+        assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
+        assert!(res.american.is_none());
+    }
+
+    #[test]
+    fn test_fast_level_flags_an_ignored_dividend_schedule() {
+        let (rate, carry, expiry) = (0.05, 0.0, 0.5);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        let mut config = model_config(rate, expiry);
+        config.american.dividends = vec![(0.2, 0.5)];
+        config.american.level = AmericanLevel::Fast;
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert!(res.flags.contains(ForwardFlags::SCHEDULE_IGNORED));
     }
 }
