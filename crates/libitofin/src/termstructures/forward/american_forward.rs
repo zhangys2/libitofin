@@ -472,9 +472,8 @@ pub(crate) fn solve(
     min_pairs: usize,
     config: &AmericanModelConfig,
 ) -> ModelResult<ModelSolution> {
-    if !(discount_factor.is_finite() && discount_factor > 0.0) {
-        return Err(ModelFailure::InvalidDiscountFactor);
-    }
+    // The caller has checked the discount factor; a bad one would only fail every inversion.
+    debug_assert!(discount_factor.is_finite() && discount_factor > 0.0);
     let rate = -discount_factor.ln() / expiry_years;
     let market = Market {
         spot,
@@ -571,7 +570,9 @@ pub(crate) fn solve(
         Ok(solution) => Ok(solution),
         Err(failure) => {
             flags.insert(ForwardFlags::NON_CONVERGED);
-            let mut solution = fast(flags)?;
+            // If the Fast level cannot deliver either, the Accurate stage's cause is the one
+            // reported: it is where the solve first stopped.
+            let mut solution = fast(flags).map_err(|_| failure)?;
             solution.accurate_failure = Some(failure);
             Ok(solution)
         }
@@ -849,10 +850,6 @@ mod tests {
         let quotes = ju_quotes(0.25, rate, 0.01, expiry);
         let default = AmericanModelConfig::default();
 
-        assert_eq!(
-            failure(&quotes, -1.0, 2, &default),
-            ModelFailure::InvalidDiscountFactor
-        );
         let huge_dividend = AmericanModelConfig {
             dividends: vec![(0.25, 150.0)],
             ..default.clone()
@@ -947,6 +944,53 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_fast_fallback_reports_the_accurate_stage_cause() {
+        // The pricer for the dividend after the expiry cannot be built (Accurate stage), and
+        // the three corrupted calls leave the Fast level fewer than the three strikes it needs.
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
+        let mut quotes = ju_quotes(0.25, rate, carry, expiry);
+        for q in quotes
+            .iter_mut()
+            .filter(|q| q.strike != 100.0 && q.strike != 105.0)
+        {
+            *q = OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+        }
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            dividends: vec![(expiry + 0.1, 1.0)],
+            ..AmericanModelConfig::default()
+        };
+        let error = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 3, &config).unwrap_err();
+        assert_eq!(error, ModelFailure::PricerUnavailable);
+    }
+
+    #[test]
+    fn a_chain_that_loses_strikes_across_the_bracket_is_not_solved_on_the_remainder() {
+        // Near-zero volatility and a carry at the edge of the search: the far strikes stop
+        // inverting as the trial carry moves, so the refinement cannot keep most of them. The
+        // answer must be a reported failure or the carry the chain was priced with.
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.0, -0.09, 0.5);
+        let pricer = AmericanPricer::new(PricerKind::JuQuadratic, expiry, &[]).unwrap();
+        let quotes: Vec<OptionQuotePair> = [80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0]
+            .iter()
+            .map(|&k| {
+                let c = pricer.price(Call, k, 100.0, rate, carry, 0.05).unwrap();
+                let p = pricer.price(Put, k, 100.0, rate, carry, 0.05).unwrap();
+                OptionQuotePair::new(k, c - 0.01, c + 0.01, (p - 0.01).max(0.0), p + 0.01)
+            })
+            .collect();
+        let config = AmericanModelConfig::default();
+        match solve(&quotes, 100.0, 1.0, expiry, 2, &config) {
+            Err(failure) => assert_eq!(failure, ModelFailure::CarrySolveFailed),
+            Ok(solution) => assert!(
+                (solution.carry - carry).abs() < 1e-4,
+                "solved {}",
+                solution.carry
+            ),
+        }
+    }
+
+    #[test]
     fn the_solved_carry_is_right_or_an_error_never_a_strike_set_artifact() {
         // Deep in-the-money options can stop being invertible as the trial carry moves away
         // from the true one, so the strike set seen by the solver may change along the search.
@@ -962,7 +1006,7 @@ mod tests {
                 if let Ok(solution) = solve(&quotes, 100.0, discount, expiry, 2, &config) {
                     solved += 1;
                     assert!(
-                        (solution.carry - carry).abs() < 5e-3,
+                        (solution.carry - carry).abs() < 1e-5,
                         "carry {carry} vol {vol}: solved {}",
                         solution.carry
                     );

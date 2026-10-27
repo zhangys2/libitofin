@@ -48,12 +48,11 @@ impl ForwardTier {
 ///
 /// Reported with the `NON_CONVERGED` flag: after a full failure the corridor estimate is
 /// returned (status `WarningModelFallback`), after a failure of the Accurate stage alone the
-/// Fast model estimate is.
+/// Fast model estimate is. Invalid inputs (a non-positive discount factor, a malformed
+/// config) are not model failures: they are errors of the call itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ModelFailure {
-    /// The discount factor is not finite and positive.
-    InvalidDiscountFactor,
     /// The strike window left fewer than `min_pairs` valid quote pairs.
     InsufficientPairs,
     /// The present value of the dividends is not below the spot.
@@ -76,7 +75,6 @@ impl ModelFailure {
     /// Stable lowercase name used by the bindings.
     pub fn as_str(self) -> &'static str {
         match self {
-            ModelFailure::InvalidDiscountFactor => "invalid_discount_factor",
             ModelFailure::InsufficientPairs => "insufficient_pairs",
             ModelFailure::DividendsExceedSpot => "dividends_exceed_spot",
             ModelFailure::PricerUnavailable => "pricer_unavailable",
@@ -91,15 +89,14 @@ impl ModelFailure {
     /// Stable code for the C ABI (0 is reserved for "no failure").
     pub fn code(self) -> u32 {
         match self {
-            ModelFailure::InvalidDiscountFactor => 1,
-            ModelFailure::InsufficientPairs => 2,
-            ModelFailure::DividendsExceedSpot => 3,
-            ModelFailure::PricerUnavailable => 4,
-            ModelFailure::NoImpliedVolatility => 5,
-            ModelFailure::CarryNotBracketed => 6,
-            ModelFailure::CarrySolveFailed => 7,
-            ModelFailure::TooFewStrikes => 8,
-            ModelFailure::ParityFitFailed => 9,
+            ModelFailure::InsufficientPairs => 1,
+            ModelFailure::DividendsExceedSpot => 2,
+            ModelFailure::PricerUnavailable => 3,
+            ModelFailure::NoImpliedVolatility => 4,
+            ModelFailure::CarryNotBracketed => 5,
+            ModelFailure::CarrySolveFailed => 6,
+            ModelFailure::TooFewStrikes => 7,
+            ModelFailure::ParityFitFailed => 8,
         }
     }
 }

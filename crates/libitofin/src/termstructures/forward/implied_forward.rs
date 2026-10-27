@@ -271,6 +271,10 @@ impl ImpliedForward {
             });
             let vol = atm_vol.or(estimated).unwrap_or(DEFAULT_ATM_VOL);
             if let Some(discount_factor) = config.discount_factor {
+                require!(
+                    discount_factor.is_finite() && discount_factor > 0.0,
+                    "discount_factor must be finite and positive, got {discount_factor}"
+                );
                 let window = (config.american.corridor_kappa * vol * expiry_years.sqrt())
                     .max(MIN_CORRIDOR_WINDOW);
                 let attempt = Self::select_pairs(&valid_all, Some((spot, window)), config)
@@ -1505,6 +1509,69 @@ mod tests {
         assert_eq!(res.diagnostics.status, ForwardStatus::WarningModelFallback);
         assert!(!res.is_valid());
         assert_eq!(res.model_failure, Some(ModelFailure::CarryNotBracketed));
+    }
+
+    #[test]
+    fn test_an_invalid_discount_factor_is_an_error_not_a_fallback() {
+        let (rate, expiry) = (0.05, 0.5);
+        let quotes = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            0.01,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        for bad in [-1.0, 0.0, Real::NAN] {
+            let config = ImpliedForwardConfig {
+                discount_factor: Some(bad),
+                ..Default::default()
+            };
+            assert!(
+                ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).is_err(),
+                "discount factor {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_failed_accurate_stage_keeps_the_fast_estimate_and_says_why() {
+        // Quotes from a 1000-step tree carry about zero; the closed form puts the carry at
+        // 0.026% a year and the accurate stage at -0.0006%. With the search floor at 0.01% the
+        // closed-form solve fits and the corrected quotes no longer do.
+        let (rate, expiry) = (0.05, 2.0);
+        // A wide spread keeps the closed-form bias from crossing the synthetic bounds.
+        let quotes: Vec<OptionQuotePair> = priced_quotes(
+            PricerKind::Binomial(1000),
+            100.0,
+            rate,
+            0.0,
+            expiry,
+            0.25,
+            &STRIKES,
+        )
+        .iter()
+        .map(|q| {
+            OptionQuotePair::new(
+                q.strike,
+                q.call_bid - 0.3,
+                q.call_ask + 0.3,
+                q.put_bid - 0.3,
+                q.put_ask + 0.3,
+            )
+        })
+        .collect();
+        let mut config = accurate_config(rate, expiry);
+        config.american.carry_search_range = (1e-4, 0.25);
+        config.american.carry_flag_range = (1e-4, 0.15);
+        let res = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
+        assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(res.flags, ForwardFlags::NON_CONVERGED);
+        assert_eq!(res.model_failure, Some(ModelFailure::CarryNotBracketed));
+        // The Fast estimate is still a model result.
+        assert_eq!(res.diagnostics.status, ForwardStatus::Valid);
+        assert!(res.american.is_some());
     }
 
     #[test]

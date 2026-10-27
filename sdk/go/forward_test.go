@@ -221,9 +221,9 @@ func TestForwardTierAndFlagNames(t *testing.T) {
 
 func TestForwardModelFailureNames(t *testing.T) {
 	want := map[uint32]string{
-		0: "", 1: "invalid_discount_factor", 2: "insufficient_pairs", 3: "dividends_exceed_spot",
-		4: "pricer_unavailable", 5: "no_implied_volatility", 6: "carry_not_bracketed",
-		7: "carry_solve_failed", 8: "too_few_strikes", 9: "parity_fit_failed", 10: "unknown(10)",
+		0: "", 1: "insufficient_pairs", 2: "dividends_exceed_spot", 3: "pricer_unavailable",
+		4: "no_implied_volatility", 5: "carry_not_bracketed", 6: "carry_solve_failed",
+		7: "too_few_strikes", 8: "parity_fit_failed", 9: "unknown(9)",
 	}
 	for code, name := range want {
 		if got := forwardModelFailure(code); got != name {

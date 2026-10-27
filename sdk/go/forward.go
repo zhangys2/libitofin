@@ -304,7 +304,6 @@ func forwardTier(code int32) string {
 func forwardModelFailure(code uint32) string {
 	names := [...]string{
 		"",
-		"invalid_discount_factor",
 		"insufficient_pairs",
 		"dividends_exceed_spot",
 		"pricer_unavailable",
