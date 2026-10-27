@@ -305,6 +305,60 @@
       "tests": [
         "TestImpliedForward"
       ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.Tier",
+      "python": "itofin.termstructures.ImpliedForwardResult.tier",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsReportsTheModelTier"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.Flags",
+      "python": "itofin.termstructures.ImpliedForwardResult.flags",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsLevelsScheduleAndBudget"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.SolvedCarry",
+      "python": "itofin.termstructures.ImpliedForwardResult.solved_carry",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsReportsTheModelTier"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.CallPutIVGap",
+      "python": "itofin.termstructures.ImpliedForwardResult.call_put_iv_gap",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsReportsTheModelTier"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.Iterations",
+      "python": "itofin.termstructures.ImpliedForwardResult.iterations",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsReportsTheModelTier"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.AccuratePricesUsed",
+      "python": "itofin.termstructures.ImpliedForwardResult.accurate_prices_used",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsLevelsScheduleAndBudget"
+      ]
     }
   ]
 }

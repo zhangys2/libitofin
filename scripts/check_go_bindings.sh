@@ -101,6 +101,12 @@ c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/bond_forward.c -Ltarget/release -litofin_ffi -o target/cpp-bond-forward
 ./target/cpp-bond-forward
 cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/implied_forward.c -Ltarget/release -litofin_ffi -lm -o target/c-implied-forward
+./target/c-implied-forward
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/implied_forward.c -Ltarget/release -litofin_ffi -lm -o target/cpp-implied-forward
+./target/cpp-implied-forward
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/float_float_swap.c -Ltarget/release -litofin_ffi -o target/c-float-float-swap
 ./target/c-float-float-swap
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \

@@ -41,6 +41,8 @@ func TestForwardStatusDecodesEveryFFICode(t *testing.T) {
 		{3, "WarningImplausibleDiscountFactor", false},
 		{4, "WarningSpotDeviationExceeded", false},
 		{5, "DegradedAmericanBounds", false},
+		{6, "WarningImplausibleCarry", false},
+		{7, "WarningModelFallback", false},
 		{99, "Unknown(99)", false},
 		{-1, "Unknown(-1)", false},
 	}
@@ -174,5 +176,197 @@ func TestImpliedForwardConventionCodes(t *testing.T) {
 	}
 	if !res.IsValid || math.Abs(res.Forward-101) > 0.5 {
 		t.Errorf("American convention (2): forward=%v status=%q, want ~101", res.Forward, res.Status)
+	}
+}
+
+func TestForwardConventionAndLevelConstants(t *testing.T) {
+	if ForwardEuropeanVanilla != 0 || ForwardCryptoInverse != 1 || ForwardAmericanEquity != 2 {
+		t.Errorf("convention codes changed: %d %d %d", ForwardEuropeanVanilla, ForwardCryptoInverse, ForwardAmericanEquity)
+	}
+	if ForwardLevelAuto != 0 || ForwardLevelFast != 1 || ForwardLevelAccurate != 2 {
+		t.Errorf("level codes changed: %d %d %d", ForwardLevelAuto, ForwardLevelFast, ForwardLevelAccurate)
+	}
+}
+
+func TestForwardTierAndFlagNames(t *testing.T) {
+	tiers := map[int32]string{-1: "", 0: "corridor", 1: "model_fast", 2: "model_accurate", 9: "unknown(9)"}
+	for code, want := range tiers {
+		if got := forwardTier(code); got != want {
+			t.Errorf("tier %d: got %q, want %q", code, got, want)
+		}
+	}
+	if got := forwardFlags(0); len(got) != 0 {
+		t.Errorf("no flags: got %v", got)
+	}
+	if got := forwardFlags(1); len(got) != 1 || got[0] != "schedule_ignored" {
+		t.Errorf("flag 1: got %v", got)
+	}
+	got := forwardFlags(7)
+	want := []string{"schedule_ignored", "latency_fallback", "non_converged"}
+	if len(got) != len(want) {
+		t.Fatalf("flags 7: got %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("flags 7: got %v, want %v", got, want)
+		}
+	}
+	if got := forwardFlags(8); len(got) != 1 || got[0] != "unknown(0x8)" {
+		t.Errorf("unknown bit must be surfaced, got %v", got)
+	}
+}
+
+// blackQuotes builds Black-priced quotes (spot 100, r 1%, q 2%, 0.5y, vol 25%) with a half spread.
+func blackQuotes(half float64) []OptionQuotePair {
+	const spot, rate, carry, expiry, vol = 100.0, 0.01, 0.02, 0.5, 0.25
+	forward := spot * math.Exp((rate-carry)*expiry)
+	df := math.Exp(-rate * expiry)
+	sd := vol * math.Sqrt(expiry)
+	cdf := func(x float64) float64 { return 0.5 * math.Erfc(-x/math.Sqrt2) }
+	var quotes []OptionQuotePair
+	for _, k := range []float64{92.5, 95, 97.5, 100, 102.5, 105, 107.5} {
+		d1 := (math.Log(forward/k) + 0.5*sd*sd) / sd
+		d2 := d1 - sd
+		call := df * (forward*cdf(d1) - k*cdf(d2))
+		put := df * (k*cdf(-d2) - forward*cdf(-d1))
+		quotes = append(quotes, OptionQuotePair{Strike: k, CallBid: call - half, CallAsk: call + half, PutBid: put - half, PutAsk: put + half})
+	}
+	return quotes
+}
+
+func TestImpliedForwardWithOptionsReportsTheModelTier(t *testing.T) {
+	spot, df := 100.0, math.Exp(-0.01*0.5)
+	// European Black prices are not American prices, so a tight spread would cross the synthetic
+	// bounds; a 0.3 half spread keeps the estimate clean.
+	res, err := ImpliedForwardWithOptions(blackQuotes(0.3), 0.5, ForwardAmericanEquity, &spot, &df, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Tier != "model_fast" || len(res.Flags) != 0 || res.Status != "Ok" || !res.IsValid {
+		t.Errorf("tier=%q flags=%v status=%q valid=%v", res.Tier, res.Flags, res.Status, res.IsValid)
+	}
+	if res.SolvedCarry == nil || math.Abs(*res.SolvedCarry-0.02) > 0.02 {
+		t.Errorf("solved carry %v", res.SolvedCarry)
+	}
+	if res.CallPutIVGap == nil || math.Abs(*res.CallPutIVGap) > 1e-6 {
+		t.Errorf("iv gap %v", res.CallPutIVGap)
+	}
+	if res.Iterations < 1 || res.AccuratePricesUsed != 0 {
+		t.Errorf("iterations=%d accurate=%d", res.Iterations, res.AccuratePricesUsed)
+	}
+	d := res.Diagnostics
+	if d.TotalPairsReceived != 7 || d.MinSpread <= 0 || d.MaxSpread < d.MinSpread || d.PairsUsed < 2 {
+		t.Errorf("diagnostics not populated: %+v", d)
+	}
+	if res.Forward <= 0 || res.PairsUsed != d.PairsUsed {
+		t.Errorf("forward=%v pairsUsed=%d", res.Forward, res.PairsUsed)
+	}
+}
+
+func TestImpliedForwardWithOptionsLevelsScheduleAndBudget(t *testing.T) {
+	spot, df := 100.0, math.Exp(-0.01*0.5)
+	quotes := blackQuotes(0.01)
+
+	res, err := ImpliedForwardWithOptions(quotes, 0.5, ForwardAmericanEquity, &spot, &df,
+		&ImpliedForwardOptions{Level: ForwardLevelAccurate})
+	if err != nil {
+		t.Fatalf("accurate: %v", err)
+	}
+	if res.Tier != "model_accurate" || res.AccuratePricesUsed != 2*len(quotes) {
+		t.Errorf("accurate: tier=%q prices=%d", res.Tier, res.AccuratePricesUsed)
+	}
+
+	schedule := []ForwardDividend{{Time: 0.2, Amount: 0.5}}
+	res, err = ImpliedForwardWithOptions(quotes, 0.5, ForwardAmericanEquity, &spot, &df,
+		&ImpliedForwardOptions{Dividends: schedule, Level: ForwardLevelFast})
+	if err != nil {
+		t.Fatalf("fast with schedule: %v", err)
+	}
+	if res.Tier != "model_fast" || len(res.Flags) != 1 || res.Flags[0] != "schedule_ignored" {
+		t.Errorf("fast with schedule: tier=%q flags=%v", res.Tier, res.Flags)
+	}
+
+	res, err = ImpliedForwardWithOptions(quotes, 0.5, ForwardAmericanEquity, &spot, &df,
+		&ImpliedForwardOptions{Dividends: schedule})
+	if err != nil {
+		t.Fatalf("auto with schedule: %v", err)
+	}
+	if res.Tier != "model_accurate" || len(res.Flags) != 0 {
+		t.Errorf("auto with schedule: tier=%q flags=%v", res.Tier, res.Flags)
+	}
+
+	budget := 1
+	res, err = ImpliedForwardWithOptions(quotes, 0.5, ForwardAmericanEquity, &spot, &df,
+		&ImpliedForwardOptions{Level: ForwardLevelAccurate, MaxAccuratePrices: &budget})
+	if err != nil {
+		t.Fatalf("budget: %v", err)
+	}
+	if res.Tier != "model_fast" || len(res.Flags) != 1 || res.Flags[0] != "latency_fallback" {
+		t.Errorf("budget: tier=%q flags=%v", res.Tier, res.Flags)
+	}
+}
+
+func TestImpliedForwardWithOptionsOtherTiersAndConventions(t *testing.T) {
+	spot := 100.0
+	res, err := ImpliedForwardWithOptions(blackQuotes(0.01), 0.5, ForwardAmericanEquity, &spot, nil, nil)
+	if err != nil {
+		t.Fatalf("corridor: %v", err)
+	}
+	if res.Tier != "corridor" || res.SolvedCarry != nil || res.CallPutIVGap != nil {
+		t.Errorf("corridor: tier=%q carry=%v", res.Tier, res.SolvedCarry)
+	}
+
+	df := 1.0
+	res, err = ImpliedForwardWithOptions(blackQuotes(0.5), 0.5, ForwardEuropeanVanilla, &spot, &df, nil)
+	if err != nil {
+		t.Fatalf("european: %v", err)
+	}
+	if res.Tier != "" || res.SolvedCarry != nil || len(res.Flags) != 0 {
+		t.Errorf("european: tier=%q carry=%v flags=%v", res.Tier, res.SolvedCarry, res.Flags)
+	}
+
+	if _, err := ImpliedForwardWithOptions(blackQuotes(0.01), 0.5, ForwardAmericanEquity, nil, nil, nil); err == nil {
+		t.Error("American convention without spot must fail")
+	}
+	if _, err := ImpliedForwardWithOptions(nil, 0.5, ForwardEuropeanVanilla, nil, nil, nil); err == nil {
+		t.Error("empty quotes must fail")
+	}
+}
+
+func TestImpliedForwardWithOptionsRejectsInvalidOptions(t *testing.T) {
+	spot, df := 100.0, math.Exp(-0.01*0.5)
+	quotes := blackQuotes(0.01)
+	cases := map[string]*ImpliedForwardOptions{
+		"level":          {Level: ForwardLevel(9)},
+		"inverted range": {CarrySearchRange: &[2]float64{0.25, -0.10}},
+		"late dividend":  {Dividends: []ForwardDividend{{Time: 0.9, Amount: 1}}},
+	}
+	for name, opts := range cases {
+		if _, err := ImpliedForwardWithOptions(quotes, 0.5, ForwardAmericanEquity, &spot, &df, opts); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+func TestImpliedForwardWithOptionsAppliesOptionalSettings(t *testing.T) {
+	spot, df := 100.0, math.Exp(-0.01*0.5)
+	vol, kappa, tol := 0.25, 1.2, 1e-8
+	passes := 0
+	opts := &ImpliedForwardOptions{
+		AtmVol:           &vol,
+		Level:            ForwardLevelAccurate,
+		CorrectionPasses: &passes,
+		CarryTolerance:   &tol,
+		CorridorKappa:    &kappa,
+		CarrySearchRange: &[2]float64{-0.05, 0.20},
+		CarryFlagRange:   &[2]float64{-0.02, 0.10},
+	}
+	res, err := ImpliedForwardWithOptions(blackQuotes(0.01), 0.5, ForwardAmericanEquity, &spot, &df, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Zero correction passes means the fast level.
+	if res.Tier != "model_fast" {
+		t.Errorf("tier=%q", res.Tier)
 	}
 }

@@ -1753,6 +1753,39 @@ class ImpliedForwardResult:
     @property
     def diagnostics(self) -> ForwardDiagnostics: ...
     @property
+    def tier(self) -> typing.Optional[builtins.str]:
+        r"""
+        Estimator that produced an American forward: "corridor", "model_fast" or
+        "model_accurate"; None for other conventions.
+        """
+    @property
+    def flags(self) -> builtins.list[builtins.str]:
+        r"""
+        Independent signals about an American forward: "schedule_ignored", "latency_fallback",
+        "non_converged".
+        """
+    @property
+    def solved_carry(self) -> typing.Optional[builtins.float]:
+        r"""
+        Solved continuous yield, or the residual carry beside a dividend schedule; None on the
+        corridor tier and for other conventions.
+        """
+    @property
+    def call_put_iv_gap(self) -> typing.Optional[builtins.float]:
+        r"""
+        Mean call minus put implied volatility at the solution (model tiers only).
+        """
+    @property
+    def iterations(self) -> typing.Optional[builtins.int]:
+        r"""
+        Gap evaluations spent by the carry solve (model tiers only).
+        """
+    @property
+    def accurate_prices_used(self) -> typing.Optional[builtins.int]:
+        r"""
+        Accurate-pricer evaluations spent on correction (model tiers only).
+        """
+    @property
     def is_valid(self) -> builtins.bool: ...
     @property
     def pairs_used(self) -> builtins.int: ...
@@ -4551,7 +4584,7 @@ class VolatilityType:
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 
-def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5) -> ImpliedForwardResult:
+def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention: builtins.str = 'european', spot: typing.Optional[builtins.float] = None, discount_factor: typing.Optional[builtins.float] = None, min_pairs: builtins.int = 2, max_pairs: builtins.int = 50, spread_floor: builtins.float = 0.0001, max_spot_deviation: typing.Optional[builtins.float] = 0.1, american_kappa: builtins.float = 0.5, atm_vol: typing.Optional[builtins.float] = None, dividends: typing.Optional[typing.Sequence[tuple[builtins.float, builtins.float]]] = None, level: builtins.str = 'auto', carry_search_range: tuple[builtins.float, builtins.float] = (-0.1, 0.25), carry_flag_range: tuple[builtins.float, builtins.float] = (-0.05, 0.15), correction_passes: typing.Optional[builtins.int] = None, corridor_kappa: builtins.float = 1.0, max_accurate_prices: builtins.int = 100) -> ImpliedForwardResult:
     r"""
     Calculate implied forward price and discount factor from option quotes.
 
@@ -4565,5 +4598,22 @@ def implied_forward(quotes: typing.Any, expiry_years: builtins.float, convention
         max_pairs: Maximum number of ATM strike pairs used (default: 50).
         spread_floor: Spread floor regularizer (default: 1e-4).
         max_spot_deviation: Maximum relative deviation from spot (default: 0.10).
-        american_kappa: American ATM moneyness corridor multiplier (default: 0.5).
+        american_kappa: American ATM moneyness corridor multiplier of the corridor tier (default: 0.5).
+        atm_vol: Annualized ATM volatility sizing the American strike window; estimated from the
+            quotes when omitted and a discount factor is given, otherwise 0.30.
+        dividends: Discrete cash dividends as (time_years, amount) pairs on the time basis of
+            `expiry_years`, each time in (0, expiry_years] (American model path only).
+        level: "auto" (default), "fast" or "accurate". Auto uses the accurate level when
+            dividends are given. Fast ignores a dividend schedule and flags it.
+        carry_search_range: (low, high) interval searched for the solved carry per year.
+        carry_flag_range: (low, high) interval outside of which the status is
+            WarningImplausibleCarry; must lie inside the search range.
+        correction_passes: Premium-correction passes of the accurate level (default: one, or
+            two with dividends; 0 means fast).
+        corridor_kappa: Strike window of the model path in standard deviations (default: 1.0).
+        max_accurate_prices: Work budget of accurate-pricer evaluations (default: 100).
+
+    For the American convention with a `discount_factor` the quotes are de-Americanized before
+    the parity estimate (tier "model_fast" or "model_accurate"); otherwise, or if the model cannot
+    be solved, the model-free corridor estimate is returned (tier "corridor").
     """
