@@ -26,8 +26,8 @@ def test_asset_digital_fd_fields_expiry_and_lifetime():
         option = VanillaOption.asset_or_nothing(kind, 105.0, today + 360, settings)
         with pytest.raises(ItofinError):
             option.npv()
-        with pytest.raises(ItofinError, match="payoff"):
-            option.price(process)
+        analytic = option.price(process)
+        assert math.isfinite(analytic)
         option.set_fd_engine(engine)
         values = [option.npv(), option.delta(), option.gamma(), option.theta()]
         assert all(math.isfinite(value) for value in values)

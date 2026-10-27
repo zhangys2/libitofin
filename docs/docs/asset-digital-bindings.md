@@ -27,11 +27,9 @@ plain-vanilla and cash-digital constructors are unchanged.
   Unexpired FD vega, rho, dividend rho, error estimate and exercise probability
   remain unavailable and raise native errors. Expired instruments retain the
   ordinary option's zero-result handling.
-- The analytic Black calculator does not support this payoff. `price(process)`
-  or analytic engine attachment followed by a query raises an error rather than
-  pricing a vanilla call/put. Other plain-payoff-only analytic/MC paths retain
-  their existing payoff/exercise checks. No new visitor or engine compatibility
-  is implied by this factory.
+- The analytic Black calculator prices this payoff. `price(process)` returns
+  that value. Plain-payoff-only Monte Carlo paths retain their existing
+  payoff checks.
 
 ## Numerical qualifications
 
@@ -91,5 +89,6 @@ this factory does not change the general boundary contract.
   absolute local evidence/oracle paths, explicitly not advertised as portable.
 
 This slice does not expose signed stock domains, American asset digitals, gap or
-percentage-strike products, or analytic Black asset-digital pricing. Original core
-numerics and the wider deferred engine/payoff scope remain separate.
+percentage-strike products. Analytic Black asset-or-nothing pricing is the
+existing calculator. Original core numerics and the wider deferred engine/payoff
+scope remain separate.

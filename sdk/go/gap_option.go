@@ -8,8 +8,8 @@ import "C"
 // NewGapOption constructs a European gap option with separate trigger and
 // payment strikes. The trigger must be finite and nonnegative; secondStrike
 // must be finite and may be signed. Trigger equality is included and negative
-// payments are not floored. Use SetFdEngine or PriceFd; the analytic Black
-// engine rejects Gap. Existing FD grid and cell-averaging limits are retained.
+// payments are not floored. Price uses the analytic Black gap calculator;
+// SetFdEngine or PriceFd keeps the finite-difference path.
 func (s *Session) NewGapOption(kind OptionType, strike, secondStrike float64, expiry Date, settings *Settings) (*VanillaOption, error) {
 	if settings == nil {
 		return nil, errNilArgument("settings")

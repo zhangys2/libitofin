@@ -99,8 +99,9 @@ func TestAssetDigitalEngineErrorsAndSessionBoundaries(t *testing.T) {
 	dc := pricingMust(s.Actual360())
 	process := pricingMust(s.NewBlackScholesProcess(BlackScholesConfig{Spot: 100, RiskFreeRate: .05, DividendYield: .02, Volatility: .2, ReferenceDate: today, DayCounter: dc}))
 	option := pricingMust(s.NewAssetOrNothingOption(Put, 100, pricingMust(today.AddDays(360)), settings))
-	if _, err := option.Price(process); err == nil {
-		t.Fatal("unsupported analytic Black payoff accepted")
+	analytic := pricingMust(option.Price(process))
+	if math.IsNaN(analytic) || math.IsInf(analytic, 0) || analytic <= 0 {
+		t.Fatalf("analytic asset-or-nothing price %v", analytic)
 	}
 	mc := pricingMust(s.NewMCEuropeanEngine(process, MCConfig{Steps: pricingPtr(uint(1)), Samples: pricingPtr(uint(100))}))
 	if _, err := option.PriceMC(mc); err == nil {

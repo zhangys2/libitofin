@@ -61,8 +61,8 @@ def test_asset_digital_unsupported_engines_fail_and_fd_recovers():
     settings.set_evaluation_date(today)
     process = BlackScholesProcess(100.0, 0.05, 0.02, 0.2, today, dc)
     option = VanillaOption.asset_or_nothing(OptionType.Put, 100.0, today + 360, settings)
-    with pytest.raises(ItofinError, match="payoff"):
-        option.price(process)
+    analytic = option.price(process)
+    assert math.isfinite(analytic) and analytic > 0
     option.set_mc_engine(MCEuropeanEngine(process, steps=1, samples=100))
     with pytest.raises(ItofinError, match="payoff"):
         option.npv()

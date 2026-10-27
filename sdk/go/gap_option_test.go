@@ -26,7 +26,7 @@ func gapMarket(t *testing.T) (*Session, Date, *Settings, *BlackScholesProcess) {
 	return s, pricingMust(today.AddDays(360)), settings, p
 }
 
-func TestGapFactoryPricingAndUnsupportedAnalytic(t *testing.T) {
+func TestGapFactoryPricingAndPlainLimit(t *testing.T) {
 	s, expiry, settings, process := gapMarket(t)
 	engine := pricingMust(s.NewFdBlackScholesVanillaEngine(process, FdConfig{TGrid: pricingPtr(uint(400)), XGrid: pricingPtr(uint(400)), DampingSteps: pricingPtr(uint(2))}))
 	for _, kind := range []OptionType{Call, Put} {
@@ -34,11 +34,8 @@ func TestGapFactoryPricingAndUnsupportedAnalytic(t *testing.T) {
 		if _, err := o.NPV(); err == nil {
 			t.Fatal("missing engine accepted")
 		}
-		pricingOK(t, o.SetEngine(process))
-		if _, err := o.NPV(); err == nil {
-			t.Fatal("analytic Black engine accepted Gap")
-		}
 		vanilla := pricingMust(s.NewVanillaOption(kind, 100, expiry, settings))
+		gapNear(t, pricingMust(o.Price(process)), pricingMust(vanilla.Price(process)), 1e-12)
 		gapNear(t, pricingMust(o.PriceFd(engine)), pricingMust(vanilla.PriceFd(engine)), 1e-12)
 		for _, query := range []func() (float64, error){o.NPV, o.Delta, o.Gamma, o.Theta} {
 			value := pricingMust(query())

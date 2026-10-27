@@ -1,4 +1,4 @@
-"""The gap factory is FD-backed, signed, and distinct from vanilla analytic pricing."""
+"""The gap factory is signed, and a zero payment gap matches the vanilla limit."""
 
 import gc
 import math
@@ -24,16 +24,14 @@ def market():
 
 
 @pytest.mark.parametrize("kind", [OptionType.Call, OptionType.Put])
-def test_gap_factory_preserves_plain_limit_and_rejects_analytic(kind):
+def test_gap_factory_preserves_plain_limit(kind):
     settings, process = market()
     option = VanillaOption.gap(kind, 100.0, 100.0, TODAY + 360, settings)
     with pytest.raises(ItofinError):
         option.npv()
-    option.set_engine(process)
-    with pytest.raises(ItofinError):
-        option.npv()
-    engine = FdBlackScholesVanillaEngine(process, t_grid=400, x_grid=400, damping_steps=2)
     vanilla = VanillaOption(kind, 100.0, TODAY + 360, settings)
+    assert option.price(process) == pytest.approx(vanilla.price(process), rel=0, abs=1e-12)
+    engine = FdBlackScholesVanillaEngine(process, t_grid=400, x_grid=400, damping_steps=2)
     expected = vanilla.price_fd(engine)
     assert math.isfinite(expected)
     assert option.price_fd(engine) == pytest.approx(expected, rel=0, abs=1e-12)

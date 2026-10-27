@@ -6,9 +6,9 @@ not a standalone payoff-object API or complete payoff/engine compatibility.
 
 | Facade | Construction | Supported pricing path |
 | --- | --- | --- |
-| C | `itofin_option_gap_new` | Existing FD engine attached by `itofin_option_set_engine`, kind 2 |
-| Go | `Session.NewGapOption` | `SetFdEngine` or `PriceFd` |
-| Python | `VanillaOption.gap` | `set_fd_engine` or `price_fd` |
+| C | `itofin_option_gap_new` | Analytic engine kind 0, or an FD engine with kind 2 |
+| Go | `Session.NewGapOption` | `Price` / `SetEngine`, or `SetFdEngine` / `PriceFd` |
+| Python | `VanillaOption.gap` | `price` / `set_engine`, or `set_fd_engine` / `price_fd` |
 
 ## Signed payoff and validation
 
@@ -27,8 +27,8 @@ Use the existing `FdBlackScholesVanillaEngine`, supported Douglas or implicit Eu
 scheme, and explicitly selected grids/damping when examining convergence. FD
 provides NPV, delta, gamma and theta; other unavailable result fields return their
 existing errors. Without an engine valuation fails. The analytic European Black
-path rejects `GapPayoff`; the factory does not silently select a vanilla payoff or
-expand any analytic/Heston/Monte Carlo engine's supported payoff types.
+path prices `GapPayoff`. A zero payment gap matches the vanilla limit. The
+factory does not expand Heston or Monte Carlo payoff support.
 
 ## Inherited FD limits
 

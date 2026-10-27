@@ -125,11 +125,12 @@ impl PyVanillaOption {
         })
     }
 
-    /// Build a European asset-or-nothing option for the existing FD engine.
+    /// Build a European asset-or-nothing option.
     ///
     /// The finite nonnegative strike triggers a terminal asset-price payment
-    /// strictly in the money; equality pays zero. Attach set_fd_engine(engine)
-    /// or use price_fd(engine). The analytic Black engine rejects this payoff.
+    /// strictly in the money; equality pays zero. `price(process)` uses the
+    /// analytic Black asset-or-nothing calculator. Attach set_fd_engine(engine)
+    /// or use price_fd(engine) for the finite-difference price.
     /// Grid convergence and the existing log-FD market domain still apply.
     #[classmethod]
     fn asset_or_nothing(
@@ -156,8 +157,8 @@ impl PyVanillaOption {
     ///
     /// The trigger strike must be finite and nonnegative, and second_strike
     /// finite (signed values are accepted). Trigger equality is included and
-    /// negative payments are retained. Attach an existing finite-difference
-    /// engine with set_fd_engine; set_engine's analytic Black path rejects Gap.
+    /// negative payments are retained. `price(process)` uses the analytic Black
+    /// gap calculator. Attach set_fd_engine for the finite-difference price.
     /// FD cell averaging preserves its existing signed/cancelling-value fallback.
     #[classmethod]
     fn gap(

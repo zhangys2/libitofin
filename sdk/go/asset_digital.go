@@ -7,8 +7,8 @@ import "C"
 
 // NewAssetOrNothingOption constructs a European asset-or-nothing option.
 // Strike must be finite and nonnegative. Strictly in the money the option pays
-// the terminal asset price; equality pays zero. Use SetFdEngine or PriceFd.
-// Analytic Black pricing rejects this payoff; grid convergence still applies.
+// the terminal asset price; equality pays zero. Price uses the analytic Black
+// asset-or-nothing calculator; PriceFd keeps the finite-difference path.
 func (s *Session) NewAssetOrNothingOption(kind OptionType, strike float64, expiry Date, settings *Settings) (*VanillaOption, error) {
 	if settings == nil {
 		return nil, errNilArgument("settings")
