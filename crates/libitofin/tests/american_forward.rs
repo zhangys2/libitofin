@@ -7,7 +7,7 @@
 
 use libitofin::termstructures::forward::{
     AmericanLevel, AmericanModelConfig, ForwardFlags, ForwardStatus, ForwardTier, ImpliedForward,
-    ImpliedForwardConfig, ImpliedForwardResult, MarketConvention, OptionQuotePair,
+    ImpliedForwardConfig, ImpliedForwardResult, MarketConvention, ModelFailure, OptionQuotePair,
 };
 
 const SCENARIOS: &str = include_str!("fixtures/american_forward/scenarios.tsv");
@@ -261,4 +261,185 @@ impl AmericanConfigOnly {
             ..Default::default()
         }
     }
+}
+
+/// Deterministic uniform noise in `[-1, 1)` (SplitMix64), so the noisy chains are reproducible.
+struct Noise(u64);
+
+impl Noise {
+    fn next(&mut self) -> f64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        (z >> 11) as f64 / (1u64 << 52) as f64 - 1.0
+    }
+}
+
+/// Every call and put moved, bid and ask together, by up to `relative` of its own price.
+fn noisy(quotes: &[OptionQuotePair], relative: f64, seed: u64) -> Vec<OptionQuotePair> {
+    let mut noise = Noise(seed);
+    let mut jitter = |bid: f64, ask: f64| {
+        let scale = 1.0 + relative * noise.next();
+        (bid * scale, ask * scale)
+    };
+    quotes
+        .iter()
+        .map(|q| {
+            let (cb, ca) = jitter(q.call_bid, q.call_ask);
+            let (pb, pa) = jitter(q.put_bid, q.put_ask);
+            OptionQuotePair::new(q.strike, cb, ca, pb, pa)
+        })
+        .collect()
+}
+
+fn run_quotes(
+    s: &Scenario,
+    quotes: &[OptionQuotePair],
+    config: &ImpliedForwardConfig,
+) -> ImpliedForwardResult {
+    let convention = MarketConvention::AmericanEquity {
+        spot: SPOT,
+        atm_vol: None,
+    };
+    ImpliedForward::calculate(quotes, convention, config, s.expiry).unwrap()
+}
+
+fn bp_between(a: &ImpliedForwardResult, b: &ImpliedForwardResult) -> f64 {
+    (a.forward / b.forward - 1.0).abs() * 1e4
+}
+
+#[test]
+fn noisy_quotes_move_the_forward_by_about_the_noise_and_nothing_else() {
+    // 0.3% of every price is a few cents on a 10-dollar option: tens of basis points of noise
+    // in the call/put gap, which parity over 17 strikes averages down to a few basis points.
+    let mut worst: f64 = 0.0;
+    for s in load().iter().filter(|s| s.dividends.is_empty()) {
+        for level in [AmericanLevel::Fast, AmericanLevel::Accurate] {
+            let cfg = config(s, level, false);
+            let clean = run(s, &cfg);
+            for seed in 1..=4 {
+                let res = run_quotes(s, &noisy(&s.quotes, 0.003, seed), &cfg);
+                let moved = bp_between(&res, &clean);
+                worst = worst.max(moved);
+                let label = format!("{} {level:?} seed {seed}", s.name);
+                assert!(res.forward.is_finite(), "{label}");
+                assert!(moved < 8.0, "{label}: moved {moved} bp");
+                assert_eq!(res.tier, clean.tier, "{label}");
+                assert_eq!(res.flags, ForwardFlags::NONE, "{label}");
+                assert_eq!(res.model_failure, None, "{label}");
+                // Noise wider than the spread can cross the synthetic bounds; nothing else.
+                assert!(
+                    matches!(
+                        res.diagnostics.status,
+                        ForwardStatus::Valid | ForwardStatus::WarningCrossedSyntheticQuotes
+                    ),
+                    "{label}: {:?}",
+                    res.diagnostics.status
+                );
+            }
+        }
+    }
+    assert!(worst > 0.1, "the noise had no effect ({worst} bp)");
+}
+
+/// Scenario 0 (no dividends, 180 days) with the quotes of `strikes` replaced by `bad`.
+fn with_replaced(
+    s: &Scenario,
+    strikes: &[f64],
+    bad: impl Fn(&OptionQuotePair) -> OptionQuotePair,
+) -> Vec<OptionQuotePair> {
+    s.quotes
+        .iter()
+        .map(|q| {
+            if strikes.contains(&q.strike) {
+                bad(q)
+            } else {
+                *q
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn quotes_that_cannot_be_inverted_are_dropped_and_counted() {
+    let scenarios = load();
+    let s = &scenarios[0];
+    let cfg = config(s, AmericanLevel::Fast, false);
+    let clean = run(s, &cfg);
+    // A call above the spot has no implied volatility; so does a put above the strike.
+    let junk =
+        |q: &OptionQuotePair| OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+
+    let two = run_quotes(s, &with_replaced(s, &[97.5, 102.5], junk), &cfg);
+    assert_eq!(two.tier, Some(ForwardTier::ModelFast));
+    assert_eq!(
+        two.diagnostics.pairs_pruned,
+        clean.diagnostics.pairs_pruned + 2
+    );
+    assert!(!two.flags.contains(ForwardFlags::PAIRS_DROPPED));
+    assert!(
+        bp_between(&two, &clean) < 1.0,
+        "{} bp",
+        bp_between(&two, &clean)
+    );
+
+    // Most of the chain unusable: still a forward, but the result says so.
+    let strikes: Vec<f64> = s.quotes.iter().map(|q| q.strike).step_by(2).collect();
+    let many = run_quotes(s, &with_replaced(s, &strikes, junk), &cfg);
+    assert!(many.flags.contains(ForwardFlags::PAIRS_DROPPED));
+    assert!(many.forward.is_finite());
+    assert!(
+        bp_between(&many, &clean) < 5.0,
+        "{} bp",
+        bp_between(&many, &clean)
+    );
+}
+
+#[test]
+fn crossed_quotes_never_reach_the_model() {
+    let scenarios = load();
+    let s = &scenarios[0];
+    let cfg = config(s, AmericanLevel::Fast, false);
+    let clean = run(s, &cfg);
+    // A bid above its ask is not a quote; the pair is dropped before the strike window.
+    let crossed = s
+        .quotes
+        .iter()
+        .map(|q| {
+            if q.strike == 100.0 || q.strike == 105.0 {
+                OptionQuotePair {
+                    call_bid: q.call_ask + 0.5,
+                    ..*q
+                }
+            } else {
+                *q
+            }
+        })
+        .collect::<Vec<_>>();
+    let res = run_quotes(s, &crossed, &cfg);
+    assert_eq!(res.tier, Some(ForwardTier::ModelFast));
+    assert_eq!(res.flags, ForwardFlags::NONE);
+    assert_eq!(res.diagnostics.total_pairs_received, s.quotes.len());
+    assert_eq!(
+        res.diagnostics.pairs_pruned,
+        clean.diagnostics.pairs_pruned + 2
+    );
+    assert!(bp_between(&res, &clean) < 1.0);
+}
+
+#[test]
+fn an_unusable_chain_falls_back_with_the_reason() {
+    let scenarios = load();
+    let s = &scenarios[0];
+    let cfg = config(s, AmericanLevel::Fast, false);
+    let junk = |q: &OptionQuotePair| OptionQuotePair::new(q.strike, 150.0, 151.0, 150.0, 151.0);
+    let strikes: Vec<f64> = s.quotes.iter().map(|q| q.strike).collect();
+    let res = run_quotes(s, &with_replaced(s, &strikes, junk), &cfg);
+    assert_eq!(res.tier, Some(ForwardTier::Corridor));
+    assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
+    // The junk quotes cross the corridor's synthetic bounds, which takes precedence in status.
+    assert_ne!(res.diagnostics.status, ForwardStatus::Valid);
+    assert_eq!(res.model_failure, Some(ModelFailure::NoImpliedVolatility));
 }

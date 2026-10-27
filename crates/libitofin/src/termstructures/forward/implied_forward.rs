@@ -11,7 +11,7 @@
 
 use super::american_forward;
 use super::american_model::{
-    AmericanModelConfig, AmericanModelDiagnostics, ForwardFlags, ForwardTier,
+    AmericanModelConfig, AmericanModelDiagnostics, ForwardFlags, ForwardTier, ModelFailure,
 };
 use crate::errors::QlResult;
 use crate::types::{DiscountFactor, Rate, Real, Time};
@@ -203,6 +203,10 @@ pub struct ImpliedForwardResult {
     pub flags: ForwardFlags,
     /// Numeric diagnostics of the model-based solve; `None` on the corridor tier.
     pub american: Option<AmericanModelDiagnostics>,
+    /// Why the model path failed (corridor fallback) or its Accurate stage fell back to the Fast
+    /// level; the `NON_CONVERGED` flag is set with it. `None` when the model path ran cleanly or
+    /// was not attempted.
+    pub model_failure: Option<ModelFailure>,
 }
 
 impl ImpliedForwardResult {
@@ -253,7 +257,7 @@ impl ImpliedForward {
         // 2. Convention-specific strike filtering and the model-based American path. The model
         // needs a discount factor; without one, or when it cannot be solved, the corridor
         // estimate further down is returned and labeled.
-        let mut model_failed = false;
+        let mut model_failure = None;
         let mut corridor_window = None;
         if let MarketConvention::AmericanEquity { spot, atm_vol } = convention {
             require!(
@@ -270,6 +274,7 @@ impl ImpliedForward {
                 let window = (config.american.corridor_kappa * vol * expiry_years.sqrt())
                     .max(MIN_CORRIDOR_WINDOW);
                 let attempt = Self::select_pairs(&valid_all, Some((spot, window)), config)
+                    .map_err(|_| ModelFailure::InsufficientPairs)
                     .and_then(|pairs| {
                         Self::calculate_american_model(
                             &pairs,
@@ -282,7 +287,7 @@ impl ImpliedForward {
                     });
                 match attempt {
                     Ok(result) => return Ok(result),
-                    Err(_) => model_failed = true,
+                    Err(failure) => model_failure = Some(failure),
                 }
             }
             let window =
@@ -313,7 +318,8 @@ impl ImpliedForward {
                 )
             }
         }?;
-        if model_failed {
+        if model_failure.is_some() {
+            result.model_failure = model_failure;
             result.flags.insert(ForwardFlags::NON_CONVERGED);
             if result.diagnostics.status == ForwardStatus::Valid {
                 result.diagnostics.status = ForwardStatus::WarningModelFallback;
@@ -378,7 +384,7 @@ impl ImpliedForward {
         config: &ImpliedForwardConfig,
         expiry_years: Time,
         total_received: usize,
-    ) -> QlResult<ImpliedForwardResult> {
+    ) -> Result<ImpliedForwardResult, ModelFailure> {
         let solution = american_forward::solve(
             pairs,
             spot,
@@ -406,7 +412,8 @@ impl ImpliedForward {
             expiry_years,
             total_received,
             pairs_pruned,
-        )?;
+        )
+        .map_err(|_| ModelFailure::ParityFitFailed)?;
 
         let (flag_low, flag_high) = config.american.carry_flag_range;
         if (solution.carry < flag_low || solution.carry > flag_high)
@@ -416,6 +423,7 @@ impl ImpliedForward {
         }
         result.tier = Some(solution.tier);
         result.flags = solution.flags;
+        result.model_failure = solution.accurate_failure;
         result.american = Some(AmericanModelDiagnostics {
             solved_carry: solution.carry,
             call_put_iv_gap: solution.iv_gap,
@@ -669,6 +677,7 @@ impl ImpliedForward {
                 .then_some(ForwardTier::Corridor),
             flags: ForwardFlags::NONE,
             american: None,
+            model_failure: None,
         })
     }
 
@@ -849,6 +858,7 @@ impl ImpliedForward {
             tier: None,
             flags: ForwardFlags::NONE,
             american: None,
+            model_failure: None,
         })
     }
 
@@ -1453,6 +1463,7 @@ mod tests {
         assert_eq!(res.tier, Some(ForwardTier::Corridor));
         assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
         assert!(res.american.is_none());
+        assert_eq!(res.model_failure, Some(ModelFailure::CarryNotBracketed));
     }
 
     #[test]
@@ -1484,6 +1495,7 @@ mod tests {
         let mut config = model_config(rate, expiry);
         let valid = ImpliedForward::calculate(&quotes, american(100.0), &config, expiry).unwrap();
         assert_eq!(valid.diagnostics.status, ForwardStatus::Valid);
+        assert_eq!(valid.model_failure, None);
 
         config.american.carry_search_range = (0.20, 0.25);
         config.american.carry_flag_range = (0.21, 0.24);
@@ -1492,6 +1504,54 @@ mod tests {
         assert!(res.flags.contains(ForwardFlags::NON_CONVERGED));
         assert_eq!(res.diagnostics.status, ForwardStatus::WarningModelFallback);
         assert!(!res.is_valid());
+        assert_eq!(res.model_failure, Some(ModelFailure::CarryNotBracketed));
+    }
+
+    #[test]
+    fn test_pairs_that_cannot_be_de_americanized_are_counted_and_flagged() {
+        let (rate, carry, expiry) = (0.05, 0.01, 0.5);
+        let clean = priced_quotes(
+            PricerKind::JuQuadratic,
+            100.0,
+            rate,
+            carry,
+            expiry,
+            0.25,
+            &STRIKES,
+        );
+        // A call quoted above the spot has no implied volatility under any pricer.
+        let corrupt = |strikes: &[Real]| -> Vec<OptionQuotePair> {
+            clean
+                .iter()
+                .map(|q| {
+                    if strikes.contains(&q.strike) {
+                        OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask)
+                    } else {
+                        *q
+                    }
+                })
+                .collect()
+        };
+        let config = model_config(rate, expiry);
+        let calculate = |quotes: &[OptionQuotePair]| {
+            ImpliedForward::calculate(quotes, american(100.0), &config, expiry).unwrap()
+        };
+
+        let reference = calculate(&clean);
+        assert!(!reference.flags.contains(ForwardFlags::PAIRS_DROPPED));
+
+        let one = calculate(&corrupt(&[110.0]));
+        assert_eq!(one.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(one.diagnostics.pairs_pruned, 1);
+        assert!(!one.flags.contains(ForwardFlags::PAIRS_DROPPED));
+        assert!((one.forward / reference.forward - 1.0).abs() < 1e-3);
+
+        let three = calculate(&corrupt(&[90.0, 92.5, 110.0]));
+        assert_eq!(three.tier, Some(ForwardTier::ModelFast));
+        assert_eq!(three.diagnostics.pairs_pruned, 3);
+        assert!(three.flags.contains(ForwardFlags::PAIRS_DROPPED));
+        assert_eq!(three.model_failure, None);
+        assert!((three.forward / reference.forward - 1.0).abs() < 1e-3);
     }
 
     #[test]

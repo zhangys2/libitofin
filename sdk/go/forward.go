@@ -265,8 +265,13 @@ type ImpliedForwardResultEx struct {
 	ImpliedForwardResult
 	// Tier is "corridor", "model_fast" or "model_accurate" for the American convention, "" otherwise.
 	Tier string
-	// Flags lists "schedule_ignored", "latency_fallback" and "non_converged" when set.
+	// Flags lists "schedule_ignored", "latency_fallback", "non_converged" and "pairs_dropped"
+	// when set.
 	Flags []string
+	// ModelFailure says why the model path failed (corridor fallback) or its accurate stage fell
+	// back to the fast level, for example "carry_not_bracketed" or "no_implied_volatility";
+	// "" when the model ran cleanly or was not attempted. "non_converged" is set with it.
+	ModelFailure string
 	// SolvedCarry is the solved continuous yield (or the residual carry beside a schedule);
 	// nil unless a model tier produced the result.
 	SolvedCarry *float64
@@ -294,6 +299,27 @@ func forwardTier(code int32) string {
 	}
 }
 
+// forwardModelFailure names the model_failure code of itofin_implied_forward_calculate_with_options.
+// A cause this version does not know is reported as "unknown(N)".
+func forwardModelFailure(code uint32) string {
+	names := [...]string{
+		"",
+		"invalid_discount_factor",
+		"insufficient_pairs",
+		"dividends_exceed_spot",
+		"pricer_unavailable",
+		"no_implied_volatility",
+		"carry_not_bracketed",
+		"carry_solve_failed",
+		"too_few_strikes",
+		"parity_fit_failed",
+	}
+	if int(code) < len(names) {
+		return names[code]
+	}
+	return fmt.Sprintf("unknown(%d)", code)
+}
+
 // forwardFlags names the set bits of the flags field; bits this version does not know are
 // reported as one "unknown(0x..)" entry.
 func forwardFlags(bits uint32) []string {
@@ -301,7 +327,7 @@ func forwardFlags(bits uint32) []string {
 	for _, f := range []struct {
 		bit  uint32
 		name string
-	}{{1, "schedule_ignored"}, {2, "latency_fallback"}, {4, "non_converged"}} {
+	}{{1, "schedule_ignored"}, {2, "latency_fallback"}, {4, "non_converged"}, {8, "pairs_dropped"}} {
 		if bits&f.bit != 0 {
 			names = append(names, f.name)
 			bits &^= f.bit
@@ -456,8 +482,9 @@ func ImpliedForwardWithOptions(pairs []OptionQuotePair, expiryYears float64, con
 			PairsUsed:        int(out.core.pairs_used),
 			Status:           statusStr,
 		},
-		Tier:  forwardTier(int32(out.tier_code)),
-		Flags: forwardFlags(uint32(out.flags)),
+		Tier:         forwardTier(int32(out.tier_code)),
+		Flags:        forwardFlags(uint32(out.flags)),
+		ModelFailure: forwardModelFailure(uint32(out.model_failure)),
 	}
 	if out.has_model != 0 {
 		carry := float64(out.solved_carry)

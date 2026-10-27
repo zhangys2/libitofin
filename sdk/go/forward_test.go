@@ -211,8 +211,51 @@ func TestForwardTierAndFlagNames(t *testing.T) {
 			t.Errorf("flags 7: got %v, want %v", got, want)
 		}
 	}
-	if got := forwardFlags(8); len(got) != 1 || got[0] != "unknown(0x8)" {
+	if got := forwardFlags(8); len(got) != 1 || got[0] != "pairs_dropped" {
+		t.Errorf("flag 8: got %v", got)
+	}
+	if got := forwardFlags(16); len(got) != 1 || got[0] != "unknown(0x10)" {
 		t.Errorf("unknown bit must be surfaced, got %v", got)
+	}
+}
+
+func TestForwardModelFailureNames(t *testing.T) {
+	want := map[uint32]string{
+		0: "", 1: "invalid_discount_factor", 2: "insufficient_pairs", 3: "dividends_exceed_spot",
+		4: "pricer_unavailable", 5: "no_implied_volatility", 6: "carry_not_bracketed",
+		7: "carry_solve_failed", 8: "too_few_strikes", 9: "parity_fit_failed", 10: "unknown(10)",
+	}
+	for code, name := range want {
+		if got := forwardModelFailure(code); got != name {
+			t.Errorf("model failure %d: got %q, want %q", code, got, name)
+		}
+	}
+}
+
+func TestImpliedForwardWithOptionsReportsWhyTheModelFailed(t *testing.T) {
+	spot, df := 100.0, math.Exp(-0.01*0.5)
+	// The quotes carry about 2% a year; the search only looks above 20%.
+	opts := &ImpliedForwardOptions{
+		CarrySearchRange: &[2]float64{0.20, 0.25},
+		CarryFlagRange:   &[2]float64{0.21, 0.24},
+	}
+	res, err := ImpliedForwardWithOptions(blackQuotes(0.3), 0.5, ForwardAmericanEquity, &spot, &df, opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Tier != "corridor" || res.ModelFailure != "carry_not_bracketed" || res.IsValid {
+		t.Errorf("tier=%q failure=%q valid=%v", res.Tier, res.ModelFailure, res.IsValid)
+	}
+	if len(res.Flags) != 1 || res.Flags[0] != "non_converged" {
+		t.Errorf("flags=%v", res.Flags)
+	}
+
+	clean, err := ImpliedForwardWithOptions(blackQuotes(0.3), 0.5, ForwardAmericanEquity, &spot, &df, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if clean.ModelFailure != "" {
+		t.Errorf("a clean model run reported %q", clean.ModelFailure)
 	}
 }
 

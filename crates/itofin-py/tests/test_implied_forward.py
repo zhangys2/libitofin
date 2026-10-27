@@ -173,6 +173,7 @@ def test_american_model_path_reports_tier_and_diagnostics():
     res = _american()
     assert res.tier == "model_fast"
     assert res.flags == []
+    assert res.model_failure is None
     assert res.accurate_prices_used == 0
     assert res.iterations is not None and res.iterations >= 1
     assert res.solved_carry is not None and abs(res.solved_carry - _CARRY) < 0.02
@@ -249,6 +250,36 @@ def test_model_failure_is_reported_as_a_fallback_status():
     assert res.flags == ["non_converged"]
     assert res.status == "WarningModelFallback"
     assert not res.is_valid
+    assert res.model_failure == "carry_not_bracketed"
+
+
+def test_unusable_strikes_are_dropped_and_flagged_when_they_are_many():
+    # A call quoted above the spot has no implied volatility under any pricer.
+    def corrupt(strikes):
+        quotes = _model_quotes(100.0, _RATE, _CARRY, _EXPIRY, 0.25, _AMERICAN_STRIKES, 0.01)
+        return [
+            (k, 150.0, 151.0, pb, pa) if k in strikes else (k, cb, ca, pb, pa)
+            for k, cb, ca, pb, pa in quotes
+        ]
+
+    def run(quotes):
+        return implied_forward(
+            quotes,
+            expiry_years=_EXPIRY,
+            convention="american",
+            spot=100.0,
+            discount_factor=math.exp(-_RATE * _EXPIRY),
+        )
+
+    one = run(corrupt({92.5}))
+    assert one.flags == []
+    assert one.diagnostics.pairs_pruned == 1
+
+    three = run(corrupt({92.5, 95.0, 107.5}))
+    assert three.flags == ["pairs_dropped"]
+    assert three.model_failure is None
+    assert three.diagnostics.pairs_pruned == 3
+    assert math.isclose(three.forward, _american().forward, rel_tol=1e-3)
 
 
 def test_invalid_american_arguments_are_rejected():
