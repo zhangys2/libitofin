@@ -24,9 +24,12 @@ int main(void) {
         double value = -123, expected = 0;
         assert(itofin_option_gap_new(ctx, kind, 100, 100, today + 360, settings, &option, &error) == 0);
         assert(itofin_option_value(ctx, option, 0, &value, &error) != 0 && value == -123);
-        assert(itofin_option_set_engine(ctx, option, process, 0, 0, &error) == 0);
-        assert(itofin_option_value(ctx, option, 0, &value, &error) != 0 && value == -123);
         assert(itofin_option_new(ctx, kind, 100, 0, today + 360, 0, settings, &vanilla, &error) == 0);
+        assert(itofin_option_set_engine(ctx, option, process, 0, 0, &error) == 0);
+        assert(itofin_option_set_engine(ctx, vanilla, process, 0, 0, &error) == 0);
+        assert(itofin_option_value(ctx, option, 0, &value, &error) == 0);
+        assert(itofin_option_value(ctx, vanilla, 0, &expected, &error) == 0);
+        assert(isfinite(value) && isfinite(expected) && fabs(value - expected) < 1e-12);
         assert(itofin_option_set_engine(ctx, option, engine, 2, 0, &error) == 0);
         assert(itofin_option_set_engine(ctx, vanilla, engine, 2, 0, &error) == 0);
         assert(itofin_option_value(ctx, option, 0, &value, &error) == 0);

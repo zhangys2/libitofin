@@ -33,7 +33,7 @@ static void ordinary_row(char **fields) {
     double out = -123;
     assert(itofin_option_value(ctx, option, 0, &out, &error) != 0 && out == -123);
     assert(itofin_option_set_engine(ctx, option, process, 0, 0, &error) == 0);
-    assert(itofin_option_value(ctx, option, 0, &out, &error) != 0 && out == -123);
+    assert(itofin_option_value(ctx, option, 0, &out, &error) == 0 && isfinite(out));
     assert(itofin_option_set_engine(ctx, option, engine, 2, 0, &error) == 0);
     assert(itofin_handle_release(ctx, settings, &error) == 0);
     assert(itofin_handle_release(ctx, dc, &error) == 0);
