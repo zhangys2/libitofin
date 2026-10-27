@@ -326,6 +326,15 @@
     },
     {
       "c": "itofin_implied_forward_calculate_with_options",
+      "go": "ImpliedForwardResultEx.ModelFailure",
+      "python": "itofin.termstructures.ImpliedForwardResult.model_failure",
+      "status": "implemented",
+      "tests": [
+        "TestImpliedForwardWithOptionsReportsWhyTheModelFailed"
+      ]
+    },
+    {
+      "c": "itofin_implied_forward_calculate_with_options",
       "go": "ImpliedForwardResultEx.SolvedCarry",
       "python": "itofin.termstructures.ImpliedForwardResult.solved_carry",
       "status": "implemented",

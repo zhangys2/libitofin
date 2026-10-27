@@ -184,6 +184,41 @@ fn fixed_iv_gap(
     (!pairs.is_empty()).then(|| sum / pairs.len() as Real)
 }
 
+/// The refinement may lose strikes to the bracket ends, but not most of them: at least two
+/// strikes (or all of them when fewer were given) and at least half must remain.
+fn enough_strikes(remaining: usize, total: usize) -> bool {
+    remaining >= total.min(2) && 2 * remaining >= total
+}
+
+/// Bracket halvings tried to bring enough invertible strikes to both ends.
+const MAX_BRACKET_HALVINGS: usize = 6;
+
+/// The strikes that invert at both `x_min` and `x_max`, with the mean call/put gap over them at
+/// each end.
+fn common_strikes(
+    pricer: &AmericanPricer,
+    pairs: &[OptionQuotePair],
+    spot: Real,
+    rate: Rate,
+    x_min: Rate,
+    x_max: Rate,
+) -> (Vec<OptionQuotePair>, Real, Real) {
+    let mut common = Vec::with_capacity(pairs.len());
+    let (mut sum_min, mut sum_max) = (0.0, 0.0);
+    for pair in pairs {
+        if let (Some(g_min), Some(g_max)) = (
+            pair_gap(pricer, pair, spot, rate, x_min),
+            pair_gap(pricer, pair, spot, rate, x_max),
+        ) {
+            common.push(*pair);
+            sum_min += g_min;
+            sum_max += g_max;
+        }
+    }
+    let count = common.len().max(1) as Real;
+    (common, sum_min / count, sum_max / count)
+}
+
 /// A solved carry with the work it took and the gap left at it.
 #[derive(Debug, Clone, Copy)]
 struct CarrySolve {
@@ -198,9 +233,9 @@ struct CarrySolve {
 /// The gap rises with the yield (a higher yield lowers call prices and raises put prices, so
 /// the call volatility must rise and the put volatility fall), so the root is bracketed by
 /// stepping away from zero toward it and refined with Brent's method. The bracketing may see a
-/// different set of invertible strikes at each trial carry; the refinement is run on the
-/// strikes that invert at both ends of the bracket, and fails rather than follow a gap that
-/// loses a strike or changes sign because of the strike set.
+/// different set of invertible strikes at each trial carry; the bracket is halved until most
+/// strikes invert at both of its ends, and the refinement runs on those strikes only. It fails
+/// rather than follow a gap that loses a strike or changes sign because of the strike set.
 fn solve_carry(
     pricer: &AmericanPricer,
     pairs: &[OptionQuotePair],
@@ -229,9 +264,10 @@ fn solve_carry(
     let direction = if g_start < 0.0 { 1.0 } else { -1.0 };
     let edge = if direction > 0.0 { hi } else { lo };
     let mut a = start;
+    let mut g_a = g_start;
     let mut step = BRACKET_STEP;
     let mut shrinks = 0;
-    let b = loop {
+    let (b, g_b) = loop {
         let mut next = a + direction * step;
         if direction * (next - edge) >= 0.0 {
             next = edge;
@@ -244,12 +280,13 @@ fn solve_carry(
                     iv_gap: g_next,
                 });
             }
-            Some(g_next) if g_next * g_start < 0.0 => break next,
-            Some(_) => {
+            Some(g_next) if g_next * g_start < 0.0 => break (next, g_next),
+            Some(g_next) => {
                 if next == edge {
                     return Err(ModelFailure::CarryNotBracketed);
                 }
                 a = next;
+                g_a = g_next;
                 step *= 2.0;
             }
             None => {
@@ -262,23 +299,47 @@ fn solve_carry(
             }
         }
     };
-    let (x_min, x_max) = if a < b { (a, b) } else { (b, a) };
-    let common: Vec<OptionQuotePair> = pairs
-        .iter()
-        .copied()
-        .filter(|pair| {
-            pair_gap(pricer, pair, spot, rate, x_min).is_some()
-                && pair_gap(pricer, pair, spot, rate, x_max).is_some()
-        })
-        .collect();
+    // Halve the bracket (on the gap of whichever strikes invert) until enough strikes invert at
+    // both of its ends to refine on.
+    let (mut left, mut right) = if a < b {
+        ((a, g_a), (b, g_b))
+    } else {
+        ((b, g_b), (a, g_a))
+    };
+    let mut halvings = 0;
+    let (common, mean_left, mean_right) = loop {
+        let (common, mean_left, mean_right) =
+            common_strikes(pricer, pairs, spot, rate, left.0, right.0);
+        evaluations.set(evaluations.get() + 2);
+        if enough_strikes(common.len(), pairs.len()) {
+            break (common, mean_left, mean_right);
+        }
+        halvings += 1;
+        if halvings > MAX_BRACKET_HALVINGS {
+            return Err(ModelFailure::CarrySolveFailed);
+        }
+        let mid = 0.5 * (left.0 + right.0);
+        match gap(mid) {
+            Some(g_mid) if g_mid.abs() <= GAP_TOLERANCE => {
+                return Ok(CarrySolve {
+                    carry: mid,
+                    evaluations: evaluations.get(),
+                    iv_gap: g_mid,
+                });
+            }
+            Some(g_mid) if g_mid * left.1 < 0.0 => right = (mid, g_mid),
+            Some(g_mid) => left = (mid, g_mid),
+            None => return Err(ModelFailure::CarrySolveFailed),
+        }
+    };
+    if mean_left * mean_right > 0.0 {
+        return Err(ModelFailure::CarrySolveFailed);
+    }
+    let (x_min, x_max) = (left.0, right.0);
     let fixed_gap = |carry: Rate| {
         evaluations.set(evaluations.get() + 1);
         fixed_iv_gap(pricer, &common, spot, rate, carry)
     };
-    match (fixed_gap(x_min), fixed_gap(x_max)) {
-        (Some(g_min), Some(g_max)) if g_min * g_max <= 0.0 => {}
-        _ => return Err(ModelFailure::CarrySolveFailed),
-    }
     let lost_a_strike = Cell::new(false);
     let carry = Brent::new()
         .with_max_evaluations(100)
@@ -854,6 +915,38 @@ mod tests {
     }
 
     #[test]
+    fn the_refinement_needs_most_of_the_strikes_it_started_with() {
+        assert!(enough_strikes(1, 1));
+        assert!(enough_strikes(2, 2));
+        assert!(enough_strikes(3, 5));
+        assert!(!enough_strikes(1, 5));
+        assert!(!enough_strikes(2, 5));
+        assert!(!enough_strikes(1, 2));
+        assert!(!enough_strikes(0, 1));
+    }
+
+    #[test]
+    fn strikes_lost_during_the_accurate_correction_are_counted_too() {
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
+        let mut quotes = ju_quotes(0.25, rate, carry, expiry);
+        for q in quotes
+            .iter_mut()
+            .filter(|q| q.strike == 90.0 || q.strike == 110.0)
+        {
+            // A call above the spot cannot be inverted, so the correction drops the strike.
+            *q = OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+        }
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            ..AmericanModelConfig::default()
+        };
+        let solution = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 2, &config).unwrap();
+        assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+        assert_eq!(solution.pairs.len(), 3);
+        assert!(solution.flags.contains(ForwardFlags::PAIRS_DROPPED));
+    }
+
+    #[test]
     fn the_solved_carry_is_right_or_an_error_never_a_strike_set_artifact() {
         // Deep in-the-money options can stop being invertible as the trial carry moves away
         // from the true one, so the strike set seen by the solver may change along the search.
@@ -962,7 +1055,12 @@ mod tests {
                 ..AmericanModelConfig::default()
             };
             let solution = solve(&quotes, 100.0, discount, expiry, 2, &config).unwrap();
-            assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+            assert_eq!(
+                solution.tier,
+                ForwardTier::ModelAccurate,
+                "{:?} r={rate} q={carry} T={expiry}",
+                solution.accurate_failure
+            );
 
             let accurate = AmericanPricer::new(PricerKind::Binomial(400), expiry, &[]).unwrap();
             let market = Market {
