@@ -92,3 +92,66 @@ Copyright (C) 2005 Charles Whitmore; Copyright (C) 2007, 2008, 2009, 2010, 2011,
 2012 Ferdinando Ametrano; Copyright (C) 2008 Toyin Akin.
 The complete QuantLib license and contributor notices are included in
 [QUANTLIB_LICENSE.txt](QUANTLIB_LICENSE.txt).
+
+## QuantLib price-fed bond ATM helper
+
+The additive `BondFunctions::atm_rate_from_price` boundary adapts the explicit
+price branch of QuantLib `ql/pricingengines/bond/bondfunctions.cpp`,
+`BondFunctions::atmRate`, revision `9863b578af0caa4cecabf697196533e84a8308b6`.
+It delegates the existing cash-flow calculation without changing its formulas.
+Copyright (C) 2009 Nathan Abbott; 2007-2010 Ferdinando Ametrano; 2007 Chiara
+Fornarola; 2008 Simon Ibbotson; 2004 M-Dimension Consulting Inc.; 2005-2009
+StatPro Italia srl; 2004 Jeff Yu. The complete license and contributor notices
+are included in `QUANTLIB_LICENSE.txt`.
+
+## QuantLib amortizing fixed-rate bond construction
+
+The named bounded amortizing fixed-rate factory follows the composition in
+`ql/instruments/bonds/amortizingfixedratebond.{hpp,cpp}` at source revision
+`9863b578af0caa4cecabf697196533e84a8308b6`: the existing fixed-rate leg and Bond
+redemption machinery, without a new pricing formula.
+Upstream headers retain Copyright (C) 2008 Simon Ibbotson.
+The independently selected JSONL fixture queries the QuantLib 1.43 Python wheel,
+not asserted to be a build of that source revision. No upstream test vectors
+are copied. The complete QuantLib license and contributor notices are included
+in [QUANTLIB_LICENSE.txt](QUANTLIB_LICENSE.txt).
+
+## QuantLib CPI cash flows
+
+The explicit-base CPI coupon, plain coupon pricer, indexed principal and CPI leg
+are adapted from QuantLib revision
+`9863b578af0caa4cecabf697196533e84a8308b6`,
+`ql/cashflows/cpicoupon.{hpp,cpp}` and `cpicouponpricer.{hpp,cpp}`.
+Copyright (C) 2009, 2011 Chris Kenyon; Copyright (C) 2022 Quaternion Risk
+Management Ltd. The complete QuantLib license and contributor notices are in
+`QUANTLIB_LICENSE.txt`. The bounded implementation omits base-date constructors,
+CPI coupon optionlets and convexity adjustments.
+
+## QuantLib CPI bond
+
+The explicit-base CPI bond constructor is adapted from
+`ql/instruments/bonds/cpibond.{hpp,cpp}` at QuantLib revision
+`9863b578af0caa4cecabf697196533e84a8308b6`.
+Copyright (C) 2010, 2011 Chris Kenyon.
+The complete QuantLib license is included in `QUANTLIB_LICENSE.txt`.
+
+## QuantLib CPI swap
+The CPI-versus-Ibor swap construction and terminal exchange conventions are
+adapted from `ql/instruments/cpiswap.{hpp,cpp}` at QuantLib revision
+`9863b578af0caa4cecabf697196533e84a8308b6`.
+Copyright (C) 2007, 2009, 2011 Chris Kenyon;
+Copyright (C) 2009 StatPro Italia srl.
+The complete QuantLib license is included in `QUANTLIB_LICENSE.txt`.
+
+## QuantLib cumulative CPI quoted-price options
+
+The cumulative CPI cap/floor instrument, quoted-price parity surface and
+interpolating engine are adapted from QuantLib revision
+`9863b578af0caa4cecabf697196533e84a8308b6`:
+`ql/instruments/cpicapfloor.{hpp,cpp}` and
+`ql/experimental/inflation/{cpicapfloortermpricesurface,cpicapfloorengines}.{hpp,cpp}`.
+Copyright (C) 2010, 2011 Chris Kenyon; Copyright (C) 2021 Ralf Konrad Eckel.
+The complete license is included in `QUANTLIB_LICENSE.txt` above. The bounded
+immutable reference-date and whole-year-tenor contracts, plus mixed native-oracle
+provenance, are documented in `docs/docs/cpi-capfloor-bindings.md` at repository
+level and `sdk/go/testdata/cpi-capfloor-native.provenance.json`.

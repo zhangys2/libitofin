@@ -626,6 +626,7 @@ impl PyYoYInflationLeg {
         Ok(PyLeg {
             inner: self.leg().build().map_err(PyQlError::from)?,
             guard: None,
+            cpi_settings: None,
         })
     }
 }
@@ -890,6 +891,16 @@ impl PyCashFlow {
     }
 }
 
+impl PyCashFlow {
+    pub(crate) fn from_inner(inner: Shared<dyn CashFlow>) -> Self {
+        Self {
+            inner,
+            guard: None,
+            position: 0,
+        }
+    }
+}
+
 /// A sequence of erased cash flows, built by a leg builder's build().
 ///
 /// Indexable and sized, which with CashFlow's two accessors is enough to
@@ -899,11 +910,102 @@ impl PyCashFlow {
 pub struct PyLeg {
     inner: Leg,
     guard: Option<CashFlowGuard>,
+    cpi_settings: Option<Shared<libitofin::settings::Settings<libitofin::time::date::Date>>>,
 }
 
 #[gen_stub_pymethods]
 #[pymethods]
 impl PyLeg {
+    /// Earliest coupon accrual start or non-coupon payment date; empty legs fail.
+    fn start_date(&self) -> PyResult<PyDate> {
+        Ok(PyDate::from_inner(
+            CashFlows::start_date(&self.inner).map_err(PyQlError::from)?,
+        ))
+    }
+    /// Latest coupon accrual end or non-coupon payment date; empty legs fail.
+    fn maturity_date(&self) -> PyResult<PyDate> {
+        Ok(PyDate::from_inner(
+            CashFlows::maturity_date(&self.inner).map_err(PyQlError::from)?,
+        ))
+    }
+    /// Previous payment date, or None; date-only inspection needs no fixings.
+    #[pyo3(signature=(settings, *, include_settlement_date_flows=None, settlement_date=None))]
+    fn previous_cash_flow_date(
+        &self,
+        settings: &PySettings,
+        include_settlement_date_flows: Option<bool>,
+        settlement_date: Option<&PyDate>,
+    ) -> PyResult<Option<PyDate>> {
+        let date = crate::bonds::analytical_date(settlement_date)?;
+        Ok(self
+            .inspection_payment(
+                &settings.inner(),
+                include_settlement_date_flows,
+                date,
+                false,
+                false,
+            )?
+            .0
+            .map(PyDate::from_inner))
+    }
+    /// Next payment date, or None; settlement-date policy follows Settings when omitted.
+    #[pyo3(signature=(settings, *, include_settlement_date_flows=None, settlement_date=None))]
+    fn next_cash_flow_date(
+        &self,
+        settings: &PySettings,
+        include_settlement_date_flows: Option<bool>,
+        settlement_date: Option<&PyDate>,
+    ) -> PyResult<Option<PyDate>> {
+        let date = crate::bonds::analytical_date(settlement_date)?;
+        Ok(self
+            .inspection_payment(
+                &settings.inner(),
+                include_settlement_date_flows,
+                date,
+                true,
+                false,
+            )?
+            .0
+            .map(PyDate::from_inner))
+    }
+    /// Aggregate actual amount on the previous payment date, or None; includes principal.
+    #[pyo3(signature=(settings, *, include_settlement_date_flows=None, settlement_date=None))]
+    fn previous_cash_flow_amount(
+        &self,
+        settings: &PySettings,
+        include_settlement_date_flows: Option<bool>,
+        settlement_date: Option<&PyDate>,
+    ) -> PyResult<Option<f64>> {
+        let date = crate::bonds::analytical_date(settlement_date)?;
+        Ok(self
+            .inspection_payment(
+                &settings.inner(),
+                include_settlement_date_flows,
+                date,
+                false,
+                true,
+            )?
+            .1)
+    }
+    /// Aggregate actual amount on the next payment date, or None; includes principal.
+    #[pyo3(signature=(settings, *, include_settlement_date_flows=None, settlement_date=None))]
+    fn next_cash_flow_amount(
+        &self,
+        settings: &PySettings,
+        include_settlement_date_flows: Option<bool>,
+        settlement_date: Option<&PyDate>,
+    ) -> PyResult<Option<f64>> {
+        let date = crate::bonds::analytical_date(settlement_date)?;
+        Ok(self
+            .inspection_payment(
+                &settings.inner(),
+                include_settlement_date_flows,
+                date,
+                true,
+                true,
+            )?
+            .1)
+    }
     /// Return the number of flows on the leg.
     ///
     /// Returns:
@@ -975,6 +1077,13 @@ pub(crate) fn npv(
         .current_link()
         .map_err(PyQlError::from)?;
     let settings = settings.inner();
+    if let Some(cpi_settings) = &leg.cpi_settings
+        && !std::ptr::eq(&*settings, &**cpi_settings)
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "CPI leg and NPV settings must match",
+        ));
+    }
     if let Some(guard) = &leg.guard {
         for (i, flow) in leg.inner.iter().enumerate() {
             if !flow
@@ -1001,7 +1110,7 @@ pub(crate) fn npv(
         npv_date.map(PyDate::inner),
     )
     .map_err(PyQlError::from)?;
-    if leg.guard.is_some() {
+    if leg.guard.is_some() || leg.cpi_settings.is_some() {
         crate::bonds::finite(value)
     } else {
         Ok(value)
@@ -1009,8 +1118,74 @@ pub(crate) fn npv(
 }
 
 impl PyLeg {
+    pub(crate) fn inspection_payment(
+        &self,
+        settings: &libitofin::settings::Settings<libitofin::time::date::Date>,
+        include: Option<bool>,
+        settlement: Option<libitofin::time::date::Date>,
+        next: bool,
+        with_amount: bool,
+    ) -> PyResult<(Option<libitofin::time::date::Date>, Option<f64>)> {
+        if let Some(cpi_settings) = &self.cpi_settings
+            && !std::ptr::eq(settings, &**cpi_settings)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "CPI leg and inspection settings must match",
+            ));
+        }
+        let index = if next {
+            CashFlows::next_cash_flow(&self.inner, settings, include, settlement)
+        } else {
+            CashFlows::previous_cash_flow(&self.inner, settings, include, settlement)
+        }
+        .map_err(PyQlError::from)?;
+        let Some(index) = index else {
+            return Ok((None, None));
+        };
+        let date = self.inner[index].date();
+        if !with_amount {
+            return Ok((Some(date), None));
+        }
+        if let Some(guard) = &self.guard {
+            let mut first = index;
+            let mut end = index + 1;
+            if next {
+                while end < self.inner.len() && self.inner[end].date() == date {
+                    end += 1;
+                }
+            } else {
+                while first > 0 && self.inner[first - 1].date() == date {
+                    first -= 1;
+                }
+            }
+            for position in first..end {
+                guard(Some(position))?;
+            }
+        }
+        let amount = if next {
+            CashFlows::next_cash_flow_amount(&self.inner, settings, include, settlement)
+        } else {
+            CashFlows::previous_cash_flow_amount(&self.inner, settings, include, settlement)
+        }
+        .map_err(PyQlError::from)?;
+        Ok((Some(date), amount.map(crate::bonds::finite).transpose()?))
+    }
     pub(crate) fn from_inner(inner: Leg) -> Self {
-        Self { inner, guard: None }
+        Self {
+            inner,
+            guard: None,
+            cpi_settings: None,
+        }
+    }
+    pub(crate) fn with_cpi_settings(
+        inner: Leg,
+        settings: Shared<libitofin::settings::Settings<libitofin::time::date::Date>>,
+    ) -> Self {
+        Self {
+            inner,
+            guard: None,
+            cpi_settings: Some(settings),
+        }
     }
     pub(crate) fn with_guard(inner: Leg, guard: Option<CashFlowGuard>) -> Self {
         let mut leg = Self::from_inner(inner);
@@ -1056,6 +1231,13 @@ impl PyLeg {
         include: Option<bool>,
         settlement: Option<libitofin::time::date::Date>,
     ) -> PyResult<()> {
+        if let Some(cpi_settings) = &self.cpi_settings
+            && !std::ptr::eq(settings, &**cpi_settings)
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "CPI leg and NPV settings must match",
+            ));
+        }
         if let Some(guard) = &self.guard {
             for (i, flow) in self.inner.iter().enumerate() {
                 if !flow

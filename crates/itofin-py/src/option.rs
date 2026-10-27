@@ -18,7 +18,8 @@ use crate::treeswaption::PyBermudanExercise;
 use libitofin::exercise::{AmericanExercise, EuropeanExercise, Exercise};
 use libitofin::instrument::Instrument;
 use libitofin::instruments::{
-    CashOrNothingPayoff, PlainVanillaPayoff, StrikedTypePayoff, VanillaOption,
+    AssetOrNothingPayoff, CashOrNothingPayoff, GapPayoff, PercentageStrikePayoff,
+    PlainVanillaPayoff, StrikedTypePayoff, VanillaOption,
 };
 use libitofin::option::OptionType;
 use libitofin::pricingengine::PricingEngine;
@@ -118,6 +119,91 @@ impl PyVanillaOption {
             strike,
             cash_payoff,
         )) as Shared<dyn StrikedTypePayoff>;
+        let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
+        Ok(Self {
+            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+        })
+    }
+
+    /// Build a European asset-or-nothing option for the existing FD engine.
+    ///
+    /// The finite nonnegative strike triggers a terminal asset-price payment
+    /// strictly in the money; equality pays zero. Attach set_fd_engine(engine)
+    /// or use price_fd(engine). The analytic Black engine rejects this payoff.
+    /// Grid convergence and the existing log-FD market domain still apply.
+    #[classmethod]
+    fn asset_or_nothing(
+        _cls: &Bound<'_, PyType>,
+        option_type: PyOptionType,
+        strike: f64,
+        expiry: &PyDate,
+        settings: &PySettings,
+    ) -> PyResult<Self> {
+        if !strike.is_finite() || strike < 0.0 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "strike must be finite and nonnegative",
+            ));
+        }
+        let payoff = shared(AssetOrNothingPayoff::new(option_type.inner(), strike))
+            as Shared<dyn StrikedTypePayoff>;
+        let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
+        Ok(Self {
+            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+        })
+    }
+
+    /// Build a European gap option with separate trigger and payment strikes.
+    ///
+    /// The trigger strike must be finite and nonnegative, and second_strike
+    /// finite (signed values are accepted). Trigger equality is included and
+    /// negative payments are retained. Attach an existing finite-difference
+    /// engine with set_fd_engine; set_engine's analytic Black path rejects Gap.
+    /// FD cell averaging preserves its existing signed/cancelling-value fallback.
+    #[classmethod]
+    fn gap(
+        _cls: &Bound<'_, PyType>,
+        option_type: PyOptionType,
+        strike: f64,
+        second_strike: f64,
+        expiry: &PyDate,
+        settings: &PySettings,
+    ) -> PyResult<Self> {
+        if !strike.is_finite() || strike < 0.0 || !second_strike.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "trigger strike must be finite and nonnegative; payment strike must be finite",
+            ));
+        }
+        let payoff = shared(GapPayoff::new(option_type.inner(), strike, second_strike))
+            as Shared<dyn StrikedTypePayoff>;
+        let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
+        Ok(Self {
+            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+        })
+    }
+
+    /// Build a European percentage-strike option for the existing FD engine.
+    ///
+    /// Moneyness is a finite dimensionless ratio, not a percent scaled by 100
+    /// or an absolute strike. Signed ratios are accepted. A call pays
+    /// S*max(1-m,0), a put S*max(m-1,0). Use set_fd_engine or price_fd;
+    /// analytic Black rejects this payoff. The FD volatility lookup receives m
+    /// unchanged, so strike-smile surfaces can reject it. Constant-vol use is
+    /// the validated path; existing grid and market-domain limits apply.
+    #[classmethod]
+    fn percentage_strike(
+        _cls: &Bound<'_, PyType>,
+        option_type: PyOptionType,
+        moneyness: f64,
+        expiry: &PyDate,
+        settings: &PySettings,
+    ) -> PyResult<Self> {
+        if !moneyness.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "moneyness must be finite",
+            ));
+        }
+        let payoff = shared(PercentageStrikePayoff::new(option_type.inner(), moneyness))
+            as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         Ok(Self {
             inner: VanillaOption::new(payoff, exercise, settings.inner()),

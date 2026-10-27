@@ -16,6 +16,10 @@ mod cashflows;
 mod cmscoupon;
 mod coupon;
 mod couponpricer;
+mod cpibasedate;
+pub(crate) mod cpicoupon;
+pub(crate) mod cpidates;
+mod cpileg;
 mod digitaliborcoupon;
 mod dividend;
 mod duration;
@@ -42,6 +46,8 @@ pub use cashflows::CashFlows;
 pub use cmscoupon::CmsCoupon;
 pub use coupon::{Coupon, CouponBase};
 pub use couponpricer::{BlackIborCouponPricer, FloatingRateCouponPricer};
+pub use cpicoupon::{CpiCashFlow, CpiCoupon, CpiCouponPricer};
+pub use cpileg::CpiLeg;
 pub use digitaliborcoupon::DigitalIborCoupon;
 pub use dividend::{Dividend, FixedDividend, FractionalDividend, dividend_vector};
 pub use duration::Duration;
@@ -70,3 +76,6 @@ pub use zeroinflationcashflow::ZeroInflationCashFlow;
 
 pub mod averagebmacoupon;
 pub use averagebmacoupon::{AverageBMACoupon, AverageBMACouponPricer, AverageBMALeg};
+
+#[cfg(test)]
+mod cpibasedate_tests;

@@ -31,6 +31,7 @@ __all__ = [
     "FdBlackScholesVanillaEngine",
     "FdScheme",
     "ForwardsInCouponPeriod",
+    "InterpolatingCpiCapFloorEngine",
     "IsdaCdsEngine",
     "JumpDiffusionEngine",
     "MCAmericanEngine",
@@ -139,13 +140,22 @@ class BatesEngine:
 @typing.final
 class BlackCalculator:
     r"""
-    Immutable plain-vanilla standalone value and Greeks, not a pricing engine.
+    Immutable vanilla or cash-digital standalone calculator, not a pricing engine.
     Every nonfinite result raises ItofinError, including native zero-strike NaNs.
     """
     def __init__(self, option_type: instruments.OptionType, strike: builtins.float, forward: builtins.float, std_dev: builtins.float, discount: builtins.float) -> None:
         r"""
         Copy finite strike >= 0, forward > 0, std_dev >= 0 and discount > 0.
         std_dev is volatility times sqrt(time); no payoff objects are accepted.
+        """
+    @staticmethod
+    def cash_digital(option_type: instruments.OptionType, strike: builtins.float, cash_payoff: builtins.float, forward: builtins.float, std_dev: builtins.float, discount: builtins.float) -> BlackCalculator:
+        r"""
+        Copy a cash-or-nothing payoff into a standalone calculator.
+        Cash payoff may be signed and must be finite. std_dev must exceed
+        f64::EPSILON, excluding the core's degenerate-volatility Greek shortcut.
+        Other inputs use the vanilla constructor domains. std_dev is volatility
+        times sqrt(time). Finite elasticity sentinels remain.
         """
     def value(self) -> builtins.float:
         r"""
@@ -459,6 +469,16 @@ class FdBlackScholesVanillaEngine:
         Raises:
             ValueError: If the grid dimensions are invalid.
             OverflowError: If a grid integer is outside the accepted range.
+        """
+
+@typing.final
+class InterpolatingCpiCapFloorEngine:
+    r"""
+    Price-surface interpolation engine, without instrument notional scaling.
+    """
+    def __init__(self, surface: termstructures.CpiCapFloorTermPriceSurface) -> None:
+        r"""
+        Retain an immutable CPI price surface.
         """
 
 @typing.final

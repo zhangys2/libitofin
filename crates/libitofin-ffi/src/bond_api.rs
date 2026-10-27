@@ -22,6 +22,7 @@ pub(crate) struct NativeBond {
     pub(crate) fixed: Option<(Frequency, DayCounter, Option<DayCounter>)>,
     pub(crate) flags: Shared<Cell<(bool, Option<bool>)>>,
     pub(crate) floating: Option<crate::floating_bond_api::NativeFloating>,
+    pub(crate) indexed: bool,
 }
 impl NativeBond {
     pub(crate) fn new(
@@ -49,6 +50,7 @@ impl NativeBond {
             fixed,
             flags: shared(Cell::new(flags)),
             floating: None,
+            indexed: false,
         }
     }
     pub(crate) fn settlement(&self, supplied: Option<Date>) -> BindingResult<Date> {
@@ -206,6 +208,95 @@ pub unsafe extern "C" fn itofin_fixed_rate_bond_new(
     out: *mut u64,
     error: *mut ItofinError,
 ) -> i32 {
+    unsafe { fixed_rate_bond_new(ctx, a, coupons, count, None, out, error) }
+}
+
+/// Configuration for a par-amortizing fixed-rate bond with per-period balances.
+#[repr(C)]
+pub struct ItofinAmortizingFixedBondConfig {
+    pub settlement_days: u32,
+    pub settings: u64,
+    /// Zero means no issue date.
+    pub issue_date: i32,
+    pub payment_convention: i32,
+    /// Zero selects the schedule calendar.
+    pub calendar: u64,
+    pub schedule: u64,
+    pub day_counter: u64,
+    /// Zero means no first-period override.
+    pub first_period_day_counter: u64,
+    pub ex_coupon_calendar: u64,
+    pub ex_coupon_length: i32,
+    pub ex_coupon_unit: i32,
+    pub ex_coupon_convention: i32,
+    pub has_ex_coupon: u8,
+    pub ex_coupon_end_of_month: u8,
+}
+
+#[unsafe(no_mangle)]
+/// Builds a par-amortizing fixed-rate bond from exact per-period balances.
+///
+/// Notionals must be finite, positive, nonincreasing and have exactly one
+/// entry for each schedule accrual period. Equal adjacent balances are allowed.
+/// # Safety
+/// Pointers and thread ownership must satisfy the crate-level C caller contract.
+pub unsafe extern "C" fn itofin_amortizing_fixed_rate_bond_new(
+    ctx: *mut Context,
+    a: ItofinAmortizingFixedBondConfig,
+    notionals: *const f64,
+    notional_count: usize,
+    coupons: *const f64,
+    coupon_count: usize,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    if !error.is_null() && check_ptr(error).is_err() {
+        return INVALID_ARGUMENT;
+    }
+    let config = ItofinFixedBondConfig {
+        bond: ItofinBondConfig {
+            settlement_days: a.settlement_days,
+            face_amount: 1.0,
+            redemption: 100.0,
+            settings: a.settings,
+            issue_date: a.issue_date,
+            payment_convention: a.payment_convention,
+            calendar: a.calendar,
+        },
+        schedule: a.schedule,
+        day_counter: a.day_counter,
+        first_period_day_counter: a.first_period_day_counter,
+        ex_coupon_calendar: a.ex_coupon_calendar,
+        ex_coupon_length: a.ex_coupon_length,
+        ex_coupon_unit: a.ex_coupon_unit,
+        ex_coupon_convention: a.ex_coupon_convention,
+        has_ex_coupon: a.has_ex_coupon,
+        ex_coupon_end_of_month: a.ex_coupon_end_of_month,
+    };
+    unsafe {
+        fixed_rate_bond_new(
+            ctx,
+            config,
+            coupons,
+            coupon_count,
+            Some((notionals, notional_count)),
+            out,
+            error,
+        )
+    }
+}
+
+/// # Safety
+/// Follow the crate-level C pointer and thread contract for all arrays and outputs.
+unsafe fn fixed_rate_bond_new(
+    ctx: *mut Context,
+    a: ItofinFixedBondConfig,
+    coupons: *const f64,
+    count: usize,
+    notionals: Option<(*const f64, usize)>,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
     unsafe {
         with_context(ctx, error, |c| {
             check_ptr(out)?;
@@ -285,23 +376,42 @@ pub unsafe extern "C" fn itofin_fixed_rate_bond_new(
             } else {
                 Some(day_counter(c, a.first_period_day_counter)?)
             };
-            let bond = FixedRateBond::new(
-                a.bond.settlement_days,
-                a.bond.face_amount,
-                schedule,
-                rates,
-                day_counter(c, a.day_counter)?,
-                rule,
-                a.bond.redemption,
-                optional_date(a.bond.issue_date)?,
-                Some(calendar.inner.clone()),
-                ex_period,
-                ex_calendar.inner,
-                ex_rule,
-                a.ex_coupon_end_of_month == 1,
-                first,
-                settings(c, a.bond.settings)?,
-            )?;
+            let bond = if let Some((pointer, count)) = notionals {
+                FixedRateBond::new_amortizing(
+                    a.bond.settlement_days,
+                    input_slice(pointer, count)?.to_vec(),
+                    schedule,
+                    rates,
+                    day_counter(c, a.day_counter)?,
+                    rule,
+                    optional_date(a.bond.issue_date)?,
+                    Some(calendar.inner.clone()),
+                    ex_period,
+                    ex_calendar.inner,
+                    ex_rule,
+                    a.ex_coupon_end_of_month == 1,
+                    first,
+                    settings(c, a.bond.settings)?,
+                )?
+            } else {
+                FixedRateBond::new(
+                    a.bond.settlement_days,
+                    a.bond.face_amount,
+                    schedule,
+                    rates,
+                    day_counter(c, a.day_counter)?,
+                    rule,
+                    a.bond.redemption,
+                    optional_date(a.bond.issue_date)?,
+                    Some(calendar.inner.clone()),
+                    ex_period,
+                    ex_calendar.inner,
+                    ex_rule,
+                    a.ex_coupon_end_of_month == 1,
+                    first,
+                    settings(c, a.bond.settings)?,
+                )?
+            };
             let fixed = Some((
                 bond.frequency(),
                 bond.day_counter().clone(),
@@ -485,13 +595,30 @@ pub unsafe extern "C" fn itofin_bond_handle(
                 0 => c.insert(native.calendar)?,
                 1 => {
                     let leg = native.bond.borrow().cashflows().clone();
-                    if let Some(floating) = native.floating {
+                    if native.indexed {
+                        let settings = native.bond.borrow().settings_handle();
+                        c.insert_with_metadata(
+                            leg,
+                            crate::cpi_cashflows_api::CpiLegSettings(settings),
+                        )?
+                    } else if let Some(floating) = native.floating {
                         c.insert_with_metadata(leg, floating)?
                     } else {
                         c.insert(leg)?
                     }
                 }
-                2 => c.insert(native.bond.borrow().redemptions().clone())?,
+                2 => {
+                    let bond = native.bond.borrow();
+                    let leg = bond.redemptions().clone();
+                    if native.indexed {
+                        c.insert_with_metadata(
+                            leg,
+                            crate::cpi_cashflows_api::CpiLegSettings(bond.settings_handle()),
+                        )?
+                    } else {
+                        c.insert(leg)?
+                    }
+                }
                 3 | 4 => {
                     let fixed = native
                         .fixed

@@ -74,13 +74,19 @@ nav:
   - Constant-parameter GSR process: gsr-process-bindings.md
   - Black FX delta conventions: black-delta-bindings.md
   - Plain-vanilla BlackCalculator: black-calculator-bindings.md
+  - Cash-digital BlackCalculator: cash-digital-black-calculator.md
   - European analytic cash digitals: cash-digital-bindings.md
+  - European asset-or-nothing FD pricing: asset-digital-bindings.md
+  - European signed gap FD pricing: gap-option-bindings.md
+  - European percentage-strike FD pricing: percentage-strike-bindings.md
   - Callable bond sensitivities: callable-bond-sensitivities.md
+  - Bond and leg payment inspection: payment-inspection-bindings.md
   - Callable OAS: callable-oas.md
   - Callable implied volatility: callable-implied-volatility.md
   - Black callable bonds: black-callable-bonds.md
   - Callable zero-coupon bonds: callable-zero-coupon-bonds.md
   - Floating-type payoff: floating-type-payoff.md
+  - Standalone scalar payoffs: scalar-payoff-bindings.md
   - Percentage-strike payoff: percentage-strike-payoff.md
   - Bachelier asset ITM: normal-itm.md
   - OIS payer and receiver: ois-side.md
@@ -143,6 +149,15 @@ nav:
   - Go/Python callable bond bindings: callable-bond-bindings.md
   - Bond yield and Z-spread analytics: bond-analytics.md
   - Bond coupon BPS and ATM rate: bond-coupon-analytics.md
+  - Price-fed bond ATM: bond-price-atm-bindings.md
+  - Amortizing fixed-rate bonds: amortizing-fixed-bonds.md
+  - Amortizing plain-Ibor bonds: amortizing-floating-bond-bindings.md
+  - Plain CPI cash flows: cpi-cashflow-bindings.md
+  - Standalone inflation principal flows: inflation-principal-bindings.md
+  - Base-date CPI coupons and legs: cpi-base-date-bindings.md
+  - CPI bonds: cpi-bond-bindings.md
+  - CPI versus Ibor swaps: cpi-swap-bindings.md
+  - CPI cap/floor quoted-price interpolation: cpi-capfloor-bindings.md
   - Zero-coupon bonds: zero-coupon-bonds.md
   - Floating-rate bonds: floating-rate-bonds.md
   - Par asset swaps: asset-swaps.md
