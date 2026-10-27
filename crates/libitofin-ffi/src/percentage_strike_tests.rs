@@ -224,7 +224,7 @@ fn percentage_strike_uses_fd_and_retains_dependencies() {
             &mut c,
             settings_id,
             0,
-            0.8,
+            -0.2,
             today.serial_number() + 360,
             &mut option
         ),
@@ -244,7 +244,7 @@ fn percentage_strike_uses_fd_and_retains_dependencies() {
             itofin_option_value(&mut c, option, 0, &mut value, null_mut()),
             0
         );
-        assert!(value.is_finite() && value > 0.0);
+        assert!(value.is_finite() && value > 100.0);
         assert_eq!(itofin_handle_release(&mut c, option, null_mut()), 0);
         assert_eq!(
             itofin_option_value(&mut c, option, 0, &mut value, null_mut()),

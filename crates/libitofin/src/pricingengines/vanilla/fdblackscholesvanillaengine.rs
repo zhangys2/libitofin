@@ -195,7 +195,11 @@ impl PricingEngine for FdBlackScholesVanillaEngine {
             fail!("no payoff given");
         };
         let strike = payoff.strike();
-        require!(strike >= 0.0, "strike must be non-negative");
+        // Percentage-strike moneyness may be negative. The payoff still scales
+        // the spot; other striked payoffs keep the non-negative strike guard.
+        if payoff.name() != "PercentageStrike" {
+            require!(strike >= 0.0, "strike must be non-negative");
+        }
 
         let maturity = self.process.time(&exercise.last_date())?;
         let spot = self.process.x0()?;
