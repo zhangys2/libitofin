@@ -48,3 +48,7 @@ $$F_{\max} = \min_{i \in \text{ATM}} \left[ K_i + \frac{C_{\text{ask}, i} - (P_{
    - Flag result as `Confidence::AmericanDividendAdjusted`.
 3. **High Borrow Fee / Hard-to-Borrow**:
    - If implied repo rate $q = r - \frac{1}{T}\ln(F/S)$ is anomalously high ($q > 0.15$), flag `Diagnostics::NegativeCarryDetected`.
+
+## Amendment (2026-10-25)
+
+The decision to replace iterative PDE inversion with this model-free filter is reopened. The corridor stays valid as the fast tier, but it does not remove the early-exercise premium, so its bias grows with rates, dividends and maturity. Model-based de-Americanization (iterative EEP subtraction and/or call/put IV matching) is now in scope; see [De-Americanization Method & Tier Structure](forward-deamericanization-method-and-tiering.md). This resolution is otherwise unchanged.
