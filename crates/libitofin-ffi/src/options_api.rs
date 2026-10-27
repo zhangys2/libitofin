@@ -104,7 +104,7 @@ pub unsafe extern "C" fn itofin_option_cash_or_nothing_new(
 /// Build a European asset-or-nothing option retaining the supplied settings.
 /// Kind is 0 call or 1 put; strike must be finite and nonnegative. The payoff
 /// pays the terminal asset price strictly beyond strike, and zero at equality.
-/// Attach the existing FD Black-Scholes engine; the analytic engine rejects it.
+/// The analytic Black engine prices this payoff. The FD engine remains available.
 /// # Safety
 /// Follow the crate-level C caller contract. Output is written only on success.
 #[unsafe(no_mangle)]
