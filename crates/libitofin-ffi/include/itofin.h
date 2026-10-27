@@ -8129,8 +8129,8 @@ int32_t itofin_option_asset_or_nothing_new(struct ItofinContext *ctx,
  * Build a European gap option with a separate trigger and payment strike.
  * Kind is 0 call or 1 put. The trigger strike must be finite and nonnegative;
  * the payment strike must be finite and may be signed. Trigger equality is
- * included and negative payments are not floored. Use the existing FD engine;
- * the analytic European engine rejects this payoff.
+ * included and negative payments are not floored. The analytic European
+ * engine prices Gap through the existing Black calculator; FD remains available.
  * # Safety
  * Follow the crate-level C caller contract. Output is written only on success.
  */
