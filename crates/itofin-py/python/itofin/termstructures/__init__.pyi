@@ -1762,7 +1762,14 @@ class ImpliedForwardResult:
     def flags(self) -> builtins.list[builtins.str]:
         r"""
         Independent signals about an American forward: "schedule_ignored", "latency_fallback",
-        "non_converged".
+        "non_converged", "pairs_dropped".
+        """
+    @property
+    def model_failure(self) -> typing.Optional[builtins.str]:
+        r"""
+        Why the model path failed (corridor fallback) or its Accurate stage fell back to Fast,
+        for example "carry_not_bracketed" or "no_implied_volatility"; None when the model ran
+        cleanly or was not attempted. "non_converged" is set with it.
         """
     @property
     def solved_carry(self) -> typing.Optional[builtins.float]:

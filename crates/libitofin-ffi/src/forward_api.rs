@@ -75,7 +75,11 @@ pub struct ItofinImpliedForwardOptions {
 /// The result of `itofin_implied_forward_calculate` plus the model-path outputs.
 ///
 /// `tier_code` is -1 (no tier), 0 corridor, 1 model fast, 2 model accurate. `flags` bits:
-/// 1 schedule ignored, 2 latency fallback, 4 not converged. `has_model` is 1 when the
+/// 1 schedule ignored, 2 latency fallback, 4 not converged, 8 pairs dropped. `model_failure`
+/// is 0 when the model path ran cleanly, otherwise the cause of the fallback (1 insufficient
+/// pairs, 2 dividends exceed spot, 3 pricer unavailable, 4 no implied volatility, 5 carry not
+/// bracketed, 6 carry solve failed, 7 too few strikes, 8 parity fit failed); codes this version
+/// does not know are reserved. `has_model` is 1 when the
 /// `solved_carry`, `call_put_iv_gap`, `iterations` and `accurate_prices_used` fields are
 /// meaningful (NaN or 0 otherwise).
 #[repr(C)]
@@ -94,6 +98,7 @@ pub struct ItofinImpliedForwardResultEx {
     pub box_arbitrage_violations: u32,
     pub min_spread: f64,
     pub max_spread: f64,
+    pub model_failure: u32,
 }
 
 impl ItofinImpliedForwardOptions {
@@ -184,6 +189,7 @@ fn extended_result(res: &ImpliedForwardResult) -> ItofinImpliedForwardResultEx {
         box_arbitrage_violations: res.diagnostics.box_arbitrage_violations as u32,
         min_spread: res.diagnostics.min_spread,
         max_spread: res.diagnostics.max_spread,
+        model_failure: res.model_failure.map_or(0, |failure| failure.code()),
     }
 }
 
@@ -502,6 +508,7 @@ mod tests {
             box_arbitrage_violations: 0,
             min_spread: 0.0,
             max_spread: 0.0,
+            model_failure: 0xffff,
         }
     }
 
@@ -574,6 +581,7 @@ mod tests {
         assert_eq!(rc, 0);
         assert_eq!(out.tier_code, 1);
         assert_eq!(out.flags, 0);
+        assert_eq!(out.model_failure, 0);
         assert_eq!(out.has_model, 1);
         assert!(out.solved_carry.is_finite() && (out.solved_carry - 0.02).abs() < 0.02);
         assert!(out.call_put_iv_gap.abs() < 1e-6);
@@ -583,6 +591,24 @@ mod tests {
         assert!(out.min_spread > 0.0 && out.max_spread >= out.min_spread);
         assert!(out.core.forward > 0.0);
         assert!(out.core.pairs_used >= 2);
+    }
+
+    #[test]
+    fn extended_call_reports_why_the_model_failed() {
+        let quotes = black_quotes(0.01);
+        let df = Some((-0.01_f64 * 0.5).exp());
+        // The quotes carry about 2% a year; the search only looks above 20%.
+        let mut options = default_options();
+        options.carry_search_low = 0.20;
+        options.carry_search_high = 0.25;
+        options.carry_flag_low = 0.21;
+        options.carry_flag_high = 0.24;
+        let mut out = empty_result();
+        assert_eq!(american_call(&quotes, 2, df, &options, &mut out), 0);
+        assert_eq!(out.tier_code, 0);
+        assert_eq!(out.flags, 4);
+        assert_eq!(out.model_failure, 5);
+        assert_eq!(out.core.status_code, 7);
     }
 
     #[test]

@@ -144,9 +144,14 @@ pub struct PyImpliedForwardResult {
     #[pyo3(get)]
     pub tier: Option<String>,
     /// Independent signals about an American forward: "schedule_ignored", "latency_fallback",
-    /// "non_converged".
+    /// "non_converged", "pairs_dropped".
     #[pyo3(get)]
     pub flags: Vec<String>,
+    /// Why the model path failed (corridor fallback) or its Accurate stage fell back to Fast,
+    /// for example "carry_not_bracketed" or "no_implied_volatility"; None when the model ran
+    /// cleanly or was not attempted. "non_converged" is set with it.
+    #[pyo3(get)]
+    pub model_failure: Option<String>,
     /// Solved continuous yield, or the residual carry beside a dividend schedule; None on the
     /// corridor tier and for other conventions.
     #[pyo3(get)]
@@ -350,6 +355,9 @@ pub fn implied_forward(
         },
         tier: res.tier.map(|tier| tier.as_str().to_string()),
         flags: res.flags.names().into_iter().map(String::from).collect(),
+        model_failure: res
+            .model_failure
+            .map(|failure| failure.as_str().to_string()),
         solved_carry: res.american.map(|a| a.solved_carry),
         call_put_iv_gap: res.american.map(|a| a.call_put_iv_gap),
         iterations: res.american.map(|a| a.iterations),

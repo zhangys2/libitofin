@@ -7,17 +7,19 @@
 //! agree strike by strike, so the carry is found by solving for a zero mean call/put gap.
 //! The European-equivalent quotes are then handed to the parity estimator.
 
-use super::american_model::{AmericanLevel, AmericanModelConfig, ForwardFlags, ForwardTier};
+use super::american_model::{
+    AmericanLevel, AmericanModelConfig, ForwardFlags, ForwardTier, ModelFailure,
+};
 use super::american_pricer::{AmericanPricer, PricerKind};
 use super::implied_forward::OptionQuotePair;
-use crate::errors::QlResult;
 use crate::math::solver1d::Solver1D;
 use crate::math::solvers1d::brent::Brent;
 use crate::option::OptionType::{self, Call, Put};
 use crate::pricingengines::blackformula::black_formula;
 use crate::types::{DiscountFactor, Rate, Real, Time, Volatility};
-use crate::{fail, require};
 use std::cell::Cell;
+
+type ModelResult<T> = Result<T, ModelFailure>;
 
 /// Below about 0.5% volatility the Ju engine's put boundary overflows, so smaller implied
 /// volatilities are treated as unsolvable.
@@ -36,6 +38,8 @@ const GAP_TOLERANCE: Real = 1e-9;
 /// four fifths of the remaining carry error, so the error left is about a quarter of the
 /// last move: 5e-4 per year keeps it near a basis point of the forward per year of expiry.
 const CORRECTION_CONVERGENCE: Rate = 5e-4;
+/// More than this fraction of the strikes entering the model being dropped flags the result.
+const MAX_DROPPED_FRACTION: Real = 0.25;
 
 /// Result of a model-based solve.
 #[derive(Debug, Clone)]
@@ -52,6 +56,8 @@ pub(crate) struct ModelSolution {
     pub accurate_prices_used: usize,
     pub tier: ForwardTier,
     pub flags: ForwardFlags,
+    /// Why the Accurate stage fell back to the Fast solution, when it did.
+    pub accurate_failure: Option<ModelFailure>,
 }
 
 /// Lower ends tried for the volatility bracket: the closed forms overflow below a few percent
@@ -126,6 +132,27 @@ fn european_equivalent(
     .ok()
 }
 
+/// Call minus put implied volatility of one strike, or `None` when either cannot be inverted.
+fn pair_gap(
+    pricer: &AmericanPricer,
+    pair: &OptionQuotePair,
+    spot: Real,
+    rate: Rate,
+    carry: Rate,
+) -> Option<Real> {
+    let call = american_iv(
+        pricer,
+        Call,
+        pair.strike,
+        spot,
+        rate,
+        carry,
+        pair.call_mid(),
+    )?;
+    let put = american_iv(pricer, Put, pair.strike, spot, rate, carry, pair.put_mid())?;
+    Some(call - put)
+}
+
 /// Mean call minus put implied volatility over the strikes where both exist.
 fn mean_iv_gap(
     pricer: &AmericanPricer,
@@ -134,39 +161,88 @@ fn mean_iv_gap(
     rate: Rate,
     carry: Rate,
 ) -> Option<Real> {
+    let gaps: Vec<Real> = pairs
+        .iter()
+        .filter_map(|pair| pair_gap(pricer, pair, spot, rate, carry))
+        .collect();
+    (!gaps.is_empty()).then(|| gaps.iter().sum::<Real>() / gaps.len() as Real)
+}
+
+/// Mean call minus put implied volatility over a fixed set of strikes: `None` as soon as one of
+/// them cannot be inverted, so the objective never changes its strike set between evaluations.
+fn fixed_iv_gap(
+    pricer: &AmericanPricer,
+    pairs: &[OptionQuotePair],
+    spot: Real,
+    rate: Rate,
+    carry: Rate,
+) -> Option<Real> {
     let mut sum = 0.0;
-    let mut count = 0usize;
     for pair in pairs {
-        let call = american_iv(
-            pricer,
-            Call,
-            pair.strike,
-            spot,
-            rate,
-            carry,
-            pair.call_mid(),
-        );
-        let put = american_iv(pricer, Put, pair.strike, spot, rate, carry, pair.put_mid());
-        if let (Some(c), Some(p)) = (call, put) {
-            sum += c - p;
-            count += 1;
+        sum += pair_gap(pricer, pair, spot, rate, carry)?;
+    }
+    (!pairs.is_empty()).then(|| sum / pairs.len() as Real)
+}
+
+/// The refinement may lose strikes to the bracket ends, but not most of them: at least two
+/// strikes (or all of them when fewer were given) and at least half must remain.
+fn enough_strikes(remaining: usize, total: usize) -> bool {
+    remaining >= total.min(2) && 2 * remaining >= total
+}
+
+/// Bracket halvings tried to bring enough invertible strikes to both ends.
+const MAX_BRACKET_HALVINGS: usize = 6;
+
+/// The strikes that invert at both `x_min` and `x_max`, with the mean call/put gap over them at
+/// each end.
+fn common_strikes(
+    pricer: &AmericanPricer,
+    pairs: &[OptionQuotePair],
+    spot: Real,
+    rate: Rate,
+    x_min: Rate,
+    x_max: Rate,
+) -> (Vec<OptionQuotePair>, Real, Real) {
+    let mut common = Vec::with_capacity(pairs.len());
+    let (mut sum_min, mut sum_max) = (0.0, 0.0);
+    for pair in pairs {
+        if let (Some(g_min), Some(g_max)) = (
+            pair_gap(pricer, pair, spot, rate, x_min),
+            pair_gap(pricer, pair, spot, rate, x_max),
+        ) {
+            common.push(*pair);
+            sum_min += g_min;
+            sum_max += g_max;
         }
     }
-    (count > 0).then(|| sum / count as Real)
+    let count = common.len().max(1) as Real;
+    (common, sum_min / count, sum_max / count)
+}
+
+/// A solved carry with the work it took and the gap left at it.
+#[derive(Debug, Clone, Copy)]
+struct CarrySolve {
+    carry: Rate,
+    evaluations: usize,
+    /// Mean call minus put implied volatility over the strikes of the final objective.
+    iv_gap: Real,
 }
 
 /// Solves for the carry that makes the mean call/put implied-vol gap vanish.
 ///
 /// The gap rises with the yield (a higher yield lowers call prices and raises put prices, so
 /// the call volatility must rise and the put volatility fall), so the root is bracketed by
-/// stepping away from zero toward it and refined with Brent's method.
+/// stepping away from zero toward it and refined with Brent's method. The bracketing may see a
+/// different set of invertible strikes at each trial carry; the bracket is halved until most
+/// strikes invert at both of its ends, and the refinement runs on those strikes only. It fails
+/// rather than follow a gap that loses a strike or changes sign because of the strike set.
 fn solve_carry(
     pricer: &AmericanPricer,
     pairs: &[OptionQuotePair],
     spot: Real,
     rate: Rate,
     config: &AmericanModelConfig,
-) -> QlResult<(Rate, usize)> {
+) -> ModelResult<CarrySolve> {
     let (lo, hi) = config.carry_search_range;
     let evaluations = Cell::new(0usize);
     let gap = |carry: Rate| {
@@ -176,54 +252,119 @@ fn solve_carry(
 
     let start = 0.0_f64.clamp(lo, hi);
     let Some(g_start) = gap(start) else {
-        fail!("no implied volatility could be solved at carry {start}");
+        return Err(ModelFailure::NoImpliedVolatility);
     };
     if g_start.abs() <= GAP_TOLERANCE {
-        return Ok((start, evaluations.get()));
+        return Ok(CarrySolve {
+            carry: start,
+            evaluations: evaluations.get(),
+            iv_gap: g_start,
+        });
     }
     let direction = if g_start < 0.0 { 1.0 } else { -1.0 };
     let edge = if direction > 0.0 { hi } else { lo };
     let mut a = start;
+    let mut g_a = g_start;
     let mut step = BRACKET_STEP;
     let mut shrinks = 0;
-    let b = loop {
+    let (b, g_b) = loop {
         let mut next = a + direction * step;
         if direction * (next - edge) >= 0.0 {
             next = edge;
         }
         match gap(next) {
             Some(g_next) if g_next.abs() <= GAP_TOLERANCE => {
-                return Ok((next, evaluations.get()));
+                return Ok(CarrySolve {
+                    carry: next,
+                    evaluations: evaluations.get(),
+                    iv_gap: g_next,
+                });
             }
-            Some(g_next) if g_next * g_start < 0.0 => break next,
-            Some(_) => {
-                require!(
-                    next != edge,
-                    "no carry in [{lo}, {hi}] equalizes call and put implied vols"
-                );
+            Some(g_next) if g_next * g_start < 0.0 => break (next, g_next),
+            Some(g_next) => {
+                if next == edge {
+                    return Err(ModelFailure::CarryNotBracketed);
+                }
                 a = next;
+                g_a = g_next;
                 step *= 2.0;
             }
             None => {
                 // Some strikes cannot be inverted this far out; retry closer to the last good point.
                 shrinks += 1;
-                require!(
-                    shrinks <= 4,
-                    "no implied volatility could be solved near carry {next}"
-                );
+                if shrinks > 4 {
+                    return Err(ModelFailure::NoImpliedVolatility);
+                }
                 step *= 0.5;
             }
         }
     };
-    let (x_min, x_max) = if a < b { (a, b) } else { (b, a) };
-    let carry = Brent::new().with_max_evaluations(100).solve_bracketed(
-        |c| gap(c).unwrap_or(Real::NAN),
-        config.carry_tolerance,
-        0.5 * (x_min + x_max),
-        x_min,
-        x_max,
-    )?;
-    Ok((carry, evaluations.get()))
+    // Halve the bracket (on the gap of whichever strikes invert) until enough strikes invert at
+    // both of its ends to refine on.
+    let (mut left, mut right) = if a < b {
+        ((a, g_a), (b, g_b))
+    } else {
+        ((b, g_b), (a, g_a))
+    };
+    let mut halvings = 0;
+    let (common, mean_left, mean_right) = loop {
+        let (common, mean_left, mean_right) =
+            common_strikes(pricer, pairs, spot, rate, left.0, right.0);
+        evaluations.set(evaluations.get() + 2);
+        if enough_strikes(common.len(), pairs.len()) {
+            break (common, mean_left, mean_right);
+        }
+        halvings += 1;
+        if halvings > MAX_BRACKET_HALVINGS {
+            return Err(ModelFailure::CarrySolveFailed);
+        }
+        let mid = 0.5 * (left.0 + right.0);
+        match gap(mid) {
+            Some(g_mid) if g_mid.abs() <= GAP_TOLERANCE => {
+                return Ok(CarrySolve {
+                    carry: mid,
+                    evaluations: evaluations.get(),
+                    iv_gap: g_mid,
+                });
+            }
+            Some(g_mid) if g_mid * left.1 < 0.0 => right = (mid, g_mid),
+            Some(g_mid) => left = (mid, g_mid),
+            None => return Err(ModelFailure::CarrySolveFailed),
+        }
+    };
+    if mean_left * mean_right > 0.0 {
+        return Err(ModelFailure::CarrySolveFailed);
+    }
+    let (x_min, x_max) = (left.0, right.0);
+    let fixed_gap = |carry: Rate| {
+        evaluations.set(evaluations.get() + 1);
+        fixed_iv_gap(pricer, &common, spot, rate, carry)
+    };
+    let lost_a_strike = Cell::new(false);
+    let carry = Brent::new()
+        .with_max_evaluations(100)
+        .solve_bracketed(
+            |c| {
+                fixed_gap(c).unwrap_or_else(|| {
+                    lost_a_strike.set(true);
+                    Real::NAN
+                })
+            },
+            config.carry_tolerance,
+            0.5 * (x_min + x_max),
+            x_min,
+            x_max,
+        )
+        .map_err(|_| ModelFailure::CarrySolveFailed)?;
+    let iv_gap = fixed_gap(carry).unwrap_or(Real::NAN);
+    if lost_a_strike.get() || !iv_gap.is_finite() {
+        return Err(ModelFailure::CarrySolveFailed);
+    }
+    Ok(CarrySolve {
+        carry,
+        evaluations: evaluations.get(),
+        iv_gap,
+    })
 }
 
 /// At-the-money volatility implied by the quotes, or `None` when none can be inverted.
@@ -330,11 +471,9 @@ pub(crate) fn solve(
     expiry_years: Time,
     min_pairs: usize,
     config: &AmericanModelConfig,
-) -> QlResult<ModelSolution> {
-    require!(
-        discount_factor.is_finite() && discount_factor > 0.0,
-        "discount factor must be finite and positive, got {discount_factor}"
-    );
+) -> ModelResult<ModelSolution> {
+    // The caller has checked the discount factor; a bad one would only fail every inversion.
+    debug_assert!(discount_factor.is_finite() && discount_factor > 0.0);
     let rate = -discount_factor.ln() / expiry_years;
     let market = Market {
         spot,
@@ -342,7 +481,8 @@ pub(crate) fn solve(
         expiry: expiry_years,
         discount: discount_factor,
     };
-    let cheap = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[])?;
+    let cheap = AmericanPricer::new(PricerKind::JuQuadratic, expiry_years, &[])
+        .map_err(|_| ModelFailure::PricerUnavailable)?;
     let money = spot * (rate * expiry_years).exp();
 
     // Beside a schedule the flat yield q the closed form fits maps to the residual carry
@@ -355,10 +495,9 @@ pub(crate) fn solve(
             .iter()
             .map(|&(time, amount)| amount * (-rate * time).exp())
             .sum();
-        require!(
-            pv < spot,
-            "present value of dividends ({pv}) must be below the spot ({spot})"
-        );
+        if pv >= spot {
+            return Err(ModelFailure::DividendsExceedSpot);
+        }
         (spot / (spot - pv)).ln() / expiry_years
     } else {
         0.0
@@ -371,13 +510,14 @@ pub(crate) fn solve(
         ..config.clone()
     };
 
-    let (carry0, iterations0) = solve_carry(
+    let first = solve_carry(
         &cheap,
         &nearest_to(pairs, money, SOLVE_STRIKES),
         spot,
         rate,
         &search,
     )?;
+    let carry0 = first.carry;
 
     let level = match config.level {
         AmericanLevel::Auto if has_schedule => AmericanLevel::Accurate,
@@ -399,49 +539,42 @@ pub(crate) fn solve(
 
     // Fast: either requested, the budget could not pay for a correction, or the correction
     // failed after the closed-form carry was solved.
-    let fast = |mut flags: ForwardFlags| -> QlResult<ModelSolution> {
+    let fast = |mut flags: ForwardFlags| -> ModelResult<ModelSolution> {
         if has_schedule {
             flags.insert(ForwardFlags::SCHEDULE_IGNORED);
         }
         let shifts = vec![Shift::default(); pairs.len()];
         let equivalent = deamericanize(&cheap, market, pairs, &shifts, carry0);
-        require!(
-            equivalent.len() >= min_pairs,
-            "only {} strikes could be de-Americanized, need {min_pairs}",
-            equivalent.len()
-        );
-        let nearest = nearest_to(pairs, money, SOLVE_STRIKES);
-        let iv_gap = mean_iv_gap(&cheap, &nearest, spot, rate, carry0).unwrap_or(Real::NAN);
+        if equivalent.len() < min_pairs {
+            return Err(ModelFailure::TooFewStrikes);
+        }
+        flag_dropped_pairs(&mut flags, pairs.len(), equivalent.len());
         Ok(ModelSolution {
             pairs: equivalent,
             carry: carry0 - offset,
-            iv_gap,
-            iterations: iterations0,
+            iv_gap: first.iv_gap,
+            iterations: first.evaluations,
             accurate_prices_used: 0,
             tier: ForwardTier::ModelFast,
             flags,
+            accurate_failure: None,
         })
     };
     let Some(plan) = plan else {
         return fast(flags);
     };
     let accurate = accurate_stage(
-        &cheap,
-        market,
-        pairs,
-        (carry0, iterations0),
-        offset,
-        plan,
-        min_pairs,
-        config,
-        &search,
-        flags,
+        &cheap, market, pairs, first, offset, plan, min_pairs, config, &search, flags,
     );
     match accurate {
         Ok(solution) => Ok(solution),
-        Err(_) => {
+        Err(failure) => {
             flags.insert(ForwardFlags::NON_CONVERGED);
-            fast(flags)
+            // If the Fast level cannot deliver either, the Accurate stage's cause is the one
+            // reported: it is where the solve first stopped.
+            let mut solution = fast(flags).map_err(|_| failure)?;
+            solution.accurate_failure = Some(failure);
+            Ok(solution)
         }
     }
 }
@@ -453,14 +586,14 @@ fn accurate_stage(
     cheap: &AmericanPricer,
     market: Market,
     pairs: &[OptionQuotePair],
-    (carry0, iterations0): (Rate, usize),
+    first: CarrySolve,
     offset: Rate,
     plan: CorrectionPlan,
     min_pairs: usize,
     config: &AmericanModelConfig,
     search: &AmericanModelConfig,
     mut flags: ForwardFlags,
-) -> QlResult<ModelSolution> {
+) -> ModelResult<ModelSolution> {
     let Market {
         spot,
         rate,
@@ -478,15 +611,18 @@ fn accurate_stage(
     } else {
         PricerKind::Binomial(400)
     };
-    let accurate = AmericanPricer::new(accurate_kind, expiry_years, &config.dividends)?;
+    let accurate = AmericanPricer::new(accurate_kind, expiry_years, &config.dividends)
+        .map_err(|_| ModelFailure::PricerUnavailable)?;
     let accurate_price = |ty: OptionType, strike: Real, carry: Rate, vol: Volatility| {
         accurate.price(ty, strike, spot, rate, carry - offset, vol)
     };
 
-    let mut carry = carry0;
-    let mut iterations = iterations0;
+    let mut carry = first.carry;
+    let mut iterations = first.evaluations;
+    let mut iv_gap = first.iv_gap;
     let prices_used = Cell::new(0usize);
     let mut corrected = corrected;
+    let attempted = corrected.len();
     let mut shifts = vec![Shift::default(); corrected.len()];
     let mut last_change = Real::INFINITY;
     for _ in 0..plan.passes {
@@ -512,11 +648,9 @@ fn accurate_stage(
                 kept_shifts.push(Shift { call, put });
             }
         }
-        require!(
-            kept.len() >= min_pairs,
-            "only {} strikes could be corrected, need {min_pairs}",
-            kept.len()
-        );
+        if kept.len() < min_pairs {
+            return Err(ModelFailure::TooFewStrikes);
+        }
         corrected = kept;
         shifts = kept_shifts;
         let adjusted: Vec<OptionQuotePair> = corrected
@@ -524,16 +658,17 @@ fn accurate_stage(
             .zip(&shifts)
             .map(|(pair, &shift)| shifted(pair, shift))
             .collect();
-        let (next, spent) = solve_carry(
+        let solved = solve_carry(
             cheap,
             &nearest_to(&adjusted, money, SOLVE_STRIKES),
             spot,
             rate,
             search,
         )?;
-        iterations += spent;
-        last_change = (next - carry).abs();
-        carry = next;
+        iterations += solved.evaluations;
+        last_change = (solved.carry - carry).abs();
+        carry = solved.carry;
+        iv_gap = solved.iv_gap;
         if last_change <= config.carry_tolerance {
             break;
         }
@@ -547,24 +682,10 @@ fn accurate_stage(
     }
 
     let equivalent = deamericanize(cheap, market, &corrected, &shifts, carry);
-    require!(
-        equivalent.len() >= min_pairs,
-        "only {} strikes could be de-Americanized, need {min_pairs}",
-        equivalent.len()
-    );
-    let adjusted: Vec<OptionQuotePair> = corrected
-        .iter()
-        .zip(&shifts)
-        .map(|(pair, &shift)| shifted(pair, shift))
-        .collect();
-    let iv_gap = mean_iv_gap(
-        cheap,
-        &nearest_to(&adjusted, money, SOLVE_STRIKES),
-        spot,
-        rate,
-        carry,
-    )
-    .unwrap_or(Real::NAN);
+    if equivalent.len() < min_pairs {
+        return Err(ModelFailure::TooFewStrikes);
+    }
+    flag_dropped_pairs(&mut flags, attempted, equivalent.len());
     Ok(ModelSolution {
         pairs: equivalent,
         carry: carry - offset,
@@ -573,7 +694,17 @@ fn accurate_stage(
         accurate_prices_used: prices_used,
         tier: ForwardTier::ModelAccurate,
         flags,
+        accurate_failure: None,
     })
+}
+
+/// Flags a result when more than a quarter of the `attempted` strikes did not survive the
+/// de-Americanization.
+fn flag_dropped_pairs(flags: &mut ForwardFlags, attempted: usize, kept: usize) {
+    let dropped = attempted.saturating_sub(kept);
+    if dropped as Real > MAX_DROPPED_FRACTION * attempted as Real {
+        flags.insert(ForwardFlags::PAIRS_DROPPED);
+    }
 }
 
 /// How much correction the work budget pays for.
@@ -685,7 +816,7 @@ mod tests {
     fn an_accurate_stage_failure_keeps_the_fast_solution() {
         // A dividend after the expiry makes the grid pricer refuse to build, after the
         // closed-form carry has been solved: the Fast result is returned, flagged.
-        let (rate, carry, expiry) = (0.03, 0.01, 0.5);
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
         let quotes = ju_quotes(0.25, rate, carry, expiry);
         let config = AmericanModelConfig {
             level: AmericanLevel::Accurate,
@@ -697,6 +828,192 @@ mod tests {
         assert!(solution.flags.contains(ForwardFlags::NON_CONVERGED));
         assert!(solution.flags.contains(ForwardFlags::SCHEDULE_IGNORED));
         assert!(solution.pairs.len() >= 2);
+        assert_eq!(
+            solution.accurate_failure,
+            Some(ModelFailure::PricerUnavailable)
+        );
+    }
+
+    fn failure(
+        quotes: &[OptionQuotePair],
+        discount_factor: DiscountFactor,
+        min_pairs: usize,
+        config: &AmericanModelConfig,
+    ) -> ModelFailure {
+        solve(quotes, 100.0, discount_factor, 0.5, min_pairs, config).unwrap_err()
+    }
+
+    #[test]
+    fn each_failure_reports_its_cause() {
+        let (rate, expiry): (Rate, Time) = (0.03, 0.5);
+        let discount = (-rate * expiry).exp();
+        let quotes = ju_quotes(0.25, rate, 0.01, expiry);
+        let default = AmericanModelConfig::default();
+
+        let huge_dividend = AmericanModelConfig {
+            dividends: vec![(0.25, 150.0)],
+            ..default.clone()
+        };
+        assert_eq!(
+            failure(&quotes, discount, 2, &huge_dividend),
+            ModelFailure::DividendsExceedSpot
+        );
+        // Calls above the spot and puts above the strike cannot be priced by any volatility.
+        let unpriceable: Vec<OptionQuotePair> = quotes
+            .iter()
+            .map(|q| OptionQuotePair::new(q.strike, 150.0, 151.0, 150.0, 151.0))
+            .collect();
+        assert_eq!(
+            failure(&unpriceable, discount, 2, &default),
+            ModelFailure::NoImpliedVolatility
+        );
+        // Quotes carrying about 1%, searched only above 20%.
+        let far_away = AmericanModelConfig {
+            carry_search_range: (0.20, 0.25),
+            carry_flag_range: (0.21, 0.24),
+            ..default.clone()
+        };
+        assert_eq!(
+            failure(&quotes, discount, 2, &far_away),
+            ModelFailure::CarryNotBracketed
+        );
+        // More strikes demanded than the chain has.
+        assert_eq!(
+            failure(&quotes, discount, 6, &default),
+            ModelFailure::TooFewStrikes
+        );
+    }
+
+    #[test]
+    fn a_lone_unpriceable_strike_is_dropped_without_a_flag_but_two_of_five_are_flagged() {
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
+        let discount = (-rate * expiry).exp();
+        let corrupt = |quotes: &mut Vec<OptionQuotePair>, strikes: &[Real]| {
+            for q in quotes.iter_mut().filter(|q| strikes.contains(&q.strike)) {
+                // A call quoted above the spot has no implied volatility.
+                *q = OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+            }
+        };
+        let config = AmericanModelConfig::default();
+
+        let mut one = ju_quotes(0.25, rate, carry, expiry);
+        corrupt(&mut one, &[110.0]);
+        let solution = solve(&one, 100.0, discount, expiry, 2, &config).unwrap();
+        assert_eq!(solution.pairs.len(), 4);
+        assert!(!solution.flags.contains(ForwardFlags::PAIRS_DROPPED));
+        assert!((solution.carry - carry).abs() < 0.01, "{}", solution.carry);
+
+        let mut two = ju_quotes(0.25, rate, carry, expiry);
+        corrupt(&mut two, &[90.0, 110.0]);
+        let solution = solve(&two, 100.0, discount, expiry, 2, &config).unwrap();
+        assert_eq!(solution.pairs.len(), 3);
+        assert!(solution.flags.contains(ForwardFlags::PAIRS_DROPPED));
+        assert!((solution.carry - carry).abs() < 0.01, "{}", solution.carry);
+    }
+
+    #[test]
+    fn the_refinement_needs_most_of_the_strikes_it_started_with() {
+        assert!(enough_strikes(1, 1));
+        assert!(enough_strikes(2, 2));
+        assert!(enough_strikes(3, 5));
+        assert!(!enough_strikes(1, 5));
+        assert!(!enough_strikes(2, 5));
+        assert!(!enough_strikes(1, 2));
+        assert!(!enough_strikes(0, 1));
+    }
+
+    #[test]
+    fn strikes_lost_during_the_accurate_correction_are_counted_too() {
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
+        let mut quotes = ju_quotes(0.25, rate, carry, expiry);
+        for q in quotes
+            .iter_mut()
+            .filter(|q| q.strike == 90.0 || q.strike == 110.0)
+        {
+            // A call above the spot cannot be inverted, so the correction drops the strike.
+            *q = OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+        }
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            ..AmericanModelConfig::default()
+        };
+        let solution = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 2, &config).unwrap();
+        assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+        assert_eq!(solution.pairs.len(), 3);
+        assert!(solution.flags.contains(ForwardFlags::PAIRS_DROPPED));
+    }
+
+    #[test]
+    fn a_failed_fast_fallback_reports_the_accurate_stage_cause() {
+        // The pricer for the dividend after the expiry cannot be built (Accurate stage), and
+        // the three corrupted calls leave the Fast level fewer than the three strikes it needs.
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.03, 0.01, 0.5);
+        let mut quotes = ju_quotes(0.25, rate, carry, expiry);
+        for q in quotes
+            .iter_mut()
+            .filter(|q| q.strike != 100.0 && q.strike != 105.0)
+        {
+            *q = OptionQuotePair::new(q.strike, 150.0, 151.0, q.put_bid, q.put_ask);
+        }
+        let config = AmericanModelConfig {
+            level: AmericanLevel::Accurate,
+            dividends: vec![(expiry + 0.1, 1.0)],
+            ..AmericanModelConfig::default()
+        };
+        let error = solve(&quotes, 100.0, (-rate * expiry).exp(), expiry, 3, &config).unwrap_err();
+        assert_eq!(error, ModelFailure::PricerUnavailable);
+    }
+
+    #[test]
+    fn a_chain_that_loses_strikes_across_the_bracket_is_not_solved_on_the_remainder() {
+        // Near-zero volatility and a carry at the edge of the search: the far strikes stop
+        // inverting as the trial carry moves, so the refinement cannot keep most of them. The
+        // answer must be a reported failure or the carry the chain was priced with.
+        let (rate, carry, expiry): (Rate, Rate, Time) = (0.0, -0.09, 0.5);
+        let pricer = AmericanPricer::new(PricerKind::JuQuadratic, expiry, &[]).unwrap();
+        let quotes: Vec<OptionQuotePair> = [80.0, 90.0, 95.0, 100.0, 105.0, 110.0, 120.0]
+            .iter()
+            .map(|&k| {
+                let c = pricer.price(Call, k, 100.0, rate, carry, 0.05).unwrap();
+                let p = pricer.price(Put, k, 100.0, rate, carry, 0.05).unwrap();
+                OptionQuotePair::new(k, c - 0.01, c + 0.01, (p - 0.01).max(0.0), p + 0.01)
+            })
+            .collect();
+        let config = AmericanModelConfig::default();
+        match solve(&quotes, 100.0, 1.0, expiry, 2, &config) {
+            Err(failure) => assert_eq!(failure, ModelFailure::CarrySolveFailed),
+            Ok(solution) => assert!(
+                (solution.carry - carry).abs() < 1e-4,
+                "solved {}",
+                solution.carry
+            ),
+        }
+    }
+
+    #[test]
+    fn the_solved_carry_is_right_or_an_error_never_a_strike_set_artifact() {
+        // Deep in-the-money options can stop being invertible as the trial carry moves away
+        // from the true one, so the strike set seen by the solver may change along the search.
+        // Whatever the quotes, the answer must be the carry they were priced with or a reported
+        // failure.
+        let (rate, expiry): (Rate, Time) = (0.03, 0.5);
+        let discount = (-rate * expiry).exp();
+        let config = AmericanModelConfig::default();
+        let mut solved = 0;
+        for &carry in &[-0.08, -0.03, 0.0, 0.04, 0.10, 0.18, 0.22] {
+            for &vol in &[0.08, 0.15, 0.25, 0.5] {
+                let quotes = ju_quotes(vol, rate, carry, expiry);
+                if let Ok(solution) = solve(&quotes, 100.0, discount, expiry, 2, &config) {
+                    solved += 1;
+                    assert!(
+                        (solution.carry - carry).abs() < 1e-5,
+                        "carry {carry} vol {vol}: solved {}",
+                        solution.carry
+                    );
+                }
+            }
+        }
+        assert!(solved >= 20, "only {solved} of 28 solved");
     }
 
     #[test]
@@ -782,7 +1099,12 @@ mod tests {
                 ..AmericanModelConfig::default()
             };
             let solution = solve(&quotes, 100.0, discount, expiry, 2, &config).unwrap();
-            assert_eq!(solution.tier, ForwardTier::ModelAccurate);
+            assert_eq!(
+                solution.tier,
+                ForwardTier::ModelAccurate,
+                "{:?} r={rate} q={carry} T={expiry}",
+                solution.accurate_failure
+            );
 
             let accurate = AmericanPricer::new(PricerKind::Binomial(400), expiry, &[]).unwrap();
             let market = Market {

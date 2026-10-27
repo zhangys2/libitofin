@@ -44,6 +44,69 @@ impl ForwardTier {
     }
 }
 
+/// Why the model-based estimate could not be produced, or fell back to the Fast level.
+///
+/// Reported with the `NON_CONVERGED` flag: after a full failure the corridor estimate is
+/// returned (status `WarningModelFallback`), after a failure of the Accurate stage alone the
+/// Fast model estimate is. Invalid inputs (a non-positive discount factor, a malformed
+/// config) are not model failures: they are errors of the call itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ModelFailure {
+    /// The strike window left fewer than `min_pairs` valid quote pairs.
+    InsufficientPairs,
+    /// The present value of the dividends is not below the spot.
+    DividendsExceedSpot,
+    /// The American pricer could not be built (for example a dividend after the expiry).
+    PricerUnavailable,
+    /// No quote near the money could be inverted for an American implied volatility.
+    NoImpliedVolatility,
+    /// No carry inside `carry_search_range` equalizes the call and put implied volatilities.
+    CarryNotBracketed,
+    /// The carry solver lost a strike or did not converge inside the bracket.
+    CarrySolveFailed,
+    /// Fewer than `min_pairs` strikes survived the premium correction or de-Americanization.
+    TooFewStrikes,
+    /// The parity fit of the de-Americanized quotes failed.
+    ParityFitFailed,
+}
+
+impl ModelFailure {
+    /// Stable lowercase name used by the bindings.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModelFailure::InsufficientPairs => "insufficient_pairs",
+            ModelFailure::DividendsExceedSpot => "dividends_exceed_spot",
+            ModelFailure::PricerUnavailable => "pricer_unavailable",
+            ModelFailure::NoImpliedVolatility => "no_implied_volatility",
+            ModelFailure::CarryNotBracketed => "carry_not_bracketed",
+            ModelFailure::CarrySolveFailed => "carry_solve_failed",
+            ModelFailure::TooFewStrikes => "too_few_strikes",
+            ModelFailure::ParityFitFailed => "parity_fit_failed",
+        }
+    }
+
+    /// Stable code for the C ABI (0 is reserved for "no failure").
+    pub fn code(self) -> u32 {
+        match self {
+            ModelFailure::InsufficientPairs => 1,
+            ModelFailure::DividendsExceedSpot => 2,
+            ModelFailure::PricerUnavailable => 3,
+            ModelFailure::NoImpliedVolatility => 4,
+            ModelFailure::CarryNotBracketed => 5,
+            ModelFailure::CarrySolveFailed => 6,
+            ModelFailure::TooFewStrikes => 7,
+            ModelFailure::ParityFitFailed => 8,
+        }
+    }
+}
+
+impl std::fmt::Display for ModelFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Independent boolean signals about how an American forward was produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ForwardFlags(u8);
@@ -57,11 +120,15 @@ impl ForwardFlags {
     pub const LATENCY_FALLBACK: ForwardFlags = ForwardFlags(1 << 1);
     /// The carry or correction iteration did not reach its tolerance.
     pub const NON_CONVERGED: ForwardFlags = ForwardFlags(1 << 2);
+    /// More than a quarter of the strikes entering the model could not be de-Americanized
+    /// and were left out of the parity fit.
+    pub const PAIRS_DROPPED: ForwardFlags = ForwardFlags(1 << 3);
 
-    const NAMED: [(ForwardFlags, &'static str); 3] = [
+    const NAMED: [(ForwardFlags, &'static str); 4] = [
         (ForwardFlags::SCHEDULE_IGNORED, "schedule_ignored"),
         (ForwardFlags::LATENCY_FALLBACK, "latency_fallback"),
         (ForwardFlags::NON_CONVERGED, "non_converged"),
+        (ForwardFlags::PAIRS_DROPPED, "pairs_dropped"),
     ];
 
     /// Raw bits, for the C ABI.

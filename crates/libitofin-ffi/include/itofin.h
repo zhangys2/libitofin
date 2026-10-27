@@ -720,7 +720,11 @@ typedef struct ItofinImpliedForwardOptions {
  * The result of `itofin_implied_forward_calculate` plus the model-path outputs.
  *
  * `tier_code` is -1 (no tier), 0 corridor, 1 model fast, 2 model accurate. `flags` bits:
- * 1 schedule ignored, 2 latency fallback, 4 not converged. `has_model` is 1 when the
+ * 1 schedule ignored, 2 latency fallback, 4 not converged, 8 pairs dropped. `model_failure`
+ * is 0 when the model path ran cleanly, otherwise the cause of the fallback (1 insufficient
+ * pairs, 2 dividends exceed spot, 3 pricer unavailable, 4 no implied volatility, 5 carry not
+ * bracketed, 6 carry solve failed, 7 too few strikes, 8 parity fit failed); codes this version
+ * does not know are reserved. `has_model` is 1 when the
  * `solved_carry`, `call_put_iv_gap`, `iterations` and `accurate_prices_used` fields are
  * meaningful (NaN or 0 otherwise).
  */
@@ -738,6 +742,7 @@ typedef struct ItofinImpliedForwardResultEx {
   uint32_t box_arbitrage_violations;
   double min_spread;
   double max_spread;
+  uint32_t model_failure;
 } ItofinImpliedForwardResultEx;
 
 /**

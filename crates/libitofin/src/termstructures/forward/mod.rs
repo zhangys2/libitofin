@@ -7,6 +7,7 @@ pub mod implied_forward;
 
 pub use american_model::{
     AmericanLevel, AmericanModelConfig, AmericanModelDiagnostics, ForwardFlags, ForwardTier,
+    ModelFailure,
 };
 
 pub use implied_forward::{
