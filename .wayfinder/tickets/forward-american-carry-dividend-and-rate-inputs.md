@@ -19,7 +19,7 @@ Why it matters: the American pricer needs $r$ and the dividends to compute the E
 ## Context
 
 - Today `discount_factor` is optional and the Merton bounds use escrowed dividend PV in the American ticket's resolution.
-- Method settled in [De-Americanization Method & Tier Structure](forward-deamericanization-method-and-tiering.md): per-quote American IV under a trial carry $q$, feeding the existing `ImpliedForward` back-end, so the solver's unknown is the carry (equivalently $F$) with $D$ taken from the curve. Only FD takes cash dividends (see the pricer ticket).
+- Method settled in [De-Americanization Method & Tier Structure](forward-deamericanization-method-and-tiering.md), amended 2026-10-27: Brent on the mean call/put IV gap, one de-Americanization, median forward. The solver's unknown is the carry (equivalently $F$) with $D$ taken from the curve. Only FD takes cash dividends (see the pricer ticket).
 
 ## Resolution
 
