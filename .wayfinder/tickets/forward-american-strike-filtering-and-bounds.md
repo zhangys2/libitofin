@@ -5,7 +5,7 @@ status: closed
 blocked_by: []
 claimed_by: "Math & Market Formulations Researcher"
 map: ../maps/implied-forward-from-options.md
-resolution: "Adopted model-free strike corridor |ln(K/S)| <= kappa * sigma_atm * sqrt(T) (default kappa = 0.5) where early exercise premium is bounded by bid-ask spread. Combined with Merton analytical bounds [F_min, F_max] adjusting for escrowed dividends. Replaced iterative PDE inversion with robust, low-latency filter."
+resolution: "Model-free strike corridor |ln(K/S)| <= kappa * sigma_atm * sqrt(T) plus Merton bounds [F_min, F_max]. Amended 2026-10-27: the corridor is the flagged fallback of the model-based solver. Fast is the Ju level. The dividend adjustment and the repo-rate diagnostic were replaced by the dividend schedule and ForwardStatus::WarningImplausibleCarry."
 ---
 
 # American Option Strike Filtering & Early Exercise Bounds
@@ -48,3 +48,9 @@ $$F_{\max} = \min_{i \in \text{ATM}} \left[ K_i + \frac{C_{\text{ask}, i} - (P_{
    - Flag result as `Confidence::AmericanDividendAdjusted`.
 3. **High Borrow Fee / Hard-to-Borrow**:
    - If implied repo rate $q = r - \frac{1}{T}\ln(F/S)$ is anomalously high ($q > 0.15$), flag `Diagnostics::NegativeCarryDetected`.
+
+## Amendment (2026-10-25, updated 2026-10-27)
+
+The decision to replace iterative PDE inversion with this model-free filter is reopened. The corridor is the flagged fallback when the discount factor is absent, the model path does not converge, or the pricer errors. It does not remove the early-exercise premium, so its bias grows with rates, dividends and maturity. Fast is the Ju level in [De-Americanization Method & Tier Structure](forward-deamericanization-method-and-tiering.md).
+
+The dividend adjustment in section 3 (`Confidence::AmericanDividendAdjusted`) and the repo-rate diagnostic (`Diagnostics::NegativeCarryDetected`) were replaced by the dividend schedule on `AmericanModelConfig` and by `ForwardStatus::WarningImplausibleCarry` on `carry_flag_range`.
