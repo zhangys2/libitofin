@@ -14,17 +14,22 @@ from itofin import termstructures
 from itofin import time
 import typing
 __all__ = [
+    "AmortizingFixedRateBond",
+    "AmortizingFloatingRateBond",
     "AssetSwap",
     "BMASwap",
     "BermudanExercise",
     "Bond",
     "BondForward",
+    "CPIBond",
+    "CPISwap",
     "Callability",
     "CallabilityType",
     "CallableFixedRateBond",
     "CallableZeroCouponBond",
     "CapFloor",
     "CapFloorType",
+    "CpiCapFloor",
     "CreditDefaultSwap",
     "Duration",
     "EuropeanExercise",
@@ -41,9 +46,11 @@ __all__ = [
     "OptionType",
     "OvernightIndexFuture",
     "OvernightIndexedSwap",
+    "PayoffKind",
     "Position",
     "PricingModel",
     "ProtectionSide",
+    "ScalarPayoff",
     "SettlementMethod",
     "SettlementType",
     "SwapType",
@@ -57,6 +64,32 @@ __all__ = [
     "ZeroCouponBond",
     "ZeroCouponInflationSwap",
 ]
+
+@typing.final
+class AmortizingFixedRateBond(Bond):
+    r"""
+    Par-amortizing fixed bond with one positive nonincreasing balance per period.
+    """
+    def __new__(cls, settlement_days: builtins.int, notionals: typing.Sequence[builtins.float], schedule: time.Schedule, coupons: typing.Sequence[builtins.float], accrual_day_counter: time.DayCounter, settings: itofin.Settings, payment_convention: time.BusinessDayConvention = time.BusinessDayConvention.Following, issue_date: typing.Optional[time.Date] = None, payment_calendar: typing.Optional[time.Calendar] = None, ex_coupon_period: typing.Optional[time.Period] = None, ex_coupon_calendar: typing.Optional[time.Calendar] = None, ex_coupon_convention: time.BusinessDayConvention = time.BusinessDayConvention.Unadjusted, ex_coupon_end_of_month: builtins.bool = False, first_period_day_counter: typing.Optional[time.DayCounter] = None) -> AmortizingFixedRateBond: ...
+    def frequency(self) -> time.Frequency: ...
+    def day_counter(self) -> time.DayCounter: ...
+    def first_period_day_counter(self) -> typing.Optional[time.DayCounter]: ...
+
+@typing.final
+class AmortizingFloatingRateBond(Bond):
+    r"""
+    Plain ibor amortization with one positive balance per coupon period and par principal.
+    Settlement, coupon and index fixing lags are bounded by the supported Date span.
+    """
+    def __new__(cls, settlement_days: builtins.int, notionals: typing.Sequence[builtins.float], schedule: time.Schedule, index: indexes.IborIndex, accrual_day_counter: time.DayCounter, settings: itofin.Settings, *, payment_convention: time.BusinessDayConvention = time.BusinessDayConvention.Following, fixing_days: typing.Optional[builtins.int] = None, spreads: typing.Optional[typing.Sequence[builtins.float]] = None, issue_date: typing.Optional[time.Date] = None, ex_coupon_period: typing.Optional[time.Period] = None, ex_coupon_calendar: typing.Optional[time.Calendar] = None, ex_coupon_convention: time.BusinessDayConvention = time.BusinessDayConvention.Unadjusted, ex_coupon_end_of_month: builtins.bool = False, fixing_convention: time.BusinessDayConvention = time.BusinessDayConvention.Preceding) -> AmortizingFloatingRateBond: ...
+    def index(self) -> indexes.IborIndex:
+        r"""
+        Return the retained live ibor index with its original calendar bounds.
+        """
+    def set_coupon_pricer(self, pricer: cashflows.BlackIborCouponPricer) -> None:
+        r"""
+        Replace the retained plain coupon pricer without changing principal flows.
+        """
 
 @typing.final
 class AssetSwap:
@@ -239,6 +272,11 @@ class Bond:
         r"""
         The coupon rate repricing the bond's own curve NPV, not a par-price target.
         """
+    def atm_rate_from_price(self, discount_curve: termstructures.YieldTermStructure, price: builtins.float, *, price_type: termstructures.BondPriceType = termstructures.BondPriceType.Clean, settlement: typing.Optional[time.Date] = None) -> builtins.float:
+        r"""
+        Coupon rate repricing an explicit per-100 clean or dirty quote at settlement.
+        Uses current notional and live coupon amounts; the own-NPV ATM API is unchanged.
+        """
     def duration(self, yield_rate: builtins.float, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, duration_type: Duration = Duration.Modified, settlement: typing.Optional[time.Date] = None) -> builtins.float:
         r"""
         Flat-yield duration, independent of pricing engines. Macaulay requires compounded yield.
@@ -297,6 +335,30 @@ class Bond:
     def issue_date(self) -> typing.Optional[time.Date]: ...
     def cashflows(self) -> cashflows.Leg: ...
     def redemptions(self) -> cashflows.Leg: ...
+    def start_date(self) -> time.Date:
+        r"""
+        Earliest coupon accrual start or non-coupon payment date; needs no engine.
+        """
+    def is_tradable(self, settlement: typing.Optional[time.Date] = None) -> builtins.bool:
+        r"""
+        Whether outstanding notional is nonzero at settlement; omitted date uses bond settlement.
+        """
+    def previous_cash_flow_date(self, settlement: typing.Optional[time.Date] = None) -> typing.Optional[time.Date]:
+        r"""
+        Previous payment date, or None; excludes settlement flows unless today Settings override.
+        """
+    def next_cash_flow_date(self, settlement: typing.Optional[time.Date] = None) -> typing.Optional[time.Date]:
+        r"""
+        Next payment date, or None; today Settings can override settlement exclusion.
+        """
+    def previous_cash_flow_amount(self, settlement: typing.Optional[time.Date] = None) -> typing.Optional[builtins.float]:
+        r"""
+        Aggregate previous actual payment, including principal, or None; not a per-100 quote.
+        """
+    def next_cash_flow_amount(self, settlement: typing.Optional[time.Date] = None) -> typing.Optional[builtins.float]:
+        r"""
+        Aggregate next actual payment, including principal, or None; not a per-100 quote.
+        """
     def is_expired(self) -> builtins.bool: ...
     def is_calculated(self) -> builtins.bool: ...
     def freeze(self) -> None:
@@ -324,6 +386,73 @@ class BondForward:
     def freeze(self) -> None: ...
     def unfreeze(self) -> None: ...
     def recalculate(self) -> None: ...
+
+@typing.final
+class CPIBond(Bond):
+    r"""
+    Plain CPI-indexed coupon bond with explicit base CPI and indexed principal.
+    """
+    def __new__(cls, settlement_days: builtins.int, face_amount: builtins.float, base_cpi: builtins.float, observation_lag: time.Period, index: indexes.ZeroInflationIndex, observation_interpolation: indexes.CpiInterpolationType, schedule: time.Schedule, coupons: typing.Sequence[builtins.float], accrual_day_counter: time.DayCounter, settings: itofin.Settings, *, payment_convention: time.BusinessDayConvention = time.BusinessDayConvention.ModifiedFollowing, issue_date: typing.Optional[time.Date] = None, payment_calendar: typing.Optional[time.Calendar] = None, ex_coupon_period: typing.Optional[time.Period] = None, ex_coupon_calendar: typing.Optional[time.Calendar] = None, ex_coupon_convention: time.BusinessDayConvention = time.BusinessDayConvention.Unadjusted, ex_coupon_end_of_month: builtins.bool = False) -> CPIBond: ...
+
+@typing.final
+class CPISwap:
+    r"""
+    CPI-scaled fixed coupons against plain Ibor-plus-spread coupons.
+    Payer pays Ibor and receives CPI; Receiver reverses both signs.
+    """
+    def __init__(self, swap_type: SwapType, nominal: builtins.float, subtract_inflation_nominal: builtins.bool, spread: builtins.float, float_schedule: time.Schedule, float_index: indexes.IborIndex, float_day_count: time.DayCounter, float_convention: time.BusinessDayConvention, fixed_rate: builtins.float, base_cpi: builtins.float, fixed_schedule: time.Schedule, fixed_index: indexes.ZeroInflationIndex, fixed_day_count: time.DayCounter, fixed_convention: time.BusinessDayConvention, observation_lag: time.Period, settings: itofin.Settings, *, interpolation: typing.Optional[indexes.CpiInterpolationType] = None, inflation_nominal: typing.Optional[builtins.float] = None) -> None:
+        r"""
+        Construct plain coupon schedules and terminal exchanges, retaining live indexes.
+        Ibor fixing days use the index default. Payer pays the floating leg.
+        """
+    def set_engine(self, curve: termstructures.YieldTermStructure, settings: itofin.Settings) -> None:
+        r"""
+        Attach a retained live curve with native defaults; Settings must be the same object.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Signed present value under the retained engine.
+        """
+    def fixed_leg_npv(self) -> builtins.float:
+        r"""
+        Signed CPI-leg present value including indexed principal.
+        """
+    def float_leg_npv(self) -> builtins.float:
+        r"""
+        Signed Ibor-leg present value including any nominal exchange.
+        """
+    def float_leg_bps(self) -> builtins.float:
+        r"""
+        Signed sensitivity to a one-basis-point Ibor spread increase.
+        """
+    def fair_spread(self) -> builtins.float:
+        r"""
+        Absolute Ibor spread that zeroes NPV with the CPI leg unchanged.
+        """
+    def calculate(self) -> None:
+        r"""
+        Populate native cached results if needed.
+        """
+    def recalculate(self) -> None:
+        r"""
+        Force native repricing, including while frozen.
+        """
+    def freeze(self) -> None:
+        r"""
+        Pin native cached results until unfreeze or explicit recalculate.
+        """
+    def unfreeze(self) -> None:
+        r"""
+        Resume native observer-driven repricing.
+        """
+    def is_calculated(self) -> builtins.bool:
+        r"""
+        Read the native cache flag without calculating.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Test native expiry without calculating.
+        """
 
 @typing.final
 class Callability:
@@ -606,6 +735,35 @@ class CapFloor:
         Raises:
             ItofinError: If no engine is attached, which the core reports as
                 "null pricing engine".
+        """
+
+@typing.final
+class CpiCapFloor:
+    r"""
+    A single cumulative CPI cap/floor, not an option on each coupon.
+
+    NPV is the surface quote, independent of nominal, base_cpi and start_date.
+    Expiry is after raw maturity, not the adjusted payment date.
+    """
+    def __init__(self, option_type: OptionType, nominal: builtins.float, start_date: time.Date, base_cpi: builtins.float, maturity: time.Date, fixing_calendar: time.Calendar, fixing_convention: time.BusinessDayConvention, payment_calendar: time.Calendar, payment_convention: time.BusinessDayConvention, strike: builtins.float, index: indexes.ZeroInflationIndex, observation_lag: time.Period, interpolation: indexes.CpiInterpolationType, settings: itofin.Settings, engine: pricingengines.InterpolatingCpiCapFloorEngine) -> None:
+        r"""
+        Build a cumulative CPI option with explicit calendars and settings.
+        """
+    def npv(self) -> builtins.float:
+        r"""
+        Surface-quoted NPV, zero after raw maturity.
+        """
+    def fixing_date(self) -> time.Date:
+        r"""
+        Observation-lagged, adjusted fixing date.
+        """
+    def pay_date(self) -> time.Date:
+        r"""
+        Adjusted payment date, distinct from the expiry date.
+        """
+    def is_expired(self) -> builtins.bool:
+        r"""
+        Whether the live evaluation date is after raw maturity.
         """
 
 @typing.final
@@ -1541,6 +1699,63 @@ class OvernightIndexedSwap:
         """
 
 @typing.final
+class ScalarPayoff:
+    r"""
+    Immutable payoff terms and evaluation at a finite signed underlying price.
+    Signed strikes and amounts are allowed. Factories copy all input values.
+    This object cannot be passed to existing option constructors or engines.
+    """
+    @staticmethod
+    def plain_vanilla(option_type: OptionType, strike: builtins.float) -> ScalarPayoff:
+        r"""
+        Vanilla intrinsic value, floored at zero.
+        """
+    @staticmethod
+    def cash_or_nothing(option_type: OptionType, strike: builtins.float, cash_payoff: builtins.float) -> ScalarPayoff:
+        r"""
+        Fixed cash amount strictly beyond the strike; zero at equality.
+        """
+    @staticmethod
+    def asset_or_nothing(option_type: OptionType, strike: builtins.float) -> ScalarPayoff:
+        r"""
+        Underlying price strictly beyond the strike; zero at equality.
+        """
+    @staticmethod
+    def gap(option_type: OptionType, strike: builtins.float, second_strike: builtins.float) -> ScalarPayoff:
+        r"""
+        Inclusive trigger strike and separate payment strike; no payout floor.
+        """
+    @staticmethod
+    def percentage_strike(option_type: OptionType, moneyness: builtins.float) -> ScalarPayoff:
+        r"""
+        Dimensionless ratio, not percent points or an absolute monetary strike.
+        """
+    def value(self, price: builtins.float) -> builtins.float:
+        r"""
+        Evaluate at a finite signed price. Nonfinite computed results raise.
+        """
+    def kind(self) -> PayoffKind:
+        r"""
+        Stored payoff family.
+        """
+    def option_type(self) -> OptionType:
+        r"""
+        Stored call or put flag.
+        """
+    def strike(self) -> builtins.float:
+        r"""
+        Stored trigger strike, or dimensionless ratio for percentage-strike.
+        """
+    def cash_payoff(self) -> typing.Optional[builtins.float]:
+        r"""
+        Stored cash amount for cash-or-nothing, otherwise None.
+        """
+    def second_strike(self) -> typing.Optional[builtins.float]:
+        r"""
+        Stored payment strike for gap, otherwise None.
+        """
+
+@typing.final
 class Swaption:
     r"""
     An option to enter a vanilla or overnight swap.
@@ -1708,6 +1923,40 @@ class VanillaOption:
         and zero cash amounts are accepted. Use set_engine(process) to attach the
         analytic European engine; other engine compatibility is not implied.
         Existing zero-volatility and zero-strike numerical behavior is retained.
+        """
+    @classmethod
+    def asset_or_nothing(cls, option_type: OptionType, strike: builtins.float, expiry: time.Date, settings: itofin.Settings) -> VanillaOption:
+        r"""
+        Build a European asset-or-nothing option.
+
+        The finite nonnegative strike triggers a terminal asset-price payment
+        strictly in the money; equality pays zero. `price(process)` uses the
+        analytic Black asset-or-nothing calculator. Attach set_fd_engine(engine)
+        or use price_fd(engine) for the finite-difference price.
+        Grid convergence and the existing log-FD market domain still apply.
+        """
+    @classmethod
+    def gap(cls, option_type: OptionType, strike: builtins.float, second_strike: builtins.float, expiry: time.Date, settings: itofin.Settings) -> VanillaOption:
+        r"""
+        Build a European gap option with separate trigger and payment strikes.
+
+        The trigger strike must be finite and nonnegative, and second_strike
+        finite (signed values are accepted). Trigger equality is included and
+        negative payments are retained. `price(process)` uses the analytic Black
+        gap calculator. Attach set_fd_engine for the finite-difference price.
+        FD cell averaging preserves its existing signed/cancelling-value fallback.
+        """
+    @classmethod
+    def percentage_strike(cls, option_type: OptionType, moneyness: builtins.float, expiry: time.Date, settings: itofin.Settings) -> VanillaOption:
+        r"""
+        Build a European percentage-strike option for the existing FD engine.
+
+        Moneyness is a finite dimensionless ratio, not a percent scaled by 100
+        or an absolute strike. Signed ratios are accepted. A call pays
+        S*max(1-m,0), a put S*max(m-1,0). Use set_fd_engine or price_fd;
+        analytic Black rejects this payoff. The FD volatility lookup receives m
+        unchanged, so strike-smile surfaces can reject it. Constant-vol use is
+        the validated path; existing grid and market-domain limits apply.
         """
     @classmethod
     def american(cls, option_type: OptionType, strike: builtins.float, earliest: time.Date, latest: time.Date, settings: itofin.Settings) -> VanillaOption:
@@ -2977,6 +3226,20 @@ class OptionType:
     Call: typing.ClassVar[OptionType]
     Put: typing.ClassVar[OptionType]
     def __new__(cls, _unconstructible: typing.NoReturn) -> OptionType: ...
+    def __int__(self) -> builtins.int: ...
+    __hash__: typing.ClassVar[None]  # type: ignore[assignment]
+
+@typing.final
+class PayoffKind:
+    r"""
+    Safe scalar payoff family, not an engine compatibility promise.
+    """
+    PlainVanilla: typing.ClassVar[PayoffKind]
+    CashOrNothing: typing.ClassVar[PayoffKind]
+    AssetOrNothing: typing.ClassVar[PayoffKind]
+    Gap: typing.ClassVar[PayoffKind]
+    PercentageStrike: typing.ClassVar[PayoffKind]
+    def __new__(cls, _unconstructible: typing.NoReturn) -> PayoffKind: ...
     def __int__(self) -> builtins.int: ...
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 

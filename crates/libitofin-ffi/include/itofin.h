@@ -298,6 +298,35 @@ typedef struct ItofinFixedBondConfig {
   uint8_t ex_coupon_end_of_month;
 } ItofinFixedBondConfig;
 
+/**
+ * Configuration for a par-amortizing fixed-rate bond with per-period balances.
+ */
+typedef struct ItofinAmortizingFixedBondConfig {
+  uint32_t settlement_days;
+  uint64_t settings;
+  /**
+   * Zero means no issue date.
+   */
+  int32_t issue_date;
+  int32_t payment_convention;
+  /**
+   * Zero selects the schedule calendar.
+   */
+  uint64_t calendar;
+  uint64_t schedule;
+  uint64_t day_counter;
+  /**
+   * Zero means no first-period override.
+   */
+  uint64_t first_period_day_counter;
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  int32_t ex_coupon_convention;
+  uint8_t has_ex_coupon;
+  uint8_t ex_coupon_end_of_month;
+} ItofinAmortizingFixedBondConfig;
+
 typedef struct ItofinBondForwardConfig {
   uint64_t bond;
   int32_t value_date;
@@ -405,6 +434,86 @@ typedef struct ItofinCallableBondRiskConfig {
 } ItofinCallableBondRiskConfig;
 
 /**
+ * Modern CPI bond configuration. Principal pays the full CPI ratio.
+ */
+typedef struct ItofinCpiBondConfig {
+  uint32_t settlement_days;
+  double face_amount;
+  double base_cpi;
+  int32_t observation_lag_length;
+  int32_t observation_lag_unit;
+  uint64_t index;
+  int32_t observation_interpolation;
+  uint64_t schedule;
+  uint64_t day_counter;
+  uint64_t settings;
+  int32_t payment_convention;
+  /**
+   * Zero selects the schedule calendar.
+   */
+  uint64_t payment_calendar;
+  /**
+   * Zero means no issue date.
+   */
+  int32_t issue_date;
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  int32_t ex_coupon_convention;
+  uint8_t has_ex_coupon;
+  uint8_t ex_coupon_end_of_month;
+} ItofinCpiBondConfig;
+
+/**
+ * Prices are row-major, strike rows by maturity columns. Maturities are years.
+ */
+typedef struct ItofinCpiPriceSurfaceConfig {
+  double nominal;
+  double base_rate;
+  int32_t lag_length;
+  int32_t lag_unit;
+  uint64_t calendar;
+  int32_t convention;
+  uint64_t day_counter;
+  uint64_t index;
+  int32_t interpolation;
+  uint64_t discount;
+  const double *cap_strikes;
+  size_t cap_strike_count;
+  const double *floor_strikes;
+  size_t floor_strike_count;
+  const int32_t *maturity_years;
+  size_t maturity_count;
+  const double *cap_prices;
+  size_t cap_price_count;
+  const double *floor_prices;
+  size_t floor_price_count;
+  uint64_t settings;
+} ItofinCpiPriceSurfaceConfig;
+
+/**
+ * Contract nominal/base CPI/start date do not rescale the quoted surface price.
+ */
+typedef struct ItofinCpiCapFloorConfig {
+  int32_t kind;
+  double nominal;
+  int32_t start;
+  double base_cpi;
+  int32_t maturity;
+  uint64_t fixing_calendar;
+  int32_t fixing_convention;
+  uint64_t payment_calendar;
+  int32_t payment_convention;
+  double strike;
+  uint64_t index;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  uint64_t settings;
+  uint64_t engine;
+} ItofinCpiCapFloorConfig;
+
+/**
  * Plain same-currency paid and received Ibor legs. Flag zero preserves native defaults.
  */
 typedef struct ItofinFloatFloatSwapConfig {
@@ -421,6 +530,34 @@ typedef struct ItofinFloatFloatSwapConfig {
   uint8_t has_payment_convention;
   int32_t payment_convention;
 } ItofinFloatFloatSwapConfig;
+
+/**
+ * Plain ibor amortization, with par principal and no optional payoff terms.
+ */
+typedef struct ItofinAmortizingFloatingBondConfig {
+  uint32_t settlement_days;
+  uint64_t schedule;
+  uint64_t index;
+  uint64_t day_counter;
+  uint64_t settings;
+  int32_t payment_convention;
+  /**
+   * Zero means no issue date.
+   */
+  int32_t issue_date;
+  uint32_t fixing_days;
+  uint8_t has_fixing_days;
+  int32_t fixing_convention;
+  /**
+   * Zero selects NullCalendar when an ex-coupon period is present.
+   */
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  int32_t ex_coupon_convention;
+  uint8_t has_ex_coupon;
+  uint8_t ex_coupon_end_of_month;
+} ItofinAmortizingFloatingBondConfig;
 
 typedef struct ItofinFloatingBondConfig {
   struct ItofinBondConfig bond;
@@ -549,6 +686,70 @@ typedef struct ItofinCapHelperConfig {
   int32_t volatility_type;
   double shift;
 } ItofinCapHelperConfig;
+
+typedef struct ItofinCpiLegConfig {
+  uint64_t schedule;
+  uint64_t index;
+  double base_cpi;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  uint64_t day_counter;
+  uint64_t payment_calendar;
+  int32_t payment_convention;
+  const double *notionals;
+  size_t notionals_len;
+  const double *fixed_rates;
+  size_t fixed_rates_len;
+  int32_t growth_only;
+  int32_t ex_coupon_length;
+  int32_t ex_coupon_unit;
+  uint64_t ex_coupon_calendar;
+  int32_t ex_coupon_convention;
+  int32_t ex_coupon_end_of_month;
+} ItofinCpiLegConfig;
+
+typedef struct ItofinCpiCouponConfig {
+  uint64_t index;
+  double base_cpi;
+  double nominal;
+  double fixed_rate;
+  int32_t payment;
+  int32_t start;
+  int32_t end;
+  int32_t reference_start;
+  int32_t reference_end;
+  int32_t ex_coupon;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  uint64_t day_counter;
+} ItofinCpiCouponConfig;
+
+/**
+ * Constant nominal CPI-versus-Ibor swap. Payer pays Ibor and receives CPI.
+ */
+typedef struct ItofinCpiSwapConfig {
+  int32_t swap_type;
+  double nominal;
+  double inflation_nominal;
+  int32_t subtract_inflation_nominal;
+  double spread;
+  uint64_t float_schedule;
+  uint64_t float_index;
+  uint64_t float_day_counter;
+  int32_t float_convention;
+  double fixed_rate;
+  double base_cpi;
+  uint64_t fixed_schedule;
+  uint64_t fixed_index;
+  uint64_t fixed_day_counter;
+  int32_t fixed_convention;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  uint64_t settings;
+} ItofinCpiSwapConfig;
 
 /**
  * A zero quote handle selects `rate`; a nonzero settings handle selects moving dates.
@@ -1205,6 +1406,36 @@ typedef struct ItofinInflationHelperConfig {
   int32_t pillar;
 } ItofinInflationHelperConfig;
 
+/**
+ * Explicit base CPI is fixed; the observation remains live.
+ */
+typedef struct ItofinCpiCashFlowConfig {
+  uint64_t index;
+  double nominal;
+  double base_cpi;
+  int32_t observation_date;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  int32_t payment_date;
+  int32_t growth_only;
+} ItofinCpiCashFlowConfig;
+
+/**
+ * Both lagged start and end CPI observations remain live.
+ */
+typedef struct ItofinZeroInflationCashFlowConfig {
+  uint64_t index;
+  double nominal;
+  int32_t start_date;
+  int32_t end_date;
+  int32_t lag_length;
+  int32_t lag_unit;
+  int32_t interpolation;
+  int32_t payment_date;
+  int32_t growth_only;
+} ItofinZeroInflationCashFlowConfig;
+
 typedef struct ItofinZeroInflationSwapConfig {
   int32_t swap_type;
   double nominal;
@@ -1542,6 +1773,35 @@ typedef struct ItofinSofrFutureHelperConfig {
 } ItofinSofrFutureHelperConfig;
 
 /**
+ * Navigation policy for an erased leg. Date zero uses the evaluation date.
+ */
+typedef struct ItofinPaymentQuery {
+  uint64_t settings;
+  int32_t settlement;
+  /**
+   * -1 uses Settings, 0 excludes settlement-date flows, 1 includes them.
+   */
+  int32_t include_settlement;
+  /**
+   * 0 previous payment, 1 next payment.
+   */
+  int32_t direction;
+  /**
+   * 0 reads only the date, 1 also resolves and aggregates payment amounts.
+   */
+  uint8_t with_amount;
+} ItofinPaymentQuery;
+
+/**
+ * No payment has present=0, date=0 and amount=0; a date-only query has amount=0.
+ */
+typedef struct ItofinPaymentResult {
+  uint8_t present;
+  int32_t date;
+  double amount;
+} ItofinPaymentResult;
+
+/**
  * One dated OHLC observation. Dates are QuantLib-compatible serial numbers.
  */
 typedef struct ItofinDatedIntervalPrice {
@@ -1699,6 +1959,18 @@ typedef struct ItofinResultsFields {
   uint8_t has_valuation_date;
   size_t additional_count;
 } ItofinResultsFields;
+
+/**
+ * Stored scalar terms. Kinds: vanilla=0, cash=1, asset=2, gap=3, percentage=4.
+ * Option kind is call=0 or put=1. Extra is cash payoff for cash, payment strike
+ * for gap, and zero otherwise. Percentage strike is a dimensionless ratio.
+ */
+typedef struct ItofinScalarPayoffInfo {
+  int32_t kind;
+  int32_t option_kind;
+  double strike;
+  double extra;
+} ItofinScalarPayoffInfo;
 
 /**
  * Extended configuration; the original stripping ABI remains unchanged.
@@ -2065,6 +2337,25 @@ int32_t itofin_black_calculator_new(struct ItofinContext *ctx,
                                     double discount,
                                     uint64_t *out,
                                     struct ItofinError *error);
+
+/**
+ * Copy a cash-or-nothing call (0) or put (1) into the existing calculator type.
+ * All inputs must be finite. Cash payoff may be signed. std_dev must exceed
+ * f64::EPSILON, excluding the core's degenerate-volatility Greek shortcut.
+ * Other domains match itofin_black_calculator_new. No payoff handle is accepted.
+ * Finite elasticity sentinels are retained.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_black_calculator_cash_digital_new(struct ItofinContext *ctx,
+                                                 int32_t option_kind,
+                                                 double strike,
+                                                 double cash_payoff,
+                                                 double forward,
+                                                 double std_dev,
+                                                 double discount,
+                                                 uint64_t *out,
+                                                 struct ItofinError *error);
 
 /**
  * Present value.
@@ -2566,6 +2857,23 @@ int32_t itofin_bond_atm_rate_from_curve(struct ItofinContext *ctx,
                                         struct ItofinError *error);
 
 /**
+ * Coupon rate repricing an explicit quote per 100 of current settlement notional.
+ * Price kind is Clean=0 or Dirty=1. Clean includes settlement accrued interest.
+ * Reads live coupon amounts, excludes settlement-date and ex-coupon flows.
+ * Ordinary bonds only; the existing own-NPV ATM API is unchanged.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_bond_atm_rate_from_price(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        uint64_t discount,
+                                        double amount,
+                                        int32_t price_kind,
+                                        int32_t serial,
+                                        double *out,
+                                        struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers and thread ownership must satisfy the crate-level C caller contract.
  */
@@ -2700,6 +3008,23 @@ int32_t itofin_fixed_rate_bond_new(struct ItofinContext *ctx,
                                    size_t count,
                                    uint64_t *out,
                                    struct ItofinError *error);
+
+/**
+ * Builds a par-amortizing fixed-rate bond from exact per-period balances.
+ *
+ * Notionals must be finite, positive, nonincreasing and have exactly one
+ * entry for each schedule accrual period. Equal adjacent balances are allowed.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_amortizing_fixed_rate_bond_new(struct ItofinContext *ctx,
+                                              struct ItofinAmortizingFixedBondConfig a,
+                                              const double *notionals,
+                                              size_t notional_count,
+                                              const double *coupons,
+                                              size_t coupon_count,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
 
 /**
  * include_flows is -1 for settings default, 0 false or 1 true.
@@ -3294,6 +3619,101 @@ int32_t itofin_chart_volume_bars(const ItofinReal *open,
                                  struct ItofinError *error);
 
 /**
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_cpi_bond_new(struct ItofinContext *ctx,
+                            struct ItofinCpiBondConfig a,
+                            const double *coupons,
+                            size_t count,
+                            uint64_t *out,
+                            struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and valid for stated lengths, with disjoint
+ * outputs. Context and handles belong to this thread. Serialize all calls.
+ */
+int32_t itofin_cpi_price_surface_new(struct ItofinContext *ctx,
+                                     struct ItofinCpiPriceSurfaceConfig a,
+                                     uint64_t *out,
+                                     struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_price_surface_price(struct ItofinContext *ctx,
+                                       uint64_t id,
+                                       int32_t kind,
+                                       int32_t maturity,
+                                       double strike,
+                                       double *out,
+                                       struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_capfloor_engine_new(struct ItofinContext *ctx,
+                                       uint64_t surface,
+                                       uint64_t *out,
+                                       struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_capfloor_new(struct ItofinContext *ctx,
+                                struct ItofinCpiCapFloorConfig a,
+                                uint64_t *out,
+                                struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_capfloor_npv(struct ItofinContext *ctx,
+                                uint64_t id,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_capfloor_dates(struct ItofinContext *ctx,
+                                  uint64_t id,
+                                  int32_t *fixing,
+                                  int32_t *payment,
+                                  struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_price_surface_reference_date(struct ItofinContext *ctx,
+                                                uint64_t id,
+                                                int32_t *out,
+                                                struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned, live and disjoint. Context and handles belong to
+ * this thread. Serialize all calls including destruction.
+ */
+int32_t itofin_cpi_capfloor_is_expired(struct ItofinContext *ctx,
+                                       uint64_t id,
+                                       int32_t *out,
+                                       struct ItofinError *error);
+
+/**
  * Construct and retain the original native instrument, Settings and both indexes.
  * # Safety
  * Follow the crate-level pointer and thread contract.
@@ -3335,6 +3755,23 @@ int32_t itofin_float_float_swap_action(struct ItofinContext *ctx,
                                        uint64_t id,
                                        int32_t action,
                                        struct ItofinError *error);
+
+/**
+ * Copy one positive nonincreasing balance per schedule period; repay principal at par.
+ * Empty spreads mean zero and shorter spread vectors repeat their last entry.
+ * Construction does not require historical fixings or a separate coupon pricer.
+ * Date lags cannot exceed the supported maximum-minus-minimum Date span.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_amortizing_floating_rate_bond_new(struct ItofinContext *ctx,
+                                                 struct ItofinAmortizingFloatingBondConfig a,
+                                                 const double *notionals,
+                                                 size_t count,
+                                                 const double *spreads,
+                                                 size_t spreads_count,
+                                                 uint64_t *out,
+                                                 struct ItofinError *error);
 
 /**
  * Construct without requiring coupon histories or a cap/floor pricer.
@@ -3855,6 +4292,152 @@ int32_t itofin_convergence_statistics_table(struct ItofinContext *ctx,
                                             ItofinReal *out_means,
                                             size_t out_len,
                                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_leg_new(struct ItofinContext *ctx,
+                           struct ItofinCpiLegConfig a,
+                           uint64_t *out,
+                           struct ItofinError *error);
+
+/**
+ * Build a live-base-date CPI leg. Config `base_cpi` is ignored, not snapshotted.
+ * A zero base date selects schedule start minus observation lag.
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_leg_from_base_date(struct ItofinContext *ctx,
+                                      struct ItofinCpiLegConfig a,
+                                      int32_t base_date,
+                                      uint64_t *out,
+                                      struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_leg_build(struct ItofinContext *ctx,
+                             uint64_t id,
+                             uint64_t *out,
+                             struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_coupon_new(struct ItofinContext *ctx,
+                              struct ItofinCpiCouponConfig a,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Build a coupon with a live base-date denominator. Config `base_cpi` is
+ * ignored, not snapshotted. Query field 6 for the fallible effective base CPI.
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_coupon_from_base_date(struct ItofinContext *ctx,
+                                         struct ItofinCpiCouponConfig a,
+                                         int32_t base_date,
+                                         uint64_t *out,
+                                         struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_coupon_pricer_new(struct ItofinContext *ctx,
+                                     uint64_t discount,
+                                     uint64_t *out,
+                                     struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_coupon_set_pricer(struct ItofinContext *ctx,
+                                     uint64_t id,
+                                     uint64_t pricer,
+                                     struct ItofinError *error);
+
+/**
+ * Fields: 0 rate, 1 amount, 2 index fixing, 3 index ratio at date,
+ * 4 accrued amount at date, 5 accrual period, 6 effective base fixing.
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_coupon_value(struct ItofinContext *ctx,
+                                uint64_t id,
+                                int32_t field,
+                                int32_t serial,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * # Safety
+ * Pointers must be aligned and valid; outputs must not overlap. The context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_pricer_value(struct ItofinContext *ctx,
+                                uint64_t pricer,
+                                uint64_t coupon,
+                                int32_t field,
+                                int32_t serial,
+                                double *out,
+                                struct ItofinError *error);
+
+/**
+ * Retain live indexes and construct both coupon legs plus terminal exchanges.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_cpi_swap_new(struct ItofinContext *ctx,
+                            const struct ItofinCpiSwapConfig *cfg,
+                            uint64_t *out,
+                            struct ItofinError *error);
+
+/**
+ * Attach a live discount curve with native date/flow defaults and identical Settings.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_cpi_swap_set_engine(struct ItofinContext *ctx,
+                                   uint64_t id,
+                                   uint64_t discount,
+                                   uint64_t settings_id,
+                                   struct ItofinError *error);
+
+/**
+ * Query 0 NPV, 1 CPI NPV, 2 Ibor NPV, 3 Ibor BPS, 4 fair Ibor spread,
+ * 5 cache state, 6 expiry. Failures leave output untouched.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_cpi_swap_value(struct ItofinContext *ctx,
+                              uint64_t id,
+                              int32_t query,
+                              double *out,
+                              struct ItofinError *error);
+
+/**
+ * Action 0 calculate, 1 recalculate, 2 freeze, 3 unfreeze.
+ * # Safety
+ * Follow the crate-level pointer and thread contract.
+ */
+int32_t itofin_cpi_swap_action(struct ItofinContext *ctx,
+                               uint64_t id,
+                               int32_t action,
+                               struct ItofinError *error);
 
 /**
  * # Safety
@@ -6177,6 +6760,63 @@ int32_t itofin_inflation_helper_date(struct ItofinContext *ctx,
                                      struct ItofinError *error);
 
 /**
+ * Construct a standalone explicit-base CPI principal without reading fixings.
+ * # Safety
+ * Pointers must be aligned and valid, and outputs must not overlap. Context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_cpi_cashflow_new(struct ItofinContext *ctx,
+                                struct ItofinCpiCashFlowConfig a,
+                                uint64_t *out,
+                                struct ItofinError *error);
+
+/**
+ * Construct a standalone live-base inflation principal without reading fixings.
+ * # Safety
+ * Pointers must be aligned and valid, and outputs must not overlap. Context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_zero_inflation_cashflow_new(struct ItofinContext *ctx,
+                                           struct ItofinZeroInflationCashFlowConfig a,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * Query 0 amount, 1 base fixing or 2 index fixing; fixings are read lazily.
+ * # Safety
+ * Pointers must be aligned and valid, and outputs must not overlap. Context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_inflation_cashflow_value(struct ItofinContext *ctx,
+                                        uint64_t id,
+                                        int32_t field,
+                                        double *out,
+                                        struct ItofinError *error);
+
+/**
+ * Return a retained generic cash flow or, for as_leg=1, a one-flow CPI leg.
+ * # Safety
+ * Pointers must be aligned and valid, and outputs must not overlap. Context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_inflation_cashflow_convert(struct ItofinContext *ctx,
+                                          uint64_t id,
+                                          int32_t as_leg,
+                                          uint64_t *out,
+                                          struct ItofinError *error);
+
+/**
+ * Return the principal payment date without reading inflation fixings.
+ * # Safety
+ * Pointers must be aligned and valid, and outputs must not overlap. Context
+ * and handles belong to the calling thread. Serialize all context calls.
+ */
+int32_t itofin_inflation_cashflow_date(struct ItofinContext *ctx,
+                                       uint64_t id,
+                                       int32_t *out,
+                                       struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -7470,6 +8110,57 @@ int32_t itofin_option_cash_or_nothing_new(struct ItofinContext *ctx,
                                           struct ItofinError *error);
 
 /**
+ * Build a European asset-or-nothing option retaining the supplied settings.
+ * Kind is 0 call or 1 put; strike must be finite and nonnegative. The payoff
+ * pays the terminal asset price strictly beyond strike, and zero at equality.
+ * The analytic Black engine prices this payoff. The FD engine remains available.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_option_asset_or_nothing_new(struct ItofinContext *ctx,
+                                           int32_t kind,
+                                           double strike,
+                                           int32_t expiry,
+                                           uint64_t settings,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * Build a European gap option with a separate trigger and payment strike.
+ * Kind is 0 call or 1 put. The trigger strike must be finite and nonnegative;
+ * the payment strike must be finite and may be signed. Trigger equality is
+ * included and negative payments are not floored. The analytic European
+ * engine prices Gap through the existing Black calculator; FD remains available.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_option_gap_new(struct ItofinContext *ctx,
+                              int32_t kind,
+                              double strike,
+                              double second_strike,
+                              int32_t expiry,
+                              uint64_t settings,
+                              uint64_t *out,
+                              struct ItofinError *error);
+
+/**
+ * Build a European percentage-strike option for the existing FD engine.
+ * Moneyness is a finite dimensionless ratio, not an absolute strike or percent
+ * scaled by 100. Signed ratios are accepted. Call pays S*max(1-m,0), put pays
+ * S*max(m-1,0). FD volatility lookup uses m unchanged; certify constant-vol use.
+ * The analytic Black engine rejects this payoff.
+ * # Safety
+ * Follow the crate-level C caller contract. Output is written only on success.
+ */
+int32_t itofin_option_percentage_strike_new(struct ItofinContext *ctx,
+                                            int32_t kind,
+                                            double moneyness,
+                                            int32_t expiry,
+                                            uint64_t settings,
+                                            uint64_t *out,
+                                            struct ItofinError *error);
+
+/**
  * Build an American option whose exercise window starts at Date::min_date().
  * # Safety
  * Outputs must be aligned, live and non-overlapping. Context and handles must
@@ -7625,6 +8316,56 @@ int32_t itofin_overnight_add_fixing(struct ItofinContext *ctx,
                                     int32_t fixing_date,
                                     double value,
                                     struct ItofinError *error);
+
+/**
+ * Read the leg's accrual span: field 0 start, 1 maturity. Empty legs fail.
+ * # Safety
+ * Pointers, non-overlap and thread ownership must satisfy the C caller contract.
+ */
+int32_t itofin_leg_span_date(struct ItofinContext *ctx,
+                             uint64_t id,
+                             int32_t field,
+                             int32_t *out,
+                             struct ItofinError *error);
+
+/**
+ * Inspect a payment without valuing other dates or consulting a pricing engine.
+ * # Safety
+ * Pointers, non-overlap and thread ownership must satisfy the C caller contract.
+ */
+int32_t itofin_leg_payment(struct ItofinContext *ctx,
+                           uint64_t id,
+                           struct ItofinPaymentQuery query,
+                           struct ItofinPaymentResult *out,
+                           struct ItofinError *error);
+
+/**
+ * Read field 0 accrual start date, or field 1 tradability (0/1).
+ * Settlement zero uses the bond's calendar-aware settlement date for field 1.
+ * # Safety
+ * Pointers, non-overlap and thread ownership must satisfy the C caller contract.
+ */
+int32_t itofin_bond_inspection(struct ItofinContext *ctx,
+                               uint64_t id,
+                               int32_t field,
+                               int32_t settlement,
+                               int32_t *out,
+                               struct ItofinError *error);
+
+/**
+ * Read the previous (0) or next (1) payment with settlement-date exclusion.
+ * Settings includeTodaysCashFlows can override exclusion when settlement is today.
+ * with_amount is 0 for date-only or 1 for date and aggregated actual amount.
+ * # Safety
+ * Pointers, non-overlap and thread ownership must satisfy the C caller contract.
+ */
+int32_t itofin_bond_payment(struct ItofinContext *ctx,
+                            uint64_t id,
+                            int32_t direction_value,
+                            uint8_t with_amount,
+                            int32_t settlement,
+                            struct ItofinPaymentResult *out,
+                            struct ItofinError *error);
 
 /**
  * All-observation RMS shortfall below a per-period target, without annualization.
@@ -8285,6 +9026,44 @@ int32_t itofin_rng_sequence_draw(struct ItofinContext *ctx,
                                  double *out,
                                  size_t capacity,
                                  struct ItofinError *error);
+
+/**
+ * Copy scalar terms into an immutable payoff. All inputs must be finite;
+ * signed prices, strikes and amounts are supported. Extra must be zero for
+ * vanilla, asset and percentage kinds. This handle is not an engine input.
+ * # Safety
+ * Follow the crate-level caller contract. Output is written only on success.
+ */
+int32_t itofin_scalar_payoff_new(struct ItofinContext *ctx,
+                                 int32_t kind,
+                                 int32_t option_kind,
+                                 double strike,
+                                 double extra,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * Evaluate at a finite signed price, rejecting nonfinite computed results.
+ * Cash/asset triggers are strict; gap triggers are inclusive and may pay negative.
+ * Percentage payoff multiplies its floored ratio factor by the signed price.
+ * # Safety
+ * Follow the crate-level caller contract. Output is written only on success.
+ */
+int32_t itofin_scalar_payoff_value(struct ItofinContext *ctx,
+                                   uint64_t payoff,
+                                   double price,
+                                   double *out,
+                                   struct ItofinError *error);
+
+/**
+ * Copy stored terms without evaluating the payoff.
+ * # Safety
+ * Follow the crate-level caller contract. Output is written only on success.
+ */
+int32_t itofin_scalar_payoff_info(struct ItofinContext *ctx,
+                                  uint64_t payoff,
+                                  struct ItofinScalarPayoffInfo *out,
+                                  struct ItofinError *error);
 
 /**
  * Evaluate weighted vector statistics into a caller-owned row-major buffer.

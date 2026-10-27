@@ -10,6 +10,10 @@ import typing
 __all__ = [
     "AverageBMACoupon",
     "BlackIborCouponPricer",
+    "CPICashFlow",
+    "CPICoupon",
+    "CPICouponPricer",
+    "CPILeg",
     "CappedFlooredYoYInflationCoupon",
     "CashFlow",
     "IborLeg",
@@ -17,6 +21,7 @@ __all__ = [
     "YoYInflationCoupon",
     "YoYInflationLeg",
     "YoYInflationOptionletCouponPricer",
+    "ZeroInflationCashFlow",
     "npv",
     "npv_at_z_spread",
     "z_spread",
@@ -54,6 +59,119 @@ class BlackIborCouponPricer:
     Black or normal ibor coupon pricer using an optional retained optionlet surface.
     """
     def __new__(cls, volatility: typing.Optional[termstructures.OptionletVolatilityStructure] = None) -> BlackIborCouponPricer: ...
+
+@typing.final
+class CPICashFlow:
+    r"""
+    Principal scaled by a live CPI observation divided by a fixed explicit base.
+    """
+    def __init__(self, nominal: builtins.float, index: indexes.ZeroInflationIndex, base_cpi: builtins.float, observation_date: time.Date, observation_lag: time.Period, interpolation: indexes.CpiInterpolationType, payment_date: time.Date, growth_only: builtins.bool = True) -> None:
+        r"""
+        Build without reading fixings; growth_only subtracts the uninflated nominal.
+
+        The explicit finite nonzero denominator stays fixed. Observation, index
+        histories and linked curves remain live. Invalid dates and lags fail.
+        """
+    def amount(self) -> builtins.float:
+        r"""
+        Undiscounted payment; missing fixings, curves or non-finite results fail.
+        """
+    def base_fixing(self) -> builtins.float:
+        r"""
+        The fixed explicit denominator supplied at construction.
+        """
+    def index_fixing(self) -> builtins.float:
+        r"""
+        The live lagged CPI level used in the numerator.
+        """
+    def date(self) -> time.Date:
+        r"""
+        Payment date; no fixing is read.
+        """
+    def as_cashflow(self) -> CashFlow:
+        r"""
+        Return a retained generic flow; the original wrapper may be released.
+        """
+    def as_leg(self) -> Leg:
+        r"""
+        Return a one-flow leg requiring the index's identical Settings for NPV.
+        """
+
+@typing.final
+class CPICoupon:
+    r"""
+    Explicit-base CPI-scaled fixed coupon. Attach a plain pricer before pricing.
+    """
+    def __init__(self, base_cpi: builtins.float, payment_date: time.Date, nominal: builtins.float, start_date: time.Date, end_date: time.Date, index: indexes.ZeroInflationIndex, observation_lag: time.Period, interpolation: indexes.CpiInterpolationType, day_counter: time.DayCounter, fixed_rate: builtins.float, reference_start: typing.Optional[time.Date] = None, reference_end: typing.Optional[time.Date] = None, ex_coupon_date: typing.Optional[time.Date] = None) -> None:
+        r"""
+        Build a coupon using an explicit CPI denominator and lagged observation.
+
+        Attach a CPICouponPricer before rate or amount queries. The base CPI
+        must be finite and nonzero; its interpolation convention is caller-owned.
+
+        Raises:
+            ItofinError: On invalid terms, dates, lags or a non-finite parameter.
+        """
+    @staticmethod
+    def from_base_date(base_date: time.Date, payment_date: time.Date, nominal: builtins.float, start_date: time.Date, end_date: time.Date, index: indexes.ZeroInflationIndex, observation_lag: time.Period, interpolation: indexes.CpiInterpolationType, day_counter: time.DayCounter, fixed_rate: builtins.float, reference_start: typing.Optional[time.Date] = None, reference_end: typing.Optional[time.Date] = None, ex_coupon_date: typing.Optional[time.Date] = None) -> CPICoupon:
+        r"""
+        Build a coupon with a lazy, live CPI denominator observed from base_date.
+        Existing explicit-base construction is unchanged. Use base_fixing(), not
+        the native stored-base MAX sentinel, for the effective denominator.
+        """
+    def base_fixing(self) -> builtins.float:
+        r"""
+        Effective denominator, read live for a date-based coupon.
+        """
+    def set_pricer(self, pricer: CPICouponPricer) -> None: ...
+    def rate(self) -> builtins.float: ...
+    def amount(self) -> builtins.float: ...
+    def accrued_amount(self, date: time.Date) -> builtins.float: ...
+    def index_ratio(self, date: time.Date) -> builtins.float: ...
+    def index_fixing(self) -> builtins.float: ...
+    def accrual_period(self) -> builtins.float: ...
+
+@typing.final
+class CPICouponPricer:
+    r"""
+    Plain CPI swaplet pricer. Discounted prices are per unit nominal.
+    """
+    def __init__(self, nominal_curve: typing.Optional[termstructures.YieldTermStructure] = None) -> None:
+        r"""
+        Build a plain CPI swaplet pricer, optionally retaining a nominal curve.
+
+        Rate queries need no nominal curve; swaplet_price requires one and
+        returns a discounted value per unit nominal, not a currency amount.
+        """
+    def swaplet_rate(self, coupon: CPICoupon) -> builtins.float: ...
+    def swaplet_price(self, coupon: CPICoupon) -> builtins.float: ...
+    def accrued_rate(self, coupon: CPICoupon, date: time.Date) -> builtins.float: ...
+
+@typing.final
+class CPILeg:
+    r"""
+    Plain CPI coupons and one terminal indexed principal payment.
+    """
+    def __init__(self, schedule: time.Schedule, index: indexes.ZeroInflationIndex, base_cpi: builtins.float, observation_lag: time.Period, notionals: typing.Sequence[builtins.float], fixed_rates: typing.Sequence[builtins.float], day_counter: time.DayCounter, payment_calendar: time.Calendar, payment_adjustment: time.BusinessDayConvention, interpolation: indexes.CpiInterpolationType = indexes.CpiInterpolationType.Flat, growth_only: builtins.bool = True, ex_coupon_period: typing.Optional[time.Period] = None, ex_coupon_calendar: typing.Optional[time.Calendar] = None, ex_coupon_adjustment: time.BusinessDayConvention = time.BusinessDayConvention.Unadjusted, ex_coupon_end_of_month: builtins.bool = False) -> None:
+        r"""
+        Materialize plain CPI coupons and one indexed terminal payment.
+
+        Payment and ex-coupon dates are fixed at construction. CPI histories
+        and linked curves remain live; build clones the retained cash-flow graph.
+        A default plain pricer is attached, and growth_only selects whether the
+        uninflated terminal principal is subtracted.
+
+        Raises:
+            ItofinError: On invalid terms, calendars, dates or leg parameters.
+        """
+    @staticmethod
+    def from_base_date(schedule: time.Schedule, index: indexes.ZeroInflationIndex, observation_lag: time.Period, notionals: typing.Sequence[builtins.float], fixed_rates: typing.Sequence[builtins.float], day_counter: time.DayCounter, payment_calendar: time.Calendar, payment_adjustment: time.BusinessDayConvention, base_date: typing.Optional[time.Date] = None, interpolation: indexes.CpiInterpolationType = indexes.CpiInterpolationType.Flat, growth_only: builtins.bool = True, ex_coupon_period: typing.Optional[time.Period] = None, ex_coupon_calendar: typing.Optional[time.Calendar] = None, ex_coupon_adjustment: time.BusinessDayConvention = time.BusinessDayConvention.Unadjusted, ex_coupon_end_of_month: builtins.bool = False) -> CPILeg:
+        r"""
+        Build CPI coupons with a live base date and native terminal observation.
+        Omitted base_date uses schedule start minus observation_lag. No fixings
+        are read while constructing the retained, fixed-payment-date graph.
+        """
+    def build(self) -> Leg: ...
 
 @typing.final
 class CappedFlooredYoYInflationCoupon:
@@ -248,6 +366,30 @@ class Leg:
     Indexable and sized, which with CashFlow's two accessors is enough to
     hand-check what npv() sums.
     """
+    def start_date(self) -> time.Date:
+        r"""
+        Earliest coupon accrual start or non-coupon payment date; empty legs fail.
+        """
+    def maturity_date(self) -> time.Date:
+        r"""
+        Latest coupon accrual end or non-coupon payment date; empty legs fail.
+        """
+    def previous_cash_flow_date(self, settings: itofin.Settings, *, include_settlement_date_flows: typing.Optional[builtins.bool] = None, settlement_date: typing.Optional[time.Date] = None) -> typing.Optional[time.Date]:
+        r"""
+        Previous payment date, or None; date-only inspection needs no fixings.
+        """
+    def next_cash_flow_date(self, settings: itofin.Settings, *, include_settlement_date_flows: typing.Optional[builtins.bool] = None, settlement_date: typing.Optional[time.Date] = None) -> typing.Optional[time.Date]:
+        r"""
+        Next payment date, or None; settlement-date policy follows Settings when omitted.
+        """
+    def previous_cash_flow_amount(self, settings: itofin.Settings, *, include_settlement_date_flows: typing.Optional[builtins.bool] = None, settlement_date: typing.Optional[time.Date] = None) -> typing.Optional[builtins.float]:
+        r"""
+        Aggregate actual amount on the previous payment date, or None; includes principal.
+        """
+    def next_cash_flow_amount(self, settings: itofin.Settings, *, include_settlement_date_flows: typing.Optional[builtins.bool] = None, settlement_date: typing.Optional[time.Date] = None) -> typing.Optional[builtins.float]:
+        r"""
+        Aggregate actual amount on the next payment date, or None; includes principal.
+        """
     def __len__(self) -> builtins.int:
         r"""
         Return the number of flows on the leg.
@@ -565,6 +707,43 @@ class YoYInflationOptionletCouponPricer:
 
         Returns:
             YoYInflationOptionletCouponPricer: The normal pricer.
+        """
+
+@typing.final
+class ZeroInflationCashFlow:
+    r"""
+    Principal scaled by the ratio of two live lagged inflation observations.
+    """
+    def __init__(self, nominal: builtins.float, index: indexes.ZeroInflationIndex, start_date: time.Date, end_date: time.Date, observation_lag: time.Period, interpolation: indexes.CpiInterpolationType, payment_date: time.Date, growth_only: builtins.bool = True) -> None:
+        r"""
+        Build without reading fixings; both lagged start and end CPI remain live.
+
+        Unlike CPICashFlow, historical base-fixing corrections change this flow.
+        The observation lag is nonnegative and dates must remain within 1901-2199.
+        """
+    def amount(self) -> builtins.float:
+        r"""
+        Undiscounted payment; missing fixings, curves or non-finite results fail.
+        """
+    def base_fixing(self) -> builtins.float:
+        r"""
+        Read the live lagged start-date denominator, without taking a snapshot.
+        """
+    def index_fixing(self) -> builtins.float:
+        r"""
+        Read the live lagged end-date numerator.
+        """
+    def date(self) -> time.Date:
+        r"""
+        Payment date; no fixing is read.
+        """
+    def as_cashflow(self) -> CashFlow:
+        r"""
+        Return a retained finite-checked generic flow.
+        """
+    def as_leg(self) -> Leg:
+        r"""
+        Return a one-flow leg requiring the index's identical Settings for NPV.
         """
 
 def npv(leg: Leg, discount_curve: termstructures.YieldTermStructure, settings: itofin.Settings, include_settlement_date_flows: typing.Optional[builtins.bool] = None, settlement_date: typing.Optional[time.Date] = None, npv_date: typing.Optional[time.Date] = None) -> builtins.float:

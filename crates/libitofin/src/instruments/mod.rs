@@ -80,7 +80,8 @@ pub use bond::{Bond, BondArguments, BondEngine, BondPrice, BondPriceType, BondRe
 pub use bondforward::BondForward;
 pub use bonds::{
     ConvertibleBondArguments, ConvertibleFixedCouponBond, ConvertibleFloatingRateBond,
-    ConvertibleZeroCouponBond, FixedRateBond, FloatingRateBond, ZeroCouponBond, soft_callability,
+    ConvertibleZeroCouponBond, CpiBond, FixedRateBond, FloatingRateBond, ZeroCouponBond,
+    soft_callability,
 };
 pub use callablebond::{
     Callability, CallabilitySchedule, CallabilityType, CallableBondArguments,
@@ -188,3 +189,9 @@ pub use overnightindexfuture::OvernightIndexFuture;
 
 pub mod bmaswap;
 pub use bmaswap::BMASwap;
+
+mod cpiswap;
+pub use cpiswap::CpiSwap;
+
+pub mod cpicapfloor;
+pub use cpicapfloor::{CpiCapFloor, CpiCapFloorArguments, CpiCapFloorConfig};

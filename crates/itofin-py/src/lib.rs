@@ -5,6 +5,7 @@
 //! Python-visible ItofinError exception. The pricing facades land in follow-up
 //! tickets (#485-#487).
 
+mod amortizing_fixed_bond;
 mod asset_swap;
 mod bates;
 mod benchmark_beta;
@@ -30,6 +31,10 @@ mod chart_ohlc_volatility;
 mod chart_prices;
 mod chart_williams;
 mod convergence_statistics;
+mod cpi_bond;
+mod cpi_capfloor;
+mod cpi_cashflows;
+mod cpi_swap;
 mod credit;
 mod creditdensity;
 mod creditengine;
@@ -60,6 +65,7 @@ mod hullwhite;
 mod hw_forward_process;
 mod incremental_statistics;
 mod inflation;
+mod inflation_principal;
 mod iterativebootstrap;
 mod jointcurves;
 mod makeswaption;
@@ -79,6 +85,7 @@ mod performance_ratios;
 mod poissonrng;
 mod randomnumbers;
 mod results;
+mod scalar_payoff;
 mod sequence_statistics;
 mod settings;
 mod simulation;
@@ -106,6 +113,9 @@ use capfloortermvol::{PyCapFloorTermVolCurve, PyCapFloorTermVolSurface};
 use cashflows::{
     PyCappedFlooredYoYInflationCoupon, PyCashFlow, PyIborLeg, PyLeg, PyYoYInflationCoupon,
     PyYoYInflationLeg, PyYoYInflationOptionletCouponPricer,
+};
+use cpi_capfloor::{
+    PyCpiCapFloor, PyCpiCapFloorTermPriceSurface, PyInterpolatingCpiCapFloorEngine,
 };
 use credit::{
     PyCreditDefaultSwap, PyDefaultProbabilityTermStructure, PyFlatHazardRate,
@@ -347,6 +357,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyPiecewiseYoYInflationCurve>()?;
     termstructures.add_class::<PyConstantYoYOptionletVolatility>()?;
     termstructures.add_class::<PyYoYCapFloorTermPriceSurface>()?;
+    termstructures.add_class::<PyCpiCapFloorTermPriceSurface>()?;
     termstructures.add_class::<PyKInterpolatedYoYOptionletVolatilitySurface>()?;
 
     let processes = PyModule::new(py, "processes")?;
@@ -386,6 +397,11 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     cashflows.add_class::<PyYoYInflationOptionletCouponPricer>()?;
     cashflows.add_class::<PyYoYInflationLeg>()?;
     cashflows.add_class::<PyIborLeg>()?;
+    cashflows.add_class::<cpi_cashflows::PyCpiCoupon>()?;
+    cashflows.add_class::<cpi_cashflows::PyCpiCouponPricer>()?;
+    cashflows.add_class::<cpi_cashflows::PyCpiLeg>()?;
+    cashflows.add_class::<inflation_principal::PyCpiCashFlow>()?;
+    cashflows.add_class::<inflation_principal::PyZeroInflationCashFlow>()?;
     cashflows.add_class::<bma::PyAverageBMACoupon>()?;
     cashflows.add_class::<PyCashFlow>()?;
     cashflows.add_class::<PyLeg>()?;
@@ -405,15 +421,21 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<callable_bonds::PyCallableFixedRateBond>()?;
     instruments.add_class::<callable_bonds::PyCallableZeroCouponBond>()?;
     instruments.add_class::<floating_bonds::PyFloatingRateBond>()?;
+    instruments.add_class::<floating_bonds::PyAmortizingFloatingRateBond>()?;
     instruments.add_class::<bonds::PyFixedRateBond>()?;
+    instruments.add_class::<amortizing_fixed_bond::PyAmortizingFixedRateBond>()?;
+    instruments.add_class::<cpi_bond::PyCpiBond>()?;
     instruments.add_class::<bonds::PyZeroCouponBond>()?;
     instruments.add_class::<variance_swap::PyVarianceSwap>()?;
     instruments.add_class::<PyOptionType>()?;
+    instruments.add_class::<scalar_payoff::PyPayoffKind>()?;
+    instruments.add_class::<scalar_payoff::PyScalarPayoff>()?;
     instruments.add_class::<PyVanillaOption>()?;
     instruments.add_class::<PySwapType>()?;
     instruments.add_class::<PyVanillaSwap>()?;
     instruments.add_class::<asset_swap::PyAssetSwap>()?;
     instruments.add_class::<float_float_swap::PyFloatFloatSwap>()?;
+    instruments.add_class::<cpi_swap::PyCpiSwap>()?;
     instruments.add_class::<bma::PyBMASwap>()?;
     instruments.add_class::<PyMakeVanillaSwap>()?;
     instruments.add_class::<makeswaption::PyMakeSwaption>()?;
@@ -434,6 +456,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     instruments.add_class::<PyCreditDefaultSwap>()?;
     instruments.add_class::<PyMakeCreditDefaultSwap>()?;
     instruments.add_class::<PyZeroCouponInflationSwap>()?;
+    instruments.add_class::<PyCpiCapFloor>()?;
     instruments.add_class::<PyYearOnYearInflationSwap>()?;
     instruments.add_class::<PyMakeYoYInflationCapFloor>()?;
     instruments.add_class::<PyYoYInflationCapFloor>()?;
@@ -470,6 +493,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<PyForwardsInCouponPeriod>()?;
     pricingengines.add_class::<PyDiscountingSwapEngine>()?;
     pricingengines.add_class::<PyYoYInflationCapFloorEngine>()?;
+    pricingengines.add_class::<PyInterpolatingCpiCapFloorEngine>()?;
     pricingengines.add_class::<fdengine::PyFdScheme>()?;
     pricingengines.add_class::<fdengine::PyFdBlackScholesVanillaEngine>()?;
     pricingengines.add_class::<PyMCEuropeanEngine>()?;

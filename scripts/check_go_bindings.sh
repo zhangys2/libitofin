@@ -95,6 +95,12 @@ c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/callable_risk.c -Ltarget/release -litofin_ffi -o target/cpp-callable-risk
 ./target/cpp-callable-risk
 cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/amortizing_fixed_bond.c -Ltarget/release -litofin_ffi -o target/c-amortizing-fixed-bond
+./target/c-amortizing-fixed-bond
+c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+  crates/libitofin-ffi/tests/amortizing_fixed_bond.c -Ltarget/release -litofin_ffi -o target/cpp-amortizing-fixed-bond
+./target/cpp-amortizing-fixed-bond
+cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/bond_forward.c -Ltarget/release -litofin_ffi -o target/c-bond-forward
 ./target/c-bond-forward
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
@@ -124,13 +130,25 @@ cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
 c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
   crates/libitofin-ffi/tests/g2_process.c -Ltarget/release -litofin_ffi -lm -o target/cpp-g2-process
 ./target/cpp-g2-process
-for probe in c_currency black_delta black_calculator bond_risk fx_forward gsr_process cash_digital mf_state_process hw_forward_process xccy_basis; do
+for probe in c_currency black_delta black_calculator cash_digital_black_calculator bond_risk bond_price_atm payment_inspection fx_forward gsr_process cash_digital percentage_strike gap_option gap_option_native mf_state_process hw_forward_process xccy_basis asset_digital amortizing_floating_bond inflation_principal cpi_base_date; do
   cc -std=c11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
     "crates/libitofin-ffi/tests/$probe.c" -Ltarget/release -litofin_ffi -lm -o "target/c-$probe"
   "./target/c-$probe"
   c++ -x c++ -std=c++11 -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
     "crates/libitofin-ffi/tests/$probe.c" -Ltarget/release -litofin_ffi -lm -o "target/cpp-$probe"
   "./target/cpp-$probe"
+done
+for compiler in cc c++; do
+  if [[ "$compiler" == cc ]]; then standard=c11; else standard=c++11; fi
+  "$compiler" -x "${standard%%11}" -std="$standard" -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+    crates/libitofin-ffi/tests/scalar_payoff.c -Ltarget/release -litofin_ffi -lm -o "target/$compiler-scalar-payoff"
+  "./target/$compiler-scalar-payoff" sdk/go/testdata/scalar_payoffs.tsv
+done
+for compiler in cc c++; do
+  if [[ "$compiler" == cc ]]; then standard=c11; else standard=c++11; fi
+  "$compiler" -x "${standard%%11}" -std="$standard" -Wall -Wextra -Werror -Icrates/libitofin-ffi/include \
+    crates/libitofin-ffi/tests/amortizing_floating_oracle.c -Ltarget/release -litofin_ffi -lm -o "target/$compiler-amortizing-floating-oracle"
+  "./target/$compiler-amortizing-floating-oracle" scripts/fixtures/amortizing_floating_bond/values.tsv
 done
 cargo build -p libitofin-ffi --release --features optimization-method-oracle
 cd sdk/go
@@ -145,6 +163,13 @@ go run ./examples/g2_process
 go run ./examples/gsr_process
 go run ./examples/mf_state_process
 go run ./examples/hw_forward_process
+go run ./examples/gap_option
+go run ./examples/percentage_strike
+go run ./examples/payment_inspection
+go run ./examples/scalar_payoffs
+go run ./examples/cash_digital_black_calculator
+go run ./examples/inflation_principal
+go run ./examples/cpi_base_date
 
 go run ./examples/drawdown
 go run ./examples/benchmark_beta
@@ -162,3 +187,4 @@ go run ./examples/bond-coupon-analytics
 go run ./examples/float-float-swap
 
 go run ./examples/xccy_basis
+go run ./examples/amortizing_floating_bond
