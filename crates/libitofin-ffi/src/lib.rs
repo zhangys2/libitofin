@@ -8,6 +8,8 @@
 //! Go enforces these rules through a session worker locked to one OS thread.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(test)]
+mod amortizing_fixed_bond_tests;
 pub mod asset_swap_api;
 pub mod bates_api;
 pub mod bates_calibration_api;
@@ -35,6 +37,8 @@ pub mod callable_risk_api;
 pub mod callable_tree_api;
 pub mod chart_adx_api;
 pub mod chart_api;
+pub mod cpi_bond_api;
+pub mod cpi_capfloor_api;
 pub mod float_float_swap_api;
 pub mod floating_bond_api;
 pub mod merton_paths_api;
@@ -47,6 +51,8 @@ pub mod cap_calibration_api;
 pub mod cashflows_api;
 pub mod constraint_api;
 pub mod convergence_statistics_api;
+pub mod cpi_cashflows_api;
+pub mod cpi_swap_api;
 pub mod credit_api;
 pub mod credit_helpers_api;
 pub mod credit_instruments_api;
@@ -76,6 +82,7 @@ pub mod inflation_capfloor_api;
 pub mod inflation_cashflows_api;
 pub mod inflation_curves_api;
 pub mod inflation_helpers_api;
+pub mod inflation_principal_api;
 pub mod inflation_products_api;
 pub mod inflation_seasonality_api;
 pub mod inflation_vol_api;
@@ -90,6 +97,7 @@ pub mod models_api;
 pub mod optimize_api;
 pub mod options_api;
 pub mod overnight_futures_api;
+pub mod payment_inspection_api;
 pub mod performance_ratios_api;
 pub mod poisson_rng_api;
 pub mod prices_api;
@@ -104,6 +112,9 @@ pub mod rng_api;
 pub mod rng_gaussian_sobol;
 pub mod rng_low_discrepancy;
 pub mod rng_sequence_api;
+pub mod scalar_payoff_api;
+#[cfg(test)]
+mod scalar_payoff_tests;
 pub mod sequence_statistics_api;
 pub mod settings_api;
 pub mod smile_api;

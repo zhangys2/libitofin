@@ -285,6 +285,7 @@ impl PyDuration {
 #[gen_stub_pyclass]
 #[pyclass(name = "Bond", subclass, unsendable, module = "itofin.instruments")]
 pub struct PyBond {
+    indexed: bool,
     inner: BondBacking,
     calendar: PyCalendar,
     flags: (bool, Option<bool>, Option<bool>),
@@ -293,8 +294,34 @@ pub struct PyBond {
     frozen: Cell<bool>,
 }
 impl PyBond {
+    fn inspection_payment(
+        &self,
+        settlement: Option<&PyDate>,
+        next: bool,
+        with_amount: bool,
+    ) -> PyResult<(Option<Date>, Option<f64>)> {
+        let settlement = analytical_date(settlement)?
+            .map_or_else(|| self.settlement_date(None).map(|date| date.inner()), Ok)?;
+        let bond = self.inner.borrow();
+        self.cashflows().inspection_payment(
+            bond.settings(),
+            Some(false),
+            Some(settlement),
+            next,
+            with_amount,
+        )
+    }
+    fn require_unindexed_coupon_analytics(&self) -> PyResult<()> {
+        if self.indexed {
+            Err(ItofinError::new_err(
+                "CPI raw-coupon BPS and ATM analytics are unsupported",
+            ))
+        } else {
+            Ok(())
+        }
+    }
     pub(crate) fn forward_plain(&self) -> PyResult<SharedMut<Bond>> {
-        if self.guard.is_some() {
+        if self.guard.is_some() || self.indexed {
             return Err(ItofinError::new_err("fixed or zero plain bond required"));
         }
         match &self.inner {
@@ -308,6 +335,11 @@ impl PyBond {
     pub(crate) fn from_inner(inner: Bond, calendar: PyCalendar) -> Self {
         Self::from_backing(BondBacking::Plain(shared_mut(inner)), calendar)
     }
+    pub(crate) fn from_indexed(inner: Bond, calendar: PyCalendar) -> Self {
+        let mut base = Self::from_inner(inner, calendar);
+        base.indexed = true;
+        base
+    }
     pub(crate) fn from_backing(inner: BondBacking, calendar: PyCalendar) -> Self {
         let bond = inner.borrow();
         let flags = (
@@ -317,6 +349,7 @@ impl PyBond {
         );
         drop(bond);
         Self {
+            indexed: false,
             inner,
             calendar,
             flags,
@@ -683,6 +716,7 @@ impl PyBond {
         discount_curve: &PyYieldTermStructure,
         settlement: Option<&PyDate>,
     ) -> PyResult<f64> {
+        self.require_unindexed_coupon_analytics()?;
         let settlement = self.coupon_sensitivity_settlement(settlement)?;
         let curve = discount_curve
             .handle()
@@ -703,6 +737,7 @@ impl PyBond {
         frequency: &PyFrequency,
         settlement: Option<&PyDate>,
     ) -> PyResult<f64> {
+        self.require_unindexed_coupon_analytics()?;
         let rate = libitofin::interestrate::InterestRate::new(
             finite(yield_rate)?,
             day_counter.inner(),
@@ -723,6 +758,7 @@ impl PyBond {
         discount_curve: &PyYieldTermStructure,
         settlement: Option<&PyDate>,
     ) -> PyResult<f64> {
+        self.require_unindexed_coupon_analytics()?;
         let settlement = self.risk_settlement(settlement)?;
         let curve = discount_curve
             .handle()
@@ -731,6 +767,37 @@ impl PyBond {
         finite(
             BondFunctions::atm_rate(&self.inner.borrow(), &*curve, Some(settlement), None)
                 .map_err(PyQlError::from)?,
+        )
+    }
+    /// Coupon rate repricing an explicit per-100 clean or dirty quote at settlement.
+    /// Uses current notional and live coupon amounts; the own-NPV ATM API is unchanged.
+    #[pyo3(signature=(discount_curve, price, *, price_type=PyBondPriceType::Clean, settlement=None))]
+    fn atm_rate_from_price(
+        &self,
+        discount_curve: &PyYieldTermStructure,
+        price: f64,
+        price_type: PyBondPriceType,
+        settlement: Option<&PyDate>,
+    ) -> PyResult<f64> {
+        self.require_unindexed_coupon_analytics()?;
+        if !matches!(self.inner, BondBacking::Plain(_)) {
+            return Err(ItofinError::new_err("ordinary noncallable bond required"));
+        }
+        let price = analytical_price(finite(price)?, price_type);
+        let settlement =
+            self.analytical_settlement(settlement, matches!(price, BondPrice::Clean(_)))?;
+        let curve = discount_curve
+            .handle()
+            .current_link()
+            .map_err(PyQlError::from)?;
+        finite(
+            BondFunctions::atm_rate_from_price(
+                &self.inner.borrow(),
+                &*curve,
+                price,
+                Some(settlement),
+            )
+            .map_err(PyQlError::from)?,
         )
     }
     /// Flat-yield duration, independent of pricing engines. Macaulay requires compounded yield.
@@ -1021,14 +1088,65 @@ impl PyBond {
         self.inner.borrow().issue_date().map(PyDate::from_inner)
     }
     fn cashflows(&self) -> PyLeg {
-        PyLeg::with_guard(self.inner.borrow().cashflows().clone(), self.guard.clone())
+        let bond = self.inner.borrow();
+        if self.indexed {
+            PyLeg::with_cpi_settings(bond.cashflows().clone(), bond.settings_handle())
+        } else {
+            PyLeg::with_guard(bond.cashflows().clone(), self.guard.clone())
+        }
     }
     fn redemptions(&self) -> PyLeg {
+        if self.indexed {
+            let bond = self.inner.borrow();
+            return PyLeg::with_cpi_settings(bond.redemptions().clone(), bond.settings_handle());
+        }
         let guard = self
             .guard
             .as_ref()
             .map(|_| libitofin::shared::shared(|_: Option<usize>| Ok(())) as CashFlowGuard);
         PyLeg::with_guard(self.inner.borrow().redemptions().clone(), guard)
+    }
+    /// Earliest coupon accrual start or non-coupon payment date; needs no engine.
+    fn start_date(&self) -> PyResult<PyDate> {
+        Ok(PyDate::from_inner(
+            CashFlows::start_date(self.inner.borrow().cashflows()).map_err(PyQlError::from)?,
+        ))
+    }
+    /// Whether outstanding notional is nonzero at settlement; omitted date uses bond settlement.
+    #[pyo3(signature=(settlement=None))]
+    fn is_tradable(&self, settlement: Option<&PyDate>) -> PyResult<bool> {
+        let settlement = analytical_date(settlement)?
+            .map_or_else(|| self.settlement_date(None).map(|date| date.inner()), Ok)?;
+        Ok(
+            BondFunctions::is_tradable(&self.inner.borrow(), Some(settlement))
+                .map_err(PyQlError::from)?,
+        )
+    }
+    /// Previous payment date, or None; excludes settlement flows unless today Settings override.
+    #[pyo3(signature=(settlement=None))]
+    fn previous_cash_flow_date(&self, settlement: Option<&PyDate>) -> PyResult<Option<PyDate>> {
+        Ok(self
+            .inspection_payment(settlement, false, false)?
+            .0
+            .map(PyDate::from_inner))
+    }
+    /// Next payment date, or None; today Settings can override settlement exclusion.
+    #[pyo3(signature=(settlement=None))]
+    fn next_cash_flow_date(&self, settlement: Option<&PyDate>) -> PyResult<Option<PyDate>> {
+        Ok(self
+            .inspection_payment(settlement, true, false)?
+            .0
+            .map(PyDate::from_inner))
+    }
+    /// Aggregate previous actual payment, including principal, or None; not a per-100 quote.
+    #[pyo3(signature=(settlement=None))]
+    fn previous_cash_flow_amount(&self, settlement: Option<&PyDate>) -> PyResult<Option<f64>> {
+        Ok(self.inspection_payment(settlement, false, true)?.1)
+    }
+    /// Aggregate next actual payment, including principal, or None; not a per-100 quote.
+    #[pyo3(signature=(settlement=None))]
+    fn next_cash_flow_amount(&self, settlement: Option<&PyDate>) -> PyResult<Option<f64>> {
+        Ok(self.inspection_payment(settlement, true, true)?.1)
     }
     fn is_expired(&self) -> PyResult<bool> {
         Ok(self

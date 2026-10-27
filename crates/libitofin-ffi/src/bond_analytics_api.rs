@@ -209,6 +209,11 @@ pub unsafe extern "C" fn itofin_bond_bps_from_curve(
             }
             check_ptr(out)?;
             let bond = c.get::<NativeBond>(id)?;
+            if bond.indexed {
+                return Err(BindingError::invalid(
+                    "CPI raw-coupon BPS and ATM analytics are unsupported",
+                ));
+            }
             bond.bond.plain()?;
             let actual = coupon_sensitivity_settlement(&bond, serial)?;
             let discount = curve(c, discount)?.current_link()?;
@@ -243,6 +248,11 @@ pub unsafe extern "C" fn itofin_bond_bps_from_yield(
                 frequency(a.frequency)?,
             )?;
             let bond = c.get::<NativeBond>(id)?;
+            if bond.indexed {
+                return Err(BindingError::invalid(
+                    "CPI raw-coupon BPS and ATM analytics are unsupported",
+                ));
+            }
             bond.bond.plain()?;
             let actual = coupon_sensitivity_settlement(&bond, a.settlement)?;
             let value = BondFunctions::bps_at_yield(&bond.bond.borrow(), &rate, Some(actual))?;
@@ -270,11 +280,59 @@ pub unsafe extern "C" fn itofin_bond_atm_rate_from_curve(
             }
             check_ptr(out)?;
             let bond = c.get::<NativeBond>(id)?;
+            if bond.indexed {
+                return Err(BindingError::invalid(
+                    "CPI raw-coupon BPS and ATM analytics are unsupported",
+                ));
+            }
             bond.bond.plain()?;
             let actual = settlement(&bond, serial, false)?;
             let discount = curve(c, discount)?.current_link()?;
             let value =
                 BondFunctions::atm_rate(&bond.bond.borrow(), &*discount, Some(actual), None)?;
+            output(out, finite(value)?)
+        })
+    }
+}
+#[unsafe(no_mangle)]
+/// Coupon rate repricing an explicit quote per 100 of current settlement notional.
+/// Price kind is Clean=0 or Dirty=1. Clean includes settlement accrued interest.
+/// Reads live coupon amounts, excludes settlement-date and ex-coupon flows.
+/// Ordinary bonds only; the existing own-NPV ATM API is unchanged.
+/// # Safety
+/// Pointers and thread ownership must satisfy the crate-level C caller contract.
+pub unsafe extern "C" fn itofin_bond_atm_rate_from_price(
+    ctx: *mut Context,
+    id: u64,
+    discount: u64,
+    amount: f64,
+    price_kind: i32,
+    serial: i32,
+    out: *mut f64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            if !error.is_null() {
+                check_ptr(error)?;
+            }
+            check_ptr(out)?;
+            let price = price(amount, price_kind)?;
+            let bond = c.get::<NativeBond>(id)?;
+            if bond.indexed {
+                return Err(BindingError::invalid(
+                    "CPI raw-coupon BPS and ATM analytics are unsupported",
+                ));
+            }
+            bond.bond.plain()?;
+            let actual = settlement(&bond, serial, matches!(price, BondPrice::Clean(_)))?;
+            let discount = curve(c, discount)?.current_link()?;
+            let value = BondFunctions::atm_rate_from_price(
+                &bond.bond.borrow(),
+                &*discount,
+                price,
+                Some(actual),
+            )?;
             output(out, finite(value)?)
         })
     }
@@ -542,6 +600,9 @@ pub unsafe extern "C" fn itofin_cashflows_npv_at_z_spread(
 ) -> i32 {
     unsafe {
         with_context(ctx, error, |c| {
+            if !error.is_null() {
+                check_ptr(error)?;
+            }
             check_ptr(out)?;
             let value = finite(value)?;
             let discount = curve(c, a.discount)?;
@@ -553,6 +614,13 @@ pub unsafe extern "C" fn itofin_cashflows_npv_at_z_spread(
             let npv_date = optional_date(a.npv_date)?;
 
             let leg = c.get::<Leg>(id)?;
+            if let Some(cpi) = c.optional_metadata::<crate::cpi_cashflows_api::CpiLegSettings>(id)
+                && !std::ptr::eq(&*settings, &*cpi.0)
+            {
+                return Err(BindingError::invalid(
+                    "CPI leg and valuation settings differ",
+                ));
+            }
             if let Some(floating) =
                 c.optional_metadata::<crate::floating_bond_api::NativeFloating>(id)
             {
@@ -579,6 +647,9 @@ pub unsafe extern "C" fn itofin_cashflows_z_spread(
 ) -> i32 {
     unsafe {
         with_context(ctx, error, |c| {
+            if !error.is_null() {
+                check_ptr(error)?;
+            }
             check_ptr(out)?;
             let value = finite(value)?;
             let discount = curve(c, a.discount)?;
@@ -590,6 +661,13 @@ pub unsafe extern "C" fn itofin_cashflows_z_spread(
             let npv_date = optional_date(a.npv_date)?;
             let solve = solver(solve)?;
             let leg = c.get::<Leg>(id)?;
+            if let Some(cpi) = c.optional_metadata::<crate::cpi_cashflows_api::CpiLegSettings>(id)
+                && !std::ptr::eq(&*settings, &*cpi.0)
+            {
+                return Err(BindingError::invalid(
+                    "CPI leg and valuation settings differ",
+                ));
+            }
             if let Some(floating) =
                 c.optional_metadata::<crate::floating_bond_api::NativeFloating>(id)
             {
@@ -617,3 +695,7 @@ pub unsafe extern "C" fn itofin_cashflows_z_spread(
 #[cfg(test)]
 #[path = "bond_analytics_api_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "bond_price_atm_api_tests.rs"]
+mod price_atm_tests;
