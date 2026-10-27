@@ -7,7 +7,7 @@
       "python": "itofin.instruments.VanillaOption.gap",
       "status": "implemented",
       "tests": [
-        "TestGapFactoryPricingAndUnsupportedAnalytic",
+        "TestGapFactoryPricingAndPlainLimit",
         "TestGapSignedPaymentsAndRetainedGraph",
         "TestGapFactoryDomainsAndSessions",
         "TestGapLiveCurvesAndMixedEngineSessions",
