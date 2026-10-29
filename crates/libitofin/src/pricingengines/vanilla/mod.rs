@@ -1614,6 +1614,8 @@ mod test_greeks {
 
 #[cfg(test)]
 mod qmc_oracle;
+#[cfg(test)]
+mod seed_replay;
 
 pub mod analyticgjrgarchengine;
 pub mod mceuropeangjrgarchengine;
