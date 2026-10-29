@@ -200,17 +200,20 @@ fn edge_cases_are_errors_and_leave_the_quotes_untouched() {
         result.unwrap_err().message().to_owned()
     };
 
-    assert_eq!(
-        message(parallel_analysis(
-            &quotes,
-            &instruments,
-            &[],
-            0.0,
-            kind,
-            None
-        )),
-        "zero shift not allowed"
-    );
+    for shift in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            message(parallel_analysis(
+                &quotes,
+                &instruments,
+                &[],
+                shift,
+                kind,
+                None
+            )),
+            "shift must be finite and non-zero"
+        );
+        assert_eq!(setup.quote.value().unwrap(), RATE);
+    }
     assert_eq!(
         message(bucket_analysis(
             &setup.quote,
@@ -449,16 +452,18 @@ fn matrix_edge_cases_are_errors() {
         )),
         "empty instrument vector"
     );
-    assert_eq!(
-        message(bucket_analysis_matrix(
-            &setup.ragged(),
-            &instruments,
-            &[],
-            0.0,
-            kind
-        )),
-        "zero shift not allowed"
-    );
+    for shift in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            message(bucket_analysis_matrix(
+                &setup.ragged(),
+                &instruments,
+                &[],
+                shift,
+                kind
+            )),
+            "shift must be finite and non-zero"
+        );
+    }
     let invalid = vec![
         vec![Shared::clone(&setup.quotes[0])],
         vec![shared(SimpleQuote::new(None))],

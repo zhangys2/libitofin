@@ -178,7 +178,9 @@ where
     /// forward the change, so an always-forwarding curve notifies its
     /// observers once more per date change than the fixed-date constructor
     /// does; the extra notification is harmless, and a curve set to forward
-    /// only the first notification swallows it.
+    /// only the first notification swallows it. A relative helper that rebuilds
+    /// its pillars must use this same `settings` value; fixed-date helpers are
+    /// not checked.
     #[allow(clippy::too_many_arguments)]
     pub fn moving_with_bootstrap(
         settlement_days: Natural,
@@ -189,6 +191,18 @@ where
         settings: Shared<Settings<Date>>,
         bootstrap: B,
     ) -> QlResult<Shared<PiecewiseYieldCurve<T, I, B>>> {
+        for helper in &instruments {
+            let base = helper.base();
+            if !base.update_dates() {
+                continue;
+            }
+            if let Some(helper_settings) = base.settings() {
+                require!(
+                    Shared::ptr_eq(helper_settings, &settings),
+                    "moving curve settings differ from a relative helper's settings"
+                );
+            }
+        }
         let curve = Self::build(
             TermStructureBase::moving(
                 settlement_days,
@@ -2016,13 +2030,55 @@ mod tests {
         assert!(curve.data.borrow().is_valid());
     }
 
+    /// A relative helper rebuilds its pillars from its own settings. Those must
+    /// be the curve's settings, or a roll of only the helper's settings would
+    /// move discounts while the reference date stayed put.
+    #[test]
+    fn moving_curve_rejects_relative_helpers_bound_to_other_settings() {
+        let vars = common_vars();
+        let other = shared(Settings::<Date>::new());
+        other.set_evaluation_date(rolled(vars.today));
+        let (_, instruments) = instruments_on(&other);
+        let err = match PiecewiseYieldCurve::<Discount, LogLinear>::moving(
+            2,
+            Target::new(),
+            instruments,
+            Actual360::new(),
+            LogLinear,
+            Shared::clone(&vars.settings),
+        ) {
+            Ok(_) => panic!("relative helpers on other settings were accepted"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.message(),
+            "moving curve settings differ from a relative helper's settings"
+        );
+    }
+
+    /// Fixed-date helpers store settings but do not rebuild pillars, so they
+    /// may belong to another settings object. The reference date still follows
+    /// the curve's settings.
+    #[test]
+    fn moving_curve_accepts_fixed_date_helpers_on_other_settings() {
+        let vars = common_vars();
+        let other = shared(Settings::<Date>::new());
+        other.set_evaluation_date(rolled(vars.today));
+        let curve = moving_curve(fixed_date_fras(&other), &vars.settings);
+        assert_eq!(
+            TermStructure::reference_date(&*curve).unwrap(),
+            vars.settlement
+        );
+    }
+
     /// D10: a moving curve on settings with no evaluation date errs rather
-    /// than falling back to the system clock.
+    /// than falling back to the system clock. The helpers are fixed-date, so
+    /// they are not required to share those settings.
     #[test]
     fn moving_curve_without_an_evaluation_date_errs() {
         let vars = common_vars();
         let unset = shared(Settings::<Date>::new());
-        let curve = moving_curve(vars.instruments.clone(), &unset);
+        let curve = moving_curve(fixed_date_fras(&vars.settings), &unset);
         assert!(TermStructure::reference_date(&*curve).is_err());
         assert!(curve.discount(1.0, true).is_err());
     }

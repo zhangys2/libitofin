@@ -30,8 +30,10 @@
 //! - an invalid bump quote in the parameter forms returns `Err`; QuantLib fills
 //!   the results with `Null` (`.cpp:181-187`).
 //!
-//! The parameter forms are fault tolerant as in QuantLib: an invalid parameter
-//! yields `None` in its slot (`.cpp:198`), not an error. Their reference values
+//! The parameter forms are fault tolerant for the reference read, as in
+//! QuantLib: an invalid parameter yields `None` in its slot (`.cpp:198`), not
+//! an error. A parameter that was valid then and fails after the bump is an
+//! error for the whole call, and the quote is restored. Their reference values
 //! are input only, where QuantLib's single-quote form fills an in/out vector
 //! (`.cpp:196-200`).
 //!
@@ -234,8 +236,9 @@ pub fn bucket_analysis_matrix(
 /// second derivatives (`None` throughout for
 /// [`OneSide`](SensitivityAnalysis::OneSide)). A slot is `None` when its
 /// reference value is `None`: an invalid parameter is skipped, not an error
-/// (QuantLib's "fault tolerant", `.cpp:198`). A `None` `reference_values` is
-/// read from the parameters before the bump; QuantLib's in/out vector is
+/// (QuantLib's "fault tolerant", `.cpp:198`). A parameter that fails when read
+/// after the bump is an error for the whole call. A `None` `reference_values`
+/// is read from the parameters before the bump; QuantLib's in/out vector is
 /// input-only here.
 pub fn parameter_sensitivity(
     quote: &Shared<SimpleQuote>,
@@ -244,7 +247,7 @@ pub fn parameter_sensitivity(
     shift: Real,
     kind: SensitivityAnalysis,
 ) -> QlResult<(ParameterDerivatives, ParameterDerivatives)> {
-    require!(shift != 0.0, "zero shift not allowed");
+    require_shift(shift)?;
     require!(!parameters.is_empty(), "empty parameters vector");
     let Ok(original) = quote.value() else {
         fail!("invalid SimpleQuote");
@@ -362,7 +365,7 @@ fn prepare(
     shift: Real,
     reference_npv: Option<Real>,
 ) -> QlResult<(Vec<Real>, Real)> {
-    require!(shift != 0.0, "zero shift not allowed");
+    require_shift(shift)?;
     require!(!instruments.is_empty(), "empty instrument vector");
     let mut originals = Vec::with_capacity(quotes.len());
     for (i, quote) in quotes.iter().enumerate() {
@@ -376,6 +379,16 @@ fn prepare(
         None => aggregate_npv(instruments, quantities)?,
     };
     Ok((originals, reference_npv))
+}
+
+/// Rejects a shift that is zero, NaN, or infinite. `NaN != 0.0` is true, so a
+/// bare non-zero check would accept a shift that writes NaN into the quotes.
+fn require_shift(shift: Real) -> QlResult<()> {
+    require!(
+        shift.is_finite() && shift != 0.0,
+        "shift must be finite and non-zero"
+    );
+    Ok(())
 }
 
 fn finite_differences(

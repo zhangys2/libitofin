@@ -113,10 +113,19 @@ fn edge_cases_are_errors() {
     let (quote, parameters) = fixture();
     let message = |result: QlResult<Sensitivities>| result.unwrap_err().message().to_owned();
     let kind = SensitivityAnalysis::Centered;
-    assert_eq!(
-        message(parameter_sensitivity(&quote, &parameters, None, 0.0, kind)),
-        "zero shift not allowed"
-    );
+    for shift in [0.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            message(parameter_sensitivity(
+                &quote,
+                &parameters,
+                None,
+                shift,
+                kind
+            )),
+            "shift must be finite and non-zero"
+        );
+        assert_eq!(quote.value().unwrap(), X);
+    }
     assert_eq!(
         message(parameter_sensitivity(&quote, &[], None, H, kind)),
         "empty parameters vector"
