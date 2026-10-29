@@ -35,7 +35,7 @@ reported seed is never `0`, because `0` would draw again.
 | Sobol | Used literally: it only seeds dimensions above the tabulated count | Not reported |
 | Halton | No seed: the sequence is deterministic | Not applicable |
 | Pseudo-random MC engines (European, Heston, GJR-GARCH, American LSM, variance swap) | Random seed, drawn once per calculation | Additional result `"seed"` (a real) |
-| American LSM calibration | Derived from the resolved pricing seed, never `0` | Additional result `"seed_calibration"` |
+| American LSM calibration | Unset: derived from the pricing seed, never `0`. Explicit: used as given; explicit `0` is a separate nonzero draw | Additional result `"seed_calibration"` |
 | Low-discrepancy (QMC) engines | Kept as `0`: the run stays deterministic | Additional result `"seed"`, the given seed |
 | Path kernels (`simulate_gbm`, GJR/OU/Merton/Heston paths) | Rejected | Not applicable: the seed is always explicit |
 
@@ -46,10 +46,13 @@ core only: its Python, C and Go bindings have no results snapshot yet, so the
 seed is not reachable there.
 
 LSM divergence from QuantLib (`mclongstaffschwartzengine.hpp`): QuantLib draws
-two independent random seeds for pricing and calibration. Here the calibration
-seed is derived from the resolved pricing seed, so the one pricing seed reproduces
-both runs. The single pricing seed whose derived calibration seed wraps to `0`
-uses calibration seed `1` instead.
+two independent random seeds for pricing and calibration. Here an unset
+calibration seed is derived from the resolved pricing seed, so that one pricing
+seed reproduces both runs. The single pricing seed whose derived calibration
+seed wraps to `0` uses calibration seed `1` instead. An explicit calibration
+seed is used as given. An explicit `0` on a generator that randomizes zero is
+its own nonzero draw, not that derivation, and replaying the run needs both
+reported seeds, `seed` and `seed_calibration`.
 
 Rust supplies `InverseCumulativeRng`, `FallibleInverseCumulativeRsg`,
 `GenericLowDiscrepancy`, `LowDiscrepancy` and `PoissonPseudoRandom`.
