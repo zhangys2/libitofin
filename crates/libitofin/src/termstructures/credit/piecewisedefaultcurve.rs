@@ -142,11 +142,14 @@ impl<T: CreditBootstrapTraits + 'static, I: Interpolator + 'static> PiecewiseDef
     ///
     /// The curve's own [`CurveUpdater`] is registered on the evaluation-date
     /// observable, so a date change invalidates the bootstrap even when no
-    /// helper observes the evaluation date.
+    /// helper observes the evaluation date. A relative helper that rebuilds
+    /// its pillars must use this same `settings` value; fixed-date helpers are
+    /// not checked.
     ///
     /// # Errors
     ///
-    /// Rejects an empty helper set.
+    /// Rejects an empty helper set, and a relative helper bound to other
+    /// settings.
     pub fn moving(
         settlement_days: Natural,
         calendar: Calendar,
@@ -155,6 +158,18 @@ impl<T: CreditBootstrapTraits + 'static, I: Interpolator + 'static> PiecewiseDef
         interpolator: I,
         settings: Shared<Settings<Date>>,
     ) -> QlResult<Shared<PiecewiseDefaultCurve<T, I>>> {
+        for helper in &instruments {
+            let base = helper.base();
+            if !base.update_dates() {
+                continue;
+            }
+            if let Some(helper_settings) = base.settings() {
+                require!(
+                    Shared::ptr_eq(helper_settings, &settings),
+                    "moving curve settings differ from a relative helper's settings"
+                );
+            }
+        }
         let curve = Self::build(
             TermStructureBase::moving(
                 settlement_days,
@@ -1373,6 +1388,32 @@ mod tests {
         assert!(
             !Flag::is_up(&flag),
             "notified of date change without an intervening recalculation"
+        );
+    }
+
+    /// A relative helper rebuilds its pillars from its own settings. Those must
+    /// be the curve's settings.
+    #[test]
+    fn moving_curve_rejects_relative_helpers_bound_to_other_settings() {
+        let curve_settings = moving_settings();
+        let helper_settings = moving_settings();
+        helper_settings.set_evaluation_date(business_days_after(today(), 30));
+        let discount = discount_curve(today());
+        let (_, helpers) = spread_helpers_on(&helper_settings, &discount);
+        let err = match PiecewiseDefaultCurve::<HazardRate, BackwardFlat>::moving(
+            MOVING_SETTLEMENT_DAYS,
+            Target::new(),
+            helpers,
+            day_counter(),
+            BackwardFlat,
+            curve_settings,
+        ) {
+            Ok(_) => panic!("relative helpers on other settings were accepted"),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.message(),
+            "moving curve settings differ from a relative helper's settings"
         );
     }
 
