@@ -704,3 +704,42 @@ def test_regime_detector_validation_and_invalid_input_leave_state_unchanged():
         det.multiplier,
         det._last_time,
     )
+
+
+def test_regime_override_solver_failure_keeps_quarantine_and_scales(monkeypatch):
+    import btc_option_iv.kalman as module
+
+    manager = FilterManager(FilterConfig(regime_override=True, adapt_rate=0.1))
+    before = warm(manager)
+    state = manager._filters[EXPIRY_MS]
+    state.process_scale = 2.0
+    for i, x in enumerate([-1.0, 0.6]):
+        ingest(manager, x, iv=0.8, now=1 + i * 0.1)
+
+    def fail(*args, **kwargs):
+        raise np.linalg.LinAlgError("injected factorization failure")
+
+    monkeypatch.setattr(module, "cho_factor", fail)
+    ingest(manager, 1.0, iv=0.8, now=1.2)
+    view = manager.snapshots(now=1.2)[EXPIRY_MS]
+    assert view.updates == before.updates
+    assert any("Numerical update skipped" in w for w in view.warnings)
+    assert len(state.outliers) == 3 and len(state.quarantined) == 3
+    assert state.process_scale == 2.0
+
+
+def test_configure_clears_stale_regime_and_adaptive_multipliers():
+    manager = FilterManager(
+        FilterConfig(adapt_rate=0.1, regime=RegimeConfig(threshold=4.0))
+    )
+    warm(manager)
+    state = manager._filters[EXPIRY_MS]
+    state.process_scale = 4.0
+    state.regime._multiplier = 8.0
+    assert manager._noise_dt(state, 1.0) == pytest.approx(32.0)
+    manager.configure(FilterConfig(), now=2.0)
+    assert state.regime is None and state.process_scale == 1.0
+    assert manager._noise_dt(state, 1.0) == 1.0
+    # Even a stale multiplier cannot leak when the config no longer enables it.
+    state.process_scale = 4.0
+    assert manager._noise_dt(state, 1.0) == 1.0

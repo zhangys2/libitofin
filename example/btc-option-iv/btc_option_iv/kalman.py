@@ -466,11 +466,12 @@ class FilterManager:
             )
         return tuple(selected)
 
-    @staticmethod
-    def _noise_dt(state, dt):
+    def _noise_dt(self, state, dt):
         """Elapsed time scaled by the adaptive and regime process-noise multipliers."""
-        multiplier = state.regime.multiplier if state.regime is not None else 1.0
-        return dt * state.process_scale * multiplier
+        regime = state.regime if self.config.regime is not None else None
+        multiplier = regime.multiplier if regime is not None else 1.0
+        scale = state.process_scale if self.config.adapt_rate > 0 else 1.0
+        return dt * scale * multiplier
 
     def _observe_regime(self, state, now):
         """Feed the detector the quote-derived ATM vol and forward (use threshold 4)."""
@@ -726,9 +727,9 @@ class FilterManager:
             and state.quarantined.get(o.instrument) == o.version
             and -3 <= state.context.coordinates([o.strike])[0] <= 3
         ]
-        state.outliers.clear()
-        state.process_scale = state.nis_average = 1.0
         if not forced:
+            state.outliers.clear()
+            state.process_scale = state.nis_average = 1.0
             return
         h = basis_matrix(state.context.coordinates([o.strike for o in forced]))
         y = np.asarray([o.mid_iv for o in forced])
@@ -736,6 +737,10 @@ class FilterManager:
         values, covariance, innovations, z = kalman_update(
             state.mean, state.covariance, h, y, r
         )
+        # Commit only after the solve succeeded: on failure the exception leaves
+        # the quarantine and outlier memory intact for the caller's handler.
+        state.outliers.clear()
+        state.process_scale = state.nis_average = 1.0
         state.mean, state.covariance = values, covariance
         state.last_accepted = now
         state.updates += len(forced)
@@ -781,6 +786,12 @@ class FilterManager:
                 )
                 _validate_state(state.mean, covariance)
                 state.covariance, state.clock = covariance, now
+        if config.adapt_rate != self.config.adapt_rate:
+            for state in self._filters.values():
+                state.process_scale = state.nis_average = 1.0
+        if config.regime != self.config.regime:
+            for state in self._filters.values():
+                state.regime = None
         self.config = config
 
     def reset_all(self, *, now_ms, now):
