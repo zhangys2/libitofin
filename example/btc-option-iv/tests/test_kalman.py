@@ -18,6 +18,7 @@ from btc_option_iv.kalman import (
     process_covariance,
     transport,
 )
+from btc_option_iv.kalman_regime import RegimeConfig, RegimeDetector
 
 NOW_MS = 1_800_000_000_000
 EXPIRY_MS = NOW_MS + 30 * 86_400_000
@@ -475,3 +476,344 @@ def test_timer_tick_does_not_bootstrap_without_events():
     manager.tick(now_ms=NOW_MS + 600, now=0.6)
     assert state.mean is None
     assert row.instrument_name not in state.seen
+
+
+def test_robust_and_adaptation_config_validation_matches_rust():
+    for bad in (
+        {"robust_sigma": 0.0},
+        {"robust_sigma": math.nan},
+        {"gate_sigma": 2.0},
+        {"adapt_rate": 1.5},
+        {"adapt_rate": -0.1},
+        {"adapt_min_scale": 0.0},
+        {"adapt_min_scale": 2.0},
+        {"adapt_max_scale": 0.5},
+    ):
+        with pytest.raises(ValueError):
+            FilterConfig(**bad)
+    config = FilterConfig()
+    assert config.robust_weight(2.0) == 1.0
+    assert config.robust_weight(-4.0) == pytest.approx(0.75)
+    assert config.adapt_rate == 0.0 and not config.regime_override
+
+
+def _probe_z(delta):
+    manager = FilterManager()
+    warm(manager)
+    ingest(manager, 0.6, iv=0.3 + delta, now=1)
+    return next(
+        d
+        for d in manager.snapshots(now=1)[EXPIRY_MS].diagnostics
+        if d.instrument == "q-0.6-c"
+    )
+
+
+def test_huber_weight_applies_between_robust_and_gate_sigma():
+    z1 = _probe_z(0.01).innovation_z
+    shifts = {}
+    for target in (2.0, 4.0):
+        diag = _probe_z(0.01 * target / z1)
+        assert diag.status == "accepted"
+        assert diag.innovation_z == pytest.approx(target, rel=1e-6)
+        assert diag.weight == pytest.approx(min(1.0, 3.0 / target))
+        shifts[target] = diag.innovation
+    # A z=4 quote is down-weighted, so it moves the state by less than the
+    # un-weighted gain would: compare with a config that disables Huber.
+    plain = FilterManager(FilterConfig(robust_sigma=5.0))
+    warm(plain)
+    ingest(plain, 0.6, iv=0.3 + shifts[4.0], now=1)
+    robust = FilterManager()
+    warm(robust)
+    ingest(robust, 0.6, iv=0.3 + shifts[4.0], now=1)
+    plain_ivs = plain.snapshots(now=1)[EXPIRY_MS].knot_ivs
+    robust_ivs = robust.snapshots(now=1)[EXPIRY_MS].knot_ivs
+    assert abs(robust_ivs[5] - 0.3) < abs(plain_ivs[5] - 0.3)
+
+
+def test_gate_sigma_is_configurable():
+    z1 = _probe_z(0.01).innovation_z
+    delta = 0.01 * 4.0 / z1
+    manager = FilterManager(FilterConfig(gate_sigma=3.5))
+    warm(manager)
+    ingest(manager, 0.6, iv=0.3 + delta, now=1)
+    statuses = [d.status for d in manager.snapshots(now=1)[EXPIRY_MS].diagnostics]
+    assert "gated" in statuses
+
+
+def test_regime_override_accepts_coherent_rejections_instead_of_resetting():
+    manager = FilterManager(FilterConfig(regime_override=True))
+    before = warm(manager)
+    for i, x in enumerate([-1.0, 0.6, 1.0]):
+        ingest(manager, x, iv=0.8, now=1 + i * 0.1)
+    view = manager.snapshots(now=1.2)[EXPIRY_MS]
+    assert view.resets == before.resets
+    assert view.reset_reason == before.reset_reason
+    accepted = [d for d in view.diagnostics if d.weight == 1.0 and d.innovation_z]
+    assert len(accepted) >= 3 and all(d.status == "accepted" for d in accepted)
+    assert min(view.knot_ivs[5], view.knot_ivs[6]) > 0.5
+    state = manager._filters[EXPIRY_MS]
+    assert state.process_scale == 1.0 and not state.outliers
+
+
+def test_nis_adaptation_raises_process_scale_only_when_enabled():
+    scales = {}
+    for rate in (0.0, 0.1):
+        rng = np.random.default_rng(7)
+        manager = FilterManager(FilterConfig(adapt_rate=rate))
+        for second in range(60):
+            for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+                ingest(
+                    manager,
+                    x,
+                    iv=0.3 + rng.normal(0, 0.012),
+                    now=second + i * 0.001,
+                )
+        scales[rate] = manager._filters[EXPIRY_MS].process_scale
+    assert scales[0.0] == 1.0
+    assert scales[0.1] > 1.5
+    assert scales[0.1] <= FilterConfig().adapt_max_scale
+
+
+def test_nonfinite_innovation_is_marked_invalid_without_touching_the_state():
+    manager = FilterManager()
+    warm(manager)
+    state = manager._filters[EXPIRY_MS]
+    before = state.mean.copy()
+    obs = state.observations[3]
+    state.seen[obs.instrument] = obs.version - 1
+    object.__setattr__(obs, "mid_iv", 1e308)
+    manager._measure(state, [obs], set(), 1.0)
+    assert state.diagnostics[obs.instrument].status == "invalid"
+    assert np.array_equal(state.mean, before)
+
+
+def test_regime_detector_feeds_process_noise_time_in_the_manager():
+    config = FilterConfig(regime=RegimeConfig(threshold=4.0))
+    manager = FilterManager(config)
+    for second in range(120):
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=0.3, now=second + i * 0.001)
+    state = manager._filters[EXPIRY_MS]
+    assert state.regime is not None and state.regime.multiplier == 1.0
+    for second in range(120, 150):
+        shocked = 0.3 + 0.08 * (second - 119) / 30
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=shocked, now=second + i * 0.001)
+    assert state.regime.multiplier > 5
+    # Same elapsed time, bigger covariance growth than the default filter.
+    assert manager._noise_dt(state, 1.0) > 5
+
+
+def _wiggle(i):
+    return math.modf(math.sin(i * 12.9898) * 43758.5453)[0] * 2 - 1
+
+
+def _calm(det, start, n, vol, fwd, dt=10.0):
+    t = start
+    for i in range(n):
+        det.observe(t, vol + 0.0002 * _wiggle(i), fwd * (1 + 1e-5 * _wiggle(i + 7)))
+        t += dt
+    return t
+
+
+def test_regime_detector_calm_shock_and_exact_decay():
+    det = RegimeDetector()
+    t = _calm(det, 0.0, 1500, 0.40, 80_000.0)
+    assert det.multiplier == 1.0
+    peak = 1.0
+    for k in range(1, 31):
+        peak = max(peak, det.observe(t, 0.40 + 0.03 * k / 30, 80_000.0))
+        t += 10.0
+    assert 10 < peak <= det.config.max_multiplier
+    at = {}
+    for i in range(151):
+        m = det.observe(t, 0.43, 80_000.0)
+        if i in (40, 150):
+            at[i] = m
+        t += 10.0
+    assert at[40] > 1.5
+    ratio = (at[150] - 1) / (at[40] - 1)
+    assert ratio == pytest.approx(math.exp(-1100 / det.config.decay), abs=1e-9)
+
+
+def test_regime_detector_forward_shock_and_cap():
+    det = RegimeDetector()
+    t = _calm(det, 0.0, 600, 0.40, 80_000.0)
+    assert det.observe(t, 0.40, 80_000.0 * 0.97) > 10
+    det = RegimeDetector(RegimeConfig(max_multiplier=5.0))
+    t = _calm(det, 0.0, 600, 0.40, 80_000.0)
+    assert det.observe(t, 0.60, 80_000.0) == 5.0
+
+
+def _after_jump(dt, calm_ticks, gap, jump):
+    det = RegimeDetector()
+    t = 0.0
+    for i in range(calm_ticks):
+        det.observe(t, 0.40 + 0.0001 * _wiggle(i), 80_000.0)
+        t += dt
+    return det.observe(t - dt + gap, 0.40 + jump, 80_000.0)
+
+
+def test_regime_detector_sees_shocks_at_any_cadence_and_across_gaps():
+    for dt in (10.0, 60.0, 120.0, 150.0, 180.0, 200.0, 250.0):
+        assert _after_jump(dt, 120, dt, 0.10) > 10, dt
+    assert _after_jump(10.0, 200, 301.0, 0.10) > 10
+    assert _after_jump(10.0, 200, 3600.0, 0.10) > 10
+
+
+def test_regime_detector_sparse_calm_and_flat_feeds_are_not_flagged():
+    for dt in (60.0, 180.0, 301.0):
+        det = RegimeDetector()
+        t = 0.0
+        for i in range(400):
+            det.observe(t, 0.40 + 0.0001 * _wiggle(i), 80_000.0)
+            t += dt
+        assert det.multiplier == 1.0, dt
+    det = RegimeDetector()
+    t = 0.0
+    for _ in range(72 * 360):
+        det.observe(t, 0.40, 80_000.0)
+        t += 10.0
+    assert det.observe(t, 0.4003, 80_000.0) == 1.0
+
+
+def test_regime_detector_validation_and_invalid_input_leave_state_unchanged():
+    for bad in (
+        {"window": 0.0},
+        {"threshold": math.nan},
+        {"decay": -1.0},
+        {"max_multiplier": 0.5},
+        {"initial_change_sd": 0.0},
+    ):
+        with pytest.raises(ValueError):
+            RegimeConfig(**bad)
+    det = RegimeDetector()
+    _calm(det, 0.0, 50, 0.4, 80_000.0)
+    snapshot = (list(det._history), det._change_var, det.multiplier, det._last_time)
+    for args in (
+        (math.nan, 0.4, 1e5),
+        (1e4, -0.1, 1e5),
+        (1e4, 0.4, 0.0),
+        (1.0, 0.4, 1e5),
+    ):
+        with pytest.raises(ValueError):
+            det.observe(*args)
+    assert snapshot == (
+        list(det._history),
+        det._change_var,
+        det.multiplier,
+        det._last_time,
+    )
+
+
+def test_regime_override_solver_failure_keeps_quarantine_and_scales(monkeypatch):
+    import btc_option_iv.kalman as module
+
+    manager = FilterManager(FilterConfig(regime_override=True, adapt_rate=0.1))
+    before = warm(manager)
+    state = manager._filters[EXPIRY_MS]
+    state.process_scale = 2.0
+    for i, x in enumerate([-1.0, 0.6]):
+        ingest(manager, x, iv=0.8, now=1 + i * 0.1)
+
+    def fail(*args, **kwargs):
+        raise np.linalg.LinAlgError("injected factorization failure")
+
+    monkeypatch.setattr(module, "cho_factor", fail)
+    ingest(manager, 1.0, iv=0.8, now=1.2)
+    view = manager.snapshots(now=1.2)[EXPIRY_MS]
+    assert view.updates == before.updates
+    assert any("Numerical update skipped" in w for w in view.warnings)
+    assert len(state.outliers) == 3 and len(state.quarantined) == 3
+    assert state.process_scale == 2.0
+
+
+def test_configure_clears_stale_regime_and_adaptive_multipliers():
+    manager = FilterManager(
+        FilterConfig(adapt_rate=0.1, regime=RegimeConfig(threshold=4.0))
+    )
+    warm(manager)
+    state = manager._filters[EXPIRY_MS]
+    state.process_scale = 4.0
+    state.regime._multiplier = 8.0
+    assert manager._noise_dt(state, 1.0) == pytest.approx(32.0)
+    manager.configure(FilterConfig(), now=2.0)
+    assert state.regime is None and state.process_scale == 1.0
+    assert manager._noise_dt(state, 1.0) == 1.0
+    # Even a stale multiplier cannot leak when the config no longer enables it.
+    state.process_scale = 4.0
+    assert manager._noise_dt(state, 1.0) == 1.0
+
+
+def test_invalid_quote_is_quarantined_and_cannot_poison_later_context():
+    manager = FilterManager()
+    before = warm(manager)
+    ingest(manager, 0.0, iv=1e308, now=1)
+    state = manager._filters[EXPIRY_MS]
+    assert state.diagnostics["q-0.0-c"].status in {"invalid", "gated"}
+    for i, x in enumerate([-1.0, 0.6, 1.0]):
+        ingest(manager, x, iv=0.301 + 0.001 * i, now=2 + i * 0.1)
+    view = manager.snapshots(now=3)[EXPIRY_MS]
+    assert view.updates > before.updates
+    assert not any("non-finite" in w for w in view.warnings)
+    assert np.isfinite(view.knot_ivs).all()
+
+
+def test_regime_override_needs_a_dominant_sign_among_the_rejections():
+    manager = FilterManager(FilterConfig(regime_override=True))
+    before = warm(manager)
+    ingest(manager, -1.0, iv=0.01, now=1.0)
+    for i, x in enumerate([-0.6, 0.6, 1.0]):
+        ingest(manager, x, iv=0.8, now=1.1 + i * 0.1)
+    view = manager.snapshots(now=1.4)[EXPIRY_MS]
+    # 3 up / 1 down is 75% < 90%: nothing is force-accepted and nothing resets.
+    assert view.resets == before.resets
+    assert view.updates == before.updates
+    assert [d.status for d in view.diagnostics].count("gated") == 4
+    state = manager._filters[EXPIRY_MS]
+    assert len(state.quarantined) == 4
+
+
+def test_regime_multiplier_decays_when_no_usable_quotes_remain():
+    manager = FilterManager(FilterConfig(regime=RegimeConfig(threshold=4.0)))
+    for second in range(120):
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=0.3, now=second + i * 0.001)
+    for second in range(120, 150):
+        shocked = 0.3 + 0.08 * (second - 119) / 30
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=shocked, now=second + i * 0.001)
+    state = manager._filters[EXPIRY_MS]
+    peak = state.regime.multiplier
+    assert peak > 5
+    # 20 s of heartbeats with every quote older than the 10 s freshness window.
+    for second in range(160, 171):
+        manager.tick(now_ms=NOW_MS + second * 1000, now=float(second))
+    assert state.mean is not None
+    assert state.regime.multiplier < peak
+    assert state.regime.multiplier == pytest.approx(
+        1 + (peak - 1) * math.exp(-21 / state.regime.config.decay), rel=0.05
+    )
+
+
+def test_resets_drop_the_regime_detector():
+    manager = FilterManager(FilterConfig(regime=RegimeConfig(threshold=4.0)))
+    warm(manager)
+    manager.tick(now_ms=NOW_MS + 1000, now=1.0)
+    state = manager._filters[EXPIRY_MS]
+    assert state.regime is not None
+    manager.reset_all(now_ms=NOW_MS + 2000, now=2.0)
+    assert state.regime is None or state.regime.multiplier == 1.0
+    assert state.resets == 1
+
+
+def test_regime_detector_advance_only_decays():
+    det = RegimeDetector()
+    t = _calm(det, 0.0, 600, 0.40, 80_000.0)
+    peak = det.observe(t, 0.50, 80_000.0)
+    assert peak > 10
+    assert det.advance(t + 600.0) == pytest.approx(
+        1 + (peak - 1) * math.exp(-600 / det.config.decay)
+    )
+    with pytest.raises(ValueError):
+        det.advance(t)

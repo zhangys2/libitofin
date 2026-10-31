@@ -15,6 +15,8 @@ from itofin.termstructures import TotalVarianceCubicSmileSection
 from scipy.interpolate import CubicSpline
 from scipy.linalg import cho_factor, cho_solve
 
+from .kalman_regime import RegimeConfig, RegimeDetector
+
 KNOTS = (-3.0, -1.5, -1.0, -0.6, 0.0, 0.6, 1.0, 1.5, 3.0)
 _KNOT_ARRAY = np.asarray(KNOTS)
 _IDENTITY = np.eye(9)
@@ -22,6 +24,7 @@ _BASIS = CubicSpline(KNOTS, _IDENTITY, bc_type="natural", extrapolate=False)
 MAX_QUOTE_AGE_MS = 10_000
 MAX_OVERHANG = 0.25
 MAX_END_SLOPE = 0.10
+NIS_ADAPT_CLAMP = (0.1, 10.0)
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,19 @@ class FilterConfig:
     reference_spread: float = 0.01
     correlation_length: float = 1.0
     independent_fraction: float = 0.1
+    # Quotes beyond gate_sigma (in prior innovation sd) are rejected; quotes
+    # between robust_sigma and gate_sigma are Huber down-weighted (noise R / w).
+    gate_sigma: float = 5.0
+    robust_sigma: float = 3.0
+    # Opt-in NIS-based process-noise adaptation; 0 disables it.
+    adapt_rate: float = 0.0
+    adapt_min_scale: float = 0.01
+    adapt_max_scale: float = 16.0
+    # Opt-in: accept coherent multi-strike rejections at full weight (instead of
+    # the cold reset after three same-sign outliers) and reset adapted scales.
+    regime_override: bool = False
+    # Opt-in external regime detector scaling process-noise time.
+    regime: RegimeConfig | None = None
 
     def __post_init__(self):
         for name in (
@@ -57,6 +73,23 @@ class FilterConfig:
             or not 0 < self.independent_fraction <= 1
         ):
             raise ValueError("independent_fraction must be in (0, 1]")
+        if not math.isfinite(self.robust_sigma) or self.robust_sigma <= 0:
+            raise ValueError("robust_sigma must be finite and positive")
+        if not math.isfinite(self.gate_sigma) or self.gate_sigma < self.robust_sigma:
+            raise ValueError("gate_sigma must be finite and at least robust_sigma")
+        if not math.isfinite(self.adapt_rate) or not 0 <= self.adapt_rate <= 1:
+            raise ValueError("adapt_rate must be in [0, 1]")
+        if not (
+            math.isfinite(self.adapt_min_scale)
+            and 0 < self.adapt_min_scale <= 1
+            and math.isfinite(self.adapt_max_scale)
+            and self.adapt_max_scale >= 1
+        ):
+            raise ValueError("adaptive scale bounds must satisfy 0 < min <= 1 <= max")
+
+    def robust_weight(self, z: float) -> float:
+        a = abs(z)
+        return 1.0 if a <= self.robust_sigma else self.robust_sigma / a
 
     def measurement_variance(self, spread: float) -> float:
         if not math.isfinite(spread) or spread < 0:
@@ -241,6 +274,7 @@ class Diagnostic:
     status: str
     innovation: float | None = None
     innovation_z: float | None = None
+    weight: float | None = None
 
 
 @dataclass(frozen=True)
@@ -290,6 +324,9 @@ class _ExpiryState:
     quarantined: dict[str, int] = field(default_factory=dict)
     diagnostics: dict[str, Diagnostic] = field(default_factory=dict)
     outliers: dict[float, tuple[float, int]] = field(default_factory=dict)
+    process_scale: float = 1.0
+    nis_average: float = 1.0
+    regime: RegimeDetector | None = None
     observations: tuple[Observation, ...] = ()
     support: tuple[float, float] | None = None
     reset_reason: str = "bootstrap"
@@ -429,8 +466,36 @@ class FilterManager:
             )
         return tuple(selected)
 
+    def _noise_dt(self, state, dt):
+        """Elapsed time scaled by the adaptive and regime process-noise multipliers."""
+        regime = state.regime if self.config.regime is not None else None
+        multiplier = regime.multiplier if regime is not None else 1.0
+        scale = state.process_scale if self.config.adapt_rate > 0 else 1.0
+        return dt * scale * multiplier
+
+    def _observe_regime(self, state, now):
+        """Feed the detector the quote-derived ATM vol and forward (use threshold 4)."""
+        if self.config.regime is None:
+            return
+        if state.regime is None or state.regime.config != self.config.regime:
+            state.regime = RegimeDetector(self.config.regime)
+        usable = [
+            o
+            for o in state.observations
+            if state.quarantined.get(o.instrument) != o.version
+        ]
+        try:
+            raw = _context(usable)
+            state.regime.observe(now, raw.atm_vol, raw.forward)
+        except ValueError:
+            # No usable ATM/forward right now: let the multiplier decay with time
+            # rather than freezing it at a stale peak.
+            state.regime.advance(now)
+
     @staticmethod
     def _reset(state, reason):
+        state.process_scale = state.nis_average = 1.0
+        state.regime = None
         state.mean = state.covariance = state.context = None
         state.last_accepted = None
         state.seen.clear()
@@ -494,10 +559,12 @@ class FilterManager:
         )
         pre_gated = set()
         try:
+            self._observe_regime(state, now)
+            noise = process_covariance(self.config, self._noise_dt(state, dt))
             # Gate fresh source IVs against the old strike-space prior BEFORE
             # using their ATM IVs as normalization. An isolated ATM spike must
             # not evade the innovation gate by inducing a coordinate reset.
-            preview_p = state.covariance + process_covariance(self.config, dt)
+            preview_p = state.covariance + noise
             for o in changed:
                 x = state.context.coordinates([o.strike])[0]
                 if -3 <= x <= 3:
@@ -508,7 +575,7 @@ class FilterManager:
                             + self.config.measurement_variance(o.spread)
                         )
                     )
-                    if abs(z) > 5:
+                    if abs(z) > self.config.gate_sigma:
                         pre_gated.add(o.instrument)
             trusted = [
                 o
@@ -530,7 +597,7 @@ class FilterManager:
                 self._reset(state, "coordinate overhang")
                 self._bootstrap(state, now)
                 return
-            covariance += process_covariance(self.config, dt)
+            covariance += noise
             _validate_state(values, covariance)
             state.context, state.mean, state.covariance, state.clock = (
                 context,
@@ -562,12 +629,33 @@ class FilterManager:
         r = np.asarray([self.config.measurement_variance(o.spread) for o in eligible])
         innovations = y - h @ state.mean
         variances = np.einsum("ij,jk,ik->i", h, state.covariance, h) + r
-        z = innovations / np.sqrt(variances)
-        if not np.isfinite(z).all():
-            raise ValueError("invalid innovation statistics")
-        gated = (np.abs(z) > 5) | np.asarray(
-            [o.instrument in pre_gated for o in eligible]
+        with np.errstate(all="ignore"):
+            z = innovations / np.sqrt(variances)
+        valid = np.isfinite(z)
+        gate = self.config.gate_sigma
+        gated = valid & (
+            (np.abs(z) > gate)
+            | np.asarray([o.instrument in pre_gated for o in eligible])
         )
+        accepted = valid & ~gated
+        # Weights come from the PRIOR z and are frozen, so the batch is the joint
+        # update for independent noise and does not depend on quote order.
+        weights = np.ones(len(eligible))
+        for i in np.flatnonzero(accepted):
+            weights[i] = self.config.robust_weight(float(z[i]))
+        regime_shift = False
+        if self.config.regime_override:
+            g = int(gated.sum())
+            positive = int((gated & (innovations > 0)).sum())
+            if (
+                g >= 3
+                and g >= int(accepted.sum())
+                and (10 * positive >= 9 * g or 10 * (g - positive) >= 9 * g)
+            ):
+                regime_shift = True
+                weights[gated] = 1.0
+                accepted = accepted | gated
+                gated = np.zeros(len(eligible), dtype=bool)
         state.outliers = {
             strike: entry
             for strike, entry in state.outliers.items()
@@ -575,12 +663,20 @@ class FilterManager:
         }
         for i, o in enumerate(eligible):
             state.seen[o.instrument] = o.version
+            if not valid[i]:
+                state.diagnostics[o.instrument] = Diagnostic(
+                    o.instrument, o.version, "invalid"
+                )
+                # Keep it out of later normalization (ATM context) like a gated quote.
+                state.quarantined[o.instrument] = o.version
+                continue
             state.diagnostics[o.instrument] = Diagnostic(
                 o.instrument,
                 o.version,
                 "gated" if gated[i] else "accepted",
                 float(innovations[i]),
                 float(z[i]),
+                float(weights[i]) if accepted[i] else None,
             )
             if gated[i]:
                 state.quarantined[o.instrument] = o.version
@@ -588,18 +684,31 @@ class FilterManager:
             else:
                 state.quarantined.pop(o.instrument, None)
                 state.outliers.pop(o.strike, None)
-        if any(
-            sum(entry[1] == sign for entry in state.outliers.values()) >= 3
+        counts = {
+            sign: sum(entry[1] == sign for entry in state.outliers.values())
             for sign in (-1, 1)
-        ):
+        }
+        triggered = any(c >= 3 for c in counts.values())
+        override_sign = 0
+        if triggered and self.config.regime_override:
+            # Rust promotes a batch only when >= 90% of the rejections share a sign.
+            total = len(state.outliers)
+            override_sign = next(
+                (s for s, c in counts.items() if c >= 3 and 10 * c >= 9 * total), 0
+            )
+            triggered = override_sign != 0
+        if triggered and not self.config.regime_override:
             self._reset(state, "multi-strike regime change")
             self._bootstrap(state, now)
             return
-        accepted = ~gated
         if accepted.any():
             try:
                 values, covariance, _, _ = kalman_update(
-                    state.mean, state.covariance, h[accepted], y[accepted], r[accepted]
+                    state.mean,
+                    state.covariance,
+                    h[accepted],
+                    y[accepted],
+                    r[accepted] / weights[accepted],
                 )
             except (ValueError, np.linalg.LinAlgError):
                 for o, accept in zip(eligible, accepted):
@@ -612,6 +721,68 @@ class FilterManager:
             state.last_accepted = now
             state.updates += int(accepted.sum())
             state.warning = None
+            if not (regime_shift or triggered):
+                self._adapt(state, float(np.mean(z[accepted] ** 2)))
+        if triggered:
+            self._accept_regime_shift(state, now, override_sign)
+        elif regime_shift:
+            state.process_scale = state.nis_average = 1.0
+
+    def _accept_regime_shift(self, state, now, sign):
+        """regime_override: take the coherent rejected quotes at full weight.
+
+        Quotes arrive one row at a time, so the coherent rejections are the
+        quarantined outliers remembered over the last few seconds.
+        """
+        forced = [
+            o
+            for o in state.observations
+            if state.outliers.get(o.strike, (0, 0))[1] == sign
+            and state.quarantined.get(o.instrument) == o.version
+            and -3 <= state.context.coordinates([o.strike])[0] <= 3
+        ]
+        if not forced:
+            state.outliers.clear()
+            state.process_scale = state.nis_average = 1.0
+            return
+        h = basis_matrix(state.context.coordinates([o.strike for o in forced]))
+        y = np.asarray([o.mid_iv for o in forced])
+        r = np.asarray([self.config.measurement_variance(o.spread) for o in forced])
+        values, covariance, innovations, z = kalman_update(
+            state.mean, state.covariance, h, y, r
+        )
+        # Commit only after the solve succeeded: on failure the exception leaves
+        # the quarantine and outlier memory intact for the caller's handler.
+        state.outliers.clear()
+        state.process_scale = state.nis_average = 1.0
+        state.mean, state.covariance = values, covariance
+        state.last_accepted = now
+        state.updates += len(forced)
+        state.warning = None
+        for i, o in enumerate(forced):
+            state.quarantined.pop(o.instrument, None)
+            state.diagnostics[o.instrument] = Diagnostic(
+                o.instrument,
+                o.version,
+                "accepted",
+                float(innovations[i]),
+                float(z[i]),
+                1.0,
+            )
+
+    def _adapt(self, state, mean_nis):
+        """NIS-based process-noise adaptation (opt-in); mirrors the Rust filter."""
+        rate = self.config.adapt_rate
+        if rate > 0 and math.isfinite(mean_nis):
+            nis = min(max(mean_nis, NIS_ADAPT_CLAMP[0]), NIS_ADAPT_CLAMP[1])
+            state.nis_average = (1 - rate) * state.nis_average + rate * nis
+            state.process_scale = min(
+                max(
+                    state.process_scale * state.nis_average**rate,
+                    self.config.adapt_min_scale,
+                ),
+                self.config.adapt_max_scale,
+            )
 
     def tick(self, *, now_ms, now):
         self.retire(set(self._filters), now_ms=now_ms)
@@ -625,10 +796,16 @@ class FilterManager:
                 if now < state.clock:
                     raise ValueError("monotonic filter clock moved backward")
                 covariance = state.covariance + process_covariance(
-                    self.config, now - state.clock
+                    self.config, self._noise_dt(state, now - state.clock)
                 )
                 _validate_state(state.mean, covariance)
                 state.covariance, state.clock = covariance, now
+        if config.adapt_rate != self.config.adapt_rate:
+            for state in self._filters.values():
+                state.process_scale = state.nis_average = 1.0
+        if config.regime != self.config.regime:
+            for state in self._filters.values():
+                state.regime = None
         self.config = config
 
     def reset_all(self, *, now_ms, now):

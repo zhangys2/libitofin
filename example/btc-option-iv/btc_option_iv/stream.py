@@ -88,7 +88,10 @@ async def subscribe_btc_option_market_data(
                 return
             payload = json.loads(raw if isinstance(raw, str) else raw.decode())
             if "error" in payload:
-                print(f"REJECT deribit reason=rpc_error detail={payload['error']!r}", file=sys.stderr)
+                print(
+                    f"REJECT deribit reason=rpc_error detail={payload['error']!r}",
+                    file=sys.stderr,
+                )
                 continue
             if payload.get("method") == "heartbeat":
                 if (payload.get("params") or {}).get("type") == "test_request":
@@ -120,7 +123,9 @@ async def run_live_btc_iv_stream(
             by_future: dict[str, list[str]] = {}
             for instrument in instruments:
                 if instrument.future_name is not None:
-                    by_future.setdefault(instrument.future_name, []).append(instrument.instrument_name)
+                    by_future.setdefault(instrument.future_name, []).append(
+                        instrument.instrument_name
+                    )
             book = MarketBook()
             latest_options: dict[str, OptionQuote] = {}
             processed: dict[str, tuple[OptionQuote, int | None, int | None]] = {}
@@ -130,7 +135,9 @@ async def run_live_btc_iv_stream(
                 if isinstance(event, IndexQuote):
                     book.note_index(event)
                     candidates = [
-                        name for name, quote in latest_options.items() if quote.index_price is None
+                        name
+                        for name, quote in latest_options.items()
+                        if quote.index_price is None
                     ]
                 elif isinstance(event, FutureQuote):
                     book.note_future(event)
@@ -154,7 +161,9 @@ async def run_live_btc_iv_stream(
                     forwards = book.forward_data(instrument)
                     signature = (
                         quote,
-                        quote.timestamp_ms if quote.index_price is not None else forwards.index_timestamp_ms,
+                        quote.timestamp_ms
+                        if quote.index_price is not None
+                        else forwards.index_timestamp_ms,
                         quote.timestamp_ms
                         if quote.underlying_price is not None
                         else forwards.forward_timestamp_ms,
@@ -229,7 +238,9 @@ def _require_websockets():
 
 
 def _get_json(url: str) -> dict:
-    request = urllib.request.Request(url, headers={"User-Agent": "itofin-btc-option-iv"})
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "itofin-btc-option-iv"}
+    )
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
     if not isinstance(payload, dict):
