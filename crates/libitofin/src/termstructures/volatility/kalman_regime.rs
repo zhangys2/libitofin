@@ -8,6 +8,9 @@
 //! noise is linear in elapsed time, so this scales it by `m`. The multiplier jumps
 //! up immediately and decays back to 1 exponentially.
 //!
+//! The detector is opt-in: nothing in the library calls it, and the tuned defaults come
+//! from a single market over 15 days.
+//!
 //! Intended use is a quiet base `process_iv_rate` (about 0.0001) with this
 //! detector supplying the extra responsiveness during shocks. Do not combine it
 //! with `FilterConfig::adapt_rate`, which scales the same noise term.
@@ -19,6 +22,11 @@ use crate::require;
 use crate::types::{Rate, Real, Time, Volatility};
 
 const SECONDS_PER_YEAR: Real = 365.0 * 86_400.0;
+
+/// The ATM-vol change baseline never falls below this fraction of `initial_change_sd`.
+/// Without a floor, a flat or quantized feed decays the baseline to zero and the next
+/// ordinary tick looks like an infinite-sigma shock.
+const BASELINE_FLOOR_FRACTION: Real = 0.5;
 
 /// Tuning of the [`RegimeDetector`]. All times are in seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,7 +42,7 @@ pub struct RegimeConfig {
     /// Time constant of the slow baseline of window-sized ATM-vol changes.
     pub baseline_tau: Time,
     /// Initial standard deviation of a window-sized ATM-vol change, before the
-    /// baseline has learned from data.
+    /// baseline has learned from data. The learned baseline is floored at half of this.
     pub initial_change_sd: Volatility,
 }
 
@@ -128,10 +136,14 @@ impl RegimeDetector {
         self.last_time = Some(time);
         let ln_forward = forward.ln();
         self.history.push_back((time, atm_vol, ln_forward));
-        while self
-            .history
-            .front()
-            .is_some_and(|&(t, _, _)| time - t > cfg.window)
+        // Drop samples older than the window, but never the last reference sample: after a
+        // gap longer than the window (or with a sampling interval close to it) the
+        // previous sample is the only thing to measure the move against.
+        while self.history.len() > 2
+            && self
+                .history
+                .front()
+                .is_some_and(|&(t, _, _)| time - t > cfg.window)
         {
             self.history.pop_front();
         }
@@ -140,12 +152,15 @@ impl RegimeDetector {
 
         let mut z = 0.0;
         let mut dvol = 0.0;
-        let measured = span >= 0.8 * cfg.window;
+        let measured = span > 0.0;
+        // `change_var` is a window-length variance; a random walk's variance is linear in
+        // the span it is measured over.
+        let span_ratio = span / cfg.window;
         if measured {
             dvol = atm_vol - vol0;
             let forward_sd = atm_vol * (span / SECONDS_PER_YEAR).sqrt();
             let z_forward = ((ln_forward - lnf0) / forward_sd).abs();
-            let z_vol = dvol.abs() / self.change_var.sqrt();
+            let z_vol = dvol.abs() / (self.change_var * span_ratio).sqrt();
             z = z_forward.max(z_vol);
         }
 
@@ -159,7 +174,9 @@ impl RegimeDetector {
         // Learn the baseline only from unflagged periods so shocks do not raise it.
         if measured && z <= cfg.threshold {
             let a = (dt / cfg.baseline_tau).min(1.0);
-            self.change_var = (1.0 - a) * self.change_var + a * dvol * dvol;
+            let floor = (BASELINE_FLOOR_FRACTION * cfg.initial_change_sd).powi(2);
+            self.change_var =
+                ((1.0 - a) * self.change_var + a * dvol * dvol / span_ratio).max(floor);
         }
         Ok(self.multiplier)
     }
@@ -229,6 +246,73 @@ mod tests {
         let ratio = (at_150 - 1.0) / (at_40 - 1.0);
         let expected = (-1100.0_f64 / RegimeConfig::default().decay).exp();
         assert!((ratio - expected).abs() < 1e-9, "{ratio} vs {expected}");
+    }
+
+    /// Calm feed sampled every `dt` seconds followed by a single jump of `jump` in ATM vol.
+    fn multiplier_after_jump(dt: Time, calm_ticks: usize, gap: Time, jump: Real) -> Real {
+        let mut det = RegimeDetector::new(RegimeConfig::default()).unwrap();
+        let mut t = 0.0;
+        for i in 0..calm_ticks {
+            det.observe(t, 0.40 + 0.0001 * wiggle(i), 80_000.0).unwrap();
+            t += dt;
+        }
+        det.observe(t - dt + gap, 0.40 + jump, 80_000.0).unwrap()
+    }
+
+    #[test]
+    fn detects_shocks_at_any_sampling_cadence_and_across_gaps() {
+        // Previously required span >= 0.8 * window after dropping points older than the
+        // window, so 180 s sampling and gaps longer than the window were blind.
+        for dt in [10.0, 60.0, 120.0, 150.0, 180.0, 200.0, 250.0] {
+            let m = multiplier_after_jump(dt, 120, dt, 0.10);
+            assert!(m > 10.0, "dt = {dt}: multiplier {m}");
+        }
+        let m = multiplier_after_jump(10.0, 200, 301.0, 0.10);
+        assert!(m > 10.0, "gap of window + 1: multiplier {m}");
+        let m = multiplier_after_jump(10.0, 200, 3600.0, 0.10);
+        assert!(m > 10.0, "one-hour gap: multiplier {m}");
+    }
+
+    #[test]
+    fn sparse_calm_feed_is_not_flagged() {
+        for dt in [60.0, 180.0, 301.0] {
+            let mut det = RegimeDetector::new(RegimeConfig::default()).unwrap();
+            let mut t = 0.0;
+            for i in 0..400 {
+                det.observe(
+                    t,
+                    0.40 + 0.0002 * wiggle(i),
+                    80_000.0 * (1.0 + 1e-5 * wiggle(i + 3)),
+                )
+                .unwrap();
+                t += dt;
+            }
+            assert_eq!(det.multiplier(), 1.0, "dt = {dt}");
+        }
+    }
+
+    #[test]
+    fn flat_feed_does_not_collapse_the_baseline() {
+        // 72 hours of exactly constant ATM vol, then ordinary ticks.
+        let cfg = RegimeConfig::default();
+        let floor = (0.5 * cfg.initial_change_sd).powi(2);
+        let mut det = RegimeDetector::new(cfg).unwrap();
+        let mut t = 0.0;
+        for _ in 0..(72 * 360) {
+            det.observe(t, 0.40, 80_000.0).unwrap();
+            t += 10.0;
+        }
+        assert!(det.change_var >= floor && det.change_var.is_finite());
+        assert_eq!(det.multiplier(), 1.0);
+        // A 0.1 vol-point tick after three flat days is ordinary, not a regime shock...
+        let m = det.observe(t, 0.401, 80_000.0).unwrap();
+        assert!(m < 1.5, "{m}");
+        // ...but a tiny tick is certainly not.
+        let mut det2 = det.clone();
+        assert_eq!(det2.observe(t, 0.4001, 80_000.0).unwrap(), 1.0);
+        // And a genuine 3 vol-point jump still triggers.
+        let m = det.observe(t + 10.0, 0.43, 80_000.0).unwrap();
+        assert!(m > 10.0, "{m}");
     }
 
     #[test]

@@ -424,20 +424,18 @@ fn innovation_stats(
     Ok((innovation, ph, s))
 }
 
-/// Fast allocation-free scalar Kalman update (m = 1) using Joseph stabilized covariance.
-pub fn kalman_update_scalar(
+/// Joseph-form scalar update without validating the state or the measurement.
+///
+/// Returns `(mean, covariance, innovation, innovation variance)`. Callers validate the
+/// inputs once and the final output once, so a batch does not pay a Cholesky check per
+/// quote.
+fn joseph_scalar(
     mean: &[Real; N_KNOTS],
     covariance: &[[Real; N_KNOTS]; N_KNOTS],
     h: &[Real; N_KNOTS],
     y: Real,
     variance: Real,
-) -> QlResult<UpdateResult<Real>> {
-    validate_state(mean, covariance)?;
-    require!(
-        h.iter().all(|v| v.is_finite()) && y.is_finite() && variance.is_finite() && variance > 0.0,
-        "invalid measurement values or variances"
-    );
-
+) -> QlResult<(KnotVector, KnotMatrix, Real, Real)> {
     let (innovation, ph, s) = innovation_stats(mean, covariance, h, y, variance)?;
 
     let mut gain = [0.0; N_KNOTS];
@@ -488,14 +486,35 @@ pub fn kalman_update_scalar(
             updated_cov[j][i] = sym;
         }
     }
+    Ok((updated_mean, updated_cov, innovation, s))
+}
 
+fn validate_measurement(h: &[Real; N_KNOTS], y: Real, variance: Real) -> QlResult<()> {
+    require!(
+        h.iter().all(|v| v.is_finite()) && y.is_finite() && variance.is_finite() && variance > 0.0,
+        "invalid measurement values or variances"
+    );
+    Ok(())
+}
+
+/// Fast allocation-free scalar Kalman update (m = 1) using Joseph stabilized covariance.
+pub fn kalman_update_scalar(
+    mean: &[Real; N_KNOTS],
+    covariance: &[[Real; N_KNOTS]; N_KNOTS],
+    h: &[Real; N_KNOTS],
+    y: Real,
+    variance: Real,
+) -> QlResult<UpdateResult<Real>> {
+    validate_state(mean, covariance)?;
+    validate_measurement(h, y, variance)?;
+    let (updated_mean, updated_cov, innovation, s) =
+        joseph_scalar(mean, covariance, h, y, variance)?;
     validate_state(&updated_mean, &updated_cov)?;
-    let normalized = innovation / s.sqrt();
     Ok(UpdateResult {
         mean: updated_mean,
         covariance: updated_cov,
         innovation,
-        normalized_innovation: normalized,
+        normalized_innovation: innovation / s.sqrt(),
     })
 }
 
@@ -537,10 +556,12 @@ pub fn kalman_update_batch(
     let mut cur_mean = *mean;
     let mut cur_cov = *covariance;
     for i in 0..m {
-        let res = kalman_update_scalar(&cur_mean, &cur_cov, &h[i], y[i], variances[i])?;
-        cur_mean = res.mean;
-        cur_cov = res.covariance;
+        let (next_mean, next_cov, _, _) =
+            joseph_scalar(&cur_mean, &cur_cov, &h[i], y[i], variances[i])?;
+        cur_mean = next_mean;
+        cur_cov = next_cov;
     }
+    validate_state(&cur_mean, &cur_cov)?;
 
     Ok(UpdateResult {
         mean: cur_mean,
@@ -844,11 +865,11 @@ impl KalmanSmileSection {
 
     /// Assimilates an incoming quote.
     ///
-    /// Invalid inputs (non-finite or non-positive strike or IV, negative spread)
-    /// return [`UpdateStatus::InvalidQuote`] and out-of-domain strikes return
-    /// [`UpdateStatus::OutOfDomain`]; neither touches the state. Otherwise the
-    /// prior innovation is gated at `gate_sigma` and Huber down-weighted beyond
-    /// `robust_sigma`.
+    /// Invalid inputs (non-finite or non-positive strike or IV, negative spread, or an
+    /// innovation too large to standardize) return [`UpdateStatus::InvalidQuote`] and
+    /// out-of-domain strikes return [`UpdateStatus::OutOfDomain`]; neither touches the
+    /// state. Otherwise the prior innovation is gated at `gate_sigma` and Huber
+    /// down-weighted beyond `robust_sigma`.
     pub fn update_scalar(
         &mut self,
         strike: Rate,
@@ -863,6 +884,9 @@ impl KalmanSmileSection {
         let (innovation, _, s) =
             innovation_stats(&self.mean, &self.covariance, &h, mid_iv, variance)?;
         let z_score = innovation / s.sqrt();
+        if !z_score.is_finite() {
+            return Ok(UpdateStatus::InvalidQuote);
+        }
         if z_score.abs() > self.config.gate_sigma {
             return Ok(UpdateStatus::GatedOutlier {
                 innovation,
@@ -885,13 +909,21 @@ impl KalmanSmileSection {
 
     /// Assimilates a coherent batch of incoming quotes.
     ///
-    /// Each quote is first hard-gated against the *prior* (order independent, so a
-    /// bad quote cannot poison the gate for the others). Survivors are then
-    /// assimilated sequentially, tightest spread first, with Huber down-weighting
-    /// against the running posterior; this equals the joint update for independent
-    /// noise. Invalid quotes get [`UpdateStatus::InvalidQuote`] without aborting the
-    /// batch. Reported `innovation`/`z_score` are those used by the update. The
-    /// state changes only if the whole batch succeeds.
+    /// Every quote is standardized against the *prior*. Quotes beyond `gate_sigma` are
+    /// rejected; the rest get a Huber weight from their prior `z` and are folded in with
+    /// noise `R / weight`. Because the weights are frozen before any update, the result
+    /// is the joint update for independent noise: it does not depend on quote order, and
+    /// two disagreeing quotes inside the gate average rather than the second being
+    /// discounted against the first. Invalid quotes get [`UpdateStatus::InvalidQuote`]
+    /// without aborting the batch. Reported `innovation` and `z_score` are against the
+    /// prior, as in [`kalman_update_batch`].
+    ///
+    /// With `regime_override`, a coherent mass rejection is instead accepted at full
+    /// weight (their reported `z_score` can then exceed `gate_sigma`) and the adaptive
+    /// multipliers reset to 1.
+    ///
+    /// The filter state, including the adaptive multipliers, changes only if the whole
+    /// batch succeeds.
     pub fn update_batch(
         &mut self,
         strikes: &[Rate],
@@ -904,9 +936,11 @@ impl KalmanSmileSection {
             "strikes, mid_ivs, and spreads must have equal length"
         );
         let mut statuses = Vec::with_capacity(n);
-        let mut candidates: Vec<(usize, [Real; N_KNOTS], Real)> = Vec::new();
+        // (index, basis row, effective noise variance)
+        let mut accepted: Vec<(usize, [Real; N_KNOTS], Real)> = Vec::new();
         let mut prior_nis: Vec<Real> = Vec::new();
-        let mut gated_list: Vec<(usize, [Real; N_KNOTS], Real, Real)> = Vec::new();
+        // (index, basis row, noise variance, innovation, z)
+        let mut gated: Vec<(usize, [Real; N_KNOTS], Real, Real, Real)> = Vec::new();
 
         for i in 0..n {
             let (h, variance) = match self.prepare_quote(strikes[i], mid_ivs[i], spreads[i])? {
@@ -919,66 +953,63 @@ impl KalmanSmileSection {
             let (innovation, _, s) =
                 innovation_stats(&self.mean, &self.covariance, &h, mid_ivs[i], variance)?;
             let z_score = innovation / s.sqrt();
-            if z_score.abs() > self.config.gate_sigma {
-                gated_list.push((i, h, variance, innovation));
+            if !z_score.is_finite() {
+                statuses.push(UpdateStatus::InvalidQuote);
+            } else if z_score.abs() > self.config.gate_sigma {
+                gated.push((i, h, variance, innovation, z_score));
                 statuses.push(UpdateStatus::GatedOutlier {
                     innovation,
                     z_score,
                 });
             } else {
-                // Placeholder, overwritten with the sequential statistics below.
+                let weight = self.config.robust_weight(z_score);
                 statuses.push(UpdateStatus::Accepted {
                     innovation,
                     z_score,
-                    weight: 1.0,
+                    weight,
                 });
-                candidates.push((i, h, variance));
+                accepted.push((i, h, variance / weight));
                 prior_nis.push(z_score * z_score);
             }
         }
 
         let mut regime_shift = false;
         if self.config.regime_override {
-            let g = gated_list.len();
-            let positive = gated_list.iter().filter(|q| q.3 > 0.0).count();
+            let g = gated.len();
+            let positive = gated.iter().filter(|q| q.3 > 0.0).count();
             if g >= 3
-                && 2 * g >= g + candidates.len()
+                && g >= accepted.len()
                 && (10 * positive >= 9 * g || 10 * (g - positive) >= 9 * g)
             {
                 regime_shift = true;
-                for (i, h, variance, innovation) in gated_list {
+                for (i, h, variance, innovation, z_score) in gated {
                     statuses[i] = UpdateStatus::Accepted {
                         innovation,
-                        z_score: 0.0,
+                        z_score,
                         weight: 1.0,
                     };
-                    candidates.push((i, h, variance));
+                    accepted.push((i, h, variance));
                 }
-                self.process_scale = 1.0;
-                self.nis_average = 1.0;
             }
         }
-        candidates.sort_by(|a, b| a.2.total_cmp(&b.2));
+
+        // Stage everything locally; `self` is written only after the last fallible step.
         let mut mean = self.mean;
         let mut covariance = self.covariance;
-        for (idx, h, variance) in candidates {
-            let (innovation, _, s) =
-                innovation_stats(&mean, &covariance, &h, mid_ivs[idx], variance)?;
-            let z_score = innovation / s.sqrt();
-            let weight = self.config.robust_weight(z_score);
-            let res =
-                kalman_update_scalar(&mean, &covariance, &h, mid_ivs[idx], variance / weight)?;
-            mean = res.mean;
-            covariance = res.covariance;
-            statuses[idx] = UpdateStatus::Accepted {
-                innovation,
-                z_score,
-                weight,
-            };
+        for (idx, h, variance) in accepted {
+            let (next_mean, next_cov, _, _) =
+                joseph_scalar(&mean, &covariance, &h, mid_ivs[idx], variance)?;
+            mean = next_mean;
+            covariance = next_cov;
         }
+        validate_state(&mean, &covariance)?;
+
         self.mean = mean;
         self.covariance = covariance;
-        if !regime_shift && !prior_nis.is_empty() {
+        if regime_shift {
+            self.process_scale = 1.0;
+            self.nis_average = 1.0;
+        } else if !prior_nis.is_empty() {
             self.adapt_process_scale(prior_nis.iter().sum::<Real>() / prior_nis.len() as Real);
         }
 
@@ -1511,6 +1542,182 @@ mod tests {
         f.update_batch(&strikes, &[0.95; 5], &[0.01; 5]).unwrap();
         assert_eq!(f.process_scale(), 1.0);
         assert_eq!(f.nis_average(), 1.0);
+    }
+
+    /// ATM-knot quote `k` prior-sigmas away from the flat 0.60 mean (spread 0.01).
+    fn atm_quote_sigmas(k: Real) -> Real {
+        let s = 0.05_f64.powi(2) + 0.005_f64.powi(2);
+        0.60 + k * s.sqrt()
+    }
+
+    #[test]
+    fn batch_with_huber_is_the_joint_update_and_order_independent() {
+        let ctx = test_context();
+        let k = ctx.strike(0.0);
+        let (z1, z2, z3) = (2.0, -1.0, 4.0); // 4 is Huber-weighted, the others are not
+        let ivs = [
+            atm_quote_sigmas(z1),
+            atm_quote_sigmas(z2),
+            atm_quote_sigmas(z3),
+        ];
+        let cfg = FilterConfig::default();
+
+        let mut f = flat_filter(cfg);
+        let st = f.update_batch(&[k; 3], &ivs, &[0.01; 3]).unwrap();
+        for (status, z) in st.iter().zip([z1, z2, z3]) {
+            match status {
+                UpdateStatus::Accepted {
+                    z_score, weight, ..
+                } => {
+                    assert!((z_score - z).abs() < 1e-9, "z is the prior z");
+                    assert!((weight - cfg.robust_weight(z)).abs() < 1e-12);
+                }
+                other => panic!("expected accepted, got {other:?}"),
+            }
+        }
+
+        // Reference: joint update with noise R / w(prior z).
+        let h = basis_vector(0.0).unwrap();
+        let r = 0.005_f64.powi(2);
+        let vars: Vec<_> = [z1, z2, z3]
+            .iter()
+            .map(|&z| r / cfg.robust_weight(z))
+            .collect();
+        let joint =
+            kalman_update_batch(&[0.60; N_KNOTS], &diag_cov(0.05), &[h; 3], &ivs, &vars).unwrap();
+        for i in 0..N_KNOTS {
+            assert!((f.mean()[i] - joint.mean[i]).abs() < 1e-12);
+            for j in 0..N_KNOTS {
+                assert!((f.covariance()[i][j] - joint.covariance[i][j]).abs() < 1e-12);
+            }
+        }
+
+        // Reordering the quotes changes nothing.
+        let mut g = flat_filter(cfg);
+        g.update_batch(&[k; 3], &[ivs[2], ivs[0], ivs[1]], &[0.01; 3])
+            .unwrap();
+        for i in 0..N_KNOTS {
+            assert!((f.mean()[i] - g.mean()[i]).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn disagreeing_in_gate_quotes_average_instead_of_discounting_the_second() {
+        // Regression: re-weighting against the running posterior moved the knot to 0.68
+        // for quotes at 0.60 +- 2 sigma; the joint update stays at 0.60.
+        let ctx = test_context();
+        let k = ctx.strike(0.0);
+        for z in [2.0, 4.0] {
+            let mut f = flat_filter(FilterConfig::default());
+            f.update_batch(
+                &[k, k],
+                &[atm_quote_sigmas(z), atm_quote_sigmas(-z)],
+                &[0.01, 0.01],
+            )
+            .unwrap();
+            assert!((f.mean()[4] - 0.60).abs() < 1e-12, "z={z}: {}", f.mean()[4]);
+        }
+    }
+
+    #[test]
+    fn non_finite_innovations_are_invalid_quotes_and_leave_state_alone() {
+        let ctx = test_context();
+        let k = ctx.strike(0.0);
+        let cfg = FilterConfig {
+            regime_override: true,
+            adapt_rate: 0.1,
+            ..FilterConfig::default()
+        };
+        let mut f = flat_filter(cfg);
+        for _ in 0..10 {
+            f.predict(1.0).unwrap();
+            f.update_scalar(k, 0.60, 0.01).unwrap();
+        }
+        let (mean, scale, nis) = (*f.mean(), f.process_scale(), f.nis_average());
+        assert!(scale < 1.0);
+
+        // 1e308 passes the finite/positive check but overflows the standardized innovation.
+        let st = f.update_batch(&[k, k, k], &[1e308; 3], &[0.01; 3]).unwrap();
+        assert!(
+            st.iter().all(|s| *s == UpdateStatus::InvalidQuote),
+            "{st:?}"
+        );
+        assert_eq!(
+            f.update_scalar(k, 1e308, 0.01).unwrap(),
+            UpdateStatus::InvalidQuote
+        );
+        assert_eq!(*f.mean(), mean);
+        assert_eq!(f.process_scale(), scale);
+        assert_eq!(f.nis_average(), nis);
+    }
+
+    #[test]
+    fn regime_override_boundaries() {
+        let ctx = test_context();
+        let xs = [
+            -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, -2.0, 2.0, 0.25, -0.25, 0.75,
+        ];
+        let cfg = FilterConfig {
+            regime_override: true,
+            ..FilterConfig::default()
+        };
+        // Returns true if the rejected quotes were promoted to Accepted.
+        let promoted = |up: usize, down: usize, ok: usize| -> bool {
+            let mut strikes = vec![];
+            let mut ivs = vec![];
+            let mut n = 0;
+            for (count, iv) in [(up, 1.00), (down, 0.20), (ok, 0.60)] {
+                for _ in 0..count {
+                    strikes.push(ctx.strike(xs[n % xs.len()]));
+                    ivs.push(iv);
+                    n += 1;
+                }
+            }
+            let mut f = flat_filter(cfg);
+            let st = f.update_batch(&strikes, &ivs, &vec![0.01; n]).unwrap();
+            let gated = up + down;
+            let accepted_outliers = st[..gated]
+                .iter()
+                .filter(|s| matches!(s, UpdateStatus::Accepted { .. }))
+                .count();
+            assert!(accepted_outliers == 0 || accepted_outliers == gated);
+            accepted_outliers == gated
+        };
+
+        assert!(
+            !promoted(2, 0, 0),
+            "two rejections are below the count floor"
+        );
+        assert!(promoted(3, 0, 0), "three coherent rejections");
+        assert!(
+            promoted(3, 0, 3),
+            "rejections equal to accepted still count (half)"
+        );
+        assert!(!promoted(3, 0, 4), "less than half of the batch");
+        assert!(promoted(9, 1, 0), "exactly 90% same sign");
+        assert!(!promoted(8, 2, 0), "80% same sign");
+        assert!(!promoted(2, 2, 0), "mixed signs");
+        assert!(promoted(0, 4, 2), "coherent downward shift");
+    }
+
+    #[test]
+    fn regime_override_follows_a_level_shift_at_full_weight() {
+        let ctx = test_context();
+        let xs = [-1.0, -0.4, 0.0, 0.4, 1.0];
+        let strikes: Vec<_> = xs.iter().map(|&x| ctx.strike(x)).collect();
+        let mut f = flat_filter(FilterConfig {
+            regime_override: true,
+            ..FilterConfig::default()
+        });
+        f.update_batch(&strikes, &[1.60; 5], &[0.01; 5]).unwrap();
+        // Huber on a 20-sigma innovation would leave the state near 0.6 + ~0.15.
+        assert!(f.mean()[4] > 1.5, "{}", f.mean()[4]);
+    }
+
+    #[test]
+    fn well_specified_adaptation_stays_near_one() {
+        let scale = simulate_scale(0.001, 0.02);
+        assert!(scale > 0.4 && scale < 2.5, "scale drifted to {scale}");
     }
 
     #[test]
