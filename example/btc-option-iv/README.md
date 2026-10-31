@@ -155,7 +155,18 @@ the forward can jitter by about a point. Only SPXW chains are used, and the
 earliest unexpired expiration is selected.
 The feed has not been exercised against a live gateway in CI.
 
+The filter follows the Rust `KalmanSmileSection` robustness rules: quotes beyond
+`gate_sigma` (5) are rejected and quotes beyond `robust_sigma` (3) are Huber
+down-weighted, using weights frozen from the prior innovation. Opt-in controls
+(all off by default) are `adapt_rate` (NIS-based process-noise adaptation),
+`regime_override` (accept coherent multi-strike rejections at full weight
+instead of cold-resetting), and `regime=RegimeConfig(...)`
+(`btc_option_iv/kalman_regime.py`, an ATM-vol/forward shock detector that scales
+process-noise time; use `threshold=4` because the ATM vol here is quote-derived).
+Do not combine `regime` with `adapt_rate`.
+
 Implementation: `btc_option_iv/kalman.py` (NumPy/SciPy math and expiry manager),
+`kalman_regime.py` (opt-in regime detector),
 `live.py` (source events and three-second immutable snapshot publication), and
 `views.py` (pure charts/tables). These optional notebook modules do not change
 the Rust API or the dependency-light streaming CLI.
