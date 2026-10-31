@@ -38,6 +38,7 @@ mod impliedvoltermstructure;
 mod inflation;
 mod interpolatedlocalvolsurface;
 mod interpolatedsmilesection;
+mod kalman_regime;
 mod kalman_smile;
 mod localconstantvol;
 mod localvolcurve;
@@ -69,10 +70,11 @@ pub use inflation::{
 };
 pub use interpolatedlocalvolsurface::InterpolatedLocalVolSurface;
 pub use interpolatedsmilesection::InterpolatedSmileSection;
+pub use kalman_regime::{RegimeConfig, RegimeDetector};
 pub use kalman_smile::{
-    FilterConfig, KalmanSmileSection, MAX_END_SLOPE, MAX_OVERHANG, N_KNOTS, SmileContext,
-    UpdateResult, UpdateStatus, basis_derivative, basis_vector, kalman_update_batch,
-    kalman_update_scalar, process_covariance, transport,
+    DEFAULT_GATE_SIGMA, DEFAULT_ROBUST_SIGMA, FilterConfig, KalmanSmileSection, MAX_END_SLOPE,
+    MAX_OVERHANG, N_KNOTS, SmileContext, UpdateResult, UpdateStatus, basis_derivative,
+    basis_vector, kalman_update_batch, kalman_update_scalar, process_covariance, transport,
 };
 pub use localconstantvol::LocalConstantVol;
 pub use localvolcurve::LocalVolCurve;
