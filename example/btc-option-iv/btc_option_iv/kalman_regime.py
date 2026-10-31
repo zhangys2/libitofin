@@ -54,6 +54,20 @@ class RegimeDetector:
     def multiplier(self) -> float:
         return self._multiplier
 
+    def advance(self, time: float) -> float:
+        """Move the clock without a new observation: the multiplier only decays."""
+        if not math.isfinite(time):
+            raise ValueError("time must be finite")
+        if self._last_time is not None:
+            if time < self._last_time:
+                raise ValueError("observation times must be non-decreasing")
+            dt = time - self._last_time
+            self._multiplier = 1.0 + (self._multiplier - 1.0) * math.exp(
+                -dt / self.config.decay
+            )
+        self._last_time = time
+        return self._multiplier
+
     def observe(self, time: float, atm_vol: float, forward: float) -> float:
         """Feed one observation; invalid input raises and leaves the state unchanged."""
         if not math.isfinite(time):

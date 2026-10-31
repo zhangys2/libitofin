@@ -743,3 +743,77 @@ def test_configure_clears_stale_regime_and_adaptive_multipliers():
     # Even a stale multiplier cannot leak when the config no longer enables it.
     state.process_scale = 4.0
     assert manager._noise_dt(state, 1.0) == 1.0
+
+
+def test_invalid_quote_is_quarantined_and_cannot_poison_later_context():
+    manager = FilterManager()
+    before = warm(manager)
+    ingest(manager, 0.0, iv=1e308, now=1)
+    state = manager._filters[EXPIRY_MS]
+    assert state.diagnostics["q-0.0-c"].status in {"invalid", "gated"}
+    for i, x in enumerate([-1.0, 0.6, 1.0]):
+        ingest(manager, x, iv=0.301 + 0.001 * i, now=2 + i * 0.1)
+    view = manager.snapshots(now=3)[EXPIRY_MS]
+    assert view.updates > before.updates
+    assert not any("non-finite" in w for w in view.warnings)
+    assert np.isfinite(view.knot_ivs).all()
+
+
+def test_regime_override_needs_a_dominant_sign_among_the_rejections():
+    manager = FilterManager(FilterConfig(regime_override=True))
+    before = warm(manager)
+    ingest(manager, -1.0, iv=0.01, now=1.0)
+    for i, x in enumerate([-0.6, 0.6, 1.0]):
+        ingest(manager, x, iv=0.8, now=1.1 + i * 0.1)
+    view = manager.snapshots(now=1.4)[EXPIRY_MS]
+    # 3 up / 1 down is 75% < 90%: nothing is force-accepted and nothing resets.
+    assert view.resets == before.resets
+    assert view.updates == before.updates
+    assert [d.status for d in view.diagnostics].count("gated") == 4
+    state = manager._filters[EXPIRY_MS]
+    assert len(state.quarantined) == 4
+
+
+def test_regime_multiplier_decays_when_no_usable_quotes_remain():
+    manager = FilterManager(FilterConfig(regime=RegimeConfig(threshold=4.0)))
+    for second in range(120):
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=0.3, now=second + i * 0.001)
+    for second in range(120, 150):
+        shocked = 0.3 + 0.08 * (second - 119) / 30
+        for i, x in enumerate([-1.4, -1, -0.6, 0, 0.6, 1, 1.4]):
+            ingest(manager, x, iv=shocked, now=second + i * 0.001)
+    state = manager._filters[EXPIRY_MS]
+    peak = state.regime.multiplier
+    assert peak > 5
+    # 20 s of heartbeats with every quote older than the 10 s freshness window.
+    for second in range(160, 171):
+        manager.tick(now_ms=NOW_MS + second * 1000, now=float(second))
+    assert state.mean is not None
+    assert state.regime.multiplier < peak
+    assert state.regime.multiplier == pytest.approx(
+        1 + (peak - 1) * math.exp(-21 / state.regime.config.decay), rel=0.05
+    )
+
+
+def test_resets_drop_the_regime_detector():
+    manager = FilterManager(FilterConfig(regime=RegimeConfig(threshold=4.0)))
+    warm(manager)
+    manager.tick(now_ms=NOW_MS + 1000, now=1.0)
+    state = manager._filters[EXPIRY_MS]
+    assert state.regime is not None
+    manager.reset_all(now_ms=NOW_MS + 2000, now=2.0)
+    assert state.regime is None or state.regime.multiplier == 1.0
+    assert state.resets == 1
+
+
+def test_regime_detector_advance_only_decays():
+    det = RegimeDetector()
+    t = _calm(det, 0.0, 600, 0.40, 80_000.0)
+    peak = det.observe(t, 0.50, 80_000.0)
+    assert peak > 10
+    assert det.advance(t + 600.0) == pytest.approx(
+        1 + (peak - 1) * math.exp(-600 / det.config.decay)
+    )
+    with pytest.raises(ValueError):
+        det.advance(t)

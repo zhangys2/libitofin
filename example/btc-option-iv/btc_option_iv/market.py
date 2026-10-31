@@ -158,7 +158,10 @@ class MarketBook:
         if (
             math.isfinite(quote.price)
             and quote.price > 0.0
-            and (self.index_timestamp_ms is None or quote.timestamp_ms > self.index_timestamp_ms)
+            and (
+                self.index_timestamp_ms is None
+                or quote.timestamp_ms > self.index_timestamp_ms
+            )
         ):
             self.index_price = quote.price
             self.index_timestamp_ms = quote.timestamp_ms
@@ -171,11 +174,15 @@ class MarketBook:
         price, source = resolved
         previous = self.futures.get(quote.instrument_name)
         if previous is None or quote.timestamp_ms > previous.timestamp_ms:
-            self.futures[quote.instrument_name] = FutureState(price, quote.timestamp_ms, source)
+            self.futures[quote.instrument_name] = FutureState(
+                price, quote.timestamp_ms, source
+            )
 
     def forward_data(self, instrument: Instrument) -> ForwardData:
         """Forward for this option's dated future, never the option ticker."""
-        state = self.futures.get(instrument.future_name) if instrument.future_name else None
+        state = (
+            self.futures.get(instrument.future_name) if instrument.future_name else None
+        )
         if state is None:
             return ForwardData(
                 None,
@@ -241,7 +248,9 @@ class IvRow:
     side_rejections: tuple[tuple[str, Rejection], ...]
 
 
-def year_fraction_actual_365_fixed(quote_timestamp_ms: int, expiration_timestamp_ms: int) -> float:
+def year_fraction_actual_365_fixed(
+    quote_timestamp_ms: int, expiration_timestamp_ms: int
+) -> float:
     """Actual/365 Fixed year fraction from quote time to exchange expiry.
 
     The fraction includes hours and seconds. It is not the difference of
@@ -390,51 +399,89 @@ def normalize_deribit_quote(
     """Convert one inverse quote into Black-76 inputs, or a reasoned rejection."""
     name = instrument.instrument_name
     timestamp = event.timestamp_ms
-    expiry = year_fraction_actual_365_fixed(timestamp, instrument.expiration_timestamp_ms)
+    expiry = year_fraction_actual_365_fixed(
+        timestamp, instrument.expiration_timestamp_ms
+    )
     if expiry <= 0.0:
         return _reject(name, EXPIRED, "quote is at or after expiration", timestamp)
     if _stale(timestamp, as_of_ms, stale_after_ms):
-        return _reject(name, STALE, "option quote is older than the stale window", timestamp)
+        return _reject(
+            name, STALE, "option quote is older than the stale window", timestamp
+        )
     index = event.index_price if event.index_price is not None else forward_data.index
     index_timestamp = (
         timestamp if event.index_price is not None else forward_data.index_timestamp_ms
     )
     if index is None or index_timestamp is None:
-        return _reject(name, MISSING_INDEX, "BTC index has not been received", timestamp)
+        return _reject(
+            name, MISSING_INDEX, "BTC index has not been received", timestamp
+        )
     if not math.isfinite(index) or index <= 0.0:
         return _reject(name, INVALID_INDEX, "BTC index must be positive", timestamp)
-    if index_timestamp != timestamp and _stale(index_timestamp, as_of_ms, stale_after_ms):
-        return _reject(name, STALE, "BTC index is older than the stale window", timestamp)
+    if index_timestamp != timestamp and _stale(
+        index_timestamp, as_of_ms, stale_after_ms
+    ):
+        return _reject(
+            name, STALE, "BTC index is older than the stale window", timestamp
+        )
 
-    forward = event.underlying_price if event.underlying_price is not None else forward_data.forward
+    forward = (
+        event.underlying_price
+        if event.underlying_price is not None
+        else forward_data.forward
+    )
     forward_timestamp = (
-        timestamp if event.underlying_price is not None else forward_data.forward_timestamp_ms
+        timestamp
+        if event.underlying_price is not None
+        else forward_data.forward_timestamp_ms
     )
     if forward is None or forward_timestamp is None:
-        return _reject(name, MISSING_FORWARD, "expiry forward has not been received", timestamp)
+        return _reject(
+            name, MISSING_FORWARD, "expiry forward has not been received", timestamp
+        )
     if not math.isfinite(forward) or forward <= 0.0:
-        return _reject(name, INVALID_FORWARD, "expiry forward must be positive", timestamp)
-    if forward_timestamp != timestamp and _stale(forward_timestamp, as_of_ms, stale_after_ms):
-        return _reject(name, STALE, "expiry forward is older than the stale window", timestamp)
+        return _reject(
+            name, INVALID_FORWARD, "expiry forward must be positive", timestamp
+        )
+    if forward_timestamp != timestamp and _stale(
+        forward_timestamp, as_of_ms, stale_after_ms
+    ):
+        return _reject(
+            name, STALE, "expiry forward is older than the stale window", timestamp
+        )
 
     if event.interest_rate is not None:
         if not math.isfinite(event.interest_rate):
-            return _reject(name, "invalid_interest_rate", "interest rate must be finite", timestamp)
+            return _reject(
+                name, "invalid_interest_rate", "interest rate must be finite", timestamp
+            )
         try:
             discount = math.exp(-event.interest_rate * expiry)
         except OverflowError:
-            return _reject(name, "invalid_discount", "discount factor overflowed", timestamp)
+            return _reject(
+                name, "invalid_discount", "discount factor overflowed", timestamp
+            )
         conversion = f"black_price = coin_premium * index; discount = exp(-{event.interest_rate} * expiry)"
     else:
         discount = index / forward
         conversion = "black_price = coin_premium * index; discount = index / forward"
     if not math.isfinite(discount) or discount <= 0.0:
-        return _reject(name, "invalid_discount", "discount factor must be positive and finite", timestamp)
+        return _reject(
+            name,
+            "invalid_discount",
+            "discount factor must be positive and finite",
+            timestamp,
+        )
 
     bid = _live_side(event.bid_price, event.bid_amount)
     ask = _live_side(event.ask_price, event.ask_amount)
     if bid is None and ask is None:
-        return _reject(name, MISSING_SIDE, "both bid and ask are missing or non-positive", timestamp)
+        return _reject(
+            name,
+            MISSING_SIDE,
+            "both bid and ask are missing or non-positive",
+            timestamp,
+        )
     if bid is not None and ask is not None and bid > ask:
         return _reject(name, CROSSED, "bid price is above the ask price", timestamp)
 
@@ -532,9 +579,13 @@ def evaluate_quote(
         else:
             ivs[side] = solved
     if not ivs:
-        failed = "; ".join(f"{side}: {rejection.detail}" for side, rejection in side_rejections)
+        failed = "; ".join(
+            f"{side}: {rejection.detail}" for side, rejection in side_rejections
+        )
         first = side_rejections[0][1]
-        return _reject(normalized.instrument_name, first.reason, failed, normalized.timestamp_ms)
+        return _reject(
+            normalized.instrument_name, first.reason, failed, normalized.timestamp_ms
+        )
     for side in ("bid", "ask", "mid"):
         ivs.setdefault(side, None)
     return IvRow(
@@ -592,12 +643,19 @@ def _format_number(value: float | None) -> str:
 
 
 def _format_side_rejections(rejections: tuple[tuple[str, Rejection], ...]) -> str:
-    return "; ".join(f"{side}:{rejection.reason}={rejection.detail}" for side, rejection in rejections)
+    return "; ".join(
+        f"{side}:{rejection.reason}={rejection.detail}"
+        for side, rejection in rejections
+    )
 
 
 def format_rejection(rejection: Rejection) -> str:
     """One diagnostic row for a quote that was not inverted."""
-    when = format_timestamp(rejection.timestamp_ms) if rejection.timestamp_ms is not None else "-"
+    when = (
+        format_timestamp(rejection.timestamp_ms)
+        if rejection.timestamp_ms is not None
+        else "-"
+    )
     return (
         f"REJECT {when} {rejection.instrument_name} "
         f"reason={rejection.reason} detail={rejection.detail!r}"
@@ -615,24 +673,39 @@ def _parse_option_row(row: object, now_ms: int) -> Instrument | Rejection:
         return _reject(label, INACTIVE, "instrument is inactive", None)
     settlement = row.get("settlement_currency")
     if settlement != "BTC":
-        return _reject(label, NOT_INVERSE, f"settlement_currency is {settlement!r}", None)
+        return _reject(
+            label, NOT_INVERSE, f"settlement_currency is {settlement!r}", None
+        )
     option_type = row.get("option_type")
     if not isinstance(option_type, str) or option_type.lower() not in ("call", "put"):
-        return _reject(label, INVALID_INSTRUMENT, "option_type must be call or put", None)
+        return _reject(
+            label, INVALID_INSTRUMENT, "option_type must be call or put", None
+        )
     if not isinstance(name, str) or future_name_for(name) is None:
-        return _reject(label, INVALID_INSTRUMENT, "instrument name is not an inverse BTC option", None)
+        return _reject(
+            label,
+            INVALID_INSTRUMENT,
+            "instrument name is not an inverse BTC option",
+            None,
+        )
     try:
         strike = float(row["strike"])
     except (KeyError, TypeError, ValueError):
-        return _reject(label, INVALID_INSTRUMENT, "strike is missing or not numeric", None)
+        return _reject(
+            label, INVALID_INSTRUMENT, "strike is missing or not numeric", None
+        )
     if not math.isfinite(strike) or strike <= 0.0:
         return _reject(label, INVALID_INSTRUMENT, "strike must be positive", None)
     expiration = _timestamp_ms(row.get("expiration_timestamp"))
     if expiration is None:
-        return _reject(label, INVALID_INSTRUMENT, "expiration_timestamp must be milliseconds", None)
+        return _reject(
+            label, INVALID_INSTRUMENT, "expiration_timestamp must be milliseconds", None
+        )
     if expiration <= now_ms:
         return _reject(label, EXPIRED, "instrument is expired", expiration)
-    return Instrument(name, option_type.lower(), strike, expiration, future_name_for(name))
+    return Instrument(
+        name, option_type.lower(), strike, expiration, future_name_for(name)
+    )
 
 
 def _parse_index(data: dict) -> IndexQuote | None:
@@ -661,7 +734,9 @@ def _parse_option_ticker(name: str, data: dict) -> OptionQuote | None:
         underlying_price=_optional_float(data, "underlying_price"),
         interest_rate=_optional_float(data, "interest_rate"),
         underlying_index=(
-            data.get("underlying_index") if isinstance(data.get("underlying_index"), str) else None
+            data.get("underlying_index")
+            if isinstance(data.get("underlying_index"), str)
+            else None
         ),
     )
 

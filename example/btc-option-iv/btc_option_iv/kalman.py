@@ -475,7 +475,7 @@ class FilterManager:
 
     def _observe_regime(self, state, now):
         """Feed the detector the quote-derived ATM vol and forward (use threshold 4)."""
-        if self.config.regime is None or not state.observations:
+        if self.config.regime is None:
             return
         if state.regime is None or state.regime.config != self.config.regime:
             state.regime = RegimeDetector(self.config.regime)
@@ -488,11 +488,14 @@ class FilterManager:
             raw = _context(usable)
             state.regime.observe(now, raw.atm_vol, raw.forward)
         except ValueError:
-            pass
+            # No usable ATM/forward right now: let the multiplier decay with time
+            # rather than freezing it at a stale peak.
+            state.regime.advance(now)
 
     @staticmethod
     def _reset(state, reason):
         state.process_scale = state.nis_average = 1.0
+        state.regime = None
         state.mean = state.covariance = state.context = None
         state.last_accepted = None
         state.seen.clear()
@@ -664,6 +667,8 @@ class FilterManager:
                 state.diagnostics[o.instrument] = Diagnostic(
                     o.instrument, o.version, "invalid"
                 )
+                # Keep it out of later normalization (ATM context) like a gated quote.
+                state.quarantined[o.instrument] = o.version
                 continue
             state.diagnostics[o.instrument] = Diagnostic(
                 o.instrument,
@@ -679,10 +684,19 @@ class FilterManager:
             else:
                 state.quarantined.pop(o.instrument, None)
                 state.outliers.pop(o.strike, None)
-        triggered = any(
-            sum(entry[1] == sign for entry in state.outliers.values()) >= 3
+        counts = {
+            sign: sum(entry[1] == sign for entry in state.outliers.values())
             for sign in (-1, 1)
-        )
+        }
+        triggered = any(c >= 3 for c in counts.values())
+        override_sign = 0
+        if triggered and self.config.regime_override:
+            # Rust promotes a batch only when >= 90% of the rejections share a sign.
+            total = len(state.outliers)
+            override_sign = next(
+                (s for s, c in counts.items() if c >= 3 and 10 * c >= 9 * total), 0
+            )
+            triggered = override_sign != 0
         if triggered and not self.config.regime_override:
             self._reset(state, "multi-strike regime change")
             self._bootstrap(state, now)
@@ -710,11 +724,11 @@ class FilterManager:
             if not (regime_shift or triggered):
                 self._adapt(state, float(np.mean(z[accepted] ** 2)))
         if triggered:
-            self._accept_regime_shift(state, now)
+            self._accept_regime_shift(state, now, override_sign)
         elif regime_shift:
             state.process_scale = state.nis_average = 1.0
 
-    def _accept_regime_shift(self, state, now):
+    def _accept_regime_shift(self, state, now, sign):
         """regime_override: take the coherent rejected quotes at full weight.
 
         Quotes arrive one row at a time, so the coherent rejections are the
@@ -723,7 +737,7 @@ class FilterManager:
         forced = [
             o
             for o in state.observations
-            if o.strike in state.outliers
+            if state.outliers.get(o.strike, (0, 0))[1] == sign
             and state.quarantined.get(o.instrument) == o.version
             and -3 <= state.context.coordinates([o.strike])[0] <= 3
         ]
