@@ -632,6 +632,18 @@ typedef struct ItofinOuInput {
 } ItofinOuInput;
 
 /**
+ * First and, for a centered scheme, second derivative of the aggregate NPV.
+ */
+typedef struct ItofinSensitivity {
+  double first;
+  double second;
+  /**
+   * Zero for a one-sided scheme, whose `second` is zero.
+   */
+  uint8_t has_second;
+} ItofinSensitivity;
+
+/**
  * GBM inputs; arrays each contain `assets` doubles, correlation `assets*assets`.
  */
 typedef struct ItofinGbmInput {
@@ -3839,6 +3851,45 @@ int32_t itofin_ou_paths(const struct ItofinOuInput *input,
                         struct ItofinError *error);
 
 /**
+ * Parallel PV01: every quote bumped together. `kind`: 0 one-sided, 1 centered.
+ * A null `reference_npv` computes the reference from the instruments; empty
+ * `quantities` mean unit weights. Quotes are restored on success and error.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_sensitivity_parallel(struct ItofinContext *ctx,
+                                    const uint64_t *quotes,
+                                    size_t quote_count,
+                                    const uint64_t *instruments,
+                                    size_t instrument_count,
+                                    const double *quantities,
+                                    size_t quantity_count,
+                                    double shift,
+                                    int32_t kind,
+                                    const double *reference_npv,
+                                    struct ItofinSensitivity *out,
+                                    struct ItofinError *error);
+
+/**
+ * Bucket PV01: each quote bumped alone, with one shared reference NPV. Writes
+ * `quote_count` results to `out`, index-aligned with `quotes`. Same `kind`,
+ * `quantities` and restore conventions as `itofin_sensitivity_parallel`.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_sensitivity_bucket(struct ItofinContext *ctx,
+                                  const uint64_t *quotes,
+                                  size_t quote_count,
+                                  const uint64_t *instruments,
+                                  size_t instrument_count,
+                                  const double *quantities,
+                                  size_t quantity_count,
+                                  double shift,
+                                  int32_t kind,
+                                  struct ItofinSensitivity *out,
+                                  struct ItofinError *error);
+
+/**
  * Generate `count` standard normal values with a deterministic nonzero seed.
  * # Safety
  * Follow the crate-level pointer contract. Output contains `count` doubles.
@@ -5032,6 +5083,32 @@ int32_t itofin_piecewise_curve_new(struct ItofinContext *ctx,
                                    size_t additional_len,
                                    uint64_t *out,
                                    struct ItofinError *error);
+
+/**
+ * The itofin_piecewise_curve_new twin whose reference date moves with the
+ * evaluation date of settings, settlement_days business days on calendar.
+ * settings must be the SAME instance a relative helper's index carries;
+ * another instance is rejected. An unset evaluation date succeeds here and
+ * errs on the first read.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_piecewise_curve_new_moving(struct ItofinContext *ctx,
+                                          uint32_t settlement_days,
+                                          uint64_t calendar,
+                                          uint64_t settings,
+                                          const uint64_t *helpers,
+                                          size_t len,
+                                          uint64_t dc,
+                                          int32_t kind,
+                                          int32_t algorithm,
+                                          const uint64_t *additional,
+                                          size_t additional_len,
+                                          uint64_t *out,
+                                          struct ItofinError *error);
 
 /**
  * Caller first queries length with capacity=0; then supplies both arrays with that capacity.

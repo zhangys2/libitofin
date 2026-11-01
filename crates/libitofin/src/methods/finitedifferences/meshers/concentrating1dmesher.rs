@@ -196,12 +196,15 @@ mod tests {
                 concentrating_1d_mesher(start, end, size, Some((c_point, 0.1)), true).unwrap();
 
             assert!(is_increasing(&mesher));
-            let nearest = mesher
-                .locations()
-                .iter()
-                .map(|&x| (x - c_point).abs())
-                .fold(Real::INFINITY, Real::min);
-            assert!(nearest < 1e-12, "cPoint {c_point} is not on the grid");
+            // `close` is relative, so a critical point of 0 would have to be an
+            // exact 0. QuantLib's mesher test uses an absolute 1e-12.
+            assert!(
+                mesher
+                    .locations()
+                    .iter()
+                    .any(|&x| (x - c_point).abs() <= 1.0e-12),
+                "cPoint {c_point} is not on the grid"
+            );
         }
     }
 

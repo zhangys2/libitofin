@@ -3030,9 +3030,10 @@ class PiecewiseYieldCurve(YieldTermStructure):
     Fallible pricing queries report callback exceptions as ItofinError with their
     original type and message.
 
-    Avoid strong callback captures of this curve or consumers that retain it:
-    those cycles cross the native ownership graph and cannot be garbage-collected.
-    Capture a weakref.ref(curve) instead. Capturing additional helpers is supported.
+    A callback that strongly captures this curve is collected once the cycle is
+    unreachable and no native consumer retains the curve. A strong capture of a
+    consumer that retains the curve still cannot be garbage-collected: capture a
+    weakref.ref instead. Capturing additional helpers is supported.
     Keep the residual count constant during each calculation; values must be finite.
     Quote mutation from a callback is rejected; read helpers and trial nodes instead.
     The supplied time and data lists include the reference node and are copies.
@@ -3074,6 +3075,41 @@ class PiecewiseYieldCurve(YieldTermStructure):
             ItofinError: On an empty helper list, on an unknown interpolation
                 or bootstrap name, on additional helpers under "iterative",
                 and on "Cubic" under "global".
+        """
+    @staticmethod
+    def moving(settlement_days: builtins.int, calendar: time.Calendar, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, settings: itofin.Settings, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> PiecewiseYieldCurve:
+        r"""
+        Build the curve on a reference date that moves with the evaluation date.
+
+        The reference date sits settlement_days business days on calendar past
+        the evaluation date of settings; a roll re-bootstraps the curve. A
+        query made before settings carries an evaluation date raises rather
+        than falling back to a system clock.
+
+        settings must be the same Settings instance the helpers' indexes carry:
+        a different instance moves the curve's reference date while the
+        helpers' dates stay put.
+
+        Args:
+            settlement_days (int): The business days the reference date sits
+                past the evaluation date.
+            calendar (Calendar): The calendar those days are counted on.
+            helpers (list[RateHelper]): The bootstrap instruments.
+            day_counter (DayCounter): The day count turning dates into times.
+            settings (Settings): The settings supplying the evaluation date.
+            interpolation (str): As in the constructor.
+            bootstrap (str): As in the constructor.
+            additional_helpers (list[RateHelper] | None): As in the constructor.
+            additional_penalties (Callable | None): As in the constructor.
+            additional_dates (Callable | None): As in the constructor.
+            additional_variables (SimpleQuoteVariables | None): As in the
+                constructor.
+
+        Returns:
+            PiecewiseYieldCurve: The moving curve.
+
+        Raises:
+            ItofinError: On the constructor's argument errors.
         """
 
 @typing.final

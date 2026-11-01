@@ -13,8 +13,8 @@ use crate::time::date::{Date, Month, Year};
 use crate::time::weekday::Weekday;
 
 /// Last year for which Israel's Jewish holidays are tabulated (matching
-/// QuantLib's data). Queries beyond this year cannot be answered reliably and
-/// panic rather than silently omitting holidays.
+/// QuantLib's data). Past this year the calendar falls through to its weekend
+/// and recurring rules, exactly like QuantLib (which never checks the year).
 pub const HOLIDAY_HORIZON: Year = 2050;
 
 /// Market handled by the Israeli calendar.
@@ -35,8 +35,9 @@ pub enum Market {
 /// # Accuracy
 ///
 /// Israel's Jewish holidays are tabulated (from QuantLib) only through 2050.
-/// Querying a date after 2050 panics rather than silently returning an
-/// unreliable business-day result.
+/// After 2050 the tabulated holidays are not observed and the calendar falls
+/// through to its weekend and recurring rules, exactly like QuantLib (which
+/// never checks the year).
 pub struct Israel;
 
 impl Israel {
@@ -436,6 +437,10 @@ fn tase_weekend(date: Date) -> bool {
 struct TelAvivImpl;
 
 impl CalendarImpl for TelAvivImpl {
+    fn holiday_horizon(&self) -> Option<Year> {
+        Some(HOLIDAY_HORIZON)
+    }
+
     fn name(&self) -> String {
         "Tel Aviv stock exchange".to_string()
     }
@@ -452,12 +457,6 @@ impl CalendarImpl for TelAvivImpl {
 
     fn is_business_day(&self, date: Date) -> bool {
         let y = date.year();
-
-        assert!(
-            y <= HOLIDAY_HORIZON,
-            "Israel Jewish holidays are tabulated only through {HOLIDAY_HORIZON} \
-             (matching QuantLib); year {y} is beyond the supported horizon"
-        );
 
         let weekend = tase_weekend(date);
 
@@ -487,6 +486,10 @@ impl CalendarImpl for TelAvivImpl {
 struct TelborImpl;
 
 impl CalendarImpl for TelborImpl {
+    fn holiday_horizon(&self) -> Option<Year> {
+        Some(HOLIDAY_HORIZON)
+    }
+
     fn name(&self) -> String {
         "Telbor fixing calendar".to_string()
     }
@@ -500,12 +503,6 @@ impl CalendarImpl for TelborImpl {
         let d = date.day_of_month();
         let m = date.month();
         let y = date.year();
-
-        assert!(
-            y <= HOLIDAY_HORIZON,
-            "Israel Jewish holidays are tabulated only through {HOLIDAY_HORIZON} \
-             (matching QuantLib); year {y} is beyond the supported horizon"
-        );
 
         !(is_weekend_sat_sun(w)
             // New Year's Day
@@ -552,6 +549,10 @@ impl CalendarImpl for TelborImpl {
 struct ShirImpl;
 
 impl CalendarImpl for ShirImpl {
+    fn holiday_horizon(&self) -> Option<Year> {
+        Some(HOLIDAY_HORIZON)
+    }
+
     fn name(&self) -> String {
         "SHIR fixing calendar".to_string()
     }
@@ -566,12 +567,6 @@ impl CalendarImpl for ShirImpl {
         let dd = date.day_of_year();
         let m = date.month();
         let y = date.year();
-
-        assert!(
-            y <= HOLIDAY_HORIZON,
-            "Israel Jewish holidays are tabulated only through {HOLIDAY_HORIZON} \
-             (matching QuantLib); year {y} is beyond the supported horizon"
-        );
 
         !(is_weekend_sat_sun(w)
             || is_purim(date)
@@ -641,11 +636,9 @@ mod tests {
 
     #[test]
     fn boundary_dates_do_not_panic() {
-        // Shifted-date predicates must not panic near the lower supported range
-        // boundary, where `date - N` would otherwise leave
-        // `[Date::min_date(), Date::max_date()]`. The upper boundary
-        // (`Date::max_date()`, year 2199) is beyond `HOLIDAY_HORIZON`, so it is
-        // covered by `beyond_horizon_panics` rather than exercised here.
+        // Shifted-date predicates must not panic near either supported range
+        // boundary, where `date - N` or `date + N` would otherwise leave
+        // `[Date::min_date(), Date::max_date()]`.
         for market in [
             Market::Settlement,
             Market::Tase,
@@ -655,6 +648,8 @@ mod tests {
             let c = Israel::new(market);
             let _ = c.is_holiday(Date::min_date());
             let _ = c.is_business_day(Date::min_date());
+            let _ = c.is_holiday(Date::max_date());
+            let _ = c.is_business_day(Date::max_date());
         }
     }
 
@@ -675,9 +670,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "beyond the supported horizon")]
-    fn beyond_horizon_panics() {
+    fn beyond_horizon_falls_through() {
+        // QuantLib never checks the year: past the tables only weekends and
+        // recurring rules apply, and tabulated dates do not recur.
         let c = Israel::new(Market::Tase);
-        let _ = c.is_business_day(Date::new(1, Month::January, HOLIDAY_HORIZON + 1));
+        assert!(c.is_business_day(Date::new(2, Month::January, 2051)));
+        assert!(c.is_business_day(Date::new(18, Month::September, 2051)));
+        assert!(c.is_holiday(Date::new(1, Month::January, 2051)));
+        let telbor = Israel::new(Market::Telbor);
+        assert!(telbor.is_holiday(Date::new(25, Month::December, 2051)));
+        assert!(telbor.is_business_day(Date::new(2, Month::January, 2051)));
+        let shir = Israel::new(Market::Shir);
+        assert!(shir.is_holiday(Date::new(31, Month::March, 2051)));
+        assert!(shir.is_business_day(Date::new(30, Month::March, 2051)));
     }
 }

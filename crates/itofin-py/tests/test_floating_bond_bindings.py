@@ -352,6 +352,7 @@ def test_mixed_calendar_natural_roll_does_not_invent_fixing_calendar_adjustment(
     ("china", "SSE", 2026), ("china", "IB", 2026),
     ("hong_kong", "HKEX", 2025), ("india", "NSE", 2026),
     ("indonesia", "BEJ", 2014), ("israel", "Tase", 2050),
+    ("israel", "Telbor", 2050), ("israel", "Shir", 2050),
     ("new_zealand", "Wellington", 2052), ("new_zealand", "Auckland", 2052),
     ("north_macedonia", "MSE", 2040), ("saudi_arabia", "Tadawul", 2022),
     ("singapore", "SGX", 2026), ("south_korea", "Settlement", 2050),
@@ -452,9 +453,7 @@ def test_custom_calendar_forecast_guards_are_deferred_and_history_recovers(limit
     del limited, value_calendar, maturity_calendar, unlimited, schedule
     gc.collect()
     if not fixing_before_construction:
-        # This fork's China calendar panics past its 2026 holiday horizon
-        # instead of returning ItofinError. Either form is the guard.
-        with pytest.raises(BaseException, match="2026"):
+        with pytest.raises(ItofinError, match="2026"):
             flow.amount()
         settings.set_evaluation_date(start)
         index.add_fixing(fixing, 0.037)
