@@ -165,7 +165,7 @@ type PiecewiseCurveConfig struct {
 	SettlementDays      uint32
 	Calendar            *Calendar
 	// Settings selects a moving reference date, SettlementDays on Calendar past its evaluation date.
-	// It must be the Settings the helpers' index carries, or the curve moves while the helpers stay put.
+	// A relative helper bound to another Settings is rejected. Fixed-date helpers are not checked.
 	// Moving curves reject IterativeOptions and the global callbacks for now (#1317).
 	Settings *Settings
 }

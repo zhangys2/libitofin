@@ -653,9 +653,9 @@ impl PyPiecewiseYieldCurve {
     /// query made before settings carries an evaluation date raises rather
     /// than falling back to a system clock.
     ///
-    /// settings must be the same Settings instance the helpers' indexes carry:
-    /// a different instance moves the curve's reference date while the
-    /// helpers' dates stay put.
+    /// settings must be the same Settings instance a relative helper's index
+    /// carries. Another instance is rejected at construction. Fixed-date
+    /// helpers are not checked.
     ///
     /// Args:
     ///     settlement_days (int): The business days the reference date sits
@@ -676,7 +676,8 @@ impl PyPiecewiseYieldCurve {
     ///     PiecewiseYieldCurve: The moving curve.
     ///
     /// Raises:
-    ///     ItofinError: On the constructor's argument errors.
+    ///     ItofinError: On the constructor's argument errors, and when a
+    ///         relative helper is bound to other settings.
     #[staticmethod]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (

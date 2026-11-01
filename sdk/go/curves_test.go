@@ -347,6 +347,12 @@ func TestMovingPiecewiseCurveFollowsSharedSettingsRoll(t *testing.T) {
 	if _, e = curveMust(t, c, e).ReferenceDate(); e == nil {
 		t.Fatal("unset evaluation date must fail on the first read")
 	}
+	mismatched, e := s.NewPiecewiseYieldCurve(PiecewiseCurveConfig{
+		Helpers: deposits(settings), DayCounter: dc, SettlementDays: 2, Calendar: cal, Settings: unset,
+	})
+	if mismatched != nil || e == nil || !strings.Contains(e.Error(), "moving curve settings differ") {
+		t.Fatalf("mismatched settings: curve %v err %v", mismatched, e)
+	}
 	cfg.Helpers = deposits(settings)
 	cfg.Settings = settings
 	c, e = s.NewPiecewiseYieldCurve(cfg)

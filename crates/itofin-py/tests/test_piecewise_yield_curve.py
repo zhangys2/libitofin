@@ -795,6 +795,13 @@ def test_moving_curve_follows_a_shared_settings_roll():
         assert abs(curve.discount_date(date) - fixed.discount_date(date)) <= 1.0e-10
 
 
+def test_moving_curve_rejects_relative_helpers_on_other_settings():
+    """A relative helper rebuilds its pillars from its own settings."""
+    _, calendar, _, _, deposits, _ = _fixture()
+    with pytest.raises(ItofinError, match="moving curve settings differ"):
+        PiecewiseYieldCurve.moving(2, calendar, deposits, DayCounter.actual360(), Settings())
+
+
 def test_moving_curve_errs_before_an_evaluation_date_is_set():
     """D10: construction succeeds; the first read raises, never a clock fallback.
 
