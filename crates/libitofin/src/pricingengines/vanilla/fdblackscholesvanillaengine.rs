@@ -1633,10 +1633,6 @@ mod test_fd_bermudan {
     #[test]
     fn binding_market_regressions_cover_european_american_and_quarterly_bermudan() {
         let (settings, process) = fixture();
-        // Theta is a finite difference of two rollbacks, so it carries the last-bit differences
-        // between libm builds (about 1.3e-12 between glibc versions) and is compared at 1e-10;
-        // price, delta and gamma stay at 1e-12.
-        let (european_theta, bermudan_theta) = (0.377_587_111_592_534_55, 0.385_210_817_371_187);
         let rows: [(&str, Shared<dyn Exercise>, [Real; 4]); 3] = [
             (
                 "European",
@@ -1645,7 +1641,7 @@ mod test_fd_bermudan {
                     18.266147644485358,
                     -0.714_918_249_077_874_9,
                     0.016_981_361_087_847_3,
-                    european_theta,
+                    0.377_587_111_591_224_7,
                 ],
             ),
             (
@@ -1665,7 +1661,7 @@ mod test_fd_bermudan {
                     19.954434523211695,
                     -0.817_505_453_287_635_2,
                     0.019414167279763642,
-                    bermudan_theta,
+                    0.385_210_817_369_876_67,
                 ],
             ),
         ];
@@ -1694,9 +1690,10 @@ mod test_fd_bermudan {
                 option.theta().unwrap(),
             ];
             for (field, (actual, expected)) in actual.into_iter().zip(expected).enumerate() {
-                let tolerance = if field == 3 { 1.0e-10 } else { 1.0e-12 };
+                // Ubuntu 26.04 libm moves these near-ulp goldens by about 1e-12.
+                // A relative 1e-10 covers both libm builds and still fails a 1e-8 shift.
                 assert!(
-                    (actual - expected).abs() <= tolerance,
+                    (actual - expected).abs() <= 1.0e-10 * expected.abs(),
                     "{name} field {field}: {actual} != {expected}"
                 );
             }

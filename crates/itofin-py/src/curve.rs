@@ -1,23 +1,28 @@
 //! Facades for the yield term-structure hierarchy: the YieldTermStructure base
 //! and the concrete FlatForward curve.
 
-use crate::bootstrap::{PySimpleQuoteVariables, global_bootstrap};
+use crate::bootstrap::{BootstrapCallbacks, PySimpleQuoteVariables, global_bootstrap};
 use crate::helpers::PyRateHelper;
 use crate::iterativebootstrap::{PyIterativeBootstrapOptions, strategy};
 use crate::market::PySimpleQuote;
+use crate::settings::PySettings;
 use crate::time::{PyCalendar, PyDate, PyDayCounter};
 use crate::{ItofinError, PyQlError};
 use libitofin::handle::Handle;
 use libitofin::interestrate::Compounding;
+use libitofin::math::interpolations::Interpolator;
 use libitofin::math::interpolations::convexmonotone::ConvexMonotone;
 use libitofin::math::interpolations::cubic::Cubic;
 use libitofin::math::interpolations::flat::BackwardFlat;
 use libitofin::math::interpolations::linear::Linear;
 use libitofin::math::interpolations::loglinear::LogLinear;
+use libitofin::settings::Settings;
 use libitofin::shared::{Shared, shared};
 use libitofin::termstructures::RateHelper;
-use libitofin::termstructures::bootstraptraits::{Discount, ForwardRate, ZeroYield};
-use libitofin::termstructures::globalbootstrap::GlobalBootstrap;
+use libitofin::termstructures::bootstraptraits::{
+    Discount, ForwardRate, YieldBootstrapTraits, ZeroYield,
+};
+use libitofin::termstructures::iterativebootstrap::Bootstrap;
 use libitofin::termstructures::localbootstrap::LocalBootstrap;
 use libitofin::termstructures::yields::{
     DiscountCurve, FlatForward, ForwardCurve, InterpolatedDiscountCurve, InterpolatedZeroCurve,
@@ -25,6 +30,10 @@ use libitofin::termstructures::yields::{
 };
 use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
 use libitofin::time::frequency::Frequency;
+use libitofin::time::{calendar::Calendar, date::Date, daycounter::DayCounter};
+use libitofin::types::Natural;
+use pyo3::PyTraverseError;
+use pyo3::gc::PyVisit;
 use pyo3::prelude::*;
 #[allow(unused_imports)]
 use pyo3_stub_gen::derive::{
@@ -234,6 +243,11 @@ impl PyYieldTermStructure {
     /// carry an owner (a joint-curve member retains its whole assembly) that
     /// `Handle::new` would drop and `current_link` does not carry, so every
     /// consumer shares a clone of that handle instead.
+    ///
+    /// `PyPiecewiseYieldCurve::__traverse__` relies on this: a new native
+    /// holder of a local curve must take its link from here so it raises the
+    /// strong count. A holder that does not would let the GC clear callbacks
+    /// it still calls.
     #[allow(dead_code)]
     pub(crate) fn handle(&self) -> Handle<dyn YieldTermStructure> {
         match self.inner.current_link() {
@@ -491,9 +505,10 @@ impl PyForwardCurve {
 /// Fallible pricing queries report callback exceptions as ItofinError with their
 /// original type and message.
 ///
-/// Avoid strong callback captures of this curve or consumers that retain it:
-/// those cycles cross the native ownership graph and cannot be garbage-collected.
-/// Capture a weakref.ref(curve) instead. Capturing additional helpers is supported.
+/// A callback that strongly captures this curve is collected once the cycle is
+/// unreachable and no native consumer retains the curve. A strong capture of a
+/// consumer that retains the curve still cannot be garbage-collected: capture a
+/// weakref.ref instead. Capturing additional helpers is supported.
 /// Keep the residual count constant during each calculation; values must be finite.
 /// Quote mutation from a callback is rejected; read helpers and trial nodes instead.
 /// The supplied time and data lists include the reference node and are copies.
@@ -507,7 +522,34 @@ impl PyForwardCurve {
 /// current grid bound, or the reference date before a grid has been installed.
 #[gen_stub_pyclass]
 #[pyclass(name = "PiecewiseYieldCurve", extends = PyYieldTermStructure, unsendable, weakref, module = "itofin.termstructures")]
-pub struct PyPiecewiseYieldCurve;
+pub struct PyPiecewiseYieldCurve {
+    callbacks: Option<(Shared<dyn YieldTermStructure>, Shared<BootstrapCallbacks>)>,
+}
+
+impl PyPiecewiseYieldCurve {
+    /// The callbacks, exposed to the cycle GC only while this wrapper is the
+    /// sole native owner of the curve.
+    ///
+    /// Exactly two strong holders are expected then: the wrapper's own link
+    /// (built by `from_local`) and the `(curve, cell)` pair kept here. Helpers
+    /// link to the curve weakly and observers are weak, so neither counts.
+    /// Every consumer gets its own link from `handle()`, so any consumer, any
+    /// other clone, and any transient `current_link()` clone (a running query)
+    /// raises the count and hides the edge. Hiding is fail-safe: the cycle
+    /// leaks, but a live consumer's callbacks are never cleared. A foreign-thread
+    /// GC pass skips this unsendable traversal for the same reason. Joint curves
+    /// build `GlobalBootstrap::new` internally and never carry Python callbacks.
+    ///
+    /// Rule: a `__traverse__` on an object shared with native code must
+    /// under-report. A leak is safe; over-reporting lets the GC clear a
+    /// callback a native consumer still calls, a use-after-free.
+    fn sole_owner_callbacks(&self) -> Option<&BootstrapCallbacks> {
+        self.callbacks
+            .as_ref()
+            .filter(|(curve, _)| Shared::strong_count(curve) == 2)
+            .map(|(_, callbacks)| &**callbacks)
+    }
+}
 
 #[gen_stub_pymethods]
 #[pymethods]
@@ -570,111 +612,282 @@ impl PyPiecewiseYieldCurve {
         additional_variables: Option<PyRef<PySimpleQuoteVariables>>,
         iterative_options: Option<&PyIterativeBootstrapOptions>,
     ) -> PyResult<PyClassInitializer<Self>> {
-        if bootstrap != "iterative" && iterative_options.is_some() {
-            return Err(ItofinError::new_err(
-                "iterative_options require bootstrap=\"iterative\"",
-            ));
-        }
-        let instruments: Vec<Shared<dyn RateHelper>> =
-            helpers.iter().map(|helper| helper.inner()).collect();
-        let additional: Vec<Shared<dyn RateHelper>> = additional_helpers
-            .map(|extra| extra.iter().map(|helper| helper.inner()).collect())
-            .unwrap_or_default();
-        let curve: Shared<dyn YieldTermStructure> = match bootstrap {
-            "iterative" => {
-                if !additional.is_empty()
-                    || additional_penalties.is_some()
-                    || additional_dates.is_some()
-                    || additional_variables.is_some()
-                {
-                    return Err(ItofinError::new_err(
-                        "additional_helpers, additional_penalties, additional_dates and additional_variables require bootstrap=\"global\"",
-                    ));
-                }
-                match interpolation {
-                    "LogLinear" => PiecewiseYieldCurve::<Discount, LogLinear>::with_bootstrap(
-                        reference_date.inner(),
-                        instruments,
-                        day_counter.inner(),
-                        LogLinear,
-                        strategy(iterative_options)?,
-                    )
-                    .map_err(PyQlError::from)?,
-                    "Linear" => PiecewiseYieldCurve::<Discount, Linear>::with_bootstrap(
-                        reference_date.inner(),
-                        instruments,
-                        day_counter.inner(),
-                        Linear,
-                        strategy(iterative_options)?,
-                    )
-                    .map_err(PyQlError::from)?,
-                    "Cubic" => PiecewiseYieldCurve::<Discount, Cubic>::with_bootstrap(
-                        reference_date.inner(),
-                        instruments,
-                        day_counter.inner(),
-                        Cubic,
-                        strategy(iterative_options)?,
-                    )
-                    .map_err(PyQlError::from)?,
-                    other => {
-                        return Err(ItofinError::new_err(format!(
-                            "unknown interpolation {other:?}, expected LogLinear, Linear or Cubic"
-                        )));
-                    }
-                }
-            }
-            "global" => {
-                let strategy = global_bootstrap(
-                    py,
-                    additional,
-                    additional_penalties,
-                    additional_dates,
-                    additional_variables.as_deref(),
-                )?;
-                match interpolation {
-                    "LogLinear" => {
-                        PiecewiseYieldCurve::<Discount, LogLinear, GlobalBootstrap>::with_bootstrap(
-                            reference_date.inner(),
-                            instruments,
-                            day_counter.inner(),
-                            LogLinear,
-                            strategy,
-                        )
-                        .map_err(PyQlError::from)?
-                    }
-                    "Linear" => {
-                        PiecewiseYieldCurve::<Discount, Linear, GlobalBootstrap>::with_bootstrap(
-                            reference_date.inner(),
-                            instruments,
-                            day_counter.inner(),
-                            Linear,
-                            strategy,
-                        )
-                        .map_err(PyQlError::from)?
-                    }
-                    "Cubic" => {
-                        return Err(ItofinError::new_err(
-                            "bootstrap=\"global\" supports LogLinear or Linear",
-                        ));
-                    }
-                    other => {
-                        return Err(ItofinError::new_err(format!(
-                            "unknown interpolation {other:?}, expected LogLinear, Linear or Cubic"
-                        )));
-                    }
-                }
-            }
-            other => {
-                return Err(ItofinError::new_err(format!(
-                    "unknown bootstrap {other:?}, expected iterative or global"
-                )));
-            }
-        };
+        let (curve, cell) = piecewise_curve(
+            py,
+            Anchor::Fixed(reference_date.inner()),
+            helpers,
+            day_counter,
+            interpolation,
+            bootstrap,
+            additional_helpers,
+            additional_penalties,
+            additional_dates,
+            additional_variables,
+            iterative_options,
+        )?;
+        let callbacks = cell.map(|cell| (Shared::clone(&curve), cell));
         Ok(
             PyClassInitializer::from(PyYieldTermStructure::from_local(curve))
-                .add_subclass(PyPiecewiseYieldCurve),
+                .add_subclass(PyPiecewiseYieldCurve { callbacks }),
         )
     }
+
+    #[gen_stub(skip)]
+    fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        match self.sole_owner_callbacks() {
+            Some(callbacks) => callbacks.visit(&visit),
+            None => Ok(()),
+        }
+    }
+
+    #[gen_stub(skip)]
+    fn __clear__(&self) {
+        if let Some(callbacks) = self.sole_owner_callbacks() {
+            callbacks.clear();
+        }
+    }
+    /// Build the curve on a reference date that moves with the evaluation date.
+    ///
+    /// The reference date sits settlement_days business days on calendar past
+    /// the evaluation date of settings; a roll re-bootstraps the curve. A
+    /// query made before settings carries an evaluation date raises rather
+    /// than falling back to a system clock.
+    ///
+    /// settings must be the same Settings instance a relative helper's index
+    /// carries. Another instance is rejected at construction. Fixed-date
+    /// helpers are not checked.
+    ///
+    /// Args:
+    ///     settlement_days (int): The business days the reference date sits
+    ///         past the evaluation date.
+    ///     calendar (Calendar): The calendar those days are counted on.
+    ///     helpers (list[RateHelper]): The bootstrap instruments.
+    ///     day_counter (DayCounter): The day count turning dates into times.
+    ///     settings (Settings): The settings supplying the evaluation date.
+    ///     interpolation (str): As in the constructor.
+    ///     bootstrap (str): As in the constructor.
+    ///     additional_helpers (list[RateHelper] | None): As in the constructor.
+    ///     additional_penalties (Callable | None): As in the constructor.
+    ///     additional_dates (Callable | None): As in the constructor.
+    ///     additional_variables (SimpleQuoteVariables | None): As in the
+    ///         constructor.
+    ///
+    /// Returns:
+    ///     PiecewiseYieldCurve: The moving curve.
+    ///
+    /// Raises:
+    ///     ItofinError: On the constructor's argument errors, and when a
+    ///         relative helper is bound to other settings.
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        settlement_days,
+        calendar,
+        helpers,
+        day_counter,
+        settings,
+        interpolation = "LogLinear",
+        bootstrap = "iterative",
+        additional_helpers = None,
+        *,
+        additional_penalties = None,
+        additional_dates = None,
+        additional_variables = None,
+        iterative_options = None,
+    ))]
+    fn moving(
+        py: Python<'_>,
+        settlement_days: Natural,
+        calendar: &PyCalendar,
+        helpers: Vec<PyRef<PyRateHelper>>,
+        day_counter: &PyDayCounter,
+        settings: &PySettings,
+        interpolation: &str,
+        bootstrap: &str,
+        additional_helpers: Option<Vec<PyRef<PyRateHelper>>>,
+        #[gen_stub(override_type(type_repr = "typing.Optional[typing.Callable[[list[float], list[float]], list[float]]]", imports = ("typing")))]
+        additional_penalties: Option<Py<PyAny>>,
+        #[gen_stub(override_type(type_repr = "typing.Optional[typing.Callable[[], list[time.Date]]]", imports = ("typing", "itofin.time")))]
+        additional_dates: Option<Py<PyAny>>,
+        additional_variables: Option<PyRef<PySimpleQuoteVariables>>,
+        iterative_options: Option<&PyIterativeBootstrapOptions>,
+    ) -> PyResult<Py<Self>> {
+        let anchor = Anchor::Moving(settlement_days, calendar.inner(), settings.inner());
+        let (curve, cell) = piecewise_curve(
+            py,
+            anchor,
+            helpers,
+            day_counter,
+            interpolation,
+            bootstrap,
+            additional_helpers,
+            additional_penalties,
+            additional_dates,
+            additional_variables,
+            iterative_options,
+        )?;
+        let callbacks = cell.map(|cell| (Shared::clone(&curve), cell));
+        Py::new(
+            py,
+            PyClassInitializer::from(PyYieldTermStructure::from_local(curve))
+                .add_subclass(PyPiecewiseYieldCurve { callbacks }),
+        )
+    }
+}
+
+/// The reference date of a piecewise curve: fixed, or moving with settings.
+enum Anchor {
+    Fixed(Date),
+    Moving(Natural, Calendar, Shared<Settings<Date>>),
+}
+
+fn anchored<T, I, B>(
+    anchor: Anchor,
+    instruments: Vec<Shared<dyn RateHelper>>,
+    day_counter: DayCounter,
+    interpolator: I,
+    bootstrap: B,
+) -> PyResult<Shared<dyn YieldTermStructure>>
+where
+    T: YieldBootstrapTraits + 'static,
+    I: Interpolator + 'static,
+    B: Bootstrap<PiecewiseYieldCurve<T, I, B>> + 'static,
+{
+    Ok(match anchor {
+        Anchor::Fixed(date) => PiecewiseYieldCurve::<T, I, B>::with_bootstrap(
+            date,
+            instruments,
+            day_counter,
+            interpolator,
+            bootstrap,
+        ),
+        Anchor::Moving(days, calendar, settings) => PiecewiseYieldCurve::moving_with_bootstrap(
+            days,
+            calendar,
+            instruments,
+            day_counter,
+            interpolator,
+            settings,
+            bootstrap,
+        ),
+    }
+    .map_err(PyQlError::from)?)
+}
+
+/// A built piecewise curve and, for a global bootstrap, its Python callback cell.
+type BuiltCurve = (
+    Shared<dyn YieldTermStructure>,
+    Option<Shared<BootstrapCallbacks>>,
+);
+
+#[allow(clippy::too_many_arguments)]
+fn piecewise_curve(
+    py: Python<'_>,
+    anchor: Anchor,
+    helpers: Vec<PyRef<PyRateHelper>>,
+    day_counter: &PyDayCounter,
+    interpolation: &str,
+    bootstrap: &str,
+    additional_helpers: Option<Vec<PyRef<PyRateHelper>>>,
+    additional_penalties: Option<Py<PyAny>>,
+    additional_dates: Option<Py<PyAny>>,
+    additional_variables: Option<PyRef<PySimpleQuoteVariables>>,
+    iterative_options: Option<&PyIterativeBootstrapOptions>,
+) -> PyResult<BuiltCurve> {
+    if bootstrap != "iterative" && iterative_options.is_some() {
+        return Err(ItofinError::new_err(
+            "iterative_options require bootstrap=\"iterative\"",
+        ));
+    }
+    let instruments: Vec<Shared<dyn RateHelper>> =
+        helpers.iter().map(|helper| helper.inner()).collect();
+    let additional: Vec<Shared<dyn RateHelper>> = additional_helpers
+        .map(|extra| extra.iter().map(|helper| helper.inner()).collect())
+        .unwrap_or_default();
+    let mut callbacks = None;
+    let curve = match bootstrap {
+        "iterative" => {
+            if !additional.is_empty()
+                || additional_penalties.is_some()
+                || additional_dates.is_some()
+                || additional_variables.is_some()
+            {
+                return Err(ItofinError::new_err(
+                    "additional_helpers, additional_penalties, additional_dates and additional_variables require bootstrap=\"global\"",
+                ));
+            }
+            match interpolation {
+                "LogLinear" => anchored::<Discount, _, _>(
+                    anchor,
+                    instruments,
+                    day_counter.inner(),
+                    LogLinear,
+                    strategy(iterative_options)?,
+                )?,
+                "Linear" => anchored::<Discount, _, _>(
+                    anchor,
+                    instruments,
+                    day_counter.inner(),
+                    Linear,
+                    strategy(iterative_options)?,
+                )?,
+                "Cubic" => anchored::<Discount, _, _>(
+                    anchor,
+                    instruments,
+                    day_counter.inner(),
+                    Cubic,
+                    strategy(iterative_options)?,
+                )?,
+                other => {
+                    return Err(ItofinError::new_err(format!(
+                        "unknown interpolation {other:?}, expected LogLinear, Linear or Cubic"
+                    )));
+                }
+            }
+        }
+        "global" => {
+            let (strategy, cell) = global_bootstrap(
+                py,
+                additional,
+                additional_penalties,
+                additional_dates,
+                additional_variables.as_deref(),
+            )?;
+            callbacks = Some(cell);
+            match interpolation {
+                "LogLinear" => anchored::<Discount, _, _>(
+                    anchor,
+                    instruments,
+                    day_counter.inner(),
+                    LogLinear,
+                    strategy,
+                )?,
+                "Linear" => anchored::<Discount, _, _>(
+                    anchor,
+                    instruments,
+                    day_counter.inner(),
+                    Linear,
+                    strategy,
+                )?,
+                "Cubic" => {
+                    return Err(ItofinError::new_err(
+                        "bootstrap=\"global\" supports LogLinear or Linear",
+                    ));
+                }
+                other => {
+                    return Err(ItofinError::new_err(format!(
+                        "unknown interpolation {other:?}, expected LogLinear, Linear or Cubic"
+                    )));
+                }
+            }
+        }
+        other => {
+            return Err(ItofinError::new_err(format!(
+                "unknown bootstrap {other:?}, expected iterative or global"
+            )));
+        }
+    };
+    Ok((curve, callbacks))
 }
 
 /// A curve bootstrapped in discount-factor space with log-linear interpolation.
@@ -1225,6 +1438,20 @@ mod tests {
         assert!(!first.points_to_same_link(&second));
         assert!(!first.points_to_same_link(&wrapper.inner));
         assert_eq!(Shared::strong_count(&curve), 4);
+    }
+
+    #[test]
+    fn callbacks_are_hidden_while_a_consumer_link_lives() {
+        let curve = flat();
+        let wrapper = PyYieldTermStructure::from_local(Shared::clone(&curve));
+        let piecewise = PyPiecewiseYieldCurve {
+            callbacks: Some((curve, shared(BootstrapCallbacks::empty()))),
+        };
+        assert!(piecewise.sole_owner_callbacks().is_some());
+        let consumer = wrapper.handle();
+        assert!(piecewise.sole_owner_callbacks().is_none());
+        drop(consumer);
+        assert!(piecewise.sole_owner_callbacks().is_some());
     }
 
     #[test]

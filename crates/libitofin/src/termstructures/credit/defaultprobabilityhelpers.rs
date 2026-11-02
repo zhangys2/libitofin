@@ -326,11 +326,31 @@ impl CdsHelperBase {
         self.protection_start.get()
     }
 
-    /// The evaluation date the schedule is measured from.
-    fn evaluation_date(&self) -> Date {
+    /// The evaluation date the schedule is measured from, or an error when it
+    /// was never set (D10).
+    fn evaluation_date(&self) -> QlResult<Date> {
         self.base
             .evaluation_date()
-            .expect("a relative-date helper always tracks an evaluation date")
+            .ok_or_else(|| QlError::new("evaluation date is not set", file!(), line!()))
+    }
+
+    /// Brings the bootstrapping curve up to date before the contract is
+    /// borrowed, so a stale curve re-bootstraps without re-entering this
+    /// helper's borrowed contract; the contract is then priced on the
+    /// converged curve, as C++ does through `LazyObject::calculate`
+    /// (`lazyobject.hpp:257-258`). Inside a bootstrap the curve is already
+    /// flagged as calculated and returns at once.
+    ///
+    /// A contract that was never built is reported first, ahead of the curve
+    /// it would be priced on.
+    fn update_curve(&self) -> QlResult<()> {
+        if let Err(error) = &*self.swap.borrow() {
+            return Err(error.clone());
+        }
+        self.base
+            .term_structure()?
+            .survival_probability(0.0, true)?;
+        Ok(())
     }
 
     /// Stores the rebuilt contract, or the reason it could not be built.
@@ -357,16 +377,16 @@ impl CdsHelperBase {
     /// (`cpp:141` and `cpp:201`), rather than the contract's own deduction: it
     /// is what the accrual rebate accrues to, so leaving it to the contract
     /// would rebate a different amount than the quoted market convention.
-    fn contract_terms(&self) -> CdsTerms {
-        CdsTerms {
+    fn contract_terms(&self) -> QlResult<CdsTerms> {
+        Ok(CdsTerms {
             settles_accrual: self.settles_accrual,
             pays_at_default_time: self.pays_at_default_time,
             protection_start: Some(self.protection_start.get()),
             last_period_day_counter: self.last_period_day_counter.clone(),
             rebates_accrual: self.rebates_accrual,
-            trade_date: Some(self.evaluation_date()),
+            trade_date: Some(self.evaluation_date()?),
             ..CdsTerms::default()
-        }
+        })
     }
 
     /// Installs the model's engine over the helper's own probability handle
@@ -420,8 +440,9 @@ impl CdsHelperBase {
     ///
     /// If [`cds_maturity`] refuses the tenor, or rolls it to a contract that has
     /// already matured.
+    /// If the evaluation date is not set (D10).
     fn initialize_dates(&self) -> QlResult<()> {
-        let evaluation_date = self.evaluation_date();
+        let evaluation_date = self.evaluation_date()?;
         let protection_start = evaluation_date + self.settlement_days;
         self.protection_start.set(protection_start);
 
@@ -621,7 +642,7 @@ impl SpreadCdsHelper {
             self.cds.schedule().clone(),
             self.cds.payment_convention,
             self.cds.day_counter.clone(),
-            self.cds.contract_terms(),
+            self.cds.contract_terms()?,
             Shared::clone(&self.cds.settings),
         )?;
         self.cds.install_engine(&mut swap);
@@ -646,7 +667,11 @@ impl DefaultProbabilityHelper for SpreadCdsHelper {
     /// weak-links the curve handle the engine prices over, so a node the
     /// bootstrap has just moved does not notify the contract, and a plain
     /// `fair_spread` would answer from the previous iteration's results.
+    ///
+    /// The curve is brought up to date before the contract is borrowed
+    /// ([`CdsHelperBase::update_curve`]).
     fn implied_quote(&self) -> QlResult<Real> {
+        self.cds.update_curve()?;
         let mut swap = self.cds.swap.borrow_mut();
         let swap = swap.as_mut().map_err(|error| error.clone())?;
         swap.recalculate()?;
@@ -810,7 +835,7 @@ impl UpfrontCdsHelper {
             self.cds.day_counter.clone(),
             CdsTerms {
                 upfront_date: Some(self.upfront_date.get()),
-                ..self.cds.contract_terms()
+                ..self.cds.contract_terms()?
             },
             Shared::clone(&self.cds.settings),
         )?;
@@ -819,8 +844,10 @@ impl UpfrontCdsHelper {
     }
 
     /// The contract's fair upfront, off a forced recalculation for the reason
-    /// [`SpreadCdsHelper`]'s is forced.
+    /// [`SpreadCdsHelper`]'s is forced, on a curve brought up to date before
+    /// the contract is borrowed ([`CdsHelperBase::update_curve`]).
     fn fair_upfront(&self) -> QlResult<Real> {
+        self.cds.update_curve()?;
         let mut swap = self.cds.swap.borrow_mut();
         let swap = swap.as_mut().map_err(|error| error.clone())?;
         swap.recalculate()?;
@@ -876,7 +903,7 @@ impl RelativeDateDefaultProbabilityHelper for UpfrontCdsHelper {
     fn initialize_dates(&self) -> QlResult<()> {
         self.cds.initialize_dates()?;
         let upfront_date = self.cds.calendar.advance(
-            self.cds.evaluation_date(),
+            self.cds.evaluation_date()?,
             self.upfront_settlement_days as Integer,
             TimeUnit::Days,
             self.cds.payment_convention,
@@ -1466,5 +1493,46 @@ mod tests {
                 .err()
                 .is_some_and(|error| error.message().contains("bootstrapping curve is set"))
         );
+    }
+
+    /// D10: a helper built on settings with no evaluation date returns that
+    /// error from its constructor rather than panicking.
+    #[test]
+    fn unset_evaluation_date_is_an_error_at_construction() {
+        let settings = shared(Settings::new());
+        let spread = SpreadCdsHelper::with_terms(
+            Handle::new(shared(SimpleQuote::new(0.01)) as Shared<dyn Quote>),
+            five_years(),
+            1,
+            Target::new(),
+            Frequency::Quarterly,
+            BusinessDayConvention::Following,
+            DateGeneration::TwentiethIMM,
+            Actual360::new(),
+            0.4,
+            discount(today()),
+            CdsHelperTerms::default(),
+            Shared::clone(&settings),
+        );
+        assert_eq!(
+            spread.err().unwrap().message(),
+            "evaluation date is not set"
+        );
+    }
+
+    /// D10: an evaluation date reset after construction is stored as the
+    /// contract error and returned by the next `implied_quote`; setting the
+    /// date again rebuilds a priceable contract.
+    #[test]
+    fn reset_evaluation_date_is_an_error_on_first_read() {
+        let settings = settings_at(today());
+        let helper = helper(&settings, CdsHelperTerms::default());
+
+        settings.reset_evaluation_date();
+        let error = helper.implied_quote().unwrap_err();
+        assert_eq!(error.message(), "evaluation date is not set");
+
+        settings.set_evaluation_date(today());
+        assert!(helper.cds.swap().is_ok());
     }
 }
