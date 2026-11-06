@@ -3,10 +3,10 @@
 //! Port of `ql/time/calendars/russia.{hpp,cpp}`.
 //!
 //! Divergence: the Moscow Exchange was formally established in 2011, so its
-//! data start in 2012. QuantLib throws for earlier years (`russia.cpp:230-232`);
-//! this port falls through to the weekend and fixed-date rules instead and
-//! reports the bound through `holiday_first_year()`, which the bindings use to
-//! keep rejecting such dates.
+//! data start in 2012. QuantLib throws for earlier years (`russia.cpp:230-232`).
+//! This port panics with the same message, so schedule generation and date
+//! rolling fail too. `holiday_first_year()` reports the bound, and the
+//! bindings reject a directly queried date with an error before that panic.
 
 use crate::shared::shared;
 use crate::time::calendar::{Calendar, CalendarImpl, is_weekend_sat_sun};
@@ -222,6 +222,12 @@ impl CalendarImpl for ExchangeImpl {
         let m = date.month();
         let y = date.year();
 
+        // Data start in 2012. Panic rather than answering from the fixed rules:
+        // schedule generation and date rolling call this directly.
+        if y < MOEX_FIRST_YEAR {
+            panic!("MOEX calendar for the year {y} does not exist.");
+        }
+
         if is_working_weekend(d, m, y) {
             return true;
         }
@@ -276,13 +282,18 @@ mod tests {
     }
 
     #[test]
-    fn moex_before_first_year_falls_through() {
-        let c = Russia::new(Market::Moex);
-        assert_eq!(c.holiday_first_year(), Some(MOEX_FIRST_YEAR));
+    fn moex_reports_its_first_year() {
+        assert_eq!(
+            Russia::new(Market::Moex).holiday_first_year(),
+            Some(MOEX_FIRST_YEAR)
+        );
         assert_eq!(Russia::new(Market::Settlement).holiday_first_year(), None);
-        assert!(c.is_holiday(Date::new(5, Month::February, 2011)));
-        assert!(c.is_holiday(Date::new(23, Month::February, 2011)));
-        assert!(c.is_business_day(Date::new(9, Month::February, 2011)));
+    }
+
+    #[test]
+    #[should_panic(expected = "MOEX calendar for the year 2011 does not exist.")]
+    fn moex_before_first_year_panics() {
+        let _ = Russia::new(Market::Moex).is_holiday(Date::new(23, Month::February, 2011));
     }
 
     #[test]

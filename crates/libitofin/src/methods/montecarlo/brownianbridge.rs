@@ -311,6 +311,20 @@ mod tests {
     }
 
     #[test]
+    fn one_step_is_the_identity() {
+        // size=1: W(T) = sqrt(T) Z_0, then the increment is Z_0.
+        let bridge = BrownianBridge::from_steps(1).unwrap();
+        let mut out = [0.0];
+        bridge.transform(&[1.25], &mut out).unwrap();
+        assert!((out[0] - 1.25).abs() < 1e-15);
+        let grid = TimeGrid::new(2.5, 1).unwrap();
+        let bridge = BrownianBridge::from_time_grid(&grid).unwrap();
+        let mut out = [0.0];
+        bridge.transform(&[-0.5], &mut out).unwrap();
+        assert!((out[0] + 0.5).abs() < 1e-15);
+    }
+
+    #[test]
     fn constructors_agree_on_unit_steps() {
         let from_steps = BrownianBridge::from_steps(5).unwrap();
         let from_times = BrownianBridge::from_times(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();

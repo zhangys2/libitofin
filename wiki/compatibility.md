@@ -41,13 +41,15 @@ oversight) and is documented at the point of divergence in the source.
   of a market's data through `Calendar::holiday_first_year`), and the C, Go, and
   Python bindings return an error for dates after `holiday_horizon()` or before
   `holiday_first_year()`. QuantLib's tables are kept verbatim; we never
-  fabricate future dates. The one core divergence is MOEX before 2012, below.
-- **The MOEX calendar answers before 2012.** QuantLib throws for Moscow
+  fabricate future dates. MOEX before 2012 is a hard failure, below.
+- **The MOEX calendar panics before 2012.** QuantLib throws for Moscow
   Exchange dates before 2012, the first year of its data
-  (`russia.cpp:230-232`). The core falls through to the weekend and fixed-date
-  rules instead of panicking and reports the bound through
-  `Calendar::holiday_first_year`; the Python, C, and Go bindings use it to keep
-  rejecting such dates with an error.
+  (`russia.cpp:230-232`). The core panics (`MOEX calendar for the year {y}
+  does not exist`) so schedule generation and date rolling fail as well, and
+  reports the bound through `Calendar::holiday_first_year`. The Python, C, and
+  Go bindings reject a directly queried date with an error before that panic.
+  Python `advance` / `adjust` check only the start date, so a roll that steps
+  into 2011 still hits the core panic. C and Go `Advance` check each step.
 - **`Period` comparison is a partial order, and fixes a negative-period bug.**
   QuantLib's `operator<`/`operator==` throw when two periods have overlapping
   day ranges (e.g. `1 Month` vs `30 Days`); this port returns `None` from
