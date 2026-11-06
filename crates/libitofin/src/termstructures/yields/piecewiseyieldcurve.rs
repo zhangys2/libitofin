@@ -225,8 +225,8 @@ where
     /// observers once more per date change than the fixed-date constructor
     /// does; the extra notification is harmless, and a curve set to forward
     /// only the first notification swallows it. A relative helper that rebuilds
-    /// its pillars must use this same `settings` value; fixed-date helpers are
-    /// not checked.
+    /// its pillars, including a global bootstrap's additional helpers, must use
+    /// this same `settings` value; fixed-date helpers are not checked.
     #[allow(clippy::too_many_arguments)]
     pub fn moving_with_bootstrap(
         settlement_days: Natural,
@@ -298,18 +298,10 @@ where
         jumps: Vec<Handle<dyn Quote>>,
         jump_dates: Vec<Date>,
     ) -> QlResult<Shared<PiecewiseYieldCurve<T, I, B>>> {
-        for helper in &instruments {
-            let base = helper.base();
-            if !base.update_dates() {
-                continue;
-            }
-            if let Some(helper_settings) = base.settings() {
-                require!(
-                    Shared::ptr_eq(helper_settings, &settings),
-                    "moving curve settings differ from a relative helper's settings"
-                );
-            }
-        }
+        // Additional helpers never become pillars, but a global bootstrap still
+        // reads their dates and quotes, so they must follow the same settings.
+        Self::reject_other_moving_settings(&settings, &instruments)?;
+        Self::reject_other_moving_settings(&settings, bootstrap.additional_helpers())?;
         let curve = Self::build(
             TermStructureBase::moving(
                 settlement_days,
@@ -327,6 +319,25 @@ where
             &(SharedMut::clone(&curve.updater) as SharedMut<dyn Observer>),
         );
         Ok(curve)
+    }
+
+    fn reject_other_moving_settings(
+        settings: &Shared<Settings<Date>>,
+        helpers: &[Shared<dyn RateHelper>],
+    ) -> QlResult<()> {
+        for helper in helpers {
+            let base = helper.base();
+            if !base.update_dates() {
+                continue;
+            }
+            if let Some(helper_settings) = base.settings() {
+                require!(
+                    Shared::ptr_eq(helper_settings, settings),
+                    "moving curve settings differ from a relative helper's settings"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn build(
@@ -2186,6 +2197,38 @@ mod tests {
             Ok(_) => panic!("relative helpers on other settings were accepted"),
             Err(err) => err,
         };
+        assert_eq!(
+            err.message(),
+            "moving curve settings differ from a relative helper's settings"
+        );
+    }
+
+    /// Additional helpers are not pillars, but a global bootstrap still reads
+    /// their dates and quotes. They have to share the curve's settings too.
+    #[test]
+    fn moving_curve_rejects_additional_helpers_bound_to_other_settings() {
+        use crate::termstructures::globalbootstrap::GlobalBootstrap;
+
+        let vars = common_vars();
+        let other = shared(Settings::<Date>::new());
+        other.set_evaluation_date(rolled(vars.today));
+        let (_, instruments) = instruments_on(&vars.settings);
+        let (_, extra) = instruments_on(&other);
+        let bootstrap =
+            GlobalBootstrap::with_penalties(extra, None, None, None, Vec::new(), |_, _| Vec::new());
+        let err =
+            match PiecewiseYieldCurve::<Discount, LogLinear, GlobalBootstrap>::moving_with_bootstrap(
+                2,
+                Target::new(),
+                instruments,
+                Actual360::new(),
+                LogLinear,
+                Shared::clone(&vars.settings),
+                bootstrap,
+            ) {
+                Ok(_) => panic!("additional helpers on other settings were accepted"),
+                Err(err) => err,
+            };
         assert_eq!(
             err.message(),
             "moving curve settings differ from a relative helper's settings"

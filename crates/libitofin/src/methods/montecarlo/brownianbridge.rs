@@ -1,31 +1,30 @@
-//! Brownian-bridge construction of a Wiener path.
+//! Brownian-bridge construction of Wiener paths.
 //!
-//! Port of `ql/methods/montecarlo/brownianbridge.{hpp,cpp}` (Jaeckel, *Monte
-//! Carlo Methods in Finance*). The transform maps a vector of unit Gaussians
-//! onto a unit-variance increment sequence whose implied path is a Brownian
-//! bridge, so the first input drives the terminal value and later inputs fill
-//! the interior in dyadic order.
+//! Port of `ql/methods/montecarlo/brownianbridge.{hpp,cpp}`: turns a sequence of
+//! Gaussian variates into normalized (unit-variance) path variations, drawing
+//! the global step first and then bisecting, so the first variates carry the
+//! most variance (the property quasi-random generators exploit).
 //!
 //! Divergences from `brownianbridge.hpp`, all deliberate:
-//! - **`transform` is fallible and takes slices**: C++ is a template over
-//!   random-access iterators (`brownianbridge.hpp:109`). Slices are the
-//!   iterator pair the only consumer ([`PathGenerator`](super::PathGenerator))
-//!   holds; a length mismatch is `Err` rather than `QL_REQUIRE`.
-//! - **empty input is rejected**: C++ `BrownianBridge(Size steps)` with
-//!   `steps == 0` underflows `map[size_-1]`. The path generator never builds
-//!   a zero-step grid, so this fails loudly instead of wrapping.
+//! - **fallible constructors**: C++ indexes `size_-1` in `initialize()` without
+//!   checking, so zero steps (or a single-node [`TimeGrid`]) is undefined
+//!   behaviour; here the constructors return `Err` (D4/D10).
+//! - **`transform` is fallible**: the two `QL_REQUIRE`s
+//!   (`brownianbridge.hpp:110-111`) become `Err`, and the unchecked output
+//!   iterator becomes a slice whose length is checked too, so `transform`
+//!   never panics.
 
 use crate::errors::QlResult;
 use crate::math::timegrid::TimeGrid;
 use crate::require;
 use crate::types::{Real, Size, Time};
 
-/// Builds unit-variance Wiener increments via a Brownian bridge
-/// (`brownianbridge.hpp:54`).
+/// Builds Wiener process paths from Gaussian variates by Brownian bridging.
+#[derive(Clone, Debug, PartialEq)]
 pub struct BrownianBridge {
     size: Size,
     t: Vec<Time>,
-    sqrtdt: Vec<Time>,
+    sqrtdt: Vec<Real>,
     bridge_index: Vec<Size>,
     left_index: Vec<Size>,
     right_index: Vec<Size>,
@@ -35,29 +34,30 @@ pub struct BrownianBridge {
 }
 
 impl BrownianBridge {
-    /// Unit-time steps `1, 2, …, steps` (`brownianbridge.cpp:36`).
+    /// A bridge over `steps` unit-length steps, times `1..=steps`
+    /// (`brownianbridge.cpp:34`).
     ///
     /// # Errors
-    ///
-    /// Returns `Err` if `steps` is zero.
-    pub fn new(steps: Size) -> QlResult<Self> {
-        require!(steps > 0, "at least one step required");
-        let t: Vec<Time> = (1..=steps).map(|i| i as Time).collect();
-        Self::from_times(t)
+    /// Returns `Err` when `steps` is zero.
+    pub fn from_steps(steps: Size) -> QlResult<Self> {
+        let times: Vec<Time> = (1..=steps).map(|i| i as Time).collect();
+        Self::from_times(&times)
     }
 
-    /// Step times copied from `times`. The path is assumed to start at 0,
-    /// which must not be included (`brownianbridge.hpp:72`).
+    /// A bridge over the given step times (`brownianbridge.cpp:43`); the
+    /// starting time 0 is implied and must not be included.
     ///
     /// # Errors
-    ///
-    /// Returns `Err` if `times` is empty.
-    pub fn from_times(times: Vec<Time>) -> QlResult<Self> {
-        require!(!times.is_empty(), "at least one step required");
+    /// Returns `Err` when `times` is empty.
+    pub fn from_times(times: &[Time]) -> QlResult<Self> {
+        require!(
+            !times.is_empty(),
+            "brownian bridge requires at least one step"
+        );
         let size = times.len();
-        let mut bb = BrownianBridge {
+        let mut bridge = BrownianBridge {
             size,
-            t: times,
+            t: times.to_vec(),
             sqrtdt: vec![0.0; size],
             bridge_index: vec![0; size],
             left_index: vec![0; size],
@@ -66,87 +66,35 @@ impl BrownianBridge {
             right_weight: vec![0.0; size],
             std_dev: vec![0.0; size],
         };
-        bb.initialize();
-        Ok(bb)
+        bridge.initialize();
+        Ok(bridge)
     }
 
-    /// Step times copied from `time_grid[1..]` (`brownianbridge.cpp:52`).
+    /// A bridge over the nodes of `time_grid` after the initial one
+    /// (`brownianbridge.cpp:50`).
     ///
     /// # Errors
-    ///
-    /// Returns `Err` if the grid has fewer than two points.
+    /// Returns `Err` when the grid has fewer than two nodes.
     pub fn from_time_grid(time_grid: &TimeGrid) -> QlResult<Self> {
-        require!(time_grid.size() > 1, "at least one step required");
-        let t = time_grid.times()[1..].to_vec();
-        Self::from_times(t)
-    }
-
-    /// Number of increments (`brownianbridge.hpp:81`).
-    pub fn size(&self) -> Size {
-        self.size
-    }
-
-    /// The step times (`brownianbridge.hpp:82`).
-    pub fn times(&self) -> &[Time] {
-        &self.t
-    }
-
-    /// Transforms unit Gaussians `input` into unit-variance increments
-    /// (`brownianbridge.hpp:109-140`).
-    ///
-    /// The first input drives the terminal Brownian value
-    /// `W(t_last) = sqrt(t_last) * input[0]`; later inputs fill the bridge.
-    /// The output is then differenced and scaled by `1/sqrt(dt)` so a path
-    /// generator can feed it to `evolve` as a unit-time Gaussian.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if `input` or `output` is not exactly [`size`](Self::size)
-    /// long.
-    #[allow(clippy::needless_range_loop)]
-    pub fn transform(&self, input: &[Real], output: &mut [Real]) -> QlResult<()> {
-        require!(input.len() == self.size, "incompatible sequence size");
-        require!(output.len() == self.size, "incompatible sequence size");
-
-        output[self.size - 1] = self.std_dev[0] * input[0];
-        for i in 1..self.size {
-            let j = self.left_index[i];
-            let k = self.right_index[i];
-            let l = self.bridge_index[i];
-            if j != 0 {
-                output[l] = self.left_weight[i] * output[j - 1]
-                    + self.right_weight[i] * output[k]
-                    + self.std_dev[i] * input[i];
-            } else {
-                output[l] = self.right_weight[i] * output[k] + self.std_dev[i] * input[i];
-            }
-        }
-
-        for i in (1..self.size).rev() {
-            output[i] -= output[i - 1];
-            output[i] /= self.sqrtdt[i];
-        }
-        output[0] /= self.sqrtdt[0];
-        Ok(())
+        Self::from_times(time_grid.times().get(1..).unwrap_or(&[]))
     }
 
     fn initialize(&mut self) {
-        self.sqrtdt[0] = self.t[0].sqrt();
-        for i in 1..self.size {
-            self.sqrtdt[i] = (self.t[i] - self.t[i - 1]).sqrt();
+        let size = self.size;
+        let t = &self.t;
+        self.sqrtdt[0] = t[0].sqrt();
+        for i in 1..size {
+            self.sqrtdt[i] = (t[i] - t[i - 1]).sqrt();
         }
 
-        // map[i] == 0  => path point i is not yet constructed.
-        // map[i] > 0   => constructed; map[i]-1 is the constructing variate.
-        let mut map = vec![0usize; self.size];
-        map[self.size - 1] = 1;
-        self.bridge_index[0] = self.size - 1;
-        self.std_dev[0] = self.t[self.size - 1].sqrt();
+        let mut map: Vec<Size> = vec![0; size];
+        map[size - 1] = 1;
+        self.bridge_index[0] = size - 1;
+        self.std_dev[0] = t[size - 1].sqrt();
         self.left_weight[0] = 0.0;
         self.right_weight[0] = 0.0;
-
-        let mut j = 0usize;
-        for i in 1..self.size {
+        let mut j = 0;
+        for i in 1..size {
             while map[j] != 0 {
                 j += 1;
             }
@@ -160,77 +108,261 @@ impl BrownianBridge {
             self.left_index[i] = j;
             self.right_index[i] = k;
             if j != 0 {
-                self.left_weight[i] = (self.t[k] - self.t[l]) / (self.t[k] - self.t[j - 1]);
-                self.right_weight[i] = (self.t[l] - self.t[j - 1]) / (self.t[k] - self.t[j - 1]);
-                self.std_dev[i] = ((self.t[l] - self.t[j - 1]) * (self.t[k] - self.t[l])
-                    / (self.t[k] - self.t[j - 1]))
-                    .sqrt();
+                self.left_weight[i] = (t[k] - t[l]) / (t[k] - t[j - 1]);
+                self.right_weight[i] = (t[l] - t[j - 1]) / (t[k] - t[j - 1]);
+                self.std_dev[i] = (((t[l] - t[j - 1]) * (t[k] - t[l])) / (t[k] - t[j - 1])).sqrt();
             } else {
-                self.left_weight[i] = (self.t[k] - self.t[l]) / self.t[k];
-                self.right_weight[i] = self.t[l] / self.t[k];
-                self.std_dev[i] = (self.t[l] * (self.t[k] - self.t[l]) / self.t[k]).sqrt();
+                self.left_weight[i] = (t[k] - t[l]) / t[k];
+                self.right_weight[i] = t[l] / t[k];
+                self.std_dev[i] = (t[l] * (t[k] - t[l]) / t[k]).sqrt();
             }
             j = k + 1;
-            if j >= self.size {
+            if j >= size {
                 j = 0;
             }
         }
+    }
+
+    /// The number of steps.
+    pub fn size(&self) -> Size {
+        self.size
+    }
+
+    /// The step times.
+    pub fn times(&self) -> &[Time] {
+        &self.t
+    }
+
+    /// The path point constructed by each variate.
+    pub fn bridge_index(&self) -> &[Size] {
+        &self.bridge_index
+    }
+
+    /// The left-neighbour index used for each variate.
+    pub fn left_index(&self) -> &[Size] {
+        &self.left_index
+    }
+
+    /// The right-neighbour index used for each variate.
+    pub fn right_index(&self) -> &[Size] {
+        &self.right_index
+    }
+
+    /// The left-neighbour interpolation weights.
+    pub fn left_weight(&self) -> &[Real] {
+        &self.left_weight
+    }
+
+    /// The right-neighbour interpolation weights.
+    pub fn right_weight(&self) -> &[Real] {
+        &self.right_weight
+    }
+
+    /// The conditional standard deviation applied to each variate.
+    pub fn std_deviation(&self) -> &[Real] {
+        &self.std_dev
+    }
+
+    /// Transforms Gaussian variates `input` into normalized path variations
+    /// written to `output` (`brownianbridge.hpp:105`).
+    ///
+    /// A zero first variate gives the canonical bridge pinned at both ends; a
+    /// non-zero one gives a sloped bridge ending at `sqrt(t_last) * input[0]`.
+    ///
+    /// # Errors
+    /// Returns `Err` when `input` or `output` does not have [`size`](Self::size)
+    /// elements.
+    pub fn transform(&self, input: &[Real], output: &mut [Real]) -> QlResult<()> {
+        let size = self.size;
+        require!(input.len() == size, "incompatible sequence size");
+        require!(output.len() == size, "incompatible output sequence size");
+        output[size - 1] = self.std_dev[0] * input[0];
+        for (i, &variate) in input.iter().enumerate().skip(1) {
+            let j = self.left_index[i];
+            let k = self.right_index[i];
+            let l = self.bridge_index[i];
+            output[l] = if j != 0 {
+                self.left_weight[i] * output[j - 1]
+                    + self.right_weight[i] * output[k]
+                    + self.std_dev[i] * variate
+            } else {
+                self.right_weight[i] * output[k] + self.std_dev[i] * variate
+            };
+        }
+        for i in (1..size).rev() {
+            output[i] -= output[i - 1];
+            output[i] /= self.sqrtdt[i];
+        }
+        output[0] /= self.sqrtdt[0];
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::math::distributions::normal::InverseCumulativeNormal;
+    use crate::math::randomnumbers::sobol::{DirectionIntegers, SobolRsg};
+    use crate::math::randomnumbers::{InverseCumulativeRsg, SequenceGenerator, SobolSequence};
+
+    fn max_diff(a: &[Real], b: &[Real]) -> Real {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, Real::max)
+    }
+
+    struct Moments {
+        n: usize,
+        samples: usize,
+        sum: Vec<Real>,
+        quadratic_sum: Vec<Real>,
+    }
+
+    impl Moments {
+        fn new(n: usize) -> Self {
+            Moments {
+                n,
+                samples: 0,
+                sum: vec![0.0; n],
+                quadratic_sum: vec![0.0; n * n],
+            }
+        }
+
+        fn add(&mut self, x: &[Real]) {
+            for i in 0..self.n {
+                for j in 0..self.n {
+                    self.quadratic_sum[i * self.n + j] += x[i] * x[j];
+                }
+                self.sum[i] += x[i];
+            }
+            self.samples += 1;
+        }
+
+        fn mean(&self) -> Vec<Real> {
+            let count = self.samples as Real;
+            self.sum.iter().map(|s| s / count).collect()
+        }
+
+        fn covariance(&self) -> Vec<Real> {
+            let count = self.samples as Real;
+            let mean = self.mean();
+            let mut result = vec![0.0; self.n * self.n];
+            for i in 0..self.n {
+                for j in 0..self.n {
+                    result[i * self.n + j] = (self.quadratic_sum[i * self.n + j] / count
+                        - mean[i] * mean[j])
+                        * (count / (count - 1.0));
+                }
+            }
+            result
+        }
+    }
+
+    #[test]
+    fn variates_match_brownian_moments() {
+        // test-suite/brownianbridge.cpp:62 testVariates. The crate's
+        // SequenceStatistics caps rows at 100_000 (sequence_shape.rs:7), so the
+        // QL GenericSequenceStatistics sums (sequencestatistics.hpp:135-139) are
+        // accumulated locally instead.
+        let times = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 2.0, 5.0];
+        let n = times.len();
+        let samples = 262143;
+        let mut generator = InverseCumulativeRsg::new(
+            SobolSequence::new(SobolRsg::new(n, 42, DirectionIntegers::Jaeckel)),
+            InverseCumulativeNormal::standard(),
+        );
+        let bridge = BrownianBridge::from_times(&times).unwrap();
+        let mut stats1 = Moments::new(n);
+        let mut stats2 = Moments::new(n);
+        let mut temp = vec![0.0; n];
+        for _ in 0..samples {
+            let sample = &generator.next_sequence().value;
+            bridge.transform(sample, &mut temp).unwrap();
+            stats1.add(&temp);
+            temp[0] *= times[0].sqrt();
+            for j in 1..n {
+                temp[j] = temp[j - 1] + temp[j] * (times[j] - times[j - 1]).sqrt();
+            }
+            stats2.add(&temp);
+        }
+
+        let mean_tolerance = 1.0e-16;
+        let expected_mean = vec![0.0; n];
+        let mut expected_cov = vec![0.0; n * n];
+        for i in 0..n {
+            expected_cov[i * n + i] = 1.0;
+        }
+        let mean_error = max_diff(&stats1.mean(), &expected_mean);
+        let cov_error = max_diff(&stats1.covariance(), &expected_cov);
+        assert!(mean_error <= mean_tolerance, "mean error {mean_error}");
+        assert!(cov_error <= 2.5e-4, "covariance error {cov_error}");
+
+        for i in 0..n {
+            for j in i..n {
+                expected_cov[i * n + j] = times[i];
+                expected_cov[j * n + i] = times[i];
+            }
+        }
+        let mean_error = max_diff(&stats2.mean(), &expected_mean);
+        let cov_error = max_diff(&stats2.covariance(), &expected_cov);
+        assert!(mean_error <= mean_tolerance, "mean error {mean_error}");
+        assert!(cov_error <= 6.0e-4, "covariance error {cov_error}");
+    }
 
     #[test]
     fn one_step_is_the_identity() {
-        // size=1: W(T) = sqrt(T) Z_0, then increment = W(T)/sqrt(T) = Z_0.
-        let bb = BrownianBridge::new(1).unwrap();
+        // size=1: W(T) = sqrt(T) Z_0, then the increment is Z_0.
+        let bridge = BrownianBridge::from_steps(1).unwrap();
         let mut out = [0.0];
-        bb.transform(&[1.25], &mut out).unwrap();
+        bridge.transform(&[1.25], &mut out).unwrap();
         assert!((out[0] - 1.25).abs() < 1e-15);
         let grid = TimeGrid::new(2.5, 1).unwrap();
-        let bb = BrownianBridge::from_time_grid(&grid).unwrap();
+        let bridge = BrownianBridge::from_time_grid(&grid).unwrap();
         let mut out = [0.0];
-        bb.transform(&[-0.5], &mut out).unwrap();
+        bridge.transform(&[-0.5], &mut out).unwrap();
         assert!((out[0] + 0.5).abs() < 1e-15);
     }
 
     #[test]
-    fn two_step_midpoint_with_zero_interior_variate() {
-        // times 0.5, 1.0; input = [1, 0]:
-        // W(1) = 1, W(0.5) = 0.5, unit increments both sqrt(1/2).
-        let bb = BrownianBridge::from_times(vec![0.5, 1.0]).unwrap();
-        assert_eq!(bb.size(), 2);
-        assert_eq!(bb.times(), &[0.5, 1.0]);
-        let mut out = [0.0, 0.0];
-        bb.transform(&[1.0, 0.0], &mut out).unwrap();
-        let expected = 0.5_f64.sqrt();
-        assert!((out[0] - expected).abs() < 1e-14);
-        assert!((out[1] - expected).abs() < 1e-14);
+    fn constructors_agree_on_unit_steps() {
+        let from_steps = BrownianBridge::from_steps(5).unwrap();
+        let from_times = BrownianBridge::from_times(&[1.0, 2.0, 3.0, 4.0, 5.0]).unwrap();
+        let grid = TimeGrid::new(5.0, 5).unwrap();
+        let from_grid = BrownianBridge::from_time_grid(&grid).unwrap();
+        assert_eq!(from_steps, from_times);
+        assert_eq!(from_grid, from_times);
+        assert_eq!(from_steps.size(), 5);
+        assert_eq!(from_steps.times(), &[1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert_eq!(from_steps.bridge_index(), &[4, 1, 0, 2, 3]);
+        assert_eq!(from_steps.left_index(), &[0, 0, 0, 2, 3]);
+        assert_eq!(from_steps.right_index(), &[0, 4, 1, 4, 4]);
     }
 
     #[test]
-    fn length_mismatch_is_rejected() {
-        let bb = BrownianBridge::new(3).unwrap();
-        let mut out = [0.0; 3];
-        assert!(bb.transform(&[1.0, 2.0], &mut out).is_err());
-        let mut short = [0.0; 2];
-        assert!(bb.transform(&[1.0, 2.0, 3.0], &mut short).is_err());
+    fn sloped_bridge_ends_at_scaled_first_variate() {
+        let times = [0.5, 1.0, 3.0, 4.0];
+        let bridge = BrownianBridge::from_times(&times).unwrap();
+        let mut output = [0.0; 4];
+        bridge
+            .transform(&[1.5, 0.0, 0.0, 0.0], &mut output)
+            .unwrap();
+        let mut level = output[0] * times[0].sqrt();
+        for j in 1..4 {
+            level += output[j] * (times[j] - times[j - 1]).sqrt();
+        }
+        assert!((level - 4.0_f64.sqrt() * 1.5).abs() < 1e-14);
     }
 
     #[test]
-    fn empty_construction_is_rejected() {
-        assert!(BrownianBridge::new(0).is_err());
-        assert!(BrownianBridge::from_times(vec![]).is_err());
-        // A default TimeGrid is empty.
+    fn rejects_empty_and_mismatched_lengths() {
+        assert!(BrownianBridge::from_times(&[]).is_err());
+        assert!(BrownianBridge::from_steps(0).is_err());
         assert!(BrownianBridge::from_time_grid(&TimeGrid::default()).is_err());
-    }
-
-    #[test]
-    fn from_time_grid_drops_the_origin() {
-        let grid = TimeGrid::new(1.0, 4).unwrap();
-        let bb = BrownianBridge::from_time_grid(&grid).unwrap();
-        assert_eq!(bb.times(), &[0.25, 0.5, 0.75, 1.0]);
+        let bridge = BrownianBridge::from_steps(3).unwrap();
+        let mut output = [0.0; 3];
+        assert!(bridge.transform(&[0.0; 2], &mut output).is_err());
+        assert!(bridge.transform(&[0.0; 3], &mut [0.0; 2]).is_err());
+        assert!(bridge.transform(&[0.0; 3], &mut output).is_ok());
     }
 }

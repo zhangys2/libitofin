@@ -170,6 +170,17 @@ pub trait Bootstrap<C: PiecewiseCurve> {
     fn additional_observables(&self) -> Vec<Shared<Observable>> {
         Vec::new()
     }
+
+    /// Helpers the bootstrap owns besides the curve's instruments.
+    ///
+    /// [`GlobalBootstrap`](crate::termstructures::globalbootstrap::GlobalBootstrap)
+    /// returns its additional helpers. A moving curve rejects any of them that
+    /// rebuild their schedule from a different `Settings`.
+    fn additional_helpers(
+        &self,
+    ) -> &[Shared<dyn crate::termstructures::bootstraphelper::RateHelper>] {
+        &[]
+    }
 }
 
 /// The iterative bootstrap (`IterativeBootstrap`).

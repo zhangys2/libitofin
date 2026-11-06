@@ -1106,6 +1106,10 @@ where
             .collect()
     }
 
+    fn additional_helpers(&self) -> &[Shared<dyn RateHelper>] {
+        &self.additional_helpers
+    }
+
     fn calculate(&self, curve: &C) -> QlResult<()> {
         // The parent branch (`globalbootstrap.hpp:408-411`): a contributing
         // curve runs the joint solve instead of its own. The parent is bound
