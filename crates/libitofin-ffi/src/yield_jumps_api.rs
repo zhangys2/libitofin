@@ -11,8 +11,7 @@ use crate::time_api::date;
 /// A zero settings handle selects the fixed reference date; a nonzero one
 /// selects a reference date settlement_days business days on calendar past
 /// the evaluation date of settings. settings must be the SAME instance the
-/// helpers' index carries: a different instance moves the curve's reference
-/// date while the helpers stay put.
+/// helpers' index carries; another instance is rejected.
 #[repr(C)]
 pub struct ItofinPiecewiseYieldConfig {
     pub reference_date: i32,

@@ -2207,8 +2207,7 @@ typedef struct ItofinXccyBasisSwapConfig {
  * A zero settings handle selects the fixed reference date; a nonzero one
  * selects a reference date settlement_days business days on calendar past
  * the evaluation date of settings. settings must be the SAME instance the
- * helpers' index carries: a different instance moves the curve's reference
- * date while the helpers stay put.
+ * helpers' index carries; another instance is rejected.
  */
 typedef struct ItofinPiecewiseYieldConfig {
   int32_t reference_date;

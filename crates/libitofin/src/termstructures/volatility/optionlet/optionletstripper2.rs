@@ -6,6 +6,7 @@ use super::{
 use crate::cashflows::Coupon;
 use crate::errors::QlResult;
 use crate::event::Event;
+use crate::indexes::OvernightIndex;
 use crate::indexes::interestrateindex::InterestRateIndex;
 use crate::instrument::Instrument;
 use crate::instruments::{CapFloorType, MakeCapFloor};
@@ -172,6 +173,13 @@ impl OptionletStripper2 {
             .with_pricing_engine(engine)
             .build()?;
             let price = cap.npv()?;
+            if OvernightIndex::from_ibor(Shared::clone(index)).is_ok()
+                && cap.coupons().len() > times.len()
+            {
+                crate::fail!(
+                    "ATM cap/floor for expiry {tenor} extends beyond the source optionlet surface"
+                );
+            }
             let mut count = cap.coupons().len().min(times.len());
             if cap.coupons()[0].fixing_date() < first_optionlet_date {
                 crate::require!(
