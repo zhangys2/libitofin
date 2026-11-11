@@ -163,7 +163,7 @@ fn invalid_inputs_are_errors_that_leave_the_quote() {
     };
     assert_eq!(
         run(&parameters, None, 0.0, CENTERED).1,
-        "zero shift not allowed"
+        "shift must be finite and non-zero"
     );
     assert_eq!(run(&[], None, H, CENTERED).1, "empty parameters vector");
     assert_eq!(

@@ -334,7 +334,7 @@ fn decreasing_variance_surfaces_an_engine_err() {
 }
 
 #[test]
-fn smile_without_external_local_vol_stays_an_err() {
+fn smile_without_external_local_vol_derives_dupire_and_prices() {
     let market = set_market();
     let process = shared(GeneralizedBlackScholesProcess::new(
         market.process.state_variable(),
@@ -342,17 +342,14 @@ fn smile_without_external_local_vol_stays_an_err() {
         market.process.risk_free_rate(),
         Handle::new(shared(smile_surface()) as Shared<dyn BlackVolTermStructure>),
     ));
+    assert!(process.local_volatility().is_ok());
     let mut mc = option(
         &market,
-        mc_engine(&process, SAMPLES),
+        mc_engine(&process, SMILE_SAMPLES),
         OptionType::Call,
         100.0,
         180,
     );
-    let err = mc.npv().unwrap_err();
-    assert!(
-        err.message().contains("only constant Black volatilities"),
-        "{}",
-        err.message()
-    );
+    let npv = mc.npv().unwrap();
+    assert!(npv.is_finite() && npv > 0.0, "{npv}");
 }

@@ -333,8 +333,8 @@ fn local_vol_core_errors() {
     let surface = m.smile_surface();
     let (spot, r, q, mut plain) = (m.spot, m.risk_free, m.dividend, 0);
     m.ok(|c, e| unsafe { itofin_black_scholes_from_quote(c, spot, r, q, surface, &mut plain, e) });
-    let err = m.price(plain, 0, 100.0, 180, 20_000).unwrap_err();
-    assert!(err.contains("only constant Black volatilities"), "{err}");
+    let (npv, se) = m.price(plain, 0, 100.0, 180, 4_000).unwrap();
+    assert!(npv.is_finite() && npv > 0.0 && se.is_finite(), "{npv} {se}");
 }
 
 #[test]

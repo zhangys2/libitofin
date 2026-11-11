@@ -5319,9 +5319,9 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
  * the serial date `dates[i]`, under the Spot model. Dividends outside the
  * option life are dropped. Both arrays share the single length `n`; with
  * `n` zero they may be null and the engine equals the plain constructor.
- * The Escrowed cash-dividend model is not offered (deferred to #828).
+ * The Escrowed cash-dividend model is not offered on this constructor.
  * Attach with `itofin_option_set_engine` kind 2. A dividend dated on the
- * evaluation date leaves theta unavailable: querying it is a core error.
+ * evaluation date leaves theta null (`Real::null()`), not an error.
  * # Safety
  * Follow the crate C caller contract; arrays must have length `n`.
  */

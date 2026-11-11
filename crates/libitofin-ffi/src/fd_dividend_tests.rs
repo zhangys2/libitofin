@@ -13,6 +13,8 @@ use crate::options_api::*;
 use crate::time_api::itofin_day_counter_new;
 use libitofin::settings::Settings;
 use libitofin::shared::{Shared, shared};
+use libitofin::types::Real;
+use libitofin::utilities::null::Null;
 use libitofin::time::date::{Date, Month};
 use std::ptr::{null, null_mut};
 
@@ -244,8 +246,8 @@ fn analytic_dividend_engine_reproduces_the_known_value() {
     assert_eq!(m.value(american, engine, 0), Err(CORE_ERROR));
 }
 
-/// `testFdDividendAtTZero` (`dividendoption.cpp:856-919`), Spot arm, and the
-/// theta the C++ refuses (`:889-892`) as a core error.
+/// `testFdDividendAtTZero` (`dividendoption.cpp:856-919`), Spot arm. A dividend
+/// on the evaluation date leaves theta null, the C++ `Null<Real>`.
 #[test]
 fn dividend_today_matches_the_analytic_engine_and_has_no_theta() {
     let today = Date::new(27, Month::February, 2005);
@@ -263,7 +265,7 @@ fn dividend_today_matches_the_analytic_engine_and_has_no_theta() {
             (calculated - expected).abs() <= 1e-4,
             "{calculated} {expected}"
         );
-        assert_eq!(m.value(option, fd, 3), Err(CORE_ERROR));
+        assert_eq!(m.value(option, fd, 3).unwrap(), Real::null());
     }
 }
 
