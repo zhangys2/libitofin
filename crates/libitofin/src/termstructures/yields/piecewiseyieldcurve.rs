@@ -37,10 +37,15 @@
 //!   re-solves warm from the previous nodes when their count is unchanged.
 //! - Jump quotes (`jumps`/`jumpDates`) are taken by
 //!   [`with_jumps`](PiecewiseYieldCurve::with_jumps) and
-//!   [`moving_with_jumps`](PiecewiseYieldCurve::moving_with_jumps), which use a
-//!   default-configured bootstrap. The quotes register with the curve's own
-//!   updater, so a jump change re-bootstraps: helpers price off the
-//!   jump-adjusted discount, as in C++.
+//!   [`moving_with_jumps`](PiecewiseYieldCurve::moving_with_jumps) with a
+//!   default-configured bootstrap, or by
+//!   [`with_bootstrap_and_jumps`](PiecewiseYieldCurve::with_bootstrap_and_jumps)
+//!   and
+//!   [`moving_with_bootstrap_and_jumps`](PiecewiseYieldCurve::moving_with_bootstrap_and_jumps)
+//!   with an explicit one, so jumps combine with any bootstrap configuration
+//!   as in C++ (`piecewiseyieldcurve.hpp:74-84,101-112`). The quotes register
+//!   with the curve's own updater, so a jump change re-bootstraps: helpers
+//!   price off the jump-adjusted discount, as in C++.
 //! - Jump times are calculated on demand against the current reference date.
 //!   C++ `update()` (`piecewiseyieldcurve.hpp:220-229`) skips
 //!   `YieldTermStructure::update`, the only re-caller of `setJumps`
@@ -165,8 +170,9 @@ where
     /// reference year.
     ///
     /// # Errors
-    /// Rejects an empty helper set, or returns a [`YieldJumps`] construction
-    /// error.
+    /// Rejects an empty helper set unless the bootstrap takes none (a global
+    /// bootstrap, whose first query then fails if its grid is too short), or
+    /// returns a [`YieldJumps`] construction error.
     pub fn with_jumps(
         reference_date: Date,
         instruments: Vec<Shared<dyn RateHelper>>,
@@ -178,11 +184,37 @@ where
     where
         B: Default,
     {
+        Self::with_bootstrap_and_jumps(
+            reference_date,
+            instruments,
+            day_counter,
+            interpolator,
+            B::default(),
+            jumps,
+            jump_dates,
+        )
+    }
+
+    /// The fixed-reference-date curve with multiplicative discount jumps and
+    /// an explicitly configured bootstrap (`piecewiseyieldcurve.hpp:74-84`).
+    ///
+    /// # Errors
+    /// As [`with_jumps`](Self::with_jumps).
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_bootstrap_and_jumps(
+        reference_date: Date,
+        instruments: Vec<Shared<dyn RateHelper>>,
+        day_counter: DayCounter,
+        interpolator: I,
+        bootstrap: B,
+        jumps: Vec<Handle<dyn Quote>>,
+        jump_dates: Vec<Date>,
+    ) -> QlResult<Shared<PiecewiseYieldCurve<T, I, B>>> {
         Self::build(
             TermStructureBase::with_reference_date(reference_date, None, Some(day_counter)),
             instruments,
             interpolator,
-            B::default(),
+            bootstrap,
             jumps,
             jump_dates,
         )
@@ -257,8 +289,10 @@ where
     /// construction, so the evaluation date must already be set.
     ///
     /// # Errors
-    /// Rejects an empty helper set, a relative helper bound to other settings,
-    /// or returns a [`YieldJumps`] construction error.
+    /// Rejects an empty helper set unless the bootstrap takes none (a global
+    /// bootstrap, whose first query then fails if its grid is too short), a
+    /// relative helper bound to other settings, or returns a [`YieldJumps`]
+    /// construction error.
     #[allow(clippy::too_many_arguments)]
     pub fn moving_with_jumps(
         settlement_days: Natural,
@@ -273,7 +307,7 @@ where
     where
         B: Default,
     {
-        Self::build_moving(
+        Self::moving_with_bootstrap_and_jumps(
             settlement_days,
             calendar,
             instruments,
@@ -281,6 +315,36 @@ where
             interpolator,
             settings,
             B::default(),
+            jumps,
+            jump_dates,
+        )
+    }
+
+    /// The moving constructor with multiplicative discount jumps and an
+    /// explicitly configured bootstrap (`piecewiseyieldcurve.hpp:101-112`).
+    ///
+    /// # Errors
+    /// As [`moving_with_jumps`](Self::moving_with_jumps).
+    #[allow(clippy::too_many_arguments)]
+    pub fn moving_with_bootstrap_and_jumps(
+        settlement_days: Natural,
+        calendar: Calendar,
+        instruments: Vec<Shared<dyn RateHelper>>,
+        day_counter: DayCounter,
+        interpolator: I,
+        settings: Shared<Settings<Date>>,
+        bootstrap: B,
+        jumps: Vec<Handle<dyn Quote>>,
+        jump_dates: Vec<Date>,
+    ) -> QlResult<Shared<PiecewiseYieldCurve<T, I, B>>> {
+        Self::build_moving(
+            settlement_days,
+            calendar,
+            instruments,
+            day_counter,
+            interpolator,
+            settings,
+            bootstrap,
             jumps,
             jump_dates,
         )
@@ -348,7 +412,10 @@ where
         jumps: Vec<Handle<dyn Quote>>,
         jump_dates: Vec<Date>,
     ) -> QlResult<Shared<PiecewiseYieldCurve<T, I, B>>> {
-        require!(!instruments.is_empty(), "no bootstrap helpers given");
+        require!(
+            !instruments.is_empty() || !bootstrap.requires_instruments(),
+            "no bootstrap helpers given"
+        );
 
         let lazy = shared_mut(LazyObject::new(true));
         let observable = lazy.borrow().observable_handle();
@@ -1103,12 +1170,12 @@ mod tests {
     ///   arm FAILS with "log-linear interpolation requires positive y values,
     ///   got y[1] = -0.0009717..." - the oracle sees `transform_direct` on
     ///   every cost evaluation.
-    /// - `transform_inverse` alone broken (log -> identity, direct kept exp):
-    ///   the arm still PASSES. The inverse only seeds the start point, so the
-    ///   ~0.99-discount guesses land at exp(0.99) ~ 2.69 - a bad start, not a
-    ///   broken mapping - and the unconstrained LM walks back to the same
-    ///   root within its 1000-iteration budget. `transform_inverse` is
-    ///   therefore transcription-verified only, like the space choice.
+    /// - `transform_inverse` is not reached at all: since QuantLib v1.44 a
+    ///   cold `Discount` solve starts from `Discount::global_guess`, which is
+    ///   already in log space (`-AVG_RATE * t`, `bootstraptraits.hpp:84-95`)
+    ///   and skips the transform; here the inverse only maps a warm restart.
+    ///   On the `InitialGuessFn` path it is pinned by
+    ///   `global_bootstrap_initial_guess_fn`.
     #[test]
     fn global_bootstrap_discount_consistency() {
         use crate::termstructures::globalbootstrap::GlobalBootstrap;
@@ -1961,6 +2028,221 @@ mod tests {
         assert!(worst < 1.0e-9, "worst relative discount gap is {worst}");
     }
 
+    /// The empty-helper guard is the iterative bootstrap's
+    /// (`iterativebootstrap.hpp:147`): iterative and local curves still reject
+    /// an empty helper list at construction, while a global curve, which
+    /// upstream has no such guard, builds and fails at its first query through
+    /// the grid-size check (`globalbootstrap.hpp:323`) rather than panicking.
+    #[test]
+    fn only_the_global_bootstrap_accepts_an_empty_helper_list() {
+        use crate::math::interpolations::convexmonotone::ConvexMonotone;
+        use crate::termstructures::globalbootstrap::GlobalBootstrap;
+        use crate::termstructures::localbootstrap::LocalBootstrap;
+
+        let vars = common_vars();
+        let iterative = PiecewiseYieldCurve::<Discount, LogLinear>::new(
+            vars.settlement,
+            Vec::new(),
+            Actual360::new(),
+            LogLinear,
+        )
+        .err()
+        .expect("an iterative curve needs helpers");
+        assert!(
+            iterative.to_string().contains("no bootstrap helpers given"),
+            "{iterative}"
+        );
+        let local = PiecewiseYieldCurve::<ForwardRate, ConvexMonotone, LocalBootstrap>::new(
+            vars.settlement,
+            Vec::new(),
+            Actual360::new(),
+            ConvexMonotone::default(),
+        )
+        .err()
+        .expect("a local curve needs helpers");
+        assert!(
+            local.to_string().contains("no bootstrap helpers given"),
+            "{local}"
+        );
+
+        let global = PiecewiseYieldCurve::<Discount, LogLinear, GlobalBootstrap>::new(
+            vars.settlement,
+            Vec::new(),
+            Actual360::new(),
+            LogLinear,
+        )
+        .expect("a global curve builds without helpers");
+        let error = global
+            .discount(1.0, true)
+            .expect_err("a one-node grid cannot be interpolated");
+        assert!(
+            error.to_string().contains("not enough curve points (1)"),
+            "{error}"
+        );
+    }
+
+    /// `testGlobalBootstrapInitialGuessFn` (`piecewiseyieldcurve.cpp:1552`,
+    /// par coupons): a `<Discount, LogLinear>` global curve over NO
+    /// instruments. The strip goes in as additional helpers, the grid comes
+    /// from additional dates (eight 45-day steps from 1 Oct 2019 on the TARGET
+    /// calendar, then every later helper pillar), and every residual comes from
+    /// the penalty: the helpers' quote errors plus a `1e-2` weighted
+    /// forward-gradient smoothness term. The [`InitialGuessFn`] seeds every
+    /// node at a discount factor of 1.0 and must run exactly once; the 24
+    /// nodes match the C++ to 1e-10 (`:1618`).
+    ///
+    /// The setup is the upstream one because it is sensitive to the start
+    /// point: from the traits' own guess the same system lands about 1.3e-9
+    /// away from the C++ nodes, outside the 1e-10 tolerance, which the second
+    /// run pins so the oracle stays able to see the override.
+    ///
+    /// [`InitialGuessFn`]: crate::termstructures::globalbootstrap::InitialGuessFn
+    #[test]
+    #[allow(
+        clippy::excessive_precision,
+        reason = "Preserve exact upstream decimal tokens"
+    )]
+    fn global_bootstrap_initial_guess_fn() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        use crate::termstructures::globalbootstrap::GlobalBootstrap;
+
+        const EXPECTED_DATES: [(Day, Month, Year); 24] = [
+            (27, Month::September, 2019),
+            (1, Month::October, 2019),
+            (15, Month::November, 2019),
+            (30, Month::December, 2019),
+            (13, Month::February, 2020),
+            (30, Month::March, 2020),
+            (14, Month::May, 2020),
+            (29, Month::June, 2020),
+            (13, Month::August, 2020),
+            (28, Month::September, 2020),
+            (27, Month::September, 2021),
+            (27, Month::September, 2022),
+            (27, Month::September, 2023),
+            (27, Month::September, 2024),
+            (29, Month::September, 2025),
+            (28, Month::September, 2026),
+            (27, Month::September, 2027),
+            (27, Month::September, 2028),
+            (27, Month::September, 2029),
+            (29, Month::September, 2031),
+            (27, Month::September, 2034),
+            (27, Month::September, 2039),
+            (27, Month::September, 2044),
+            (27, Month::September, 2049),
+        ];
+        const EXPECTED_DFS: [Real; 24] = [
+            1.0,
+            0.9994923431162580,
+            0.9938069118457880,
+            0.9882401711181712,
+            0.9828381250775845,
+            0.9774079566030049,
+            0.9721182498392723,
+            0.9667951580943512,
+            0.9617336341824015,
+            0.9564548068987965,
+            0.9135007024272714,
+            0.8698607442445871,
+            0.8266650007699866,
+            0.7829682196126155,
+            0.7399209887960153,
+            0.6973589159124343,
+            0.6565792747227167,
+            0.6180250998622848,
+            0.5818438569698231,
+            0.5127051907762759,
+            0.4218543471337612,
+            0.3050840671400172,
+            0.2225943633033588,
+            0.165544906093695,
+        ];
+
+        let vars = common_vars_on(Date::new(25, Month::September, 2019));
+        assert!(vars.settings.using_at_par_coupons());
+
+        let calendar = Target::new();
+        let mut pillar_dates = vec![Date::new(1, Month::October, 2019)];
+        for _ in 0..8 {
+            let last = *pillar_dates.last().unwrap();
+            pillar_dates.push(calendar.adjust(last + 45, BusinessDayConvention::Following));
+        }
+        for helper in &vars.instruments {
+            if helper.pillar_date() > *pillar_dates.last().unwrap() {
+                pillar_dates.push(helper.pillar_date());
+            }
+        }
+
+        let build = |initial_guess_calls: Option<Rc<Cell<usize>>>| {
+            let helpers = vars.instruments.clone();
+            let dates = pillar_dates.clone();
+            let mut bootstrap = GlobalBootstrap::with_fallible_penalties(
+                vars.instruments.clone(),
+                Some(Box::new(move || Ok(dates.clone()))),
+                Some(1.0e-12),
+                None,
+                Vec::new(),
+                move |times, data| {
+                    let mut errors = Vec::with_capacity(helpers.len() + times.len() - 2);
+                    for helper in &helpers {
+                        errors.push(helper.quote_error()?);
+                    }
+                    let rates: Vec<Real> = (0..times.len() - 1)
+                        .map(|i| (data[i] / data[i + 1] - 1.0) / (times[i + 1] - times[i]))
+                        .collect();
+                    for i in 0..times.len() - 2 {
+                        errors.push(1.0e-2 * (rates[i + 1] - rates[i]) / (times[i + 1] - times[i]));
+                    }
+                    Ok(errors)
+                },
+            );
+            if let Some(calls) = initial_guess_calls {
+                bootstrap = bootstrap.with_initial_guess_fn(move |times, _| {
+                    calls.set(calls.get() + 1);
+                    vec![1.0; times.len() - 1]
+                });
+            }
+            PiecewiseYieldCurve::<Discount, LogLinear, _>::with_bootstrap(
+                vars.settlement,
+                Vec::new(),
+                Actual365Fixed::new(),
+                LogLinear,
+                bootstrap,
+            )
+            .expect("a global curve takes its grid from the additional dates")
+        };
+
+        let calls = Rc::new(Cell::new(0));
+        let curve = build(Some(Rc::clone(&calls)));
+        let nodes = curve.nodes().expect("the penalised system solves");
+        assert_eq!(nodes.len(), EXPECTED_DATES.len());
+        for (i, ((date, df), (day, month, year))) in nodes.iter().zip(EXPECTED_DATES).enumerate() {
+            assert_eq!(*date, Date::new(day, month, year), "node {i} date");
+            assert!(
+                (df - EXPECTED_DFS[i]).abs() < 1.0e-10,
+                "node {i}: {df} vs {}",
+                EXPECTED_DFS[i]
+            );
+        }
+        assert_eq!(calls.get(), 1, "the initial guess function runs once");
+
+        let default_nodes = build(None)
+            .nodes()
+            .expect("the same system solves from the traits' guess");
+        let miss = default_nodes
+            .iter()
+            .zip(EXPECTED_DFS)
+            .map(|((_, df), expected)| (df - expected).abs())
+            .fold(0.0, Real::max);
+        assert!(
+            miss > 1.0e-10,
+            "the traits' start also lands on the C++ nodes (miss {miss}), so the oracle cannot see the override"
+        );
+    }
+
     fn rolled(today: Date) -> Date {
         Target::new().advance(
             today,
@@ -2438,6 +2720,112 @@ mod tests {
         .unwrap();
         let probe = 0.5 * (times[0] + new_times[0]);
         for t in [probe, 0.1, 1.0, 1.5, 2.0, 5.0, 10.0] {
+            let (a, b) = (
+                curve.discount(t, false).unwrap(),
+                fresh.discount(t, false).unwrap(),
+            );
+            assert!((a - b).abs() <= 1.0e-10, "t = {t}: {a} vs {b}");
+        }
+    }
+
+    /// The jump ratio `discount / discount_impl` at each probe time: the
+    /// product of the jumps strictly between the reference date and `t`.
+    fn assert_jump_ratios(curve: &dyn YieldTermStructure, values: &[Real]) {
+        let times = curve.jump_times().unwrap();
+        for t in [0.1, 0.5, 1.0, 1.5, 2.0, 5.0, 10.0] {
+            let expected: Real = times
+                .iter()
+                .zip(values)
+                .filter(|(time, _)| 0.0 < **time && **time < t)
+                .map(|(_, jump)| jump)
+                .product();
+            let ratio = curve.discount(t, false).unwrap() / curve.discount_impl(t).unwrap();
+            assert!(
+                (ratio - expected).abs() <= 1.0e-14 * expected,
+                "t = {t}: {ratio} vs {expected}"
+            );
+        }
+    }
+
+    /// Jumps combine with an explicit bootstrap (`piecewiseyieldcurve.hpp:74-84`):
+    /// a global-bootstrap curve keeps its jumps, prices its helpers off the
+    /// jump-adjusted discount, and re-solves when a jump quote changes.
+    #[test]
+    fn jumps_combine_with_an_explicit_global_bootstrap() {
+        use crate::termstructures::globalbootstrap::GlobalBootstrap;
+
+        let vars = common_vars();
+        let (quotes, handles) = jump_quotes(&JUMPS);
+        let curve =
+            PiecewiseYieldCurve::<Discount, LogLinear, GlobalBootstrap>::with_bootstrap_and_jumps(
+                vars.settlement,
+                vars.instruments.clone(),
+                Actual360::new(),
+                LogLinear,
+                GlobalBootstrap::default(),
+                handles,
+                jump_dates(),
+            )
+            .unwrap();
+        assert_eq!(curve.jump_dates(), jump_dates());
+        assert_jump_ratios(&*curve, &JUMPS);
+        reprice_helpers(&vars, curve.clone(), 1.0e-9);
+        let nodes = curve.data().unwrap();
+        quotes[0].set_value(0.98);
+        assert!(!curve.lazy.borrow().is_calculated());
+        assert!(
+            nodes
+                .iter()
+                .zip(&curve.data().unwrap())
+                .any(|(a, b)| (a - b).abs() > 1.0e-6),
+            "nodes did not move"
+        );
+    }
+
+    /// The moving twin (`piecewiseyieldcurve.hpp:101-112`) with configured
+    /// iterative options: generated year-end dates, jumps applied, and after
+    /// a roll it matches a fresh fixed curve built the same way.
+    #[test]
+    fn jumps_combine_with_explicit_iterative_options_on_a_moving_curve() {
+        use crate::termstructures::iterativebootstrap::IterativeBootstrapOptions;
+
+        let options = IterativeBootstrapOptions {
+            accuracy: Some(1.0e-13),
+            max_attempts: 3,
+            ..Default::default()
+        };
+        let strategy = || IterativeBootstrap::with_options(options).unwrap();
+        let vars = common_vars();
+        let curve = PiecewiseYieldCurve::<Discount, LogLinear>::moving_with_bootstrap_and_jumps(
+            2,
+            Target::new(),
+            vars.instruments.clone(),
+            Actual360::new(),
+            LogLinear,
+            vars.settings.clone(),
+            strategy(),
+            jump_quotes(&JUMPS).1,
+            Vec::new(),
+        )
+        .unwrap();
+        assert_eq!(curve.jump_dates(), jump_dates());
+        assert_jump_ratios(&*curve, &JUMPS);
+        reprice_helpers(&vars, curve.clone(), TOLERANCE);
+
+        vars.settings.set_evaluation_date(rolled(vars.today));
+        let reference = TermStructure::reference_date(&*curve).unwrap();
+        let (_, instruments) = instruments_on(&vars.settings);
+        let fresh = PiecewiseYieldCurve::<Discount, LogLinear>::with_bootstrap_and_jumps(
+            reference,
+            instruments,
+            Actual360::new(),
+            LogLinear,
+            strategy(),
+            jump_quotes(&JUMPS).1,
+            jump_dates(),
+        )
+        .unwrap();
+        for t in [0.1, 1.0, 1.5, 2.0, 5.0, 10.0] {
             let (a, b) = (
                 curve.discount(t, false).unwrap(),
                 fresh.discount(t, false).unwrap(),

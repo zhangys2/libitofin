@@ -40,8 +40,6 @@
 //! Not ported: the matrix overload of `parallelAnalysis`, declared
 //! (`.hpp:104-110`) but never defined upstream. A caller can flatten the quotes
 //! into [`parallel_analysis`].
-//!
-//! Deferred and not ported: the C, Go and Python bindings (#1324).
 
 use std::fmt;
 

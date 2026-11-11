@@ -181,6 +181,13 @@ pub trait Bootstrap<C: PiecewiseCurve> {
     ) -> &[Shared<dyn crate::termstructures::bootstraphelper::RateHelper>] {
         &[]
     }
+
+    /// Whether the curve must be built over at least one instrument. True by
+    /// default, the guard of `IterativeBootstrap::initialize`
+    /// (`iterativebootstrap.hpp:147`), which the curve constructor applies.
+    fn requires_instruments(&self) -> bool {
+        true
+    }
 }
 
 /// The iterative bootstrap (`IterativeBootstrap`).

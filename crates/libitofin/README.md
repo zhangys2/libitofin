@@ -27,4 +27,4 @@ The public API will change until 1.0. Language bindings live in sibling crates:
 
 ## License
 
-[BSD-3-Clause](https://github.com/benbenbang/libitofin/blob/main/LICENSE) - the same license as QuantLib, the ported source.
+[BSD-3-Clause](https://github.com/bitbrew-dev/libitofin/blob/main/LICENSE) - the same license as QuantLib, the ported source.

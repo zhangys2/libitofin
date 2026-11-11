@@ -18,6 +18,7 @@ oversight) and is documented at the point of divergence in the source.
 - [Credit](#credit-epic-credit-676)
 - [Processes](#processes-l5)
 - [Non-finite inputs](#non-finite-inputs-cross-cutting)
+- [Bindings](#bindings-c-go-python)
 
 ## Time / calendars (EPIC-2)
 
@@ -74,7 +75,7 @@ oversight) and is documented at the point of divergence in the source.
 - **`Actual/Actual (ISMA)` supports reference dates and schedules.** The
   schedule path preserves QuantLib's both-stubs-irregular indexing bug. A
   hand-derived regression test freezes that behavior; upstream reporting and
-  eventual unfreezing remain tracked in [#266](https://github.com/benbenbang/libitofin/issues/266).
+  eventual unfreezing remain tracked in [#266](https://github.com/bitbrew-dev/libitofin/issues/266).
 
 ## Core (EPIC-0)
 
@@ -191,6 +192,18 @@ oversight) and is documented at the point of divergence in the source.
   returns an honest `Err` naming the dropped contributor, never a silent
   single-curve fallback.
 
+- **A rolled moving `PiecewiseDefaultCurve` or `PiecewiseYieldCurve` follows the
+  new reference date for its jump times; C++ keeps the construction-time ones.**
+  Both C++ curves override `update()` without calling their base class
+  (`piecewisedefaultcurve.hpp:248-258`, `piecewiseyieldcurve.hpp:220-231`), and
+  that base `update()` is the only caller of `setJumps` after construction
+  (`defaulttermstructure.hpp:243-247`, `yieldtermstructure.cpp:174-180`). A rolled
+  C++ curve therefore keeps its `jumpTimes_`, so each jump drifts forward in
+  calendar terms by the size of the roll. The port keeps the jump dates fixed and
+  computes the times on demand against the current reference date, which is the
+  base-class contract and what a fresh curve at the new reference gives, so a
+  rolled curve matches a freshly built one.
+
 ## Indexes (EPIC-6)
 
 - **`Currency` is always valid; there is no empty placeholder.** QuantLib's
@@ -304,3 +317,12 @@ oversight) and is documented at the point of divergence in the source.
   port asserts rather than returning `Err`. If a Rust panic occurs within a C
   entry point, the boundary returns `PANIC` (5); a context involved in the call
   is invalidated, later calls return `POISONED` (6), and it can still be destroyed.
+
+## Bindings (C, Go, Python)
+
+- **Dependent quotes take a fixed function set, not arbitrary functions (#1359).**
+  QuantLib (and QuantLib-Python) build `DerivedQuote` and `CompositeQuote` from
+  any function; the bindings expose only affine `a * x + b` for `DerivedQuote`
+  and Add, Subtract or Multiply for `CompositeQuote`, with no Divide, no Power
+  and no user callables, because a closure cannot cross the C ABI. The Rust
+  core keeps the closure-generic types.

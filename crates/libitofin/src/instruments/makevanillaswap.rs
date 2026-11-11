@@ -126,6 +126,7 @@ pub struct MakeVanillaSwap {
 
     fixed_calendar: Calendar,
     float_calendar: Calendar,
+    settlement_calendar: Option<Calendar>,
     fixed_tenor: Option<Period>,
     fixed_convention: BusinessDayConvention,
     fixed_termination_date_convention: BusinessDayConvention,
@@ -176,6 +177,7 @@ impl MakeVanillaSwap {
             nominal: 1.0,
             fixed_calendar: fixing_calendar.clone(),
             float_calendar: fixing_calendar,
+            settlement_calendar: None,
             fixed_tenor: None,
             fixed_convention: BusinessDayConvention::ModifiedFollowing,
             fixed_termination_date_convention: BusinessDayConvention::ModifiedFollowing,
@@ -211,9 +213,18 @@ impl MakeVanillaSwap {
     }
 
     /// Sets the number of days from the evaluation date to the spot start date,
-    /// used only when no effective date is set (`makevanillaswap.cpp:219`).
+    /// used only when no effective date is set (`makevanillaswap.cpp:236`).
     pub fn with_settlement_days(mut self, settlement_days: Natural) -> MakeVanillaSwap {
         self.settlement_days = Some(settlement_days);
+        self
+    }
+
+    /// Sets the calendar the explicit settlement days are counted on, in place
+    /// of the floating-leg calendar (`makevanillaswap.cpp:241`). Like C++, it is
+    /// used only with [`with_settlement_days`](Self::with_settlement_days): the
+    /// index-default spot comes from the index value date.
+    pub fn with_settlement_calendar(mut self, calendar: Calendar) -> MakeVanillaSwap {
+        self.settlement_calendar = Some(calendar);
         self
     }
 
@@ -515,7 +526,10 @@ impl MakeVanillaSwap {
 
     /// Derives the start date: an explicit effective date, or the spot date from
     /// the index (default) or an explicit settlement-day count, shifted by the
-    /// forward start (`makevanillaswap.cpp:63-92`).
+    /// forward start (`makevanillaswap.cpp:63-98`). The index default adjusts the
+    /// evaluation date on the fixing calendar first (`:82`); explicit settlement
+    /// days count from the unadjusted evaluation date on the settlement calendar
+    /// (`:85-89`), so a Saturday plus two days is a Tuesday.
     fn start_date(&self) -> QlResult<Date> {
         if let Some(effective_date) = self.effective_date {
             return Ok(effective_date);
@@ -535,11 +549,12 @@ impl MakeVanillaSwap {
                 self.ibor_index.value_date(adjusted)?
             }
             Some(settlement_days) => {
-                let adjusted = self
-                    .float_calendar
-                    .adjust(ref_date, BusinessDayConvention::Following);
-                self.float_calendar.advance(
-                    adjusted,
+                let settlement_calendar = self
+                    .settlement_calendar
+                    .as_ref()
+                    .unwrap_or(&self.float_calendar);
+                settlement_calendar.advance(
+                    ref_date,
                     settlement_days as Integer,
                     TimeUnit::Days,
                     BusinessDayConvention::Following,
@@ -962,6 +977,152 @@ mod tests {
             .unwrap()
             .accrual_start_date();
         assert_eq!(start, expected);
+    }
+
+    fn start_with_settlement_days(
+        today: Date,
+        settlement_calendar: Option<Calendar>,
+    ) -> (Date, Shared<IborIndex>) {
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let index = euribor6m(&settings);
+        let mut maker = MakeVanillaSwap::new(
+            Period::new(5, TimeUnit::Years),
+            Shared::clone(&index),
+            Some(0.03),
+            Period::new(0, TimeUnit::Days),
+            settings,
+        )
+        .with_settlement_days(2);
+        if let Some(calendar) = settlement_calendar {
+            maker = maker.with_settlement_calendar(calendar);
+        }
+        let swap = maker.build().unwrap();
+        let start = swap.fixed_vs_floating().fixed_leg()[0]
+            .as_coupon()
+            .unwrap()
+            .accrual_start_date();
+        (start, index)
+    }
+
+    /// `testSpotDateFromNonBusinessEvaluationDate` (v1.44 `swap.cpp:619`): on
+    /// Saturday 20 June 2026, two explicit settlement days count from the
+    /// Saturday itself (`makevanillaswap.cpp:85-89`), giving Tuesday 23 June,
+    /// not Wednesday 24 June.
+    #[test]
+    fn explicit_settlement_days_count_from_a_saturday() {
+        let today = Date::new(20, Month::June, 2026);
+        let (start, index) = start_with_settlement_days(today, None);
+        assert_eq!(start, Date::new(23, Month::June, 2026));
+        assert_eq!(
+            start,
+            index.fixing_calendar().advance(
+                today,
+                2,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false
+            )
+        );
+    }
+
+    /// `testSettlementCalendar` (v1.44 `swap.cpp:648`): on Thursday 2 July 2026
+    /// the TARGET + US settlement joint calendar skips Friday 3 July
+    /// (Independence Day observed), so the spot is Tuesday 7 July while TARGET
+    /// alone gives Monday 6 July.
+    #[test]
+    fn settlement_calendar_counts_the_settlement_days() {
+        use crate::time::calendars::unitedstates::Market;
+        use crate::time::calendars::{JointCalendar, JointCalendarRule, Target, UnitedStates};
+
+        let today = Date::new(2, Month::July, 2026);
+        let calendar = JointCalendar::of_two(
+            Target::new(),
+            UnitedStates::new(Market::Settlement),
+            JointCalendarRule::JoinHolidays,
+        );
+        let (start, index) = start_with_settlement_days(today, Some(calendar));
+        assert_eq!(start, Date::new(7, Month::July, 2026));
+        assert_ne!(
+            start,
+            index.fixing_calendar().advance(
+                today,
+                2,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false
+            )
+        );
+    }
+
+    /// Without a settlement calendar the settlement days count on the floating
+    /// leg calendar, not the index fixing calendar (v1.44
+    /// `makevanillaswap.cpp:86-87`; a source pin, not a ported test case): on
+    /// Thursday 2 July 2026 a TARGET + US floating calendar skips Friday 3 July,
+    /// giving Tuesday 7 July where the TARGET fixing calendar gives Monday 6 July.
+    #[test]
+    fn settlement_days_fall_back_to_the_floating_leg_calendar() {
+        use crate::time::calendars::unitedstates::Market;
+        use crate::time::calendars::{JointCalendar, JointCalendarRule, Target, UnitedStates};
+
+        let today = Date::new(2, Month::July, 2026);
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(today);
+        let index = euribor6m(&settings);
+        let swap = MakeVanillaSwap::new(
+            Period::new(5, TimeUnit::Years),
+            Shared::clone(&index),
+            Some(0.03),
+            Period::new(0, TimeUnit::Days),
+            settings,
+        )
+        .with_settlement_days(2)
+        .with_floating_leg_calendar(JointCalendar::of_two(
+            Target::new(),
+            UnitedStates::new(Market::Settlement),
+            JointCalendarRule::JoinHolidays,
+        ))
+        .build()
+        .unwrap();
+        let start = swap.fixed_vs_floating().fixed_leg()[0]
+            .as_coupon()
+            .unwrap()
+            .accrual_start_date();
+        assert_eq!(start, Date::new(7, Month::July, 2026));
+        assert_eq!(
+            index.fixing_calendar().advance(
+                today,
+                2,
+                TimeUnit::Days,
+                BusinessDayConvention::Following,
+                false
+            ),
+            Date::new(6, Month::July, 2026)
+        );
+    }
+
+    /// The index-default spot still adjusts a Saturday evaluation date on the
+    /// fixing calendar before the value-date roll (v1.44
+    /// `makevanillaswap.cpp:82`): 20 June 2026 gives Wednesday 24 June.
+    #[test]
+    fn index_default_spot_still_adjusts_a_saturday() {
+        let settings = shared(Settings::<Date>::new());
+        settings.set_evaluation_date(Date::new(20, Month::June, 2026));
+        let index = euribor6m(&settings);
+        let swap = MakeVanillaSwap::new(
+            Period::new(5, TimeUnit::Years),
+            index,
+            Some(0.03),
+            Period::new(0, TimeUnit::Days),
+            settings,
+        )
+        .build()
+        .unwrap();
+        let start = swap.fixed_vs_floating().fixed_leg()[0]
+            .as_coupon()
+            .unwrap()
+            .accrual_start_date();
+        assert_eq!(start, Date::new(24, Month::June, 2026));
     }
 
     /// The EUR fixed-leg default tenor is `1Y` (`makevanillaswap.cpp:122`): a 2Y

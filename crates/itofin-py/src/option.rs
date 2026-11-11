@@ -2,7 +2,7 @@
 
 use crate::PyQlError;
 use crate::bates::PyBatesEngine;
-use crate::fdengine::PyFdBlackScholesVanillaEngine;
+use crate::fdengine::{PyAnalyticDividendEuropeanEngine, PyFdBlackScholesVanillaEngine};
 use crate::gjr_model::{PyAnalyticGjrGarchEngine, PyMcEuropeanGjrGarchEngine};
 use crate::heston::PyHestonModel;
 use crate::heston_engines::{PyCosHestonEngine, PyExponentialFittingHestonEngine};
@@ -70,7 +70,7 @@ impl PyOptionType {
 #[gen_stub_pyclass]
 #[pyclass(name = "VanillaOption", unsendable, module = "itofin.instruments")]
 pub struct PyVanillaOption {
-    inner: VanillaOption,
+    inner: SharedMut<VanillaOption>,
 }
 
 #[gen_stub_pymethods]
@@ -90,7 +90,7 @@ impl PyVanillaOption {
             as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         PyVanillaOption {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         }
     }
 
@@ -121,7 +121,7 @@ impl PyVanillaOption {
         )) as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         Ok(Self {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -149,7 +149,7 @@ impl PyVanillaOption {
             as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         Ok(Self {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -178,7 +178,7 @@ impl PyVanillaOption {
             as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         Ok(Self {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -207,7 +207,7 @@ impl PyVanillaOption {
             as Shared<dyn StrikedTypePayoff>;
         let exercise = shared(EuropeanExercise::new(expiry.inner())) as Shared<dyn Exercise>;
         Ok(Self {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -245,7 +245,7 @@ impl PyVanillaOption {
             AmericanExercise::over(earliest.inner(), latest.inner()).map_err(PyQlError::from)?,
         ) as Shared<dyn Exercise>;
         Ok(PyVanillaOption {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -264,7 +264,7 @@ impl PyVanillaOption {
             shared(AmericanExercise::until(latest.inner(), false).map_err(PyQlError::from)?)
                 as Shared<dyn Exercise>;
         Ok(Self {
-            inner: VanillaOption::new(payoff, exercise, settings.inner()),
+            inner: shared_mut(VanillaOption::new(payoff, exercise, settings.inner())),
         })
     }
 
@@ -280,7 +280,11 @@ impl PyVanillaOption {
         let payoff = shared(PlainVanillaPayoff::new(option_type.inner(), strike))
             as Shared<dyn StrikedTypePayoff>;
         Self {
-            inner: VanillaOption::new(payoff, exercise.inner(), settings.inner()),
+            inner: shared_mut(VanillaOption::new(
+                payoff,
+                exercise.inner(),
+                settings.inner(),
+            )),
         }
     }
 
@@ -292,13 +296,17 @@ impl PyVanillaOption {
     fn set_engine(&mut self, process: &PyBlackScholesProcess) {
         let engine = shared_mut(AnalyticEuropeanEngine::new(process.inner()));
         self.inner
+            .borrow_mut()
             .base_mut()
             .set_pricing_engine(engine as SharedMut<dyn PricingEngine>);
     }
 
     /// Attach a European jump-diffusion engine retaining its live inputs.
     fn set_jump_diffusion_engine(&mut self, engine: &PyJumpDiffusionEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the jump-diffusion engine and return the option value.
@@ -309,7 +317,10 @@ impl PyVanillaOption {
 
     /// Attach a European Bates engine retaining its observable model.
     fn set_bates_engine(&mut self, engine: &PyBatesEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the Bates engine and return the option value.
@@ -320,7 +331,10 @@ impl PyVanillaOption {
 
     /// Attach the daily-moment GJR-GARCH European approximation.
     fn set_gjr_engine(&mut self, engine: &PyAnalyticGjrGarchEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the GJR-GARCH approximation and return its value.
@@ -331,7 +345,10 @@ impl PyVanillaOption {
 
     /// Attach a seeded two-factor GJR-GARCH European Monte Carlo engine.
     fn set_mc_gjr_engine(&mut self, engine: &PyMcEuropeanGjrGarchEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the GJR-GARCH Monte Carlo engine and return its value.
@@ -360,6 +377,7 @@ impl PyVanillaOption {
         let engine =
             AnalyticHestonEngine::new(model.inner(), integration_order).map_err(PyQlError::from)?;
         self.inner
+            .borrow_mut()
             .base_mut()
             .set_pricing_engine(shared_mut(engine) as SharedMut<dyn PricingEngine>);
         Ok(())
@@ -367,7 +385,10 @@ impl PyVanillaOption {
 
     /// Attach a COS engine retaining its model.
     fn set_cos_heston_engine(&mut self, engine: &PyCosHestonEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach and price with a COS engine.
@@ -378,7 +399,10 @@ impl PyVanillaOption {
 
     /// Attach an exponentially fitted Heston engine retaining its model.
     fn set_exponential_fitting_heston_engine(&mut self, engine: &PyExponentialFittingHestonEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach and price with an exponentially fitted Heston engine.
@@ -396,12 +420,18 @@ impl PyVanillaOption {
     ///     engine (MCEuropeanEngine): The engine, which already holds the
     ///         process it prices on.
     fn set_mc_engine(&mut self, engine: &PyMCEuropeanEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach an FD engine, retaining its process for later lazy repricing.
     fn set_fd_engine(&mut self, engine: &PyFdBlackScholesVanillaEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach an FD engine and return the option value.
@@ -410,9 +440,38 @@ impl PyVanillaOption {
         self.npv()
     }
 
+    /// Attach the analytic dividend European engine, retaining its process.
+    ///
+    /// Args:
+    ///     engine (AnalyticDividendEuropeanEngine): The engine to attach.
+    fn set_analytic_dividend_engine(&mut self, engine: &PyAnalyticDividendEuropeanEngine) {
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
+    }
+
+    /// Attach the analytic dividend European engine and return the NPV.
+    ///
+    /// Args:
+    ///     engine (AnalyticDividendEuropeanEngine): The engine to attach.
+    ///
+    /// Raises:
+    ///     ItofinError: If the exercise is not European.
+    fn price_analytic_dividend(
+        &mut self,
+        engine: &PyAnalyticDividendEuropeanEngine,
+    ) -> PyResult<f64> {
+        self.set_analytic_dividend_engine(engine);
+        self.npv()
+    }
+
     /// Attach the fixed-sample Sobol European engine.
     fn set_qmc_engine(&mut self, engine: &PyQMCEuropeanEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the Sobol engine and return its NPV, without an error estimate.
@@ -427,7 +486,10 @@ impl PyVanillaOption {
     ///     engine (MCEuropeanHestonEngine): The engine, which already holds
     ///         the Heston process it prices on.
     fn set_mc_heston_engine(&mut self, engine: &PyMCEuropeanHestonEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Attach the Monte Carlo American engine.
@@ -439,7 +501,10 @@ impl PyVanillaOption {
     ///     engine (MCAmericanEngine): The engine, which already holds the
     ///         process it prices on.
     fn set_mc_american_engine(&mut self, engine: &PyMCAmericanEngine) {
-        self.inner.base_mut().set_pricing_engine(engine.engine());
+        self.inner
+            .borrow_mut()
+            .base_mut()
+            .set_pricing_engine(engine.engine());
     }
 
     /// Force the valuation, so a later accessor reads a warm cache.
@@ -451,7 +516,11 @@ impl PyVanillaOption {
     ///     ItofinError: If no engine is attached, no evaluation date is set,
     ///         or the attached engine refuses the option.
     fn calculate(&mut self) -> PyResult<()> {
-        Ok(self.inner.calculate().map_err(PyQlError::from)?)
+        Ok(self
+            .inner
+            .borrow_mut()
+            .calculate()
+            .map_err(PyQlError::from)?)
     }
 
     /// Return whether the cached results are currently valid.
@@ -460,7 +529,7 @@ impl PyVanillaOption {
     ///     bool: True when the next accessor reads the cache rather than
     ///         repricing.
     fn is_calculated(&self) -> bool {
-        self.inner.base().is_calculated()
+        self.inner.borrow().base().is_calculated()
     }
 
     /// Attach an analytic European engine on process and return the NPV.
@@ -580,7 +649,7 @@ impl PyVanillaOption {
     ///     ItofinError: On anything that makes the valuation fail.
     fn results(&mut self) -> PyResult<Results> {
         self.calculate()?;
-        Ok(Results::snapshot(self.inner.base()))
+        Ok(Results::snapshot(self.inner.borrow().base()))
     }
 
     /// Return the present value.
@@ -591,7 +660,7 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If no evaluation date or no engine is set.
     fn npv(&mut self) -> PyResult<f64> {
-        Ok(self.inner.npv().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().npv().map_err(PyQlError::from)?)
     }
 
     /// Return the option delta.
@@ -603,7 +672,7 @@ impl PyVanillaOption {
     ///     ItofinError: If the attached engine does not provide it, which the
     ///         analytic Heston engine does not.
     fn delta(&mut self) -> PyResult<f64> {
-        Ok(self.inner.delta().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().delta().map_err(PyQlError::from)?)
     }
 
     /// Return the option gamma.
@@ -614,7 +683,7 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If the attached engine does not provide it.
     fn gamma(&mut self) -> PyResult<f64> {
-        Ok(self.inner.gamma().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().gamma().map_err(PyQlError::from)?)
     }
 
     /// Return the option theta.
@@ -625,7 +694,7 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If the attached engine does not provide it.
     fn theta(&mut self) -> PyResult<f64> {
-        Ok(self.inner.theta().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().theta().map_err(PyQlError::from)?)
     }
 
     /// Return the option vega.
@@ -636,7 +705,7 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If the attached engine does not provide it.
     fn vega(&mut self) -> PyResult<f64> {
-        Ok(self.inner.vega().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().vega().map_err(PyQlError::from)?)
     }
 
     /// Return the option rho.
@@ -647,7 +716,7 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If the attached engine does not provide it.
     fn rho(&mut self) -> PyResult<f64> {
-        Ok(self.inner.rho().map_err(PyQlError::from)?)
+        Ok(self.inner.borrow_mut().rho().map_err(PyQlError::from)?)
     }
 
     /// Return the option dividend rho.
@@ -658,7 +727,11 @@ impl PyVanillaOption {
     /// Raises:
     ///     ItofinError: If the attached engine does not provide it.
     fn dividend_rho(&mut self) -> PyResult<f64> {
-        Ok(self.inner.dividend_rho().map_err(PyQlError::from)?)
+        Ok(self
+            .inner
+            .borrow_mut()
+            .dividend_rho()
+            .map_err(PyQlError::from)?)
     }
 
     /// Return the standard error on the present value.
@@ -670,7 +743,11 @@ impl PyVanillaOption {
     ///     ItofinError: On the engines that do not produce one, which is every
     ///         analytic engine here.
     fn error_estimate(&mut self) -> PyResult<f64> {
-        Ok(self.inner.error_estimate().map_err(PyQlError::from)?)
+        Ok(self
+            .inner
+            .borrow_mut()
+            .error_estimate()
+            .map_err(PyQlError::from)?)
     }
 
     /// Return the fraction of simulated paths exercised before expiry.
@@ -684,7 +761,15 @@ impl PyVanillaOption {
     fn exercise_probability(&mut self) -> PyResult<f64> {
         Ok(self
             .inner
+            .borrow_mut()
             .result::<Real>("exerciseProbability")
             .map_err(PyQlError::from)?)
+    }
+}
+
+impl PyVanillaOption {
+    /// A clone of the inner option for sensitivity analysis.
+    pub(crate) fn inner(&self) -> SharedMut<VanillaOption> {
+        SharedMut::clone(&self.inner)
     }
 }

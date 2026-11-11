@@ -318,6 +318,7 @@ where
     simulation.calculate(
         generator,
         path_pricer,
+        None,
         required_tolerance,
         required_samples,
         max_samples,

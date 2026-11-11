@@ -153,7 +153,10 @@ impl InterestRate {
     /// Fails on negative or NaN time, and - diverging from QuantLib, which
     /// returns the resulting garbage values - when the rate leaves the
     /// compounding domain: a simple factor `1 + r t <= 0` or a compounding
-    /// base `1 + r/f <= 0`. Ordinary negative rates are unaffected.
+    /// base `1 + r/f <= 0`. Ordinary negative rates are unaffected. The
+    /// composite conventions fail as in QuantLib 1.44: their factor is defined
+    /// only stepwise over a leg, by the [`CashFlows`](crate::cashflows::CashFlows)
+    /// methods.
     pub fn compound_factor(&self, t: Time) -> QlResult<Real> {
         if t.is_nan() || t < 0.0 {
             fail!("negative time ({t}) not allowed");
@@ -164,19 +167,8 @@ impl InterestRate {
             Compounding::Simple => Self::simple_factor(r, t)?,
             Compounding::Compounded => Self::compounded_factor(r, f, t)?,
             Compounding::Continuous => (r * t).exp(),
-            Compounding::SimpleThenCompounded => {
-                if t <= 1.0 / f {
-                    Self::simple_factor(r, t)?
-                } else {
-                    Self::compounded_factor(r, f, t)?
-                }
-            }
-            Compounding::CompoundedThenSimple => {
-                if t > 1.0 / f {
-                    Self::simple_factor(r, t)?
-                } else {
-                    Self::compounded_factor(r, f, t)?
-                }
+            Compounding::SimpleThenCompounded | Compounding::CompoundedThenSimple => {
+                return Self::not_direct(self.compounding);
             }
         };
         Ok(factor)
@@ -243,10 +235,53 @@ impl InterestRate {
         Ok(1.0 / self.compound_factor_between_ref(d1, d2, ref_start, ref_end)?)
     }
 
+    /// The derivative of [`discount_factor`](Self::discount_factor) at time
+    /// `t` with respect to the rate.
+    ///
+    /// # Errors
+    ///
+    /// As [`discount_factor`](Self::discount_factor).
+    pub fn discount_factor_first_derivative(&self, t: Time) -> QlResult<Real> {
+        let discount = self.discount_factor(t)?;
+        Ok(match self.compounding {
+            Compounding::Simple => -t * discount * discount,
+            Compounding::Continuous => -t * discount,
+            _ => -t * discount / (1.0 + self.rate / self.freq_real()),
+        })
+    }
+
+    /// The second derivative of [`discount_factor`](Self::discount_factor) at
+    /// time `t` with respect to the rate.
+    ///
+    /// # Errors
+    ///
+    /// As [`discount_factor_first_derivative`](Self::discount_factor_first_derivative).
+    pub fn discount_factor_second_derivative(&self, t: Time) -> QlResult<Real> {
+        let discount = self.discount_factor(t)?;
+        Ok(match self.compounding {
+            Compounding::Simple => 2.0 * t * t * discount * discount * discount,
+            Compounding::Continuous => t * t * discount,
+            _ => {
+                let freq = self.freq_real();
+                let compound = 1.0 + self.rate / freq;
+                discount * t * (freq * t + 1.0) / (freq * compound * compound)
+            }
+        })
+    }
+
+    fn not_direct<T>(compounding: Compounding) -> QlResult<T> {
+        fail!("{compounding} is not supported for direct calculations: use the CashFlow methods");
+    }
+
     /// Implied interest rate for a given compound factor at a given time.
     ///
     /// The resulting rate carries the day counter provided as input; time must
     /// be measured using that same day counter.
+    ///
+    /// # Errors
+    ///
+    /// For the composite conventions unless `compound` is `1.0`, whose rate
+    /// is `0.0` under any convention (`interestrate.cpp:112-130`).
     pub fn implied_rate(
         compound: Real,
         result_dc: DayCounter,
@@ -271,19 +306,8 @@ impl InterestRate {
                 Compounding::Simple => (compound - 1.0) / t,
                 Compounding::Compounded => (compound.powf(1.0 / (f * t)) - 1.0) * f,
                 Compounding::Continuous => compound.ln() / t,
-                Compounding::SimpleThenCompounded => {
-                    if t <= 1.0 / f {
-                        (compound - 1.0) / t
-                    } else {
-                        (compound.powf(1.0 / (f * t)) - 1.0) * f
-                    }
-                }
-                Compounding::CompoundedThenSimple => {
-                    if t > 1.0 / f {
-                        (compound - 1.0) / t
-                    } else {
-                        (compound.powf(1.0 / (f * t)) - 1.0) * f
-                    }
+                Compounding::SimpleThenCompounded | Compounding::CompoundedThenSimple => {
+                    return Self::not_direct(comp);
                 }
             }
         };
@@ -511,31 +535,88 @@ mod tests {
         );
     }
 
+    /// `interestrate.cpp:63-101`: each closed form against a central finite
+    /// difference of [`InterestRate::discount_factor`] in the rate.
     #[test]
-    fn hybrid_conventions_switch_at_first_period() {
-        let stc = InterestRate::new(
-            0.06,
-            Actual360::new(),
-            Compounding::SimpleThenCompounded,
-            Frequency::Semiannual,
-        )
-        .expect("valid interest rate");
-        assert_eq!(stc.compound_factor(0.25).expect("valid time"), 1.015);
-        assert!(
-            (stc.compound_factor(0.75).expect("valid time") - 1.03_f64.powf(1.5)).abs() < 1e-15
-        );
+    fn discount_factor_derivatives_match_finite_differences() {
+        let (t, r, h) = (1.75, 0.045, 1e-4);
+        for (comp, freq) in [
+            (Compounding::Simple, Frequency::Annual),
+            (Compounding::Compounded, Frequency::Quarterly),
+            (Compounding::Continuous, Frequency::Annual),
+        ] {
+            let at = |rate: Rate| InterestRate::new(rate, Actual360::new(), comp, freq).unwrap();
+            let df = |rate: Rate| at(rate).discount_factor(t).unwrap();
+            let first = (df(r + h) - df(r - h)) / (2.0 * h);
+            let second = (df(r + h) - 2.0 * df(r) + df(r - h)) / (h * h);
+            let rate = at(r);
+            let d1 = rate.discount_factor_first_derivative(t).unwrap();
+            let d2 = rate.discount_factor_second_derivative(t).unwrap();
+            assert!((d1 - first).abs() < 1e-7, "{comp}: {d1} vs {first}");
+            assert!((d2 - second).abs() < 1e-5, "{comp}: {d2} vs {second}");
+        }
+    }
 
-        let cts = InterestRate::new(
-            0.06,
-            Actual360::new(),
-            Compounding::CompoundedThenSimple,
-            Frequency::Semiannual,
-        )
-        .expect("valid interest rate");
-        assert!(
-            (cts.compound_factor(0.25).expect("valid time") - 1.03_f64.powf(0.5)).abs() < 1e-15
+    fn composite_error(comp: Compounding) -> String {
+        format!("{comp} is not supported for direct calculations: use the CashFlow methods")
+    }
+
+    /// `interestrates.cpp:172-182`: the composite conventions have no direct
+    /// discount factor, derivatives or equivalent rate.
+    #[test]
+    fn composite_conventions_are_not_supported_directly() {
+        use crate::time::date::Month;
+        let (d1, d2) = (
+            Date::new(6, Month::July, 2026),
+            Date::new(6, Month::July, 2027),
         );
-        assert_eq!(cts.compound_factor(0.75).expect("valid time"), 1.045);
+        for comp in [
+            Compounding::SimpleThenCompounded,
+            Compounding::CompoundedThenSimple,
+        ] {
+            let rate = InterestRate::new(0.03, Actual360::new(), comp, Frequency::Semiannual)
+                .expect("valid interest rate");
+            for error in [
+                rate.discount_factor(1.0).unwrap_err(),
+                rate.discount_factor_first_derivative(1.0).unwrap_err(),
+                rate.discount_factor_second_derivative(1.0).unwrap_err(),
+                rate.equivalent_rate_between(
+                    rate.day_counter().clone(),
+                    Compounding::Simple,
+                    Frequency::Annual,
+                    d1,
+                    d2,
+                )
+                .unwrap_err(),
+            ] {
+                assert_eq!(error.message(), composite_error(comp));
+            }
+        }
+    }
+
+    /// `interestrate.cpp:117-120`: a unit compound factor implies a zero rate
+    /// before the composite conventions are rejected.
+    #[test]
+    fn unit_compound_factor_implies_zero_composite_rate() {
+        for comp in [
+            Compounding::SimpleThenCompounded,
+            Compounding::CompoundedThenSimple,
+        ] {
+            let implied =
+                InterestRate::implied_rate(1.0, Actual360::new(), comp, Frequency::Semiannual, 0.5)
+                    .expect("unit compound factor");
+            assert_eq!(implied.rate(), 0.0);
+            assert_eq!(implied.compounding(), comp);
+            let error = InterestRate::implied_rate(
+                1.02,
+                Actual360::new(),
+                comp,
+                Frequency::Semiannual,
+                0.5,
+            )
+            .unwrap_err();
+            assert_eq!(error.message(), composite_error(comp));
+        }
     }
 
     #[test]
@@ -593,26 +674,6 @@ mod tests {
 
         let even_power = quarterly_compounded(-8.0);
         assert!(even_power.compound_factor(1.0).is_err());
-
-        let stc = InterestRate::new(
-            -8.0,
-            Actual360::new(),
-            Compounding::SimpleThenCompounded,
-            Frequency::Quarterly,
-        )
-        .expect("valid interest rate");
-        assert!(stc.compound_factor(0.2).is_err());
-        assert!(stc.compound_factor(1.0).is_err());
-
-        let cts = InterestRate::new(
-            -8.0,
-            Actual360::new(),
-            Compounding::CompoundedThenSimple,
-            Frequency::Quarterly,
-        )
-        .expect("valid interest rate");
-        assert!(cts.compound_factor(0.2).is_err());
-        assert!(cts.compound_factor(1.0).is_err());
     }
 
     #[test]
@@ -621,8 +682,6 @@ mod tests {
             Compounding::Simple,
             Compounding::Compounded,
             Compounding::Continuous,
-            Compounding::SimpleThenCompounded,
-            Compounding::CompoundedThenSimple,
         ] {
             let ir = InterestRate::new(-0.01, Actual360::new(), comp, Frequency::Quarterly)
                 .expect("valid interest rate");
@@ -650,7 +709,7 @@ mod tests {
         use Frequency::{Annual, Bimonthly, EveryFourthMonth, Monthly, Quarterly, Semiannual};
 
         type Row = (Rate, Compounding, Frequency, Time, Compounding, Frequency, Rate, i32);
-        let cases: [Row; 31] = [
+        let cases: [Row; 16] = [
             (0.0800, Compounded, Quarterly, 1.00, Continuous, Annual, 0.0792, 4),
             (0.1200, Continuous, Annual, 1.00, Compounded, Annual, 0.1275, 4),
             (0.0800, Compounded, Quarterly, 1.00, Compounded, Annual, 0.0824, 4),
@@ -667,21 +726,6 @@ mod tests {
             (0.0800, Simple, Annual, 1.0 / 6.0, Compounded, Bimonthly, 0.0800, 4),
             (0.0900, Compounded, Monthly, 1.0 / 12.0, Simple, Annual, 0.0900, 4),
             (0.1000, Simple, Annual, 1.0 / 12.0, Compounded, Monthly, 0.1000, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Annual, 0.0300, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Semiannual, 0.0300, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Quarterly, 0.0300, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.50, Simple, Annual, 0.0300, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.50, Simple, Semiannual, 0.0300, 4),
-            (0.0300, SimpleThenCompounded, Semiannual, 0.75, Compounded, Semiannual, 0.0300, 4),
-            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Quarterly, 0.0400, 4),
-            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Semiannual, 0.0400, 4),
-            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Annual, 0.0400, 4),
-            (0.0400, Compounded, Quarterly, 0.50, SimpleThenCompounded, Quarterly, 0.0400, 4),
-            (0.0400, Simple, Semiannual, 0.50, SimpleThenCompounded, Semiannual, 0.0400, 4),
-            (0.0400, Simple, Semiannual, 0.50, SimpleThenCompounded, Annual, 0.0400, 4),
-            (0.0400, Compounded, Quarterly, 0.75, SimpleThenCompounded, Quarterly, 0.0400, 4),
-            (0.0400, Compounded, Semiannual, 0.75, SimpleThenCompounded, Semiannual, 0.0400, 4),
-            (0.0400, Simple, Semiannual, 0.75, SimpleThenCompounded, Annual, 0.0400, 4),
         ];
 
         let d1 = Date::new(6, Month::July, 2026);
@@ -728,6 +772,37 @@ mod tests {
             assert_eq!(ir3.day_counter(), expected_ir.day_counter(), "conversion of {ir}");
             assert_eq!(ir3.compounding(), expected_ir.compounding(), "conversion of {ir}");
             assert_eq!(ir3.frequency(), expected_ir.frequency(), "conversion of {ir}");
+        }
+
+        type CompositeRow = (Rate, Compounding, Frequency, Time, Compounding, Frequency);
+        let composite: [CompositeRow; 15] = [
+            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Annual),
+            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Semiannual),
+            (0.0300, SimpleThenCompounded, Semiannual, 0.25, Simple, Quarterly),
+            (0.0300, SimpleThenCompounded, Semiannual, 0.50, Simple, Annual),
+            (0.0300, SimpleThenCompounded, Semiannual, 0.50, Simple, Semiannual),
+            (0.0300, SimpleThenCompounded, Semiannual, 0.75, Compounded, Semiannual),
+            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Quarterly),
+            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Semiannual),
+            (0.0400, Simple, Semiannual, 0.25, SimpleThenCompounded, Annual),
+            (0.0400, Compounded, Quarterly, 0.50, SimpleThenCompounded, Quarterly),
+            (0.0400, Simple, Semiannual, 0.50, SimpleThenCompounded, Semiannual),
+            (0.0400, Simple, Semiannual, 0.50, SimpleThenCompounded, Annual),
+            (0.0400, Compounded, Quarterly, 0.75, SimpleThenCompounded, Quarterly),
+            (0.0400, Compounded, Semiannual, 0.75, SimpleThenCompounded, Semiannual),
+            (0.0400, Simple, Semiannual, 0.75, SimpleThenCompounded, Annual),
+        ];
+        for &(r, comp, freq, t, comp2, freq2) in &composite {
+            let ir = InterestRate::new(r, Actual360::new(), comp, freq)
+                .expect("valid interest rate");
+            let d2 = d1 + time_to_days(t);
+            let direct = comp != SimpleThenCompounded;
+            assert_eq!(ir.discount_factor_between(d1, d2).is_ok(), direct, "{ir}");
+            let error = ir
+                .equivalent_rate_between(ir.day_counter().clone(), comp2, freq2, d1, d2)
+                .unwrap_err();
+            let rejected = if direct { comp2 } else { comp };
+            assert_eq!(error.message(), composite_error(rejected), "{ir} to {comp2}");
         }
     }
 }

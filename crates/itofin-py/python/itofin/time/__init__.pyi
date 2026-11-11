@@ -344,7 +344,7 @@ class Calendar:
         r"""
         The Indonesian calendar.
 
-        Its public holidays are tabulated through 2014 only, as in QuantLib;
+        Its public holidays are tabulated through 2026 only, as in QuantLib;
         every query on this calendar raises ItofinError for a later date
         rather than silently omitting holidays.
 
@@ -502,7 +502,7 @@ class Calendar:
         r"""
         The Saudi Arabian calendar.
 
-        Its Eid holidays are tabulated through 2022 only, as in QuantLib;
+        Its Eid holidays are tabulated through 2029 only, as in QuantLib;
         every query on this calendar raises ItofinError for a later date
         rather than silently omitting holidays.
 

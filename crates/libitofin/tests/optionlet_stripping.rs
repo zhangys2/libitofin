@@ -325,6 +325,7 @@ fn original_overnight_surface_and_actual_overnight_cap_match_quantlib() {
         )
         .unwrap(),
     );
+    let overnight_stripper = Shared::clone(&stripper);
     let adapter = shared(StrippedOptionletAdapter::new(stripper, settings.clone()).unwrap());
     for (time, expected) in [
         (1.0, 2.02351996017615),
@@ -341,7 +342,7 @@ fn original_overnight_surface_and_actual_overnight_cap_match_quantlib() {
         .from(Date::new(17, Month::April, 2025))
         .to(Date::new(17, Month::April, 2030))
         .with_tenor(Period::new(3, Months))
-        .with_calendar(calendar)
+        .with_calendar(calendar.clone())
         .with_convention(ModifiedFollowing)
         .forwards()
         .build();
@@ -351,8 +352,14 @@ fn original_overnight_surface_and_actual_overnight_cap_match_quantlib() {
         .with_payment_lag(2)
         .coupons()
         .unwrap();
-    let mut cap =
-        CapFloor::from_overnight(CapFloorType::Cap, coupons, vec![0.04], vec![], settings).unwrap();
+    let mut cap = CapFloor::from_overnight(
+        CapFloorType::Cap,
+        coupons,
+        vec![0.04],
+        vec![],
+        settings.clone(),
+    )
+    .unwrap();
     cap.base_mut().set_pricing_engine(shared_mut(
         BachelierCapFloorEngine::new(
             curve,
@@ -364,6 +371,32 @@ fn original_overnight_surface_and_actual_overnight_cap_match_quantlib() {
     assert!(
         (price - 1_216_118.497_735_086).abs() < 2.5e-8,
         "overnight cap {price}"
+    );
+
+    let atm = shared(
+        CapFloorTermVolCurve::moving(
+            2,
+            calendar,
+            ModifiedFollowing,
+            vec![Period::new(1, Years), Period::new(2, Years)],
+            vec![
+                make_quote_handle(0.01).handle(),
+                make_quote_handle(0.01).handle(),
+            ],
+            Actual360::new(),
+            settings,
+        )
+        .unwrap(),
+    );
+    let err = OptionletStripper2::new(overnight_stripper, atm)
+        .unwrap()
+        .optionlet_volatilities(0)
+        .unwrap_err();
+    assert!(
+        err.message()
+            .contains("extends beyond the source optionlet surface"),
+        "{}",
+        err.message()
     );
 }
 

@@ -232,6 +232,94 @@ pub unsafe extern "C" fn itofin_piecewise_default_new(
         })
     }
 }
+/// A zero settings handle selects the fixed reference date; a nonzero one
+/// selects a reference date settlement_days business days on calendar past
+/// the evaluation date of settings. settings must be the SAME instance the
+/// helpers carry: a different instance moves the curve's reference date while
+/// the helpers stay put.
+#[repr(C)]
+pub struct ItofinPiecewiseDefaultConfig {
+    pub reference_date: i32,
+    pub settlement_days: u32,
+    pub calendar: u64,
+    pub day_counter: u64,
+    pub settings: u64,
+}
+/// The itofin_piecewise_default_new twin taking a fixed or moving reference
+/// date and multiplicative survival jumps. Empty dates generate year-end jump
+/// dates from the reference year, which on a moving curve needs the
+/// evaluation date already set: an unset one is an error, never a clock
+/// fallback.
+#[unsafe(no_mangle)]
+/// # Safety
+/// Pointers must be aligned, live and valid for their stated lengths. Outputs
+/// must not overlap inputs or other outputs. Any context and its handles must
+/// belong to the calling thread; serialize calls including destruction.
+/// See the crate-level C caller contract for lifetime requirements.
+pub unsafe extern "C" fn itofin_piecewise_default_with_jumps_new(
+    ctx: *mut Context,
+    config: *const ItofinPiecewiseDefaultConfig,
+    helpers: *const u64,
+    helper_count: usize,
+    jumps: *const u64,
+    jump_count: usize,
+    dates: *const i32,
+    date_count: usize,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(config)?;
+            check_ptr(out)?;
+            let a = &*config;
+            let helpers = input_slice(helpers, helper_count)?
+                .iter()
+                .map(|id| c.get::<Shared<dyn DefaultProbabilityHelper>>(*id))
+                .collect::<BindingResult<Vec<_>>>()?;
+            let jumps = input_slice(jumps, jump_count)?
+                .iter()
+                .map(|id| {
+                    c.get::<Shared<SimpleQuote>>(*id)
+                        .map(|q| Handle::new(q as Shared<dyn Quote>))
+                })
+                .collect::<BindingResult<Vec<_>>>()?;
+            let dates = input_slice(dates, date_count)?
+                .iter()
+                .map(|d| date(*d))
+                .collect::<BindingResult<Vec<_>>>()?;
+            let dc = day_counter(c, a.day_counter)?;
+            let concrete = if a.settings == 0 {
+                Piecewise::with_jumps(
+                    date(a.reference_date)?,
+                    helpers,
+                    dc,
+                    BackwardFlat,
+                    jumps,
+                    dates,
+                )?
+            } else {
+                Piecewise::moving_with_jumps(
+                    a.settlement_days,
+                    crate::time_api::calendar(c, a.calendar)?,
+                    helpers,
+                    dc,
+                    BackwardFlat,
+                    c.get::<Shared<Settings<Date>>>(a.settings)?,
+                    jumps,
+                    dates,
+                )?
+            };
+            let curve = CreditCurve {
+                handle: Handle::new(concrete.clone()),
+                interpolated: None,
+                piecewise: Some(concrete),
+                density: None,
+            };
+            output(out, c.insert(curve)?)
+        })
+    }
+}
 #[unsafe(no_mangle)]
 /// # Safety
 /// Pointers must be aligned, live and valid for their stated lengths. Outputs
@@ -543,8 +631,102 @@ pub unsafe extern "C" fn itofin_default_curve_jumps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::calendar_api::NativeCalendar;
+    use libitofin::interestrate::Compounding;
+    use libitofin::termstructures::credit::defaultprobabilityhelpers::SpreadCdsHelper;
+    use libitofin::termstructures::yields::FlatForward;
+    use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
+    use libitofin::time::businessdayconvention::BusinessDayConvention;
+    use libitofin::time::calendars::{NullCalendar, Target};
     use libitofin::time::date::Month;
+    use libitofin::time::dategenerationrule::DateGeneration;
     use libitofin::time::daycounters::actual365fixed::Actual365Fixed;
+    use libitofin::time::frequency::Frequency;
+    use libitofin::time::period::Period;
+    use libitofin::time::timeunit::TimeUnit;
+
+    /// The same-Settings contract reaches the unset-date errors only after a
+    /// reset: helpers need the date at construction, and only the core can
+    /// clear it.
+    #[test]
+    fn moving_piecewise_on_the_helpers_reset_settings_errs_until_the_date_returns() {
+        let mut c = Context::new();
+        let today = Date::new(15, Month::June, 2026);
+        let dc = Actual365Fixed::new();
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        settings.set_include_todays_cash_flows(Some(true));
+        let discount = Handle::new(shared(FlatForward::with_rate(
+            today,
+            0.03,
+            dc.clone(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>);
+        let helper = SpreadCdsHelper::new(
+            Handle::new(shared(SimpleQuote::new(0.3))),
+            Period::new(1, TimeUnit::Years),
+            1,
+            Target::new(),
+            Frequency::Quarterly,
+            BusinessDayConvention::Following,
+            DateGeneration::TwentiethIMM,
+            dc.clone(),
+            0.4,
+            discount,
+            settings.clone(),
+        )
+        .unwrap() as Shared<dyn DefaultProbabilityHelper>;
+        let helpers = [c.insert(helper).unwrap()];
+        let jumps = [c.insert(shared(SimpleQuote::new(0.9))).unwrap()];
+        let jump_date = (today + 100).serial_number();
+        let config = ItofinPiecewiseDefaultConfig {
+            reference_date: 0,
+            settlement_days: 0,
+            calendar: c
+                .insert(NativeCalendar {
+                    inner: NullCalendar::new(),
+                    horizon: None,
+                    first_year: 1901,
+                })
+                .unwrap(),
+            day_counter: c.insert(dc).unwrap(),
+            settings: c.insert(settings.clone()).unwrap(),
+        };
+        let null = std::ptr::null_mut();
+        settings.reset_evaluation_date();
+        let (mut jumped, mut plain, mut v) = (0, 0, 0.0);
+        unsafe {
+            let new = |c: &mut Context, jumps: &[u64], dates: &[i32], out: &mut u64| {
+                itofin_piecewise_default_with_jumps_new(
+                    c,
+                    &config,
+                    helpers.as_ptr(),
+                    helpers.len(),
+                    jumps.as_ptr(),
+                    jumps.len(),
+                    dates.as_ptr(),
+                    dates.len(),
+                    out,
+                    null,
+                )
+            };
+            assert_ne!(new(&mut c, &jumps, &[], &mut jumped), 0);
+            assert_eq!(new(&mut c, &jumps, &[jump_date], &mut jumped), 0);
+            assert_eq!(new(&mut c, &[], &[], &mut plain), 0);
+            for id in [jumped, plain] {
+                let read = itofin_default_curve_value(&mut c, id, 0, 1.0, 0, 0, 0, &mut v, null);
+                assert_ne!(read, 0);
+            }
+            settings.set_evaluation_date(today);
+            for id in [jumped, plain] {
+                let read = itofin_default_curve_value(&mut c, id, 0, 1.0, 0, 0, 0, &mut v, null);
+                assert_eq!(read, 0);
+                assert!(v > 0.0 && v < 1.0);
+            }
+        }
+    }
+
     #[test]
     fn flat_hazard_live_quote_lifetime_and_foreign_handle() {
         let mut c = Context::new();

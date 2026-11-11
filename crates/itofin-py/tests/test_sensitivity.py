@@ -9,11 +9,12 @@ import pytest
 # itofin library
 from itofin import ItofinError, Settings
 from itofin.indexes import Currency, Estr, Euribor, IborIndex
-from itofin.instruments import FixedRateBond, FloatingRateBond, MakeOis, MakeVanillaSwap
-from itofin.pricingengines import DiscountingBondEngine
+from itofin.instruments import CapFloor, CapFloorType, CreditDefaultSwap, EuropeanExercise, FixedRateBond, FloatingRateBond, MakeOis, MakeVanillaSwap, OptionType, ProtectionSide, SettlementMethod, SettlementType, Swaption, VanillaOption
+from itofin.pricingengines import BlackCapFloorEngine, BlackSwaptionEngine, DiscountingBondEngine, MidPointCdsEngine
+from itofin.processes import BlackScholesProcess
 from itofin.quotes import SimpleQuote
-from itofin.risk import SensitivityAnalysis, bucket_analysis, parallel_analysis
-from itofin.termstructures import FlatForward
+from itofin.risk import SensitivityAnalysis, bucket_analysis, bucket_analysis_matrix, parallel_analysis
+from itofin.termstructures import BlackConstantVol, FlatForward, FlatHazardRate
 from itofin.time import BusinessDayConvention as BDC, Calendar, Date, DayCounter, Frequency, Period, Schedule
 
 TODAY = Date(15, 1, 2026)
@@ -105,12 +106,113 @@ def test_labelled_buckets_sum_to_the_parallel_shift():
 
 
 def test_errors_leave_the_quotes_untouched():
-    """Zero shift and empty inputs are core errors; other instruments are deferred."""
+    """Zero shift and empty inputs are core errors; a non-instrument is a TypeError."""
     _, quotes, instruments = _portfolio()
     with pytest.raises(ItofinError, match="shift must be finite and non-zero"):
         parallel_analysis(quotes, instruments, shift=0.0)
     with pytest.raises(ItofinError, match="empty instrument"):
         bucket_analysis(quotes, [])
-    with pytest.raises(TypeError, match="#1322"):
+    with pytest.raises(TypeError, match="CapFloor or CreditDefaultSwap"):
         bucket_analysis(quotes, cast(Any, [quotes[0]]))
+    assert quotes[0].value() == 0.03
+
+
+def _assert_kind(quote, instrument):
+    reference, first, second, one_side = _manual([quote], [instrument], [1.0])
+    assert first != 0.0
+    assert parallel_analysis([quote], [instrument]) == (first, second)
+    assert parallel_analysis([quote], [instrument], kind=SensitivityAnalysis.OneSide, reference_npv=reference) == (one_side, None)
+
+
+def test_cds_is_bit_identical_to_a_manual_discount_and_hazard_bump():
+    """A CDS reprices through the discount curve built from_quote and the hazard quote."""
+    settings = Settings()
+    today = Date(9, 6, 2006)
+    settings.set_evaluation_date(today)
+    calendar, day_counter, convention = Calendar.target(), DayCounter.actual360(), BDC.ModifiedFollowing
+    rate, hazard = SimpleQuote(0.06), SimpleQuote(0.01234)
+    discount = FlatForward.from_quote(today, rate, day_counter)
+    probability = FlatHazardRate.moving(0, calendar, hazard, day_counter, settings)
+    schedule = Schedule(Date(9, 6, 2005), Date(9, 6, 2015), Frequency.Semiannual, calendar, convention)
+    cds = CreditDefaultSwap(ProtectionSide.Seller, 10000.0, 0.012, schedule, convention, day_counter, True, True, settings)
+    cds.set_engine(MidPointCdsEngine(probability, 0.4, discount, settings))
+    for quote in (rate, hazard):
+        _assert_kind(quote, cds)
+    assert (rate.value(), hazard.value()) == (0.06, 0.01234)
+
+
+def _option():
+    settings = Settings()
+    settings.set_evaluation_date(TODAY)
+    day_counter = DayCounter.actual365_fixed()
+    spot, rate, vol = SimpleQuote(100.0), SimpleQuote(0.05), SimpleQuote(0.2)
+    risk_free = FlatForward.from_quote(TODAY, rate, day_counter)
+    volatility = BlackConstantVol.from_quote(TODAY, vol, day_counter)
+    process = BlackScholesProcess.from_quote(spot, risk_free, FlatForward(TODAY, 0.02, day_counter), volatility)
+    option = VanillaOption(OptionType.Call, 105.0, TODAY + 360, settings)
+    option.set_engine(process)
+    return option, spot, rate, vol
+
+
+def test_option_is_bit_identical_to_a_manual_spot_vol_and_rate_bump():
+    """An analytic European option reprices through its spot, vol and curve quotes."""
+    option, spot, rate, vol = _option()
+    for quote in (spot, vol, rate):
+        _assert_kind(quote, option)
+    assert (spot.value(), rate.value(), vol.value()) == (100.0, 0.05, 0.2)
+
+
+def test_centred_spot_bump_matches_the_analytic_delta_at_second_order():
+    """The centred difference error against option.delta() quarters when h halves."""
+    option, spot, _, _ = _option()
+    delta = option.delta()
+    coarse, fine = (abs(parallel_analysis([spot], [option], shift=h)[0] - delta) for h in (1.0, 0.5))
+    assert coarse < 1e-3
+    assert coarse / fine == pytest.approx(4.0, abs=0.1)
+
+
+def test_swaption_and_cap_floor_are_bit_identical_to_a_manual_curve_bump():
+    """A Black swaption and a Black cap reprice through the curve built from_quote."""
+    settings, _, discount, _, discount_curve = _market()
+    day_counter = DayCounter.actual365_fixed()
+    index = Euribor.six_months(discount_curve, settings)
+    exercise = Date(15, 1, 2031)
+    swap = MakeVanillaSwap(Period(5, "Years"), index, settings, fixed_rate=0.03, effective_date=Date(17, 1, 2031)).build()
+    swaption = Swaption(swap, EuropeanExercise(exercise), SettlementType.Physical, SettlementMethod.PhysicalOTC, settings)
+    swaption.set_black_engine(BlackSwaptionEngine.with_flat_vol(discount_curve, SimpleQuote(0.2), day_counter, 0.0, settings))
+    cap = CapFloor(CapFloorType.Cap, Period(3, "Years"), index, 0.03, Period(1, "Years"), settings)
+    cap.set_black_engine(BlackCapFloorEngine.with_flat_vol(discount_curve, SimpleQuote(0.2), day_counter, 0.0, settings))
+    for instrument in (swaption, cap):
+        _assert_kind(discount, instrument)
+    assert discount.value() == 0.03
+
+
+def test_matrix_buckets_are_bit_identical_to_a_manual_bump_of_each_quote():
+    """A ragged matrix with an empty row keeps its shape; each cell bumps one quote alone."""
+    _, curve_quotes, portfolio = _portfolio()
+    option, spot, rate, vol = _option()
+    instruments, quantities = [*portfolio, option], [1.0, 2.0, -1.0, 3.0]
+    rows = [[curve_quotes[0], spot], [], [vol, rate]]
+    centered = bucket_analysis_matrix(rows, instruments, quantities, H)
+    one_side = bucket_analysis_matrix(rows, instruments, quantities, H, SensitivityAnalysis.OneSide)
+    assert [len(row) for row in centered] == [len(row) for row in one_side] == [2, 0, 2]
+    for row, got, got_one_side in zip(rows, centered, one_side):
+        for quote, cell, cell_one_side in zip(row, got, got_one_side):
+            _, first, second, forward = _manual([quote], instruments, quantities)
+            assert first != 0.0
+            assert cell == (first, second)
+            assert cell_one_side == (forward, None)
+    assert bucket_analysis_matrix([[]], instruments, quantities) == [[]]
+    assert (curve_quotes[0].value(), spot.value(), rate.value(), vol.value()) == (0.03, 100.0, 0.05, 0.2)
+
+
+def test_matrix_rejects_an_empty_range_and_a_non_instrument():
+    """An empty outer sequence is a core error; a non-instrument is a TypeError."""
+    _, quotes, instruments = _portfolio()
+    with pytest.raises(ItofinError, match="empty SimpleQuote range"):
+        bucket_analysis_matrix([], instruments)
+    with pytest.raises(TypeError, match="CapFloor or CreditDefaultSwap"):
+        bucket_analysis_matrix([quotes], cast(Any, [quotes[0]]))
+    with pytest.raises(TypeError):
+        bucket_analysis_matrix(cast(Any, [[instruments[0]]]), instruments)
     assert quotes[0].value() == 0.03

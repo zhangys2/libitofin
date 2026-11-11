@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -17,7 +18,23 @@ type analyticsCase struct {
 	Start, End, Reference, Settlement int32
 	NPVDate                           int32 `json:"npv_date"`
 	Yield, Spread                     float64
-	Expected                          map[string]float64
+	Expected                          map[string]*float64
+}
+
+func (a analyticsCase) want(t *testing.T, key string) float64 {
+	t.Helper()
+	if a.Expected[key] == nil {
+		t.Fatalf("%s: no expected %s", a.Name, key)
+	}
+	return *a.Expected[key]
+}
+
+func requireCompositeUnsupported(t *testing.T, err error) {
+	t.Helper()
+	var native *Error
+	if !errors.As(err, &native) || native.Code != 3 || !strings.Contains(native.Message, "is not supported for direct calculations: use the CashFlow methods") {
+		t.Fatalf("composite compounding error required: %v", err)
+	}
 }
 
 func analyticsOracles(t *testing.T) []analyticsCase {
@@ -29,7 +46,7 @@ func analyticsOracles(t *testing.T) []analyticsCase {
 		Cases   []analyticsCase
 	}
 	bondCheck(t, json.Unmarshal(data, &x))
-	if x.Version != "1.43" || len(x.Cases) != 55 {
+	if x.Version != "1.44" || len(x.Cases) != 55 {
 		t.Fatal("oracle contract")
 	}
 	return x.Cases
@@ -93,6 +110,7 @@ func analyticsFixture(t *testing.T, s *Session, a analyticsCase) (*Bond, *Settin
 }
 func TestBondAnalyticsQuantLibOracles(t *testing.T) {
 	for _, a := range analyticsOracles(t) {
+		unsupported := a.Compounding == SimpleThenCompounded || a.Compounding == CompoundedThenSimple
 		t.Run(a.Name, func(t *testing.T) {
 			s, e := NewSession()
 			bondCheck(t, e)
@@ -121,9 +139,14 @@ func TestBondAnalyticsQuantLibOracles(t *testing.T) {
 				{"leg_npv", func() (float64, error) { return leg.NPVAtZSpread(a.Spread, lc) }},
 			}
 			for _, check := range checks {
+				if unsupported && (check.name == "clean_spread" || check.name == "dirty_spread" || check.name == "leg_npv") {
+					_, e := check.call()
+					requireCompositeUnsupported(t, e)
+					continue
+				}
 				v, e := check.call()
 				bondCheck(t, e)
-				analyticsNear(t, v, a.Expected[check.name])
+				analyticsNear(t, v, a.want(t, check.name))
 			}
 			accuracy := 1e-12
 			evaluations := uint(1000)
@@ -133,16 +156,26 @@ func TestBondAnalyticsQuantLibOracles(t *testing.T) {
 				if priceType == Dirty {
 					kind = "dirty"
 				}
-				v, e := b.YieldRate(a.Expected[kind+"_yield"], BondYieldSolveConfig{BondYieldConfig: y, PriceType: priceType, AnalyticsSolverConfig: solver})
+				v, e := b.YieldRate(a.want(t, kind+"_yield"), BondYieldSolveConfig{BondYieldConfig: y, PriceType: priceType, AnalyticsSolverConfig: solver})
 				bondCheck(t, e)
-				analyticsSolveNear(t, v, a.Expected["yield_"+kind])
-				v, e = b.ZSpread(a.Expected[kind+"_spread"], BondZSpreadSolveConfig{BondZSpreadConfig: z, PriceType: priceType, AnalyticsSolverConfig: solver})
+				analyticsSolveNear(t, v, a.want(t, "yield_"+kind))
+				if unsupported {
+					_, e = b.ZSpread(a.want(t, kind+"_curve"), BondZSpreadSolveConfig{BondZSpreadConfig: z, PriceType: priceType, AnalyticsSolverConfig: solver})
+					requireCompositeUnsupported(t, e)
+					continue
+				}
+				v, e = b.ZSpread(a.want(t, kind+"_spread"), BondZSpreadSolveConfig{BondZSpreadConfig: z, PriceType: priceType, AnalyticsSolverConfig: solver})
 				bondCheck(t, e)
-				analyticsSolveNear(t, v, a.Expected["spread_"+kind])
+				analyticsSolveNear(t, v, a.want(t, "spread_"+kind))
 			}
-			v, e := leg.ZSpread(a.Expected["leg_npv"], CashFlowsZSpreadSolveConfig{CashFlowsZSpreadConfig: lc, AnalyticsSolverConfig: solver})
-			bondCheck(t, e)
-			analyticsSolveNear(t, v, a.Expected["leg_spread"])
+			if unsupported {
+				_, e := leg.ZSpread(a.want(t, "clean_curve"), CashFlowsZSpreadSolveConfig{CashFlowsZSpreadConfig: lc, AnalyticsSolverConfig: solver})
+				requireCompositeUnsupported(t, e)
+			} else {
+				v, e := leg.ZSpread(a.want(t, "leg_npv"), CashFlowsZSpreadSolveConfig{CashFlowsZSpreadConfig: lc, AnalyticsSolverConfig: solver})
+				bondCheck(t, e)
+				analyticsSolveNear(t, v, a.want(t, "leg_spread"))
+			}
 			calculated, e := b.IsCalculated()
 			bondCheck(t, e)
 			if calculated {
@@ -297,7 +330,7 @@ func TestBondAnalyticsOmittedSettlementAndExplicitDatePurity(t *testing.T) {
 	distinct := testDate(t, 26, 6, 2026)
 	direct, e := b.DirtyPriceFromCurve(curve, &distinct)
 	bondCheck(t, e)
-	analyticsNear(t, direct, a.Expected["dirty_curve"])
+	analyticsNear(t, direct, a.want(t, "dirty_curve"))
 	if _, e := b.YieldRate(100, BondYieldSolveConfig{BondYieldConfig: BondYieldConfig{DayCounter: dc, Compounding: Compounded, Frequency: Semiannual}}); e != nil {
 		bondCheck(t, e)
 	}

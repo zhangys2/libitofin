@@ -47,6 +47,9 @@ __all__ = [
     "JointYieldCurves",
     "KInterpolatedYoYOptionletVolatilitySurface",
     "KerkhofSeasonality",
+    "LocalVolCurve",
+    "LocalVolSurface",
+    "LocalVolTermStructure",
     "MultiplicativePriceSeasonality",
     "OISRateHelper",
     "OptionQuotePair",
@@ -164,12 +167,13 @@ class BlackVarianceCurve(BlackVolTermStructure):
 @typing.final
 class BlackVarianceSurface(BlackVolTermStructure):
     r"""
-    A Black volatility surface in strike and expiry, interpolating bilinearly.
+    A Black volatility surface in strike and expiry, interpolating bilinearly
+    unless bicubic is chosen at construction.
 
     Finite in both time and strike, so out-of-grid queries require
     enable_extrapolation().
     """
-    def __init__(self, reference_date: time.Date, dates: typing.Sequence[time.Date], strikes: typing.Sequence[builtins.float], black_vol_matrix: typing.Sequence[typing.Sequence[builtins.float]], day_counter: time.DayCounter, calendar: typing.Optional[time.Calendar] = None) -> None:
+    def __init__(self, reference_date: time.Date, dates: typing.Sequence[time.Date], strikes: typing.Sequence[builtins.float], black_vol_matrix: typing.Sequence[typing.Sequence[builtins.float]], day_counter: time.DayCounter, calendar: typing.Optional[time.Calendar] = None, interpolation: builtins.str = 'bilinear') -> None:
         r"""
         Build the surface over its strike-by-expiry grid.
 
@@ -181,10 +185,13 @@ class BlackVarianceSurface(BlackVolTermStructure):
                 strike and one column per date.
             day_counter (DayCounter): The day count turning dates into times.
             calendar (Calendar | None): The surface's calendar, if any.
+            interpolation (str): The variance interpolator, "bilinear" (the
+                default) or "bicubic". Strike extrapolation is deferred (#624).
 
         Raises:
             ItofinError: On an empty or ragged matrix, and on whatever the core
                 rejects about the grid dimensions.
+            ValueError: On an unknown interpolation.
         """
 
 class BlackVolTermStructure:
@@ -1319,7 +1326,7 @@ class DiscountCurve(YieldTermStructure):
     The first date is the reference date and its discount must be 1.0. Finite
     in time: queries past the last node require extrapolation.
     """
-    def __init__(self, dates: typing.Sequence[time.Date], discounts: typing.Sequence[builtins.float], day_counter: time.DayCounter, calendar: typing.Optional[time.Calendar] = None, interpolation: builtins.str = 'LogLinear') -> None:
+    def __init__(self, dates: typing.Sequence[time.Date], discounts: typing.Sequence[builtins.float], day_counter: time.DayCounter, calendar: typing.Optional[time.Calendar] = None, interpolation: builtins.str = 'LogLinear', jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over its (date, discount-factor) nodes.
 
@@ -1334,10 +1341,17 @@ class DiscountCurve(YieldTermStructure):
             interpolation (str): "LogLinear", the shipped behaviour, giving
                 piecewise-constant forwards, or "Cubic", which is
                 non-monotonic.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, and each applies strictly after its
+                date, so a jump on the reference date never applies. None
+                builds the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an unknown interpolation name, and on whatever the
-                core rejects about the nodes.
+            ItofinError: On an unknown interpolation name, on whatever the
+                core rejects about the nodes, and on a jumps and jump_dates
+                mismatch.
         """
 
 @typing.final
@@ -1422,9 +1436,12 @@ class FlatForward(YieldTermStructure):
             day_counter (DayCounter): The day count times are measured in.
         """
     @staticmethod
-    def from_quote(reference_date: time.Date, quote: quotes.SimpleQuote, day_counter: time.DayCounter) -> FlatForward:
+    def from_quote(reference_date: time.Date, quote: quotes.Quote, day_counter: time.DayCounter) -> FlatForward:
         r"""
         Build a flat curve backed by a retained, observable quote.
+
+        The quote may be a SimpleQuote or a dependent DerivedQuote or
+        CompositeQuote; changing a source quote reprices the curve.
         """
 
 @typing.final
@@ -1528,7 +1545,7 @@ class ForwardCurve(YieldTermStructure):
 
     A query past the last node needs enable_extrapolation() or extrapolate=True.
     """
-    def __init__(self, dates: typing.Sequence[time.Date], forwards: typing.Sequence[builtins.float], day_counter: time.DayCounter) -> None:
+    def __init__(self, dates: typing.Sequence[time.Date], forwards: typing.Sequence[builtins.float], day_counter: time.DayCounter, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over its (date, forward-rate) nodes.
 
@@ -1538,9 +1555,16 @@ class ForwardCurve(YieldTermStructure):
             forwards (list[float]): The instantaneous forward rate at each
                 node.
             day_counter (DayCounter): The day count turning dates into times.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, and each applies strictly after its
+                date, so a jump on the reference date never applies. None
+                builds the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On whatever the core rejects about the nodes.
+            ItofinError: On whatever the core rejects about the nodes, and on a
+                jumps and jump_dates mismatch.
         """
 
 @typing.final
@@ -2258,6 +2282,66 @@ class KerkhofSeasonality(MultiplicativePriceSeasonality):
         Return the cumulative monthly factor relative to the anchor date.
         """
 
+@typing.final
+class LocalVolCurve(LocalVolTermStructure):
+    r"""
+    The local volatility of a Black variance curve: time-only, unbounded in
+    strike.
+    """
+    def __init__(self, curve: BlackVarianceCurve) -> None:
+        r"""
+        Build the local volatility curve.
+
+        Args:
+            curve (BlackVarianceCurve): The Black variance curve it derives from.
+        """
+
+@typing.final
+class LocalVolSurface(LocalVolTermStructure):
+    r"""
+    The Dupire local volatility derived from a Black volatility surface.
+
+    Observes the spot quote and every input, so setting the quote reprices
+    the processes built over it. Over a bilinear BlackVarianceSurface the
+    local volatility dips at the strike nodes, where the finite-difference
+    curvature meets the interpolation kink.
+    """
+    def __init__(self, black_vol: BlackVolTermStructure, risk_free: YieldTermStructure, dividend: YieldTermStructure, spot: quotes.SimpleQuote) -> None:
+        r"""
+        Build the local volatility surface.
+
+        Args:
+            black_vol (BlackVolTermStructure): The Black volatility surface.
+            risk_free (YieldTermStructure): The risk-free discount curve.
+            dividend (YieldTermStructure): The dividend curve.
+            spot (SimpleQuote): The spot quote the surface observes.
+        """
+
+class LocalVolTermStructure:
+    r"""
+    Shared base for every local-volatility structure.
+
+    Concrete structures subclass this and supply only their constructor; the
+    local volatility query below is inherited.
+    """
+    def local_vol(self, t: builtins.float, strike: builtins.float, extrapolate: builtins.bool = False) -> builtins.float:
+        r"""
+        Return the local volatility at year-fraction t and underlying level.
+
+        Args:
+            t (float): The year fraction, in the structure's own day count.
+            strike (float): The underlying level the volatility is read at.
+            extrapolate (bool): Whether to answer past the structure's maximum
+                time.
+
+        Returns:
+            float: The local volatility.
+
+        Raises:
+            ItofinError: If the query falls past the maximum time and
+                extrapolation is not allowed, or the core rejects the inputs.
+        """
+
 class MultiplicativePriceSeasonality:
     r"""
     The seasonal correction a price index carries, whose factors multiply
@@ -2486,7 +2570,7 @@ class OptionletStripper1:
 @typing.final
 class OptionletStripper2:
     r"""
-    Correct a stripped lognormal grid to ATM cap term volatilities.
+    Correct a stripped grid to ATM cap term volatilities, priced with its volatility type.
     """
     def __init__(self, stripper: OptionletStripper1, atm_curve: CapFloorTermVolCurve) -> None:
         r"""
@@ -2644,7 +2728,7 @@ class PiecewiseConvexMonotoneForward(YieldTermStructure):
     convergence loop. data() are instantaneous forward rates; the interpolation
     ignores node [0], which only mirrors the first solved pillar.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, bootstrap: builtins.str = 'iterative', iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, bootstrap: builtins.str = 'iterative', iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2658,10 +2742,19 @@ class PiecewiseConvexMonotoneForward(YieldTermStructure):
                 keeps a localised risk profile. The two reprice every pillar
                 (the local solve to its own tolerance, about 1e-7 on the
                 oracle strip) and diverge between them.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list, and on an unknown bootstrap
-                name.
+            ItofinError: On an empty helper list, on an unknown bootstrap
+                name, and on a jumps and jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -2694,7 +2787,7 @@ class PiecewiseCubicZero(YieldTermStructure):
     instead of a single pass. data() are continuously-compounded zero rates, so
     data()[0] mirrors the first solved pillar's rate rather than a 1.0 discount.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2702,9 +2795,19 @@ class PiecewiseCubicZero(YieldTermStructure):
             reference_date (Date): The curve's reference date.
             helpers (list[RateHelper]): The bootstrap instruments.
             day_counter (DayCounter): The day count turning dates into times.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list.
+            ItofinError: On an empty helper list, and on a jumps and
+                jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -2735,7 +2838,8 @@ class PiecewiseDefaultCurve(DefaultProbabilityTermStructure):
 
     Lazy: the bootstrap runs on the first read, so the helpers' Settings flags
     and evaluation date must be in place before that read, not merely before
-    the constructor. A helper quote moving invalidates the cache.
+    the constructor. A helper quote moving invalidates the cache, as does a jump
+    quote moving or, on the moving forms, an evaluation date change.
     """
     def __init__(self, reference_date: time.Date, helpers: typing.Sequence[DefaultProbabilityHelper], day_counter: time.DayCounter) -> None:
         r"""
@@ -2749,6 +2853,91 @@ class PiecewiseDefaultCurve(DefaultProbabilityTermStructure):
 
         Raises:
             ItofinError: On an empty helper list.
+        """
+    @staticmethod
+    def with_jumps(reference_date: time.Date, helpers: typing.Sequence[DefaultProbabilityHelper], day_counter: time.DayCounter, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> PiecewiseDefaultCurve:
+        r"""
+        Build a fixed-reference curve retaining multiplicative survival jump quotes.
+
+        The helpers price off the jump-adjusted survival probability, and a
+        jump quote moving re-bootstraps the curve. Jumps apply strictly after
+        their date.
+
+        Args:
+            reference_date (Date): The curve's reference date.
+            helpers (list[DefaultProbabilityHelper]): The bootstrap
+                instruments; any subclass is accepted.
+            day_counter (DayCounter): The day count turning dates into times.
+            jumps (list[SimpleQuote]): The survival factors; the curve retains
+                them.
+            jump_dates (list[Date] | None): One date per jump. Empty selects
+                consecutive year-end dates from the reference year.
+
+        Returns:
+            PiecewiseDefaultCurve: The jumped curve.
+
+        Raises:
+            ItofinError: On an empty helper list, or a jumps and jump_dates
+                mismatch.
+        """
+    @staticmethod
+    def moving(settlement_days: builtins.int, calendar: time.Calendar, helpers: typing.Sequence[DefaultProbabilityHelper], day_counter: time.DayCounter, settings: itofin.Settings) -> PiecewiseDefaultCurve:
+        r"""
+        Build the curve on a reference date that moves with the evaluation date.
+
+        The reference date sits settlement_days business days on calendar past
+        the evaluation date of settings; a roll re-bootstraps the curve. A
+        query made before settings carries an evaluation date raises rather
+        than falling back to a system clock.
+
+        settings must be the same Settings instance the helpers carry: a
+        different instance moves the curve's reference date while the helpers'
+        dates stay put.
+
+        Args:
+            settlement_days (int): The business days the reference date sits
+                past the evaluation date.
+            calendar (Calendar): The calendar those days are counted on.
+            helpers (list[DefaultProbabilityHelper]): The bootstrap
+                instruments; any subclass is accepted.
+            day_counter (DayCounter): The day count turning dates into times.
+            settings (Settings): The settings supplying the evaluation date.
+
+        Returns:
+            PiecewiseDefaultCurve: The moving curve.
+
+        Raises:
+            ItofinError: On an empty helper list.
+        """
+    @staticmethod
+    def moving_with_jumps(settlement_days: builtins.int, calendar: time.Calendar, helpers: typing.Sequence[DefaultProbabilityHelper], day_counter: time.DayCounter, settings: itofin.Settings, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> PiecewiseDefaultCurve:
+        r"""
+        Build a moving-reference curve with retained jump quotes and fixed jump dates.
+
+        As moving(), settings must be the same Settings instance the helpers
+        carry. The jump dates stay fixed through a roll while the jump times
+        follow the reference date. Empty jump_dates generates year-end dates
+        from the reference year at construction, so settings must already carry
+        an evaluation date: an unset one raises here, never a clock fallback.
+
+        Args:
+            settlement_days (int): The business days the reference date sits
+                past the evaluation date.
+            calendar (Calendar): The calendar those days are counted on.
+            helpers (list[DefaultProbabilityHelper]): The bootstrap
+                instruments; any subclass is accepted.
+            day_counter (DayCounter): The day count turning dates into times.
+            settings (Settings): The settings supplying the evaluation date.
+            jumps (list[SimpleQuote]): The survival factors; the curve retains
+                them.
+            jump_dates (list[Date] | None): One date per jump.
+
+        Returns:
+            PiecewiseDefaultCurve: The moving jumped curve.
+
+        Raises:
+            ItofinError: On an empty helper list, a jumps and jump_dates
+                mismatch, or generated jump dates without an evaluation date.
         """
     def calculate(self) -> None:
         r"""
@@ -2845,7 +3034,7 @@ class PiecewiseFlatForward(YieldTermStructure):
     identical to PiecewiseLogLinearDiscount under every query; only data(),
     forward rates against discount factors, tells the two apart.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2853,9 +3042,19 @@ class PiecewiseFlatForward(YieldTermStructure):
             reference_date (Date): The curve's reference date.
             helpers (list[RateHelper]): The bootstrap instruments.
             day_counter (DayCounter): The day count turning dates into times.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list.
+            ItofinError: On an empty helper list, and on a jumps and
+                jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -2886,7 +3085,7 @@ class PiecewiseLinearForward(YieldTermStructure):
     The verbatim QuantLib-SWIG name for the blessed (ForwardRate, Linear)
     combination. data() are instantaneous forward rates.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2894,9 +3093,19 @@ class PiecewiseLinearForward(YieldTermStructure):
             reference_date (Date): The curve's reference date.
             helpers (list[RateHelper]): The bootstrap instruments.
             day_counter (DayCounter): The day count turning dates into times.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list.
+            ItofinError: On an empty helper list, and on a jumps and
+                jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -2928,7 +3137,7 @@ class PiecewiseLinearZero(YieldTermStructure):
     combination. data() are continuously-compounded zero rates, so data()[0]
     mirrors the first solved pillar's rate rather than a 1.0 discount.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2936,9 +3145,19 @@ class PiecewiseLinearZero(YieldTermStructure):
             reference_date (Date): The curve's reference date.
             helpers (list[RateHelper]): The bootstrap instruments.
             day_counter (DayCounter): The day count turning dates into times.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list.
+            ItofinError: On an empty helper list, and on a jumps and
+                jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -2972,7 +3191,7 @@ class PiecewiseLogLinearDiscount(YieldTermStructure):
     handle discards. data() are discount factors, so data()[0] is the reference
     node's 1.0.
     """
-    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> None:
+    def __init__(self, reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, iterative_options: typing.Optional[IterativeBootstrapOptions] = None, jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over helpers with a fixed reference date.
 
@@ -2981,9 +3200,19 @@ class PiecewiseLogLinearDiscount(YieldTermStructure):
             helpers (list[RateHelper]): The bootstrap instruments; any
                 RateHelper subclass is accepted.
             day_counter (DayCounter): The day count turning dates into times.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                the iterative bootstrap.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, the helpers price off the
+                jump-adjusted discount, and a jump quote moving re-bootstraps
+                the curve. Each applies strictly after its date. None builds
+                the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an empty helper list.
+            ItofinError: On an empty helper list, and on a jumps and
+                jump_dates mismatch.
         """
     def dates(self) -> builtins.list[time.Date]:
         r"""
@@ -3038,10 +3267,11 @@ class PiecewiseYieldCurve(YieldTermStructure):
     Quote mutation from a callback is rejected; read helpers and trial nodes instead.
     The supplied time and data lists include the reference node and are copies.
 
-    The bootstrap is lazy: construction only rejects an empty helper list, and
-    the solver runs on the first query, re-running after a helper-quote or
-    evaluation-date change. A bootstrap failure therefore surfaces from the
-    query methods, not from the constructor.
+    The bootstrap is lazy: construction only rejects an empty helper list (under
+    "iterative"; "global" accepts one and fails at the first query when its grid
+    is too short), and the solver runs on the first query, re-running after a
+    helper-quote or evaluation-date change. A bootstrap failure therefore
+    surfaces from the query methods, not from the constructor.
 
     max_date is the exception: it swallows a bootstrap failure and reports the
     current grid bound, or the reference date before a grid has been installed.
@@ -3072,9 +3302,10 @@ class PiecewiseYieldCurve(YieldTermStructure):
                 solved jointly with nodes. All additional options require global.
 
         Raises:
-            ItofinError: On an empty helper list, on an unknown interpolation
-                or bootstrap name, on additional helpers under "iterative",
-                and on "Cubic" under "global".
+            ItofinError: On an empty helper list under "iterative" (a "global"
+                curve without helpers raises at its first query instead), on an
+                unknown interpolation or bootstrap name, on additional helpers
+                under "iterative", and on "Cubic" under "global".
         """
     @staticmethod
     def moving(settlement_days: builtins.int, calendar: time.Calendar, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, settings: itofin.Settings, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> PiecewiseYieldCurve:
@@ -3111,6 +3342,75 @@ class PiecewiseYieldCurve(YieldTermStructure):
         Raises:
             ItofinError: On the constructor's argument errors, and when a
                 relative helper is bound to other settings.
+        """
+    @staticmethod
+    def with_jumps(reference_date: time.Date, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> PiecewiseYieldCurve:
+        r"""
+        Build the fixed-reference curve with multiplicative discount jumps.
+
+        The helpers price off the jump-adjusted discount, and a jump quote
+        moving re-bootstraps the curve. Jumps apply strictly after their date
+        and combine with every bootstrap option, as in QuantLib.
+
+        Args:
+            reference_date (Date): The curve's reference date.
+            helpers (list[RateHelper]): The bootstrap instruments.
+            day_counter (DayCounter): The day count turning dates into times.
+            jumps (list[SimpleQuote]): The discount factors; the curve retains
+                them.
+            jump_dates (list[Date] | None): One date per jump. Empty selects
+                consecutive December 31 dates from the reference year.
+            interpolation (str): As in the constructor.
+            bootstrap (str): As in the constructor.
+            additional_helpers (list[RateHelper] | None): As in the constructor.
+            additional_penalties (Callable | None): As in the constructor.
+            additional_dates (Callable | None): As in the constructor.
+            additional_variables (SimpleQuoteVariables | None): As in the
+                constructor.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                bootstrap="iterative" only.
+
+        Returns:
+            PiecewiseYieldCurve: The jumped curve.
+
+        Raises:
+            ItofinError: On the constructor's argument errors, or a jumps and
+                jump_dates mismatch.
+        """
+    @staticmethod
+    def moving_with_jumps(settlement_days: builtins.int, calendar: time.Calendar, helpers: typing.Sequence[RateHelper], day_counter: time.DayCounter, settings: itofin.Settings, jumps: typing.Sequence[quotes.SimpleQuote], jump_dates: typing.Optional[typing.Sequence[time.Date]] = None, interpolation: builtins.str = 'LogLinear', bootstrap: builtins.str = 'iterative', additional_helpers: typing.Optional[typing.Sequence[RateHelper]] = None, *, additional_penalties: typing.Optional[typing.Callable[[list[float], list[float]], list[float]]] = None, additional_dates: typing.Optional[typing.Callable[[], list[time.Date]]] = None, additional_variables: typing.Optional[SimpleQuoteVariables] = None, iterative_options: typing.Optional[IterativeBootstrapOptions] = None) -> PiecewiseYieldCurve:
+        r"""
+        Build the moving-reference curve with multiplicative discount jumps.
+
+        The reference date follows the evaluation date of settings as in
+        moving; the jump dates stay fixed while their times follow the
+        reference date. Generated jump dates need the evaluation date at
+        construction and raise on an unset one, never falling back to a
+        system clock.
+
+        Args:
+            settlement_days (int): As in moving.
+            calendar (Calendar): As in moving.
+            helpers (list[RateHelper]): The bootstrap instruments.
+            day_counter (DayCounter): The day count turning dates into times.
+            settings (Settings): The settings supplying the evaluation date.
+            jumps (list[SimpleQuote]): As in with_jumps.
+            jump_dates (list[Date] | None): As in with_jumps.
+            interpolation (str): As in the constructor.
+            bootstrap (str): As in the constructor.
+            additional_helpers (list[RateHelper] | None): As in the constructor.
+            additional_penalties (Callable | None): As in the constructor.
+            additional_dates (Callable | None): As in the constructor.
+            additional_variables (SimpleQuoteVariables | None): As in the
+                constructor.
+            iterative_options (IterativeBootstrapOptions | None): Controls for
+                bootstrap="iterative" only.
+
+        Returns:
+            PiecewiseYieldCurve: The moving jumped curve.
+
+        Raises:
+            ItofinError: On the with_jumps argument errors.
         """
 
 @typing.final
@@ -4009,6 +4309,14 @@ class YieldTermStructure:
     Concrete curves subclass this and supply only their constructor; the whole
     query surface below is inherited.
     """
+    def jump_dates(self) -> builtins.list[time.Date]:
+        r"""
+        Return copied jump dates in constructor order.
+        """
+    def jump_times(self) -> builtins.list[builtins.float]:
+        r"""
+        Return jump times relative to the current reference date.
+        """
     def discount(self, t: builtins.float, extrapolate: builtins.bool = False) -> builtins.float:
         r"""
         Return the discount factor at year-fraction t.
@@ -4429,7 +4737,7 @@ class ZeroCurve(YieldTermStructure):
     The first date is the reference date. Finite in time: queries past the last
     node require enable_extrapolation() or extrapolate=True.
     """
-    def __init__(self, dates: typing.Sequence[time.Date], yields: typing.Sequence[builtins.float], day_counter: time.DayCounter, interpolation: builtins.str = 'Linear') -> None:
+    def __init__(self, dates: typing.Sequence[time.Date], yields: typing.Sequence[builtins.float], day_counter: time.DayCounter, interpolation: builtins.str = 'Linear', jumps: typing.Optional[typing.Sequence[quotes.SimpleQuote]] = None, jump_dates: typing.Optional[typing.Sequence[time.Date]] = None) -> None:
         r"""
         Build the curve over its (date, zero-rate) nodes.
 
@@ -4441,10 +4749,17 @@ class ZeroCurve(YieldTermStructure):
             day_counter (DayCounter): The day count turning dates into times.
             interpolation (str): "Linear", the shipped behaviour, or "Cubic",
                 the Kruger cubic factory, which is non-monotonic.
+            jumps (list[SimpleQuote] | None): Multiplicative discount jumps;
+                the curve retains them, and each applies strictly after its
+                date, so a jump on the reference date never applies. None
+                builds the jump-free curve.
+            jump_dates (list[Date] | None): One date per jump. None or empty
+                selects consecutive December 31 dates from the reference year.
 
         Raises:
-            ItofinError: On an unknown interpolation name, and on whatever the
-                core rejects about the nodes.
+            ItofinError: On an unknown interpolation name, on whatever the
+                core rejects about the nodes, and on a jumps and jump_dates
+                mismatch.
         """
 
 class ZeroInflationHelper:

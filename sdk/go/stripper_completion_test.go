@@ -100,7 +100,7 @@ func TestOptionletStripperCompletion(t *testing.T) {
 	}
 	wantStrikes := []float64{.039850314101546484, .039850293421813322, .039849613061160541}
 	wantPrices := []float64{.0010954230960266622, .0087581286819643916, .019163763351720011}
-	wantSpreads := []float64{.020000005236476808, .020000058319575627, .020000166175862723}
+	wantSpreads := []float64{.020000001831464633, .020000020399749262, .020000058111508685}
 	spreads := pricingMust(second.SpreadsVol())
 	for i := range prices {
 		pricingNear(t, atmStrikes[i], wantStrikes[i], 1e-12)
@@ -121,8 +121,24 @@ func TestOptionletStripperCompletion(t *testing.T) {
 	}
 	ratesOK(t, quotes[1].SetValue(.2))
 	pricingNear(t, pricingMust(second.ATMCapFloorPrices())[1], prices[1], 1e-12)
-	if _, err := s.OptionletStripper2(fixed, atm); err == nil {
-		t.Fatal("normal Stripper2 accepted")
+	normalQuotes := []*SimpleQuote{pricingMust(s.NewSimpleQuote(.0085)), pricingMust(s.NewSimpleQuote(.0095)), pricingMust(s.NewSimpleQuote(.01))}
+	normalCfg := atmCfg
+	normalCfg.Quotes = normalQuotes
+	normalAtm := pricingMust(s.CapFloorTermVolCurve(normalCfg))
+	normalSecond := pricingMust(s.OptionletStripper2(fixed, normalAtm))
+	normalPrices := pricingMust(normalSecond.ATMCapFloorPrices())
+	normalSpreads := pricingMust(normalSecond.SpreadsVol())
+	wantNormalPrices := []float64{.0011692297987195082, .010468295550614713, .024157893244076873}
+	wantNormalSpreads := []float64{.00042029937179690978, .001021158618511009, .0013211402105375077}
+	for i, strike := range pricingMust(normalSecond.ATMCapFloorStrikes()) {
+		pricingNear(t, strike, wantStrikes[i], 1e-12)
+		pricingNear(t, normalPrices[i], wantNormalPrices[i], 2.5e-8)
+		pricingNear(t, normalSpreads[i], wantNormalSpreads[i], 1e-7)
+	}
+	ratesOK(t, normalSecond.Close())
+	ratesOK(t, normalAtm.Close())
+	for _, q := range normalQuotes {
+		ratesOK(t, q.Close())
 	}
 	ratesOK(t, first.Close())
 	ratesOK(t, second.Close())

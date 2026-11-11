@@ -68,6 +68,7 @@ mod inflation;
 mod inflation_principal;
 mod iterativebootstrap;
 mod jointcurves;
+mod localvol;
 mod makeswaption;
 mod market;
 mod mc_variance_swap;
@@ -273,7 +274,11 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     crate::time::add_functions(&time)?;
 
     let quotes = PyModule::new(py, "quotes")?;
+    quotes.add_class::<market::PyQuote>()?;
     quotes.add_class::<PySimpleQuote>()?;
+    quotes.add_class::<market::PyDerivedQuote>()?;
+    quotes.add_class::<market::PyCompositeQuote>()?;
+    quotes.add_class::<market::PyCompositeOp>()?;
     quotes.add_class::<black_delta::PyDeltaType>()?;
     quotes.add_class::<black_delta::PyAtmType>()?;
 
@@ -288,6 +293,9 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     termstructures.add_class::<PyBlackVolTimeExtrapolation>()?;
     termstructures.add_class::<PyBlackVarianceCurve>()?;
     termstructures.add_class::<PyBlackVarianceSurface>()?;
+    termstructures.add_class::<localvol::PyLocalVolTermStructure>()?;
+    termstructures.add_class::<localvol::PyLocalVolSurface>()?;
+    termstructures.add_class::<localvol::PyLocalVolCurve>()?;
     termstructures.add_class::<PyRateHelper>()?;
     termstructures.add_class::<bma::PyBMASwapRateHelper>()?;
     termstructures.add_class::<jointcurves::PyIborIborBasisSwapRateHelper>()?;
@@ -497,6 +505,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pricingengines.add_class::<PyInterpolatingCpiCapFloorEngine>()?;
     pricingengines.add_class::<fdengine::PyFdScheme>()?;
     pricingengines.add_class::<fdengine::PyFdBlackScholesVanillaEngine>()?;
+    pricingengines.add_class::<fdengine::PyAnalyticDividendEuropeanEngine>()?;
     pricingengines.add_class::<PyMCEuropeanEngine>()?;
     pricingengines.add_class::<merton::PyJumpDiffusionEngine>()?;
     pricingengines.add_class::<bates::PyBatesEngine>()?;
@@ -703,6 +712,7 @@ fn itofin(m: &Bound<'_, PyModule>) -> PyResult<()> {
     risk.add_class::<risk::PySensitivityAnalysis>()?;
     risk.add_function(wrap_pyfunction!(risk::parallel_analysis, &risk)?)?;
     risk.add_function(wrap_pyfunction!(risk::bucket_analysis, &risk)?)?;
+    risk.add_function(wrap_pyfunction!(risk::bucket_analysis_matrix, &risk)?)?;
 
     let submodules = [
         ("time", &time),

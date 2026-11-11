@@ -103,6 +103,30 @@ impl FdBlackScholesVanillaEngine {
         )
     }
 
+    /// The engine of [`new`](FdBlackScholesVanillaEngine::new) paying the cash
+    /// `dividends` under the `Spot` model (`hpp:63-72`, `cpp:122-124`).
+    ///
+    /// The schedule is laid into the mesher bounds and rolled back through the
+    /// dividend step condition as given; dividends dated outside the option
+    /// life are dropped there, as in C++.
+    pub fn with_cash_dividends(
+        process: Shared<GeneralizedBlackScholesProcess>,
+        dividends: DividendSchedule,
+        t_grid: Size,
+        x_grid: Size,
+        damping_steps: Size,
+        scheme_desc: FdmSchemeDesc,
+    ) -> Self {
+        Self::with_params(
+            process,
+            dividends,
+            t_grid,
+            x_grid,
+            damping_steps,
+            scheme_desc,
+        )
+    }
+
     /// As [`with_params`](Self::with_params), with the C++ `localVol` /
     /// `illegalLocalVolOverwrite` arguments.
     #[allow(clippy::too_many_arguments)]

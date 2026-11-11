@@ -603,7 +603,9 @@
         "TestMCAmericanCachedOracle",
         "TestMCAmericanBasisAndLatestOnly",
         "TestMCBermudanQuantLibOracles",
-        "TestMCAmericanBasisQuantLibOracles"
+        "TestMCAmericanBasisQuantLibOracles",
+        "TestMCAmericanControlVariateOracle",
+        "TestMCVarianceReductionLifetimeAndRejections"
       ],
       "validation": "Go feature-subset tests passed with Go 1.27.1"
     },
@@ -616,7 +618,9 @@
       "source": "crates/itofin-py/python/itofin/pricingengines/__init__.pyi",
       "status": "implemented",
       "tests": [
-        "TestMCEuropeanOracleAndValidation"
+        "TestMCEuropeanOracleAndValidation",
+        "TestMCEuropeanBrownianBridgeOracle",
+        "TestMCVarianceReductionLifetimeAndRejections"
       ],
       "validation": "Go feature-subset tests passed with Go 1.27.1"
     },
@@ -629,7 +633,8 @@
       "source": "crates/itofin-py/python/itofin/pricingengines/__init__.pyi",
       "status": "implemented",
       "tests": [
-        "TestMCHestonCachedOracle"
+        "TestMCHestonCachedOracle",
+        "TestMCVarianceReductionLifetimeAndRejections"
       ],
       "validation": "Go feature-subset tests passed with Go 1.27.1"
     },
@@ -814,7 +819,7 @@
   "verification": {
     "command": "bash scripts/check_go_bindings.sh",
     "go_version": "go1.27.1",
-    "result": "PASS: integrated whole-package validation at b169fabe15d86623b24f3dd76489533d59a3a4da; see https://github.com/benbenbang/libitofin/actions/runs/35302175566.",
+    "result": "PASS: integrated whole-package validation at b169fabe15d86623b24f3dd76489533d59a3a4da; see https://github.com/bitbrew-dev/libitofin/actions/runs/35302175566.",
     "scope": "Runs native/C/C++ checks, baseline API audit, Go vet and all Go tests with race detection and cgocheck2, plus the portfolio example. Final results and the separate full-current audit belong in docs/go-bindings-followups.md."
   }
 }

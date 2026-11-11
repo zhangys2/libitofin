@@ -1,4 +1,4 @@
-"""Pure inherited bond/leg analytics pinned to independent QuantLib 1.43 oracles."""
+"""Pure inherited bond/leg analytics pinned to independent QuantLib 1.44 oracles."""
 
 import gc
 import json
@@ -21,6 +21,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 NATIVE = json.loads((FIXTURES / "bond_analytics_native.json").read_text())
 INCLUSION = json.loads((FIXTURES / "bond_analytics_inclusion_native.json").read_text())
 FROZEN = json.loads((FIXTURES / "bond_analytics_frozen_native.json").read_text())
+COMPOSITE = {"SimpleThenCompounded", "CompoundedThenSimple"}
+UNSUPPORTED = "is not supported for direct calculations: use the CashFlow methods"
 
 
 def close(value, expected):
@@ -53,15 +55,31 @@ def test_all_ten_routes_native_without_engine_or_evaluation_date(row):
     close(bond.dirty_price_from_curve(curve, settlement=settlement), expected["dirty_curve"])
     close(bond.clean_price_from_yield(row["yield_rate"], *args, settlement=settlement), expected["clean_yield"])
     close(bond.dirty_price_from_yield(row["yield_rate"], *args, settlement=settlement), expected["dirty_yield"])
-    close(bond.clean_price_at_z_spread(curve, row["z_spread"], mode, frequency, settlement=settlement), expected["clean_z_spread"])
-    close(bond.dirty_price_at_z_spread(curve, row["z_spread"], mode, frequency, settlement=settlement), expected["dirty_z_spread"])
+    spreads = row["compounding"] not in COMPOSITE
+    if spreads:
+        close(bond.clean_price_at_z_spread(curve, row["z_spread"], mode, frequency, settlement=settlement), expected["clean_z_spread"])
+        close(bond.dirty_price_at_z_spread(curve, row["z_spread"], mode, frequency, settlement=settlement), expected["dirty_z_spread"])
+    else:
+        for price_at_z_spread in [bond.clean_price_at_z_spread, bond.dirty_price_at_z_spread]:
+            with pytest.raises(ItofinError, match=UNSUPPORTED):
+                price_at_z_spread(curve, row["z_spread"], mode, frequency, settlement=settlement)
     for price_type, suffix in [(BondPriceType.Clean, "clean"), (BondPriceType.Dirty, "dirty")]:
         close(bond.yield_rate(expected[suffix+"_yield"], *args, price_type=price_type, settlement=settlement, accuracy=1e-12, max_evaluations=1000), expected["yield_from_"+suffix])
-        close(bond.z_spread(expected[suffix+"_z_spread"], curve, mode, frequency, price_type=price_type, settlement=settlement, accuracy=1e-12, max_evaluations=1000), expected["z_spread_from_"+suffix])
+        if spreads:
+            close(bond.z_spread(expected[suffix+"_z_spread"], curve, mode, frequency, price_type=price_type, settlement=settlement, accuracy=1e-12, max_evaluations=1000), expected["z_spread_from_"+suffix])
+        else:
+            with pytest.raises(ItofinError, match=UNSUPPORTED):
+                bond.z_spread(expected[suffix+"_curve"], curve, mode, frequency, price_type=price_type, settlement=settlement, accuracy=1e-12, max_evaluations=1000)
     leg = bond.cashflows()
     options = {"settlement_date": settlement, "npv_date": Date(*row["reference"]), "include_settlement_date_flows": False}
-    close(npv_at_z_spread(leg, curve, row["z_spread"], mode, frequency, settings, **options), expected["leg_npv_distinct_npv_date"])
-    close(z_spread(leg, expected["leg_npv_distinct_npv_date"], curve, mode, frequency, settings, accuracy=1e-12, max_evaluations=1000, **options), expected["leg_z_spread"])
+    if spreads:
+        close(npv_at_z_spread(leg, curve, row["z_spread"], mode, frequency, settings, **options), expected["leg_npv_distinct_npv_date"])
+        close(z_spread(leg, expected["leg_npv_distinct_npv_date"], curve, mode, frequency, settings, accuracy=1e-12, max_evaluations=1000, **options), expected["leg_z_spread"])
+    else:
+        with pytest.raises(ItofinError, match=UNSUPPORTED):
+            npv_at_z_spread(leg, curve, row["z_spread"], mode, frequency, settings, **options)
+        with pytest.raises(ItofinError, match=UNSUPPORTED):
+            z_spread(leg, expected["clean_curve"], curve, mode, frequency, settings, accuracy=1e-12, max_evaluations=1000, **options)
     close(bond.accrued_amount(settlement), expected["accrued"])
     close(bond.notional(settlement), expected["notional"])
     assert not bond.is_calculated()
