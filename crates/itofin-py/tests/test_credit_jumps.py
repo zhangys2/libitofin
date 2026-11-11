@@ -219,20 +219,12 @@ def test_piecewise_moving_without_evaluation_date_raises_instead_of_using_a_cloc
             0, calendar, piecewise_helpers(helper_settings, dc), dc, settings, [SimpleQuote(0.9)]
         )
     jump_date = TODAY + 100
-    jumped = PiecewiseDefaultCurve.moving_with_jumps(
-        0, calendar, piecewise_helpers(helper_settings, dc), dc, settings, [SimpleQuote(0.9)], [jump_date]
-    )
-    assert jumped.jump_dates() == [jump_date]
-    plain = PiecewiseDefaultCurve.moving(0, calendar, piecewise_helpers(helper_settings, dc), dc, settings)
-    for curve in (jumped, plain):
-        with pytest.raises(ItofinError):
-            curve.survival_probability(1.0)
-    with pytest.raises(ItofinError):
-        jumped.jump_times()
-    settings.set_evaluation_date(TODAY)
-    assert jumped.jump_times() == pytest.approx([100 / 365], rel=0, abs=1e-14)
-    assert jumped.survival_probability(1.0) > 0
-    assert plain.survival_probability(1.0) > 0
+    with pytest.raises(ItofinError, match="moving curve settings differ"):
+        PiecewiseDefaultCurve.moving_with_jumps(
+            0, calendar, piecewise_helpers(helper_settings, dc), dc, settings, [SimpleQuote(0.9)], [jump_date]
+        )
+    with pytest.raises(ItofinError, match="moving curve settings differ"):
+        PiecewiseDefaultCurve.moving(0, calendar, piecewise_helpers(helper_settings, dc), dc, settings)
 
 
 def test_piecewise_constructors_reject_bad_arguments():

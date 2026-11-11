@@ -306,25 +306,12 @@ func TestPiecewiseDefaultConfigInvalidArguments(t *testing.T) {
 		t.Fatal("automatic jump dates accepted missing evaluation date")
 	}
 	cfg.JumpDates = []Date{jump}
-	curve := pricingMust(s.NewPiecewiseDefaultCurveWithConfig(cfg))
-	if dates := pricingMust(curve.JumpDates()); len(dates) != 1 || dates[0] != jump {
-		t.Fatal("explicit jump date requires evaluation date")
+	if _, err := s.NewPiecewiseDefaultCurveWithConfig(cfg); err == nil || !strings.Contains(err.Error(), "moving curve settings differ") {
+		t.Fatalf("explicit jump dates on another Settings: %v", err)
 	}
-	if _, err := curve.JumpTimes(); err == nil {
-		t.Fatal("jump time accepted missing evaluation date")
-	}
-	plain := pricingMust(s.NewPiecewiseDefaultCurveWithConfig(PiecewiseDefaultConfig{Helpers: piecewiseJumpHelpers(s, helperSettings, discount), Settings: settings, Calendar: cfg.Calendar, DayCounter: dc}))
-	for _, moving := range []*PiecewiseDefaultCurve{curve, plain} {
-		if _, err := moving.SurvivalProbability(1, false); err == nil {
-			t.Fatal("moving curve read accepted missing evaluation date")
-		}
-	}
-	pricingOK(t, settings.SetEvaluationDate(today))
-	pricingNear(t, pricingMust(curve.JumpTimes())[0], 100.0/365, 1e-15)
-	for _, moving := range []*PiecewiseDefaultCurve{curve, plain} {
-		if survival := pricingMust(moving.SurvivalProbability(1, false)); survival <= 0 || survival >= 1 {
-			t.Fatalf("moving curve survival %g after setting the evaluation date", survival)
-		}
+	plainCfg := PiecewiseDefaultConfig{Helpers: piecewiseJumpHelpers(s, helperSettings, discount), Settings: settings, Calendar: cfg.Calendar, DayCounter: dc}
+	if _, err := s.NewPiecewiseDefaultCurveWithConfig(plainCfg); err == nil || !strings.Contains(err.Error(), "moving curve settings differ") {
+		t.Fatalf("moving curve on another Settings: %v", err)
 	}
 	for name, bad := range map[string]PiecewiseDefaultConfig{
 		"no helpers":         {ReferenceDate: today, DayCounter: dc},

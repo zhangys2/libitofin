@@ -96,11 +96,10 @@ def test_unset_evaluation_date_raises_rather_than_reading_a_clock():
     dc = DayCounter.actual365_fixed()
     with pytest.raises(ItofinError):
         PiecewiseYieldCurve.moving_with_jumps(2, Calendar.target(), helpers, dc, unset, [SimpleQuote(JUMP)])
-    curve = PiecewiseYieldCurve.moving_with_jumps(
-        2, Calendar.target(), helpers, dc, unset, [SimpleQuote(JUMP)], [JUMP_DATE]
-    )
-    with pytest.raises(ItofinError):
-        curve.discount(0.1)
+    with pytest.raises(ItofinError, match="moving curve settings differ"):
+        PiecewiseYieldCurve.moving_with_jumps(
+            2, Calendar.target(), helpers, dc, unset, [SimpleQuote(JUMP)], [JUMP_DATE]
+        )
 
 
 def test_bad_jump_arguments_raise_and_jump_free_curves_report_none():

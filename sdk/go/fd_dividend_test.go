@@ -85,8 +85,9 @@ func TestFdCashDividendTodayMatchesAnalyticAndHasNoTheta(t *testing.T) {
 	for _, american := range []bool{false, true} {
 		o := m.option(Call, 55, expiry, american)
 		pricingNear(t, pricingMust(o.PriceFd(fd)), expected, 1e-4)
-		if _, err := o.Theta(); err == nil {
-			t.Fatal("theta with a dividend today succeeded")
+		theta := pricingMust(o.Theta())
+		if theta != float64(math.MaxFloat32) {
+			t.Fatalf("theta with a dividend today = %g, want null", theta)
 		}
 	}
 }

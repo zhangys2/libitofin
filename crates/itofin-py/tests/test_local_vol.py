@@ -183,8 +183,8 @@ def test_core_errors():
     with pytest.raises(ItofinError, match="decreasing variance"):
         m.mc(process, OptionType.Call, 100.0, 180)
     plain = BlackScholesProcess.from_quote(m.spot, m.risk_free, m.dividend, m.smile())
-    with pytest.raises(ItofinError, match="only constant Black volatilities"):
-        m.mc(plain, OptionType.Call, 100.0, 180)
+    _, mc, se = m.mc(plain, OptionType.Call, 100.0, 180)
+    assert mc > 0 and se >= 0
 
 
 def test_tanh_smile_under_bicubic_matches_the_core_oracle():

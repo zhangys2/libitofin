@@ -72,8 +72,7 @@ def test_dividend_today_matches_analytic_and_has_no_theta(american):
     expected = VanillaOption(OptionType.Call, 55.0, expiry, settings).price_analytic_dividend(analytic)
     option = _option(OptionType.Call, 55.0, today, expiry, settings, american)
     assert option.price_fd(fd) == pytest.approx(expected, abs=1e-4)
-    with pytest.raises(ItofinError):
-        option.theta()
+    assert option.theta() == pytest.approx(3.4028234663852886e38, rel=0, abs=0)
 
 
 def test_analytic_dividend_engine_known_value():

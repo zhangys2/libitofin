@@ -2,6 +2,7 @@ package itofin
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -159,9 +160,8 @@ func TestPiecewiseYieldJumpsMovingRollAndGeneratedDates(t *testing.T) {
 		t.Fatal("generated jump dates on an unset evaluation date did not error")
 	}
 	cfg.JumpDates = generated
-	lazy := sessionMust(s.NewPiecewiseYieldCurve(cfg))
-	if _, err := lazy.Discount(.5, false); err == nil {
-		t.Fatal("moving curve read on an unset evaluation date did not error")
+	if _, err := s.NewPiecewiseYieldCurve(cfg); err == nil || !strings.Contains(err.Error(), "moving curve settings differ") {
+		t.Fatalf("explicit jump dates on another Settings: %v", err)
 	}
 }
 

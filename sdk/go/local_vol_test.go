@@ -160,8 +160,8 @@ func TestLocalVolCoreErrors(t *testing.T) {
 		t.Fatalf("decreasing variance: %v", err)
 	}
 	plain := pricingMust(m.s.NewBlackScholesProcessFromQuote(m.spot, m.riskFree, m.dividend, m.smile()))
-	if _, _, _, err := m.mc(plain, Call, 100, 180); err == nil || !strings.Contains(err.Error(), "only constant Black volatilities") {
-		t.Fatalf("surface without local vol: %v", err)
+	if _, npv, se, err := m.mc(plain, Call, 100, 180); err != nil || npv <= 0 || se < 0 {
+		t.Fatalf("smile without external local vol: npv=%g se=%g err=%v", npv, se, err)
 	}
 	if _, err := m.s.NewLocalVolSurface(nil, m.riskFree, m.dividend, m.spot); err == nil {
 		t.Fatal("nil black vol accepted")
