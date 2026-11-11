@@ -1,4 +1,4 @@
-"""QuantLib 1.43 independent normal/nonflat prices and optionlet lifecycle gates."""
+"""QuantLib 1.43 independent normal/nonflat prices and optionlet lifecycle gates (Stripper2 at v1.44)."""
 
 import gc
 
@@ -89,7 +89,7 @@ def test_switch_options_quote_errors_and_recovery():
     assert adapter.volatility(Period(3, "Years"), .04) == pytest.approx(original, abs=1e-12, rel=0)
 
 
-def test_stripper2_atm_curve_retention_updates_and_normal_rejection():
+def test_stripper2_atm_curve_retention_updates_and_normal_acceptance():
     settings, dc, curve, index, _, _, first = market(False)
     tenors = [Period(n, "Years") for n in (1, 3, 5)]
     quotes = [SimpleQuote(.20) for _ in tenors]
@@ -106,7 +106,7 @@ def test_stripper2_atm_curve_retention_updates_and_normal_rejection():
     strikes, prices = second.atm_cap_floor_strikes(), second.atm_cap_floor_prices()
     assert strikes == pytest.approx([.039850314101546484, .039850293421813322, .039849613061160541], abs=1e-12, rel=0)
     assert prices == pytest.approx([.0010954230960266622, .0087581286819643916, .019163763351720011], abs=2.5e-8, rel=0)
-    assert second.spreads_vol() == pytest.approx([.020000005236476808, .020000058319575627, .020000166175862723], abs=1e-7, rel=0)
+    assert second.spreads_vol() == pytest.approx([.020000001831464633, .020000020399749262, .020000058111508685], abs=1e-7, rel=0)
     for tenor, strike, target in zip(tenors, strikes, prices, strict=True):
         cap = CapFloor(CapFloorType.Cap, tenor, index, strike, Period(0, "Days"), settings)
         cap.set_black_engine(engine)
@@ -115,9 +115,14 @@ def test_stripper2_atm_curve_retention_updates_and_normal_rejection():
     assert second.atm_cap_floor_prices()[1] > prices[1]
     quotes[1].set_value(.20)
     assert second.atm_cap_floor_prices() == pytest.approx(prices, abs=1e-12, rel=0)
-    _, _, _, _, _, _, normal = market()
-    with pytest.raises(ItofinError):
-        OptionletStripper2(normal, atm)
+    normal_settings, _, _, _, _, _, normal = market()
+    normal_quotes = [SimpleQuote(v) for v in (.0085, .0095, .0100)]
+    normal_atm = CapFloorTermVolCurve.moving(0, Calendar.target(), BusinessDayConvention.Following,
+                                            tenors, normal_quotes, dc, normal_settings)
+    normal_second = OptionletStripper2(normal, normal_atm)
+    assert normal_second.atm_cap_floor_strikes() == pytest.approx(strikes, abs=1e-12, rel=0)
+    assert normal_second.atm_cap_floor_prices() == pytest.approx([.0011692297987195082, .010468295550614713, .024157893244076873], abs=2.5e-8, rel=0)
+    assert normal_second.spreads_vol() == pytest.approx([.00042029937179690978, .001021158618511009, .0013211402105375077], abs=1e-7, rel=0)
     del first, second, atm, quotes, fixed
     gc.collect()
     assert adapter.volatility(tenors[1], strikes[1]) > 0

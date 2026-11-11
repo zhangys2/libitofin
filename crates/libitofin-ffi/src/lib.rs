@@ -64,6 +64,8 @@ pub mod currency_api;
 pub mod curves_api;
 pub mod discrepancy_statistics_api;
 pub mod drawdown_api;
+#[cfg(test)]
+mod fd_dividend_tests;
 pub mod fd_engine_api;
 pub mod forward_api;
 pub mod fx_forward_api;
@@ -92,6 +94,9 @@ pub mod inflation_vol_api;
 pub mod inflation_volgrid_api;
 pub mod iterative_bootstrap_api;
 pub mod joint_curves_api;
+pub mod local_vol_api;
+#[cfg(test)]
+mod local_vol_api_tests;
 pub mod market_api;
 pub mod mc_api;
 pub mod merton_api;
@@ -100,10 +105,16 @@ pub mod models_api;
 pub mod optimize_api;
 pub mod options_api;
 pub mod overnight_futures_api;
+pub mod parameter_sensitivity_api;
+#[cfg(test)]
+mod parameter_sensitivity_api_tests;
 pub mod payment_inspection_api;
 pub mod performance_ratios_api;
 pub mod poisson_rng_api;
 pub mod prices_api;
+pub mod quotes_api;
+#[cfg(test)]
+mod quotes_api_tests;
 pub mod rates_api;
 pub mod rates_engines;
 pub mod rates_fra;
@@ -145,3 +156,5 @@ mod cap_calibration_tests;
 pub mod variance_swap_api;
 
 pub mod xccy_basis_api;
+
+pub mod yield_jumps_api;

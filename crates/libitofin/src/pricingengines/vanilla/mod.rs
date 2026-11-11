@@ -18,6 +18,7 @@
 //!   wrong price.
 
 pub mod analyticdigitalamericanengine;
+pub mod analyticdividendeuropeanengine;
 pub mod analytichestonengine;
 pub mod baroneadesiwhaleyengine;
 pub mod batesengine;
@@ -47,6 +48,7 @@ pub mod quantoengine;
 pub use analyticdigitalamericanengine::{
     AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine,
 };
+pub use analyticdividendeuropeanengine::AnalyticDividendEuropeanEngine;
 pub use analytichestonengine::HestonChf;
 pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
@@ -1612,6 +1614,8 @@ mod test_greeks {
     }
 }
 
+#[cfg(test)]
+mod mc_local_vol_oracle;
 #[cfg(test)]
 mod qmc_oracle;
 #[cfg(test)]

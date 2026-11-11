@@ -56,15 +56,15 @@ type BlackVarianceCurveConfig struct {
 	TimeExtrapolation     BlackVolTimeExtrapolation
 }
 
-func (s *Session) BlackVarianceCurve(cfg BlackVarianceCurveConfig) (*BlackVolTermStructure, error) {
+func (s *Session) varianceCurveArgs(cfg BlackVarianceCurveConfig) ([]C.int32_t, []C.double, C.int32_t, error) {
 	if cfg.DayCounter == nil {
-		return nil, fmt.Errorf("day counter is required")
+		return nil, nil, 0, fmt.Errorf("day counter is required")
 	}
 	if len(cfg.Dates) == 0 || len(cfg.Dates) != len(cfg.Volatilities) {
-		return nil, fmt.Errorf("dates and volatilities must have equal nonzero lengths")
+		return nil, nil, 0, fmt.Errorf("dates and volatilities must have equal nonzero lengths")
 	}
 	if err := sameSession(s, cfg.DayCounter.object); err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 	dates := make([]C.int32_t, len(cfg.Dates))
 	vols := make([]C.double, len(cfg.Volatilities))
@@ -76,8 +76,16 @@ func (s *Session) BlackVarianceCurve(cfg BlackVarianceCurveConfig) (*BlackVolTer
 	if cfg.ForceMonotoneVariance {
 		monotone = 1
 	}
+	return dates, vols, monotone, nil
+}
+
+func (s *Session) BlackVarianceCurve(cfg BlackVarianceCurveConfig) (*BlackVolTermStructure, error) {
+	dates, vols, monotone, err := s.varianceCurveArgs(cfg)
+	if err != nil {
+		return nil, err
+	}
 	var id C.uint64_t
-	err := s.invoke(func() error {
+	err = s.invoke(func() error {
 		var e C.ItofinError
 		return ffiError(C.itofin_black_variance_curve_new(s.ctx, C.int32_t(cfg.ReferenceDate.serial), &dates[0], &vols[0], C.size_t(len(dates)), C.uint64_t(cfg.DayCounter.id), monotone, C.int32_t(cfg.TimeExtrapolation), &id, &e), &e)
 	})
@@ -87,14 +95,26 @@ func (s *Session) BlackVarianceCurve(cfg BlackVarianceCurveConfig) (*BlackVolTer
 	return &BlackVolTermStructure{object{s, uint64(id)}}, nil
 }
 
+// SurfaceInterpolation selects the variance interpolator of a
+// BlackVarianceSurface; the zero value is the construction-default
+// SurfaceBilinear. Deferred (#624): strike extrapolation and non-Linear
+// BlackVarianceCurve interpolators.
+type SurfaceInterpolation int32
+
+const (
+	SurfaceBilinear SurfaceInterpolation = iota
+	SurfaceBicubic
+)
+
 type BlackVarianceSurfaceConfig struct {
 	ReferenceDate Date
 	Dates         []Date
 	Strikes       []float64
 	// Volatilities contains one row per strike, one column per expiry.
-	Volatilities [][]float64
-	DayCounter   *DayCounter
-	Calendar     *Calendar
+	Volatilities  [][]float64
+	DayCounter    *DayCounter
+	Calendar      *Calendar
+	Interpolation SurfaceInterpolation
 }
 
 func (s *Session) BlackVarianceSurface(cfg BlackVarianceSurfaceConfig) (*BlackVolTermStructure, error) {
@@ -131,7 +151,7 @@ func (s *Session) BlackVarianceSurface(cfg BlackVarianceSurfaceConfig) (*BlackVo
 	var id C.uint64_t
 	err := s.invoke(func() error {
 		var e C.ItofinError
-		return ffiError(C.itofin_black_variance_surface_new(s.ctx, C.int32_t(cfg.ReferenceDate.serial), &dates[0], C.size_t(len(dates)), &strikes[0], C.size_t(len(strikes)), &vols[0], C.size_t(len(vols)), C.uint64_t(cfg.DayCounter.id), C.uint64_t(cal), &id, &e), &e)
+		return ffiError(C.itofin_black_variance_surface_new_with_interpolation(s.ctx, C.int32_t(cfg.ReferenceDate.serial), &dates[0], C.size_t(len(dates)), &strikes[0], C.size_t(len(strikes)), &vols[0], C.size_t(len(vols)), C.uint64_t(cfg.DayCounter.id), C.uint64_t(cal), C.int32_t(cfg.Interpolation), &id, &e), &e)
 	})
 	if err != nil {
 		return nil, err

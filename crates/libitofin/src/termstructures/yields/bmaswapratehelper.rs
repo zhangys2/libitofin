@@ -14,7 +14,6 @@ use crate::termstructures::bootstraphelper::{
     BootstrapHelperBase, RateHelper, RelativeDateRateHelper,
 };
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
-use crate::time::calendars::jointcalendar::{JointCalendar, JointCalendarRule};
 use crate::time::{
     businessdayconvention::BusinessDayConvention as Bdc, calendar::Calendar, date::Date,
     daycounter::DayCounter, period::Period, schedule::MakeSchedule, timeunit::TimeUnit,
@@ -28,7 +27,7 @@ use std::{
 /// Fits the BMA forecast curve from fractions of a supplied Ibor forecast curve.
 pub struct BMASwapRateHelper {
     base: BootstrapHelperBase,
-    swap: RefCell<Option<BMASwap>>,
+    swap: RefCell<Option<SharedMut<BMASwap>>>,
     date_error: RefCell<Option<QlError>>,
     tenor: Period,
     settlement_days: u32,
@@ -112,6 +111,14 @@ impl BMASwapRateHelper {
         helper.try_initialize_dates()?;
         Ok(helper)
     }
+    /// A shared handle to the BMA swap underlying the helper (v1.44
+    /// `ratehelpers.hpp:315`, a `shared_ptr` there). Moving the evaluation date
+    /// rebuilds a new swap and leaves a held handle on the old one, so holding
+    /// it never blocks the rebuild. A borrow held on it while the helper prices
+    /// makes `implied_quote` return an error rather than panic.
+    pub fn swap(&self) -> Option<SharedMut<BMASwap>> {
+        self.swap.borrow().clone()
+    }
     /// Atomically rebuilds dates and stores errors until a subsequent successful update.
     pub fn try_initialize_dates(&self) -> QlResult<()> {
         let result = catch_unwind(AssertUnwindSafe(|| self.rebuild_dates())).unwrap_or_else(|_| {
@@ -123,7 +130,7 @@ impl BMASwapRateHelper {
         });
         match result {
             Ok((swap, earliest, maturity, latest)) => {
-                *self.swap.borrow_mut() = Some(swap);
+                *self.swap.borrow_mut() = Some(shared_mut(swap));
                 self.base.set_earliest_date(earliest);
                 self.base.set_maturity_date(maturity);
                 self.base.set_latest_relevant_date(latest);
@@ -138,6 +145,8 @@ impl BMASwapRateHelper {
             }
         }
     }
+    /// The earliest date counts the settlement days on the helper calendar
+    /// from the unadjusted evaluation date (v1.44 `ratehelpers.cpp:674-678`).
     fn rebuild_dates(&self) -> QlResult<(BMASwap, Date, Date, Date)> {
         let today = self
             .base
@@ -147,12 +156,8 @@ impl BMASwapRateHelper {
             today >= Date::min_date() + 14 && today <= Date::max_date() - 14,
             "BMA evaluation date outside supported range"
         );
-        let jc = JointCalendar::new(
-            vec![self.calendar.clone(), self.ibor_index.fixing_calendar()],
-            JointCalendarRule::JoinHolidays,
-        );
         let earliest = self.calendar.advance(
-            jc.adjust(today, Bdc::Following),
+            today,
             self.settlement_days as i32,
             TimeUnit::Days,
             Bdc::Following,
@@ -226,8 +231,12 @@ impl RateHelper for BMASwapRateHelper {
         }
         let curve = self.base.term_structure()?;
         curve.discount(0.0, true)?;
-        let mut slot = self.swap.borrow_mut();
-        let swap = slot.as_mut().expect("validated BMA helper has a swap");
+        let slot = self.swap.borrow();
+        let mut swap = slot
+            .as_ref()
+            .expect("validated BMA helper has a swap")
+            .try_borrow_mut()
+            .map_err(|_| QlError::new("BMA helper swap is borrowed", file!(), line!()))?;
         swap.swap_mut().deep_update();
         swap.fair_libor_fraction()
     }

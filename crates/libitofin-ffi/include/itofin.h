@@ -93,6 +93,15 @@ typedef double ItofinReal;
 #define ITOFIN_CONSTRAINT_INEQ 1
 
 /**
+ * Composite operation codes for `itofin_composite_quote_new`.
+ */
+#define ITOFIN_COMPOSITE_ADD 0
+
+#define ITOFIN_COMPOSITE_SUBTRACT 1
+
+#define ITOFIN_COMPOSITE_MULTIPLY 2
+
+/**
  * Opaque thread-confined owner of live native objects. Never copy this value.
  */
 typedef struct ItofinContext ItofinContext;
@@ -775,6 +784,21 @@ typedef struct ItofinFlatHazardConfig {
   uint64_t day_counter;
   uint64_t settings;
 } ItofinFlatHazardConfig;
+
+/**
+ * A zero settings handle selects the fixed reference date; a nonzero one
+ * selects a reference date settlement_days business days on calendar past
+ * the evaluation date of settings. settings must be the SAME instance the
+ * helpers carry: a different instance moves the curve's reference date while
+ * the helpers stay put.
+ */
+typedef struct ItofinPiecewiseDefaultConfig {
+  int32_t reference_date;
+  uint32_t settlement_days;
+  uint64_t calendar;
+  uint64_t day_counter;
+  uint64_t settings;
+} ItofinPiecewiseDefaultConfig;
 
 typedef struct ItofinCreditNode {
   int32_t date;
@@ -1588,7 +1612,11 @@ typedef struct ItofinBasisHelperConfig {
 
 /**
  * Presence bits: steps=1, steps/year=2, samples=4, tolerance=8, max_samples=16,
- * seed=32, antithetic=64, polynomial_order=128, calibration_samples=256.
+ * seed=32, antithetic=64, polynomial_order=128, calibration_samples=256,
+ * brownian_bridge=512, control_variate=1024. The two trailing fields were
+ * appended by #1364: C callers must rebuild against the regenerated header.
+ * The bridge applies to kinds 0 and 3 only; the control variate to American
+ * engines only. Both booleans require 0/1.
  */
 typedef struct McConfig {
   uint32_t present;
@@ -1601,6 +1629,8 @@ typedef struct McConfig {
   int32_t antithetic;
   size_t polynomial_order;
   size_t calibration_samples;
+  int32_t brownian_bridge;
+  int32_t control_variate;
 } McConfig;
 
 /**
@@ -1783,6 +1813,22 @@ typedef struct ItofinSofrFutureHelperConfig {
   int32_t pillar;
   int32_t custom_date;
 } ItofinSofrFutureHelperConfig;
+
+/**
+ * One parameter's first and, for a centered scheme, second derivative.
+ */
+typedef struct ItofinParameterSensitivity {
+  double first;
+  double second;
+  /**
+   * Zero for a skipped parameter, whose `first` is zero.
+   */
+  uint8_t has_first;
+  /**
+   * Zero for a skipped parameter or a one-sided scheme, whose `second` is zero.
+   */
+  uint8_t has_second;
+} ItofinParameterSensitivity;
 
 /**
  * Navigation policy for an erased leg. Date zero uses the evaluation date.
@@ -2156,6 +2202,21 @@ typedef struct ItofinXccyBasisSwapConfig {
   uint8_t has_spot_settlement_date;
   int32_t spot_settlement_date;
 } ItofinXccyBasisSwapConfig;
+
+/**
+ * A zero settings handle selects the fixed reference date; a nonzero one
+ * selects a reference date settlement_days business days on calendar past
+ * the evaluation date of settings. settings must be the SAME instance the
+ * helpers' index carries: a different instance moves the curve's reference
+ * date while the helpers stay put.
+ */
+typedef struct ItofinPiecewiseYieldConfig {
+  int32_t reference_date;
+  uint32_t settlement_days;
+  uint64_t calendar;
+  uint64_t day_counter;
+  uint64_t settings;
+} ItofinPiecewiseYieldConfig;
 
 #define ITOFIN_OPTIMIZE_CONVERGED_XTOL 0
 
@@ -3878,6 +3939,9 @@ int32_t itofin_ou_paths(const struct ItofinOuInput *input,
  * Parallel PV01: every quote bumped together. `kind`: 0 one-sided, 1 centered.
  * A null `reference_npv` computes the reference from the instruments; empty
  * `quantities` mean unit weights. Quotes are restored on success and error.
+ * Under a Monte Carlo engine each reprice carries sampling error that does not
+ * shrink with the shift, so the result is noisy; prefer an analytic, tree or
+ * finite-difference engine.
  * # Safety
  * Pointers and thread ownership must satisfy the crate-level C caller contract.
  */
@@ -3898,6 +3962,9 @@ int32_t itofin_sensitivity_parallel(struct ItofinContext *ctx,
  * Bucket PV01: each quote bumped alone, with one shared reference NPV. Writes
  * `quote_count` results to `out`, index-aligned with `quotes`. Same `kind`,
  * `quantities` and restore conventions as `itofin_sensitivity_parallel`.
+ * Under a Monte Carlo engine each reprice carries sampling error that does not
+ * shrink with the shift, so the result is noisy; prefer an analytic, tree or
+ * finite-difference engine.
  * # Safety
  * Pointers and thread ownership must satisfy the crate-level C caller contract.
  */
@@ -3912,6 +3979,33 @@ int32_t itofin_sensitivity_bucket(struct ItofinContext *ctx,
                                   int32_t kind,
                                   struct ItofinSensitivity *out,
                                   struct ItofinError *error);
+
+/**
+ * Bucket PV01 over a ragged matrix of quotes, each bumped alone, with one
+ * shared reference NPV. `quotes` holds the rows back to back (row-major) and
+ * `row_lengths` the `row_count` row sizes, which must sum to `quote_count`;
+ * empty rows are allowed, zero rows is an error. Writes `quote_count` results
+ * to `out` in the same row-major layout. Same `kind`, `quantities` and restore
+ * conventions as `itofin_sensitivity_parallel`.
+ * Under a Monte Carlo engine each reprice carries sampling error that does not
+ * shrink with the shift, so the result is noisy; prefer an analytic, tree or
+ * finite-difference engine.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_sensitivity_bucket_matrix(struct ItofinContext *ctx,
+                                         const uint64_t *quotes,
+                                         size_t quote_count,
+                                         const size_t *row_lengths,
+                                         size_t row_count,
+                                         const uint64_t *instruments,
+                                         size_t instrument_count,
+                                         const double *quantities,
+                                         size_t quantity_count,
+                                         double shift,
+                                         int32_t kind,
+                                         struct ItofinSensitivity *out,
+                                         struct ItofinError *error);
 
 /**
  * Generate `count` standard normal values with a deterministic nonzero seed.
@@ -3949,7 +4043,8 @@ int32_t itofin_heston_paths(const struct ItofinHestonInput *input,
 /**
  * Compute asset/benchmark beta from already aligned return samples.
  *
- * Requires 2-100,000 observations and equal asset/benchmark lengths. Null
+ * Requires at least two observations, equal asset/benchmark lengths and at
+ * most 25,000,000 rows (the covariance work bound). Null
  * weights with zero length selects unit weights; otherwise weights must have
  * one finite nonnegative entry per observation and a finite positive total.
  * Count-corrected covariance/benchmark variance uses all rows, including
@@ -4571,6 +4666,29 @@ int32_t itofin_piecewise_default_new(struct ItofinContext *ctx,
                                      uint64_t dc,
                                      uint64_t *out,
                                      struct ItofinError *error);
+
+/**
+ * The itofin_piecewise_default_new twin taking a fixed or moving reference
+ * date and multiplicative survival jumps. Empty dates generate year-end jump
+ * dates from the reference year, which on a moving curve needs the
+ * evaluation date already set: an unset one is an error, never a clock
+ * fallback.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_piecewise_default_with_jumps_new(struct ItofinContext *ctx,
+                                                const struct ItofinPiecewiseDefaultConfig *config,
+                                                const uint64_t *helpers,
+                                                size_t helper_count,
+                                                const uint64_t *jumps,
+                                                size_t jump_count,
+                                                const int32_t *dates,
+                                                size_t date_count,
+                                                uint64_t *out,
+                                                struct ItofinError *error);
 
 /**
  * # Safety
@@ -5195,6 +5313,42 @@ int32_t itofin_fd_black_scholes_engine_new(struct ItofinContext *ctx,
                                            struct ItofinFdConfig cfg,
                                            uint64_t *out,
                                            struct ItofinError *error);
+
+/**
+ * Construct an FD engine paying `n` cash dividends, one fixed `amounts[i]` on
+ * the serial date `dates[i]`, under the Spot model. Dividends outside the
+ * option life are dropped. Both arrays share the single length `n`; with
+ * `n` zero they may be null and the engine equals the plain constructor.
+ * The Escrowed cash-dividend model is not offered (deferred to #828).
+ * Attach with `itofin_option_set_engine` kind 2. A dividend dated on the
+ * evaluation date leaves theta unavailable: querying it is a core error.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have length `n`.
+ */
+int32_t itofin_fd_black_scholes_engine_with_cash_dividends(struct ItofinContext *ctx,
+                                                           uint64_t process,
+                                                           struct ItofinFdConfig cfg,
+                                                           const int32_t *dates,
+                                                           const double *amounts,
+                                                           size_t n,
+                                                           uint64_t *out,
+                                                           struct ItofinError *error);
+
+/**
+ * Construct the analytic European engine paying `n` fixed cash dividends,
+ * `amounts[i]` on the serial date `dates[i]`, retaining the process. Arrays
+ * may be null when `n` is zero. Attach with `itofin_option_set_engine` kind
+ * 2; pricing a non-European exercise is a core error.
+ * # Safety
+ * Follow the crate C caller contract; arrays must have length `n`.
+ */
+int32_t itofin_analytic_dividend_european_engine_new(struct ItofinContext *ctx,
+                                                     uint64_t process,
+                                                     const int32_t *dates,
+                                                     const double *amounts,
+                                                     size_t n,
+                                                     uint64_t *out,
+                                                     struct ItofinError *error);
 
 /**
  * # Safety
@@ -7599,6 +7753,51 @@ int32_t itofin_flat_forward_from_quote(struct ItofinContext *ctx,
                                        struct ItofinError *error);
 
 /**
+ * Dupire local volatility over a Black vol handle, risk-free and dividend
+ * curve handles and the session quote `spot`, which the surface observes.
+ * # Safety
+ * Follow the crate C caller contract; outputs must be live and non-overlapping.
+ */
+int32_t itofin_local_vol_surface_new(struct ItofinContext *ctx,
+                                     uint64_t black_vol,
+                                     uint64_t risk_free,
+                                     uint64_t dividend,
+                                     uint64_t spot,
+                                     uint64_t *out,
+                                     struct ItofinError *error);
+
+/**
+ * Local volatility of a linear Black variance curve built from the same
+ * arguments as `itofin_black_variance_curve_new` (extrapolation: 0 flat
+ * volatility, 1 use interpolator, 2 linear variance).
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_local_vol_curve_new(struct ItofinContext *ctx,
+                                   int32_t reference_date,
+                                   const int32_t *dates,
+                                   const double *vols,
+                                   size_t count,
+                                   uint64_t dc,
+                                   int32_t monotone,
+                                   int32_t extrapolation,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
+
+/**
+ * Local volatility at time `t` (a year fraction) and underlying level `strike`.
+ * # Safety
+ * Follow the crate C caller contract; outputs must be live and non-overlapping.
+ */
+int32_t itofin_local_vol_query(struct ItofinContext *ctx,
+                               uint64_t id,
+                               double t,
+                               double strike,
+                               int32_t extrapolate,
+                               double *out,
+                               struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -7667,6 +7866,41 @@ int32_t itofin_black_scholes_from_curves(struct ItofinContext *ctx,
                                          struct ItofinError *error);
 
 /**
+ * Build a process over the session quote `spot` and three term structures.
+ * The process links the quote, so setting it reprices dependent instruments.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_scholes_from_quote(struct ItofinContext *ctx,
+                                        uint64_t spot,
+                                        uint64_t risk_free,
+                                        uint64_t dividend,
+                                        uint64_t volatility,
+                                        uint64_t *out,
+                                        struct ItofinError *error);
+
+/**
+ * Build a process over the session quote `spot`, three term structures and
+ * an external local volatility, which replaces the one derived from `volatility`.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_black_scholes_with_local_vol(struct ItofinContext *ctx,
+                                            uint64_t spot,
+                                            uint64_t risk_free,
+                                            uint64_t dividend,
+                                            uint64_t volatility,
+                                            uint64_t local_vol,
+                                            uint64_t *out,
+                                            struct ItofinError *error);
+
+/**
  * # Safety
  * Pointers must be aligned, live and valid for their stated lengths. Outputs
  * must not overlap inputs or other outputs. Any context and its handles must
@@ -7699,7 +7933,7 @@ int32_t itofin_mc_engine_new(struct ItofinContext *ctx,
  * American/Bermudan engine with an explicit basis: 0 Monomial, 1 Laguerre,
  * 2 Hermite, 3 Hyperbolic, 6 Chebyshev2nd. Values 4 and 5 are unsupported.
  * Chebyshev2nd supports put payoffs only; call pricing returns an error.
- * The existing McConfig layout and default engine entrypoint are unchanged.
+ * Accepts the control variate (bit 1024) and rejects the bridge (bit 512).
  * # Safety
  * Outputs must be aligned, live and non-overlapping. Context and handles must
  * belong to the calling thread; serialize calls including destruction.
@@ -8438,6 +8672,49 @@ int32_t itofin_overnight_add_fixing(struct ItofinContext *ctx,
                                     struct ItofinError *error);
 
 /**
+ * Sensitivities of `parameters` to a bump of the SimpleQuote `quote`.
+ * `kind`: 0 one-sided, 1 centered. A null `reference_values` reads the
+ * reference values from the parameters before the bump; otherwise
+ * `reference_values` and `reference_has_value` each hold `reference_count`
+ * entries, which must equal `parameter_count`, and a zero `has_value` entry
+ * skips its parameter. Writes `parameter_count` results to `out`,
+ * index-aligned with `parameters`. A zero shift is an error. The quote is
+ * restored on success and error.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_parameter_sensitivity(struct ItofinContext *ctx,
+                                     uint64_t quote,
+                                     const uint64_t *parameters,
+                                     size_t parameter_count,
+                                     const double *reference_values,
+                                     const uint8_t *reference_has_value,
+                                     size_t reference_count,
+                                     double shift,
+                                     int32_t kind,
+                                     struct ItofinParameterSensitivity *out,
+                                     struct ItofinError *error);
+
+/**
+ * `itofin_parameter_sensitivity` for each SimpleQuote of `quotes`, bumped one
+ * at a time, with the reference values read once from the parameters. Writes
+ * `quote_count * parameter_count` results to `out`, row-major: one row of
+ * `parameter_count` results per quote. Same `kind`, shift and restore
+ * conventions as `itofin_parameter_sensitivity`.
+ * # Safety
+ * Pointers and thread ownership must satisfy the crate-level C caller contract.
+ */
+int32_t itofin_parameter_sensitivity_vector(struct ItofinContext *ctx,
+                                            const uint64_t *quotes,
+                                            size_t quote_count,
+                                            const uint64_t *parameters,
+                                            size_t parameter_count,
+                                            double shift,
+                                            int32_t kind,
+                                            struct ItofinParameterSensitivity *out,
+                                            struct ItofinError *error);
+
+/**
  * Read the leg's accrual span: field 0 start, 1 maturity. Empty legs fail.
  * # Safety
  * Pointers, non-overlap and thread ownership must satisfy the C caller contract.
@@ -8593,6 +8870,39 @@ int32_t itofin_interval_prices_normalize(const struct ItofinDatedIntervalPrice *
                                          size_t capacity,
                                          size_t *out_len,
                                          struct ItofinError *error);
+
+/**
+ * Build a quote worth `a * source + b`, recomputed when `source` changes.
+ * `source` may be a SimpleQuote or another dependent quote.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_derived_quote_new(struct ItofinContext *ctx,
+                                 uint64_t source,
+                                 double a,
+                                 double b,
+                                 uint64_t *out,
+                                 struct ItofinError *error);
+
+/**
+ * Build a quote combining `q1` and `q2` with `op`: 0 add, 1 subtract
+ * (`q1 - q2`), 2 multiply; any other code is an error. Pass the same quote
+ * twice for a square. Either source may be a dependent quote.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_composite_quote_new(struct ItofinContext *ctx,
+                                   uint64_t q1,
+                                   uint64_t q2,
+                                   int32_t op,
+                                   uint64_t *out,
+                                   struct ItofinError *error);
 
 /**
  * # Safety
@@ -9231,8 +9541,8 @@ int32_t itofin_scalar_payoff_info(struct ItofinContext *ctx,
  * The exact output length is `dimension` for 0-5 and `dimension * dimension`
  * for 6-7. Variance/covariance use the observation-count N/(N-1) correction,
  * counting zero-weight rows. On every error, the entire output is unchanged.
- * Dimensions are limited to 1-256, rows to 1-100,000, inputs to 1,000,000
- * values and covariance/correlation work to 100,000,000 row-coordinate pairs.
+ * Dimensions are limited to 1-256, rows must be positive and
+ * covariance/correlation work is limited to 100,000,000 row-coordinate pairs.
  *
  * # Safety
  *
@@ -9782,6 +10092,7 @@ int32_t itofin_black_variance_curve_new(struct ItofinContext *ctx,
                                         struct ItofinError *error);
 
 /**
+ * Bilinear surface; same as the `_with_interpolation` export with 0.
  * # Safety
  * Follow the crate C caller contract; arrays must have their stated lengths.
  */
@@ -9797,6 +10108,28 @@ int32_t itofin_black_variance_surface_new(struct ItofinContext *ctx,
                                           uint64_t cal,
                                           uint64_t *out,
                                           struct ItofinError *error);
+
+/**
+ * Interpolation: 0 Bilinear (the construction default), 1 Bicubic. The
+ * choice is made at construction because the handle is type-erased.
+ * Deferred: strike extrapolation and non-Linear `BlackVarianceCurve`
+ * interpolators (#624).
+ * # Safety
+ * Follow the crate C caller contract; arrays must have their stated lengths.
+ */
+int32_t itofin_black_variance_surface_new_with_interpolation(struct ItofinContext *ctx,
+                                                             int32_t reference_date,
+                                                             const int32_t *dates,
+                                                             size_t date_count,
+                                                             const double *strikes,
+                                                             size_t strike_count,
+                                                             const double *vols,
+                                                             size_t vol_count,
+                                                             uint64_t dc,
+                                                             uint64_t cal,
+                                                             int32_t interpolation,
+                                                             uint64_t *out,
+                                                             struct ItofinError *error);
 
 /**
  * Query kind: 0 vol, 1 variance, 2 forward vol, 3 forward variance,
@@ -10229,6 +10562,106 @@ int32_t itofin_xccy_basis_swap_currency(struct ItofinContext *ctx,
                                         int32_t side,
                                         uint64_t *out,
                                         struct ItofinError *error);
+
+/**
+ * The itofin_piecewise_curve_new twin taking a fixed or moving reference
+ * date, optional iterative options (null for the defaults, iterative
+ * algorithm only) and multiplicative discount jumps on SimpleQuote handles.
+ * Empty dates generate December 31 jump dates from the reference year,
+ * which on a moving curve needs the evaluation date already set: an unset
+ * one is an error, never a clock fallback.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_piecewise_curve_with_jumps_new(struct ItofinContext *ctx,
+                                              const struct ItofinPiecewiseYieldConfig *config,
+                                              const uint64_t *helpers,
+                                              size_t len,
+                                              int32_t kind,
+                                              int32_t algorithm,
+                                              const uint64_t *additional,
+                                              size_t additional_len,
+                                              const struct ItofinIterativeBootstrapOptions *options,
+                                              const uint64_t *jumps,
+                                              size_t jump_count,
+                                              const int32_t *dates,
+                                              size_t date_count,
+                                              uint64_t *out,
+                                              struct ItofinError *error);
+
+/**
+ * The itofin_node_curve_new twin taking multiplicative discount jumps on
+ * SimpleQuote handles, kinds as there. A jump applies strictly after its
+ * date, so one on the reference date never applies. Empty jump_dates
+ * generate December 31 jump dates from the year of dates[0]. As in
+ * itofin_node_curve_new, cal reaches the discount kinds (2, 3) only; the
+ * zero and forward kinds ignore it.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_node_curve_with_jumps_new(struct ItofinContext *ctx,
+                                         int32_t kind,
+                                         const int32_t *dates,
+                                         const double *values,
+                                         size_t len,
+                                         uint64_t dc,
+                                         uint64_t cal,
+                                         const uint64_t *jumps,
+                                         size_t jump_count,
+                                         const int32_t *jump_dates,
+                                         size_t jump_date_count,
+                                         uint64_t *out,
+                                         struct ItofinError *error);
+
+/**
+ * The itofin_global_curve_new twin taking a fixed or moving reference date
+ * and multiplicative discount jumps, dated as in
+ * itofin_piecewise_curve_with_jumps_new. Callback ownership follows
+ * itofin_global_curve_new, including on a jump argument error.
+ * # Safety
+ * As itofin_global_curve_new.
+ */
+int32_t itofin_global_curve_with_jumps_new(struct ItofinContext *ctx,
+                                           const struct ItofinPiecewiseYieldConfig *config,
+                                           const uint64_t *helpers,
+                                           size_t len,
+                                           int32_t kind,
+                                           const uint64_t *additional,
+                                           size_t additional_len,
+                                           uint64_t variables,
+                                           const struct ItofinBootstrapCallbacks *callbacks,
+                                           bool *adopted,
+                                           const uint64_t *jumps,
+                                           size_t jump_count,
+                                           const int32_t *dates,
+                                           size_t date_count,
+                                           uint64_t *out,
+                                           struct ItofinError *error);
+
+/**
+ * Jump dates in constructor order and their times against the current
+ * reference date, for any yield curve (a jump-free curve has none).
+ * Capacity zero queries the required length. A null `times` pointer
+ * requests dates only, without resolving the reference date.
+ * # Safety
+ * Pointers must be aligned, live and valid for their stated lengths. Outputs
+ * must not overlap inputs or other outputs. Any context and its handles must
+ * belong to the calling thread; serialize calls including destruction.
+ * See the crate-level C caller contract for lifetime requirements.
+ */
+int32_t itofin_curve_jumps(struct ItofinContext *ctx,
+                           uint64_t id,
+                           int32_t *dates,
+                           double *times,
+                           size_t capacity,
+                           size_t *count,
+                           struct ItofinError *error);
 
 #ifdef __cplusplus
 }  // extern "C"

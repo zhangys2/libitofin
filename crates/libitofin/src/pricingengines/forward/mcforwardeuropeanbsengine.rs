@@ -197,6 +197,7 @@ impl<RNG: McRngTraits> PricingEngine for McForwardEuropeanBsEngine<RNG> {
         simulation.calculate(
             path_gen,
             pricer,
+            None,
             self.required_tolerance,
             self.required_samples,
             self.max_samples,

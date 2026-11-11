@@ -11,10 +11,14 @@ use libitofin::termstructures::yields::FlatForward;
 use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
 use libitofin::time::frequency::Frequency;
 
+/// Any session quote, simple or dependent, read-only.
+pub(crate) fn any_quote(c: &Context, id: u64) -> BindingResult<Shared<dyn Quote>> {
+    c.get::<Shared<SimpleQuote>>(id)
+        .map(|q| q as Shared<dyn Quote>)
+        .or_else(|_| c.get::<Shared<dyn Quote>>(id))
+}
 pub(crate) fn quote(c: &Context, id: u64) -> BindingResult<Handle<dyn Quote>> {
-    Ok(Handle::new(
-        c.get::<Shared<SimpleQuote>>(id)? as Shared<dyn Quote>
-    ))
+    Ok(Handle::new(any_quote(c, id)?))
 }
 #[unsafe(no_mangle)]
 /// # Safety
@@ -47,11 +51,7 @@ pub unsafe extern "C" fn itofin_quote_value(
     out: *mut f64,
     error: *mut ItofinError,
 ) -> i32 {
-    unsafe {
-        with_context(ctx, error, |c| {
-            output(out, c.get::<Shared<SimpleQuote>>(id)?.value()?)
-        })
-    }
+    unsafe { with_context(ctx, error, |c| output(out, any_quote(c, id)?.value()?)) }
 }
 #[unsafe(no_mangle)]
 /// # Safety
@@ -139,6 +139,68 @@ pub unsafe extern "C" fn itofin_black_scholes_from_curves(
                 c.get::<Handle<dyn YieldTermStructure>>(dividend)?,
                 c.get::<Handle<dyn YieldTermStructure>>(risk_free)?,
                 c.get::<Handle<dyn BlackVolTermStructure>>(volatility)?,
+            ));
+            output(out, c.insert(process)?)
+        })
+    }
+}
+#[unsafe(no_mangle)]
+/// Build a process over the session quote `spot` and three term structures.
+/// The process links the quote, so setting it reprices dependent instruments.
+/// # Safety
+/// Pointers must be aligned, live and valid for their stated lengths. Outputs
+/// must not overlap inputs or other outputs. Any context and its handles must
+/// belong to the calling thread; serialize calls including destruction.
+/// See the crate-level C caller contract for lifetime requirements.
+pub unsafe extern "C" fn itofin_black_scholes_from_quote(
+    ctx: *mut Context,
+    spot: u64,
+    risk_free: u64,
+    dividend: u64,
+    volatility: u64,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let process = shared(GeneralizedBlackScholesProcess::new(
+                Handle::new(c.get::<Shared<SimpleQuote>>(spot)? as Shared<dyn Quote>),
+                c.get::<Handle<dyn YieldTermStructure>>(dividend)?,
+                c.get::<Handle<dyn YieldTermStructure>>(risk_free)?,
+                c.get::<Handle<dyn BlackVolTermStructure>>(volatility)?,
+            ));
+            output(out, c.insert(process)?)
+        })
+    }
+}
+#[unsafe(no_mangle)]
+/// Build a process over the session quote `spot`, three term structures and
+/// an external local volatility, which replaces the one derived from `volatility`.
+/// # Safety
+/// Pointers must be aligned, live and valid for their stated lengths. Outputs
+/// must not overlap inputs or other outputs. Any context and its handles must
+/// belong to the calling thread; serialize calls including destruction.
+/// See the crate-level C caller contract for lifetime requirements.
+pub unsafe extern "C" fn itofin_black_scholes_with_local_vol(
+    ctx: *mut Context,
+    spot: u64,
+    risk_free: u64,
+    dividend: u64,
+    volatility: u64,
+    local_vol: u64,
+    out: *mut u64,
+    error: *mut ItofinError,
+) -> i32 {
+    unsafe {
+        with_context(ctx, error, |c| {
+            check_ptr(out)?;
+            let process = shared(GeneralizedBlackScholesProcess::with_local_vol(
+                Handle::new(c.get::<Shared<SimpleQuote>>(spot)? as Shared<dyn Quote>),
+                c.get::<Handle<dyn YieldTermStructure>>(dividend)?,
+                c.get::<Handle<dyn YieldTermStructure>>(risk_free)?,
+                c.get::<Handle<dyn BlackVolTermStructure>>(volatility)?,
+                c.get::<crate::local_vol_api::LocalVol>(local_vol)?,
             ));
             output(out, c.insert(process)?)
         })

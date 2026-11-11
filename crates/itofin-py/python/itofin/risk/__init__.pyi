@@ -8,6 +8,7 @@ import typing
 __all__ = [
     "SensitivityAnalysis",
     "bucket_analysis",
+    "bucket_analysis_matrix",
     "parallel_analysis",
 ]
 
@@ -29,16 +30,34 @@ class SensitivityAnalysis:
     __hash__: typing.ClassVar[None]  # type: ignore[assignment]
 
 @typing.overload
-def bucket_analysis(quotes: typing.Mapping[builtins.str, quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.dict[builtins.str, tuple[builtins.float, builtins.float | None]]: ...
+def bucket_analysis(quotes: typing.Mapping[builtins.str, quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.dict[builtins.str, tuple[builtins.float, builtins.float | None]]: ...
 
 @typing.overload
-def bucket_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.list[tuple[builtins.float, builtins.float | None]]: ...
+def bucket_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.list[tuple[builtins.float, builtins.float | None]]: ...
 
-def parallel_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered, reference_npv: typing.Optional[builtins.float] = None) -> tuple[builtins.float, typing.Optional[builtins.float]]:
+def bucket_analysis_matrix(quotes: typing.Sequence[typing.Sequence[quotes.SimpleQuote]], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.list[builtins.list[tuple[builtins.float, typing.Optional[builtins.float]]]]:
+    r"""
+    Bucket PV01 over a ragged matrix of quotes, each bumped alone, against one
+    shared reference NPV.
+
+    Returns a list of lists of `(first, second)` shaped like `quotes`. Empty
+    rows are allowed and stay empty; an empty outer sequence is an error. Same
+    conventions as `parallel_analysis`.
+
+    Under a Monte Carlo engine each reprice carries sampling error that does not
+    shrink with the shift, so the result is noisy; prefer an analytic, tree or
+    finite-difference engine.
+    """
+
+def parallel_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered, reference_npv: typing.Optional[builtins.float] = None) -> tuple[builtins.float, typing.Optional[builtins.float]]:
     r"""
     Parallel PV01: every quote bumped together by `shift`.
 
     Returns `(first, second)`; `second` is None for `OneSide`. Empty
     `quantities` mean unit weights; a None `reference_npv` is computed from the
     instruments. A zero shift is an error. Quotes are restored on return.
+
+    Under a Monte Carlo engine each reprice carries sampling error that does not
+    shrink with the shift, so the result is noisy; prefer an analytic, tree or
+    finite-difference engine.
     """

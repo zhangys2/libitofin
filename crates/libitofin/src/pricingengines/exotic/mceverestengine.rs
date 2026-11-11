@@ -110,7 +110,7 @@ impl PricingEngine for MCEverestEngine {
         let disc = self.first.risk_free_rate().current_link()?.discount_date(last, false)?;
         let pricer = EverestMultiPathPricer { notional, guarantee, discount: disc };
         let mut sim: McSimulation<_, EverestMultiPathPricer> = McSimulation::new(self.antithetic, false);
-        sim.calculate(path_gen, pricer, self.tolerance, self.samples, self.max_samples)?;
+        sim.calculate(path_gen, pricer, None, self.tolerance, self.samples, self.max_samples)?;
         let value = sim.sample_accumulator()?.mean()?;
         let r = self.base.results_mut();
         r.instrument.value = Some(value);

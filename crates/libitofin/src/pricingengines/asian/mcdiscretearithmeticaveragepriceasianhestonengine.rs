@@ -293,6 +293,7 @@ impl<RNG: McRngTraits> PricingEngine for MCDiscreteArithmeticAveragePriceAsianHe
             simulation.calculate(
                 mpg,
                 path_pricer,
+                None,
                 self.required_tolerance,
                 self.required_samples,
                 self.max_samples,

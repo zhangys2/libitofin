@@ -1,6 +1,6 @@
 //! Yield curve construction and queries. All curves retain the same erased handle type.
 use crate::boundary::*;
-use crate::iterative_bootstrap_api::{CurveAnchor, anchored, iterative_curve};
+use crate::iterative_bootstrap_api::{CurveAnchor, CurveJumps, anchored, iterative_curve};
 use crate::time_api::{calendar, date, day_counter};
 use libitofin::handle::Handle;
 use libitofin::interestrate::Compounding;
@@ -10,6 +10,7 @@ use libitofin::math::interpolations::{
 };
 use libitofin::settings::Settings;
 use libitofin::shared::{Shared, shared};
+use libitofin::termstructures::iterativebootstrap::IterativeBootstrapOptions;
 use libitofin::termstructures::yields::{
     DiscountCurve, FlatForward, ForwardCurve, InterpolatedDiscountCurve, InterpolatedZeroCurve,
     PiecewiseYieldCurve, ZeroCurve,
@@ -84,32 +85,70 @@ pub unsafe extern "C" fn itofin_node_curve_new(
 ) -> i32 {
     unsafe {
         with_context(ctx, error, |c| {
-            check_ptr(out)?;
-            let dates = input_slice(dates, len)?
-                .iter()
-                .map(|v| date(*v))
-                .collect::<BindingResult<Vec<_>>>()?;
-            let values = input_slice(values, len)?.to_vec();
-            let dc = day_counter(c, dc)?;
-            let cal = if cal == 0 {
-                None
-            } else {
-                Some(calendar(c, cal)?)
-            };
-            let v: Shared<dyn YieldTermStructure> = match kind {
-                0 => shared(ZeroCurve::new(dates, values, dc, Linear)?),
-                1 => shared(InterpolatedZeroCurve::<Cubic>::new(
-                    dates, values, dc, Cubic,
-                )?),
-                2 => shared(DiscountCurve::new(dates, values, dc, cal)?),
-                3 => shared(InterpolatedDiscountCurve::<Cubic>::new(
-                    dates, values, dc, cal,
-                )?),
-                4 => shared(ForwardCurve::new(dates, values, dc, BackwardFlat)?),
-                _ => return Err(BindingError::invalid("unknown node curve kind")),
-            };
-            output(out, c.insert(Handle::new(v))?)
+            node_curve(c, kind, dates, values, len, dc, cal, None, out)
         })
+    }
+}
+/// Builds a node curve, with jumps when given; cal reaches the discount kinds only.
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn node_curve(
+    c: &mut Context,
+    kind: i32,
+    dates: *const i32,
+    values: *const f64,
+    len: usize,
+    dc: u64,
+    cal: u64,
+    jumps: Option<CurveJumps>,
+    out: *mut u64,
+) -> BindingResult<()> {
+    unsafe {
+        check_ptr(out)?;
+        let dates = input_slice(dates, len)?
+            .iter()
+            .map(|v| date(*v))
+            .collect::<BindingResult<Vec<_>>>()?;
+        let values = input_slice(values, len)?.to_vec();
+        let dc = day_counter(c, dc)?;
+        let cal = if cal == 0 {
+            None
+        } else {
+            Some(calendar(c, cal)?)
+        };
+        let v: Shared<dyn YieldTermStructure> = match (kind, jumps) {
+            (0, None) => shared(ZeroCurve::new(dates, values, dc, Linear)?),
+            (0, Some(CurveJumps(q, d))) => shared(ZeroCurve::with_jumps(
+                dates, values, dc, None, Linear, q, d,
+            )?),
+            (1, None) => shared(InterpolatedZeroCurve::<Cubic>::new(
+                dates, values, dc, Cubic,
+            )?),
+            (1, Some(CurveJumps(q, d))) => shared(InterpolatedZeroCurve::<Cubic>::with_jumps(
+                dates, values, dc, None, Cubic, q, d,
+            )?),
+            (2, None) => shared(DiscountCurve::new(dates, values, dc, cal)?),
+            (2, Some(CurveJumps(q, d))) => {
+                shared(DiscountCurve::with_jumps(dates, values, dc, cal, q, d)?)
+            }
+            (3, None) => shared(InterpolatedDiscountCurve::<Cubic>::new(
+                dates, values, dc, cal,
+            )?),
+            (3, Some(CurveJumps(q, d))) => shared(InterpolatedDiscountCurve::<Cubic>::with_jumps(
+                dates, values, dc, cal, q, d,
+            )?),
+            (4, None) => shared(ForwardCurve::new(dates, values, dc, BackwardFlat)?),
+            (4, Some(CurveJumps(q, d))) => shared(ForwardCurve::with_jumps(
+                dates,
+                values,
+                dc,
+                None,
+                BackwardFlat,
+                q,
+                d,
+            )?),
+            _ => return Err(BindingError::invalid("unknown node curve kind")),
+        };
+        output(out, c.insert(Handle::new(v))?)
     }
 }
 /// Query: 0 discount(time), 1 discount(date), 2 zero rate, 3 forward rate.
@@ -237,7 +276,18 @@ pub unsafe extern "C" fn itofin_piecewise_curve_new(
                 input_slice(helpers, len)?,
                 input_slice(additional, additional_len)?,
             );
-            piecewise_curve(c, anchor, h, dc, kind, algorithm, x, out)
+            piecewise_curve(
+                c,
+                anchor,
+                h,
+                dc,
+                kind,
+                algorithm,
+                x,
+                Default::default(),
+                CurveJumps::default(),
+                out,
+            )
         })
     }
 }
@@ -279,12 +329,23 @@ pub unsafe extern "C" fn itofin_piecewise_curve_new_moving(
                 input_slice(helpers, len)?,
                 input_slice(additional, additional_len)?,
             );
-            piecewise_curve(c, anchor, h, dc, kind, algorithm, x, out)
+            piecewise_curve(
+                c,
+                anchor,
+                h,
+                dc,
+                kind,
+                algorithm,
+                x,
+                Default::default(),
+                CurveJumps::default(),
+                out,
+            )
         })
     }
 }
 #[allow(clippy::too_many_arguments)]
-unsafe fn piecewise_curve(
+pub(crate) unsafe fn piecewise_curve(
     c: &mut Context,
     anchor: CurveAnchor,
     helpers: &[u64],
@@ -292,6 +353,8 @@ unsafe fn piecewise_curve(
     kind: i32,
     algorithm: i32,
     additional: &[u64],
+    options: IterativeBootstrapOptions,
+    jumps: CurveJumps,
     out: *mut u64,
 ) -> BindingResult<()> {
     unsafe {
@@ -316,16 +379,17 @@ unsafe fn piecewise_curve(
         };
         let (a, h) = (anchor, helpers);
         let v = match (kind, algorithm) {
-            (0..=7, 0) => iterative_curve(a, h, dc, kind, Default::default())?,
+            (0..=7, 0) => iterative_curve(a, h, dc, kind, options, jumps)?,
             (6, 2) => anchored::<ForwardRate, _, _>(
                 a,
                 h,
                 dc,
                 ConvexMonotone::default(),
                 LocalBootstrap::default(),
+                jumps,
             )?,
-            (0, 1) => anchored::<Discount, _, _>(a, h, dc, LogLinear, global())?,
-            (1, 1) => anchored::<Discount, _, _>(a, h, dc, Linear, global())?,
+            (0, 1) => anchored::<Discount, _, _>(a, h, dc, LogLinear, global(), jumps)?,
+            (1, 1) => anchored::<Discount, _, _>(a, h, dc, Linear, global(), jumps)?,
             _ => {
                 return Err(BindingError::invalid(
                     "unsupported curve/bootstrap combination",

@@ -1,17 +1,27 @@
-//! Bump-and-reprice sensitivities: parallel and bucket PV01 over SimpleQuotes.
+//! Bump-and-reprice sensitivities: parallel, bucket and matrix bucket PV01 over
+//! SimpleQuotes.
 //!
 //! Supported instruments: every bond (each runs the same refresh and
 //! floating-coupon preflight as `Bond.npv` once, before the first reprice),
-//! `VanillaSwap` and `OvernightIndexedSwap`. Deferred and rejected with
-//! `TypeError`: options, swaptions, cap/floors and CDS (#1322).
+//! `VanillaSwap`, `OvernightIndexedSwap`, `VanillaOption`, `Swaption`,
+//! `CapFloor` and `CreditDefaultSwap`, the last four repricing through plain
+//! `npv()`.
+//!
+//! Under a Monte Carlo engine each reprice carries sampling error that does not
+//! shrink with the shift, so the finite differences are noisy; prefer an
+//! analytic, tree or finite-difference engine for sensitivities.
 use crate::PyQlError;
 use crate::bonds::PyBond;
+use crate::capfloor::PyCapFloor;
+use crate::credit::PyCreditDefaultSwap;
 use crate::market::PySimpleQuote;
 use crate::ois::PyOvernightIndexedSwap;
+use crate::option::PyVanillaOption;
 use crate::swap::PyVanillaSwap;
+use crate::swaption::PySwaption;
 use libitofin::instrument::Instrument;
 use libitofin::quotes::SimpleQuote;
-use libitofin::risk::{self, DEFAULT_SHIFT, SensitivityAnalysis};
+use libitofin::risk::{self, DEFAULT_SHIFT, Rows, SensitivityAnalysis};
 use libitofin::shared::{Shared, SharedMut};
 use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
@@ -53,10 +63,18 @@ fn instruments(items: &[Bound<'_, PyAny>]) -> PyResult<Vec<SharedMut<dyn Instrum
                 Ok(swap.inner() as SharedMut<dyn Instrument>)
             } else if let Ok(ois) = item.extract::<PyRef<'_, PyOvernightIndexedSwap>>() {
                 Ok(ois.inner() as SharedMut<dyn Instrument>)
+            } else if let Ok(option) = item.extract::<PyRef<'_, PyVanillaOption>>() {
+                Ok(option.inner() as SharedMut<dyn Instrument>)
+            } else if let Ok(swaption) = item.extract::<PyRef<'_, PySwaption>>() {
+                Ok(swaption.inner() as SharedMut<dyn Instrument>)
+            } else if let Ok(cap) = item.extract::<PyRef<'_, PyCapFloor>>() {
+                Ok(cap.inner() as SharedMut<dyn Instrument>)
+            } else if let Ok(cds) = item.extract::<PyRef<'_, PyCreditDefaultSwap>>() {
+                Ok(cds.inner() as SharedMut<dyn Instrument>)
             } else {
                 Err(PyTypeError::new_err(
-                    "expected Bond, VanillaSwap or OvernightIndexedSwap; options, swaptions, \
-                     cap/floors and CDS are deferred (#1322)",
+                    "expected Bond, VanillaSwap, OvernightIndexedSwap, VanillaOption, Swaption, \
+                     CapFloor or CreditDefaultSwap",
                 ))
             }
         })
@@ -71,12 +89,16 @@ fn shared(quotes: &[PyRef<'_, PySimpleQuote>]) -> Vec<Shared<SimpleQuote>> {
 /// Returns `(first, second)`; `second` is None for `OneSide`. Empty
 /// `quantities` mean unit weights; a None `reference_npv` is computed from the
 /// instruments. A zero shift is an error. Quotes are restored on return.
+///
+/// Under a Monte Carlo engine each reprice carries sampling error that does not
+/// shrink with the shift, so the result is noisy; prefer an analytic, tree or
+/// finite-difference engine.
 #[gen_stub_pyfunction(module = "itofin.risk")]
 #[pyfunction]
 #[pyo3(signature = (quotes, instruments, quantities = Vec::new(), shift = DEFAULT_SHIFT, kind = PySensitivityAnalysis::Centered, reference_npv = None))]
 pub(crate) fn parallel_analysis(
     quotes: Vec<PyRef<'_, PySimpleQuote>>,
-    #[gen_stub(override_type(type_repr = "typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap]", imports = ("typing", "itofin.instruments")))]
+    #[gen_stub(override_type(type_repr = "typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap]", imports = ("typing", "itofin.instruments")))]
     instruments: Vec<Bound<'_, PyAny>>,
     quantities: Vec<f64>,
     shift: f64,
@@ -101,13 +123,17 @@ pub(crate) fn parallel_analysis(
 /// A sequence of quotes returns a list of `(first, second)` in quote order; a
 /// mapping of labels to quotes returns a dict with the same labels, in the
 /// mapping's order. Same conventions as `parallel_analysis`.
+///
+/// Under a Monte Carlo engine each reprice carries sampling error that does not
+/// shrink with the shift, so the result is noisy; prefer an analytic, tree or
+/// finite-difference engine.
 #[gen_stub_pyfunction(
     module = "itofin.risk",
     python_overload = r#"
     @typing.overload
-    def bucket_analysis(quotes: typing.Mapping[builtins.str, quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.dict[builtins.str, tuple[builtins.float, builtins.float | None]]: ...
+    def bucket_analysis(quotes: typing.Mapping[builtins.str, quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.dict[builtins.str, tuple[builtins.float, builtins.float | None]]: ...
     @typing.overload
-    def bucket_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.list[tuple[builtins.float, builtins.float | None]]: ...
+    def bucket_analysis(quotes: typing.Sequence[quotes.SimpleQuote], instruments: typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap], quantities: typing.Sequence[builtins.float] = [], shift: builtins.float = 0.0001, kind: SensitivityAnalysis = SensitivityAnalysis.Centered) -> builtins.list[tuple[builtins.float, builtins.float | None]]: ...
     "#,
     no_default_overload = true
 )]
@@ -150,4 +176,38 @@ pub(crate) fn bucket_analysis<'py>(
         }
         None => results.collect::<Vec<_>>().into_pyobject(py),
     }
+}
+
+/// Bucket PV01 over a ragged matrix of quotes, each bumped alone, against one
+/// shared reference NPV.
+///
+/// Returns a list of lists of `(first, second)` shaped like `quotes`. Empty
+/// rows are allowed and stay empty; an empty outer sequence is an error. Same
+/// conventions as `parallel_analysis`.
+///
+/// Under a Monte Carlo engine each reprice carries sampling error that does not
+/// shrink with the shift, so the result is noisy; prefer an analytic, tree or
+/// finite-difference engine.
+#[gen_stub_pyfunction(module = "itofin.risk")]
+#[pyfunction]
+#[pyo3(signature = (quotes, instruments, quantities = Vec::new(), shift = DEFAULT_SHIFT, kind = PySensitivityAnalysis::Centered))]
+pub(crate) fn bucket_analysis_matrix(
+    quotes: Vec<Vec<PyRef<'_, PySimpleQuote>>>,
+    #[gen_stub(override_type(type_repr = "typing.Sequence[instruments.Bond | instruments.VanillaSwap | instruments.OvernightIndexedSwap | instruments.VanillaOption | instruments.Swaption | instruments.CapFloor | instruments.CreditDefaultSwap]", imports = ("typing", "itofin.instruments")))]
+    instruments: Vec<Bound<'_, PyAny>>,
+    quantities: Vec<f64>,
+    shift: f64,
+    kind: PySensitivityAnalysis,
+) -> PyResult<Rows<(f64, Option<f64>)>> {
+    crate::bootstrap::ensure_quote_mutation_allowed()?;
+    let instruments = self::instruments(&instruments)?;
+    let rows: Vec<_> = quotes.iter().map(|row| shared(row)).collect();
+    let (first, second) =
+        risk::bucket_analysis_matrix(&rows, &instruments, &quantities, shift, kind.inner())
+            .map_err(PyQlError::from)?;
+    Ok(first
+        .into_iter()
+        .zip(second)
+        .map(|(first, second)| first.into_iter().zip(second).collect())
+        .collect())
 }
