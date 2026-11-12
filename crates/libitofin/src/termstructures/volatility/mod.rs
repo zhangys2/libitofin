@@ -33,6 +33,8 @@ mod blackvariancesurface;
 mod capfloor;
 mod carrmadanlocalvol;
 mod cubicsmile;
+mod essvi;
+mod essvi_calibrator;
 mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
@@ -59,6 +61,15 @@ pub use blackvariancesurface::{BlackVarianceSurface, Extrapolation};
 pub use capfloor::{CapFloorTermVolCurve, CapFloorTermVolSurface, CapFloorTermVolatilityStructure};
 pub use carrmadanlocalvol::CarrMadanLocalVolSurface;
 pub use cubicsmile::{CubicSmileSection, DEFAULT_SMILE_SMOOTHING, DEFAULT_STD_DEV_POINTS};
+pub use essvi_calibrator::{
+    calibrate, calibrate_warm, CalibrationPath, CalibrationResult, FallbackReasonCounts, Quote,
+    WarmOptions,
+};
+pub use essvi::{
+    butterfly_safe, butterfly_safe_with_safety, calendar_safe, calendar_safe_with_safety, detail,
+    mm_psi2_bound, mm_psi2_bound_with_safety, slice_total_variance, validate, MmBoundCallScope,
+    Slice, Surface,
+};
 pub use flatsmilesection::FlatSmileSection;
 pub use impliedvoltermstructure::ImpliedVolTermStructure;
 pub use inflation::{
