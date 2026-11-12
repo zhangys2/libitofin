@@ -4,7 +4,8 @@
 //! Transliteration of `ql-essvi` `cpp/essvi_surface.cpp`. The public types stay
 //! standalone: they do not implement [`SmileSection`](super::SmileSection).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 const MM_GRID_SIZE: usize = 257;
@@ -35,38 +36,39 @@ struct BoundEstimate {
 }
 
 thread_local! {
-    static ACTIVE_MM_BOUND_COUNTER: Cell<*mut u64> = const { Cell::new(std::ptr::null_mut()) };
+    static ACTIVE_MM_BOUND_COUNTER: Cell<Option<Rc<Cell<u64>>>> = const { Cell::new(None) };
     static CACHED_GRID_INDEX: Cell<i64> = const { Cell::new(-1) };
-    static ARBITRARY_WORKSPACE: Cell<Option<(f64, RhoWorkspace)>> = const { Cell::new(None) };
+    static ARBITRARY_WORKSPACE: RefCell<Option<(f64, RhoWorkspace)>> = const { RefCell::new(None) };
     static LAST_BOUND: Cell<Option<(f64, f64, BoundEstimate)>> = const { Cell::new(None) };
 }
 
 /// Pushes `counter` as the active Martini–Mingone call counter for this thread.
 pub struct MmBoundCallScope {
-    previous: *mut u64,
+    previous: Option<Rc<Cell<u64>>>,
 }
 
 impl MmBoundCallScope {
     /// Count bound evaluations that occur before this scope drops into `counter`.
-    pub fn new(counter: &mut u64) -> Self {
-        let previous = ACTIVE_MM_BOUND_COUNTER.with(|slot| slot.replace(counter));
+    pub fn new(counter: Rc<Cell<u64>>) -> Self {
+        let previous = ACTIVE_MM_BOUND_COUNTER.with(|slot| slot.replace(Some(Rc::clone(&counter))));
         Self { previous }
     }
 }
 
 impl Drop for MmBoundCallScope {
     fn drop(&mut self) {
-        ACTIVE_MM_BOUND_COUNTER.with(|slot| slot.set(self.previous));
+        let previous = self.previous.take();
+        ACTIVE_MM_BOUND_COUNTER.with(|slot| slot.set(previous));
     }
 }
 
 fn bump_mm_bound_counter() {
     ACTIVE_MM_BOUND_COUNTER.with(|slot| {
-        let counter = slot.get();
-        if !counter.is_null() {
-            // The pointer is the `MmBoundCallScope` caller's local, kept alive by that scope.
-            unsafe { *counter += 1 }
+        let current = slot.take();
+        if let Some(counter) = current.as_ref() {
+            counter.set(counter.get() + 1);
         }
+        slot.set(current);
     });
 }
 
@@ -102,35 +104,26 @@ fn fill_workspace(abs_rho: f64) -> RhoWorkspace {
     RhoWorkspace { abs_rho, s, points }
 }
 
-fn workspace_for(abs_rho: f64) -> RhoWorkspace {
+fn with_workspace<R>(abs_rho: f64, f: impl FnOnce(&RhoWorkspace) -> R) -> R {
     let grid_index = (abs_rho * 100.0).round() as i64;
     if (0..RHO_GRID_SIZE as i64).contains(&grid_index) {
         let grid_rho = grid_index as f64 / 100.0;
         if (abs_rho - grid_rho).abs() <= 1e-12 {
-            let cached = CACHED_GRID_INDEX.with(|slot| slot.get());
-            if cached == grid_index {
-                return workspace_cache()[grid_index as usize]
-                    .get()
-                    .copied()
-                    .expect("grid workspace is initialized with the cached index");
-            }
-            let workspace = workspace_cache()[grid_index as usize]
-                .get_or_init(|| fill_workspace(grid_rho))
-                .to_owned();
+            let workspace =
+                workspace_cache()[grid_index as usize].get_or_init(|| fill_workspace(grid_rho));
             CACHED_GRID_INDEX.with(|slot| slot.set(grid_index));
-            return workspace;
+            return f(workspace);
         }
     }
     ARBITRARY_WORKSPACE.with(|slot| {
-        let current = slot.get();
-        if let Some((cached_rho, workspace)) = current {
-            if cached_rho == abs_rho {
-                return workspace;
-            }
+        let mut slot = slot.borrow_mut();
+        let stale = slot
+            .as_ref()
+            .is_none_or(|(cached_rho, _)| *cached_rho != abs_rho);
+        if stale {
+            *slot = Some((abs_rho, fill_workspace(abs_rho)));
         }
-        let workspace = fill_workspace(abs_rho);
-        slot.set(Some((abs_rho, workspace)));
-        workspace
+        f(&slot.as_ref().expect("workspace was just filled").1)
     })
 }
 
@@ -227,21 +220,22 @@ fn bound_estimate(theta: f64, abs_rho: f64, safety: f64) -> BoundEstimate {
             grid_hint: 0.0,
         };
     }
-    let workspace = workspace_for(abs_rho);
-    if !(workspace.s > safety) {
-        return BoundEstimate {
-            safe: 0.0,
-            grid_hint: 0.0,
-        };
-    }
     if let Some((last_theta, last_rho, estimate)) = LAST_BOUND.with(|slot| slot.get()) {
         if theta == last_theta && abs_rho == last_rho {
             return estimate;
         }
     }
-    let estimate = refined_bound(theta, &workspace);
-    LAST_BOUND.with(|slot| slot.set(Some((theta, abs_rho, estimate))));
-    estimate
+    with_workspace(abs_rho, |workspace| {
+        if !(workspace.s > safety) {
+            return BoundEstimate {
+                safe: 0.0,
+                grid_hint: 0.0,
+            };
+        }
+        let estimate = refined_bound(theta, workspace);
+        LAST_BOUND.with(|slot| slot.set(Some((theta, abs_rho, estimate))));
+        estimate
+    })
 }
 
 /// One listed eSSVI expiry: forward ATM total variance `theta`, `psi = theta * phi`, and `rho`.
@@ -282,6 +276,14 @@ impl Surface {
         if slices.is_empty() {
             return Slice::default();
         }
+        if expiry.is_nan() {
+            return Slice {
+                expiry,
+                theta: f64::NAN,
+                psi: f64::NAN,
+                rho: f64::NAN,
+            };
+        }
         if slices.len() == 1 || expiry <= slices[0].expiry {
             return slices[0];
         }
@@ -289,6 +291,14 @@ impl Surface {
             return slices[slices.len() - 1];
         }
         let hi = slices.partition_point(|slice| slice.expiry < expiry);
+        if hi == 0 {
+            return Slice {
+                expiry,
+                theta: f64::NAN,
+                psi: f64::NAN,
+                rho: f64::NAN,
+            };
+        }
         let b = slices[hi];
         let a = slices[hi - 1];
         let u = (expiry - a.expiry) / (b.expiry - a.expiry);
@@ -398,7 +408,7 @@ pub fn validate(surface: &Surface) -> String {
 
 /// Test and calibrator helpers that mirror `essvi::detail` in the C++ tree.
 pub mod detail {
-    use super::{bump_mm_bound_counter, workspace_for, BoundPoint, RhoWorkspace, DEFAULT_SAFETY};
+    use super::{BoundPoint, DEFAULT_SAFETY, RhoWorkspace, bump_mm_bound_counter, with_workspace};
 
     /// Adaptive warm quote-cap test. `candidate_ratio` and `cold_ratio` are already weighted.
     pub fn passes_adaptive_weighted_quote_cap(
@@ -423,19 +433,16 @@ pub mod detail {
         if !(theta > safety) || !(abs_rho >= 0.0) || !(abs_rho < 1.0 - safety) {
             return 0.0;
         }
-        let workspace = workspace_for(abs_rho);
-        if !(workspace.s > safety) {
-            return 0.0;
-        }
-        let mut best = f64::INFINITY;
-        for point in &workspace.points {
-            best = best.min(grid_ratio_hint(theta, &workspace, point));
-        }
-        if best.is_finite() {
-            best
-        } else {
-            0.0
-        }
+        with_workspace(abs_rho, |workspace| {
+            if !(workspace.s > safety) {
+                return 0.0;
+            }
+            let mut best = f64::INFINITY;
+            for point in &workspace.points {
+                best = best.min(grid_ratio_hint(theta, workspace, point));
+            }
+            if best.is_finite() { best } else { 0.0 }
+        })
     }
 
     fn grid_ratio_hint(theta: f64, workspace: &RhoWorkspace, point: &BoundPoint) -> f64 {
@@ -482,10 +489,11 @@ pub mod detail {
             let l = lo * (hi / lo).powf(u);
             best = best.min(ratio(l));
         }
-        if best.is_finite() {
-            best
-        } else {
-            0.0
-        }
+        if best.is_finite() { best } else { 0.0 }
     }
 }
+
+pub use super::essvi_calibrator::{
+    CalibrationPath, CalibrationResult, FallbackReasonCounts, Quote, WarmOptions, calibrate,
+    calibrate_warm,
+};

@@ -11,9 +11,9 @@
     clippy::too_many_lines
 )]
 
-use libitofin::termstructures::volatility::{
-    butterfly_safe, calendar_safe, calibrate, calibrate_warm, slice_total_variance, validate,
-    CalibrationPath, CalibrationResult, Quote, Slice, Surface, WarmOptions,
+use libitofin::termstructures::volatility::essvi::{
+    CalibrationPath, CalibrationResult, Quote, Slice, Surface, WarmOptions, butterfly_safe,
+    calendar_safe, calibrate, calibrate_warm, slice_total_variance, validate,
 };
 
 #[link(name = "m")]
@@ -1015,10 +1015,12 @@ fn posterior_mode_preserves_quote_cap_boundary() {
         theta: prior.theta + 0.002,
         ..prior
     };
-    assert!(validate(&Surface {
-        slices: vec![target]
-    })
-    .is_empty());
+    assert!(
+        validate(&Surface {
+            slices: vec![target]
+        })
+        .is_empty()
+    );
     let quote_cap = 0.1137;
     let cap_boundary = 0.1;
     let narrow_half_width_fraction = (1.0 - 0.3) / (1.0 + 2.0 * cap_boundary);
@@ -1705,7 +1707,7 @@ fn dense_grid_violations(surface: &Surface) -> usize {
 }
 
 #[test]
-fn warm_scenario_quality_limits_hold_without_timing_budgets() {
+fn warm_scenario_stays_converged_and_arbitrage_free() {
     let scenarios = [
         WarmScenario::Quiet,
         WarmScenario::Normal,

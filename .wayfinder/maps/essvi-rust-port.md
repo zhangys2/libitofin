@@ -45,7 +45,7 @@ canonical or a hard-to-reverse trait choice needs an ADR.
 - [eSSVI in-scope C++ test assertions](../tickets/essvi-rust-test-assertions.md) — slice values and arbitrage checks are locked, and so are exact warm-path counts, bitwise covariance, and a scenario millisecond budget; CSV helper assertions are present but sit outside the Rust API.
 - [eSSVI reproduction strategy](../tickets/essvi-rust-reproduction-strategy.md) — transliterate the rho-window search, psi bounds, calendar-headroom retry, and warm-update state machine; Rust acceptance is the exact slice, path, age, count, covariance, and quote-quality assertions.
 - [eSSVI rho-search schedule](../tickets/essvi-rust-rho-search-schedule.md) — sequential rho search with the same windows and total bound-call accounting; the C++ worker pool stays out.
-- Implementation plan (2026-11-12) — [eSSVI Rust port plan](../../docs/essvi-rust-port-plan.md). Decision tickets are closed. Rust code still waits for a separate authorization.
+- Implementation plan (2026-11-12) — [eSSVI Rust port plan](../../docs/essvi-rust-port-plan.md). Decision tickets are closed. The authorized port lives under `termstructures/volatility`.
 
 ## Not yet specified
 

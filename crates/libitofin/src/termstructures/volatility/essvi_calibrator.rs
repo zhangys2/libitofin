@@ -9,11 +9,14 @@
 //! Transliteration of `ql-essvi` `cpp/calibrator.cpp`. Rho candidates run on the
 //! calling thread. Bound-call totals still match the C++ counter.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use super::essvi::detail::{
     mm_psi2_bound_search_hint_with_safety, passes_adaptive_weighted_quote_cap,
 };
 use super::essvi::{
-    mm_psi2_bound_with_safety, slice_total_variance, validate, MmBoundCallScope, Slice, Surface,
+    MmBoundCallScope, Slice, Surface, mm_psi2_bound_with_safety, slice_total_variance, validate,
 };
 
 const EPS: f64 = 1e-8;
@@ -356,6 +359,11 @@ struct FitOutput {
     calendar_headroom: f64,
 }
 
+/// Release `std::clamp`: `min(max(value, lo), hi)`, including an inverted interval.
+fn cpp_clamp(value: f64, lo: f64, hi: f64) -> f64 {
+    value.max(lo).min(hi)
+}
+
 fn finish_result(result: &mut CalibrationResult, bound_calls: u64) {
     result.objective_evaluations = result.iterations as u64;
     result.mm_bound_calls = bound_calls;
@@ -516,7 +524,7 @@ fn band_loss(slice: &Slice, quotes: &[PreparedQuote]) -> f64 {
             continue;
         }
         let variance = slice_total_variance(slice, quote.k);
-        let residual = variance - variance.clamp(quote.bid_variance, quote.ask_variance);
+        let residual = variance - cpp_clamp(variance, quote.bid_variance, quote.ask_variance);
         loss += quote.weight * quote.weight * residual * residual;
     }
     loss
@@ -967,7 +975,7 @@ fn loss_and_normal(
             jacobian[2] * parameter_scale[2],
         ];
         let variance = slice_total_variance(slice, k);
-        let residual = variance - variance.clamp(quote.bid_variance, quote.ask_variance);
+        let residual = variance - cpp_clamp(variance, quote.bid_variance, quote.ask_variance);
         loss += weight_squared * residual * residual;
         let score_weight = if prior_precision.is_some() {
             0.5 * evidence_scale
@@ -1397,7 +1405,11 @@ fn fit_slice_at_headroom(
             if evals >= local_evaluation_budget {
                 break;
             }
-            let rho = (warm_start.rho + RHO_OFFSETS[start_index]).clamp(rho_lower, rho_upper);
+            let rho = cpp_clamp(
+                warm_start.rho + RHO_OFFSETS[start_index],
+                rho_lower,
+                rho_upper,
+            );
             let mut candidate_bound = BoundMemo::new(true);
             let calendar = calendar_bounds(previous, expiry, rho, calendar_headroom);
             let psi_min = psi_lower(previous, rho).max(calendar.ratio_lower);
@@ -1422,7 +1434,7 @@ fn fit_slice_at_headroom(
             } else {
                 psi_min + psi_fraction * (psi_max - psi_min)
             };
-            let psi = psi_seed.clamp(psi_min, psi_max);
+            let psi = cpp_clamp(psi_seed, psi_min, psi_max);
             let mut current = anchored(expiry, &atm, rho, psi, previous, &mut candidate_bound);
             if !bound_safe(&current, &mut safe_bound) {
                 out.fallback_reason_counts.bound_check_failed += 1;
@@ -1485,10 +1497,16 @@ fn fit_slice_at_headroom(
                         break;
                     }
                     let mut trial = current;
-                    trial.theta = (current.theta + alpha * parameter_scale[0] * step[0])
-                        .clamp(theta_min, 5.0);
-                    trial.rho = (current.rho + alpha * parameter_scale[1] * step[1])
-                        .clamp(rho_lower, rho_upper);
+                    trial.theta = cpp_clamp(
+                        current.theta + alpha * parameter_scale[0] * step[0],
+                        theta_min,
+                        5.0,
+                    );
+                    trial.rho = cpp_clamp(
+                        current.rho + alpha * parameter_scale[1] * step[1],
+                        rho_lower,
+                        rho_upper,
+                    );
                     let trial_calendar =
                         calendar_bounds(previous, expiry, trial.rho, calendar_headroom);
                     let trial_psi_min =
@@ -1498,8 +1516,11 @@ fn fit_slice_at_headroom(
                         out.fallback_reason_counts.bound_check_failed += 1;
                         continue;
                     }
-                    trial.psi = (current.psi + alpha * parameter_scale[2] * step[2])
-                        .clamp(trial_psi_min, trial_psi_max);
+                    trial.psi = cpp_clamp(
+                        current.psi + alpha * parameter_scale[2] * step[2],
+                        trial_psi_min,
+                        trial_psi_max,
+                    );
                     if !bound_safe(&trial, &mut safe_bound) {
                         out.fallback_reason_counts.bound_check_failed += 1;
                         continue;
@@ -1630,7 +1651,7 @@ fn fit_slice_at_headroom(
         let calendar = calendar_bounds(previous, expiry, best.rho, calendar_headroom);
         for multiplier in THETA_MULTIPLIERS {
             let mut slice = best;
-            slice.theta = (best.theta * multiplier).clamp(theta_floor, 5.0);
+            slice.theta = cpp_clamp(best.theta * multiplier, theta_floor, 5.0);
             if !pair_safe(&slice, &mut safe_bound, &calendar) {
                 continue;
             }
@@ -1771,17 +1792,17 @@ pub fn calibrate(quotes: &[Quote]) -> CalibrationResult {
         path: CalibrationPath::Cold,
         ..CalibrationResult::default()
     };
-    let mut bound_calls = 0u64;
-    let _scope = MmBoundCallScope::new(&mut bound_calls);
+    let bound_calls = Rc::new(Cell::new(0u64));
+    let _scope = MmBoundCallScope::new(Rc::clone(&bound_calls));
     if has_invalid_included_weight(quotes) {
         out.error = "included quote weight must be finite and positive".to_owned();
-        finish_result(&mut out, bound_calls);
+        finish_result(&mut out, bound_calls.get());
         return out;
     }
     let groups = group_quotes(quotes);
     if groups.expiries.is_empty() {
         out.error = "no included quotes".to_owned();
-        finish_result(&mut out, bound_calls);
+        finish_result(&mut out, bound_calls.get());
         return out;
     }
     for (group_index, &expiry) in groups.expiries.iter().enumerate() {
@@ -1805,7 +1826,7 @@ pub fn calibrate(quotes: &[Quote]) -> CalibrationResult {
             } else {
                 part.result.error
             };
-            finish_result(&mut out, bound_calls);
+            finish_result(&mut out, bound_calls.get());
             return out;
         }
         let fitted = part.result.surface.slices[0];
@@ -1821,7 +1842,7 @@ pub fn calibrate(quotes: &[Quote]) -> CalibrationResult {
     }
     out.error = validate(&out.surface);
     out.converged = out.error.is_empty();
-    finish_result(&mut out, bound_calls);
+    finish_result(&mut out, bound_calls.get());
     out
 }
 
@@ -1948,20 +1969,20 @@ pub fn calibrate_warm(
         loss_tolerance: options.loss_tol,
         ..CalibrationResult::default()
     };
-    let mut bound_calls = 0u64;
-    let _scope = MmBoundCallScope::new(&mut bound_calls);
+    let bound_calls = Rc::new(Cell::new(0u64));
+    let _scope = MmBoundCallScope::new(Rc::clone(&bound_calls));
     if !options.quote_tol.is_finite()
         || options.quote_tol < 0.0
         || !options.quote_cap.is_finite()
         || options.quote_cap < 0.0
     {
         out.error = "invalid warm calibration options".to_owned();
-        finish_result(&mut out, bound_calls);
+        finish_result(&mut out, bound_calls.get());
         return out;
     }
     if has_invalid_included_weight(current_quotes) {
         out.error = "included quote weight must be finite and positive".to_owned();
-        finish_result(&mut out, bound_calls);
+        finish_result(&mut out, bound_calls.get());
         return out;
     }
 
@@ -1985,7 +2006,7 @@ pub fn calibrate_warm(
     };
     if current_groups.expiries.is_empty() {
         out.error = "no included quotes".to_owned();
-        finish_result(&mut out, bound_calls);
+        finish_result(&mut out, bound_calls.get());
         return out;
     }
 
@@ -2172,8 +2193,8 @@ pub fn calibrate_warm(
             .expect("local index has a warm start");
         plans[index].local_attempted = true;
         let local = {
-            let mut local_bound_calls = 0u64;
-            let _local_scope = MmBoundCallScope::new(&mut local_bound_calls);
+            let local_bound_calls = Rc::new(Cell::new(0u64));
+            let _local_scope = MmBoundCallScope::new(Rc::clone(&local_bound_calls));
             let fitted = fit_slice(
                 &plans[index].prepared,
                 expiry,
@@ -2182,7 +2203,7 @@ pub fn calibrate_warm(
                 None,
                 options.quote_cap,
             );
-            plans[index].local_bound_calls = local_bound_calls;
+            plans[index].local_bound_calls = local_bound_calls.get();
             plans[index].candidate_headroom = fitted.calendar_headroom;
             fitted.result
         };
@@ -2207,7 +2228,7 @@ pub fn calibrate_warm(
         if !plan.local.converged {
             out.fallback_reason_counts.infeasible_local_result += 1;
         }
-        bound_calls += plan.local_bound_calls;
+        bound_calls.set(bound_calls.get() + plan.local_bound_calls);
         out.iterations += plan.local.iterations;
     }
 
@@ -2241,7 +2262,7 @@ pub fn calibrate_warm(
                     plans[index].full_cold_reference.error.clone()
                 };
                 out.path = CalibrationPath::Fallback;
-                finish_result(&mut out, bound_calls);
+                finish_result(&mut out, bound_calls.get());
                 return out;
             }
             candidate = plans[index].full_cold_reference.surface.slices[0];
@@ -2267,8 +2288,8 @@ pub fn calibrate_warm(
                 if let Some(warm_start_slice) = warm_start {
                     out.local_solver_slices += 1;
                     let local = {
-                        let mut local_bound_calls = 0u64;
-                        let _local_scope = MmBoundCallScope::new(&mut local_bound_calls);
+                        let local_bound_calls = Rc::new(Cell::new(0u64));
+                        let _local_scope = MmBoundCallScope::new(Rc::clone(&local_bound_calls));
                         let fitted = fit_slice(
                             &plans[index].prepared,
                             expiry,
@@ -2277,8 +2298,8 @@ pub fn calibrate_warm(
                             None,
                             options.quote_cap,
                         );
-                        out.local_mm_bound_calls += local_bound_calls;
-                        bound_calls += local_bound_calls;
+                        out.local_mm_bound_calls += local_bound_calls.get();
+                        bound_calls.set(bound_calls.get() + local_bound_calls.get());
                         plans[index].candidate_headroom = fitted.calendar_headroom;
                         fitted
                     };
@@ -2410,14 +2431,14 @@ pub fn calibrate_warm(
                                     cpp_dtoa(expiry)
                                 );
                                 out.path = CalibrationPath::Fallback;
-                                finish_result(&mut out, bound_calls);
+                                finish_result(&mut out, bound_calls.get());
                                 return out;
                             }
                         } else if !plans[index].full_cold_reference.converged {
                             out.error =
                                 format!("cold quality reference failed at t={}", cpp_dtoa(expiry));
                             out.path = CalibrationPath::Fallback;
-                            finish_result(&mut out, bound_calls);
+                            finish_result(&mut out, bound_calls.get());
                             return out;
                         } else {
                             out.quality_checks += 1;
@@ -2475,7 +2496,7 @@ pub fn calibrate_warm(
                                 cpp_dtoa(expiry)
                             );
                             out.path = CalibrationPath::Fallback;
-                            finish_result(&mut out, bound_calls);
+                            finish_result(&mut out, bound_calls.get());
                             return out;
                         }
                     } else if !plans[index].full_cold_reference.converged {
@@ -2485,7 +2506,7 @@ pub fn calibrate_warm(
                             plans[index].full_cold_reference.error.clone()
                         };
                         out.path = CalibrationPath::Fallback;
-                        finish_result(&mut out, bound_calls);
+                        finish_result(&mut out, bound_calls.get());
                         return out;
                     } else {
                         candidate = plans[index].full_cold_reference.surface.slices[0];
@@ -2516,7 +2537,7 @@ pub fn calibrate_warm(
                         plans[index].full_cold_reference.error.clone()
                     };
                     out.path = CalibrationPath::Fallback;
-                    finish_result(&mut out, bound_calls);
+                    finish_result(&mut out, bound_calls.get());
                     return out;
                 }
                 candidate = plans[index].full_cold_reference.surface.slices[0];
@@ -2535,7 +2556,7 @@ pub fn calibrate_warm(
             } else {
                 CalibrationPath::Warm
             };
-            finish_result(&mut out, bound_calls);
+            finish_result(&mut out, bound_calls.get());
             return out;
         }
 
@@ -2544,8 +2565,8 @@ pub fn calibrate_warm(
                 let before = candidate;
                 let prior_mean = state_coordinates(&warm_start_slice);
                 let posterior = {
-                    let mut posterior_bound_calls = 0u64;
-                    let _posterior_scope = MmBoundCallScope::new(&mut posterior_bound_calls);
+                    let posterior_bound_calls = Rc::new(Cell::new(0u64));
+                    let _posterior_scope = MmBoundCallScope::new(Rc::clone(&posterior_bound_calls));
                     let fitted = fit_slice_with_prior(
                         &plans[index].prepared,
                         expiry,
@@ -2557,7 +2578,7 @@ pub fn calibrate_warm(
                         &plans[index].prior_precision,
                         plans[index].loss_scale,
                     );
-                    bound_calls += posterior_bound_calls;
+                    bound_calls.set(bound_calls.get() + posterior_bound_calls.get());
                     out.fallback_reason_counts.bound_check_failed +=
                         fitted.fallback_reason_counts.bound_check_failed;
                     out.iterations += fitted.iterations;
@@ -2655,7 +2676,7 @@ pub fn calibrate_warm(
     } else {
         CalibrationPath::Cold
     };
-    finish_result(&mut out, bound_calls);
+    finish_result(&mut out, bound_calls.get());
     out
 }
 

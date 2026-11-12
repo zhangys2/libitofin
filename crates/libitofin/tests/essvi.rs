@@ -1,10 +1,10 @@
 //! Acceptance tests transliterated from the in-scope `ql-essvi` C++ tests.
 //! CSV helper checks, `runtime_seconds`, and scenario millisecond budgets are omitted.
 
-use libitofin::termstructures::volatility::{
-    butterfly_safe, butterfly_safe_with_safety, calendar_safe, calibrate, calibrate_warm, detail,
-    mm_psi2_bound, slice_total_variance, validate, CalibrationPath, Quote, Slice, Surface,
-    WarmOptions,
+use libitofin::termstructures::volatility::essvi::{
+    CalibrationPath, Quote, Slice, Surface, WarmOptions, butterfly_safe,
+    butterfly_safe_with_safety, calendar_safe, calibrate, calibrate_warm, detail, mm_psi2_bound,
+    slice_total_variance, validate,
 };
 
 struct Noise {
@@ -254,6 +254,72 @@ fn calibration_keeps_fit_inside_every_bid_ask_band() {
     for quote in &quotes {
         assert!(fitted_inside_band(&result.surface, quote, 1e-5));
     }
+}
+
+#[test]
+fn slice_at_nan_expiry_does_not_panic() {
+    let surface = Surface {
+        slices: vec![
+            Slice {
+                expiry: 0.5,
+                theta: 0.04,
+                psi: 0.20,
+                rho: -0.4,
+            },
+            Slice {
+                expiry: 1.0,
+                theta: 0.07,
+                psi: 0.30,
+                rho: -0.35,
+            },
+        ],
+    };
+    let got = surface.slice_at(f64::NAN);
+    assert!(got.expiry.is_nan() && got.theta.is_nan() && got.psi.is_nan() && got.rho.is_nan());
+    assert!(surface.total_variance(f64::NAN, 0.0).is_nan());
+}
+
+#[test]
+fn crossed_quote_does_not_abort_calibration() {
+    let quotes = [
+        Quote::new("atm", 0.5, 100.0, 1.0, 100.0, 0.19, 0.21, 0.20),
+        Quote::new("crossed", 0.5, 100.0, 1.0, 110.0, 0.30, 0.20, 0.25),
+    ];
+    let result = calibrate(&quotes);
+    assert!(!result.error.is_empty() || result.converged);
+}
+
+#[test]
+fn predecessor_theta_above_five_does_not_abort() {
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    for i in 0..11 {
+        let k = -0.5 + i as f64 * 0.1;
+        let strike = 100.0 * k.exp();
+        first.push(Quote::new(
+            format!("a{i}"),
+            1.0,
+            100.0,
+            1.0,
+            strike,
+            2.25,
+            2.35,
+            2.30,
+        ));
+        second.push(Quote::new(
+            format!("b{i}"),
+            1.5,
+            100.0,
+            1.0,
+            strike,
+            0.19,
+            0.21,
+            0.20,
+        ));
+    }
+    first.append(&mut second);
+    let result = calibrate(&first);
+    let _ = result.converged;
 }
 
 #[test]
