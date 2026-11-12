@@ -33,6 +33,8 @@ mod blackvariancesurface;
 mod capfloor;
 mod carrmadanlocalvol;
 mod cubicsmile;
+pub mod essvi;
+mod essvi_calibrator;
 mod flatsmilesection;
 mod impliedvoltermstructure;
 mod inflation;
