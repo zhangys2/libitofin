@@ -84,6 +84,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.release_revision || inputs.release_tag }}
+      - name: set up Python 3.12
+        id: python_min
+        continue-on-error: ${{ matrix.optional }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python_arch }}
+          update-environment: false
       - name: set up Python
         id: python
         continue-on-error: ${{ matrix.optional }}
@@ -127,20 +135,24 @@ jobs:
         if: steps.build.outcome == 'success'
         continue-on-error: ${{ matrix.optional }}
         run: python scripts/check_release_attribution.py dist
-      - name: smoke test the wheel
+      - name: smoke test the wheel on Python 3.12 and 3.13
         id: smoke
-        if: steps.build.outcome == 'success'
+        if: steps.build.outcome == 'success' && steps.python_min.outcome == 'success'
         continue-on-error: ${{ matrix.optional }}
         env:
+          PYTHON_MIN: ${{ steps.python_min.outputs.python-path }}
           EXPECTED_VERSION: ${{ steps.version.outputs.version }}
           FAIL_LEG: ${{ inputs.fail_leg }}
           LEG: ${{ matrix.name }}
         run: |
           if [ "$FAIL_LEG" = "$LEG" ]; then echo "forced failure for $LEG"; exit 1; fi
-          python -m venv .venv
-          if [ -d .venv/Scripts ]; then py=.venv/Scripts/python; else py=.venv/bin/python; fi
-          "$py" -m pip install --only-binary=:all: dist/*.whl
-          "$py" -c 'import os, itofin; v = itofin.__version__; e = os.environ["EXPECTED_VERSION"]; assert e and v == e, f"itofin {v} != {e}"; print(v)'
+          "$PYTHON_MIN" -m venv .venv-py312
+          python -m venv .venv-py313
+          for envdir in .venv-py312 .venv-py313; do
+            if [ -d "$envdir/Scripts" ]; then py="$envdir/Scripts/python"; else py="$envdir/bin/python"; fi
+            "$py" -m pip install --only-binary=:all: dist/*.whl
+            "$py" -c 'import os, sys, itofin; v = itofin.__version__; e = os.environ["EXPECTED_VERSION"]; assert e and v == e, f"itofin {v} != {e}"; print(f"Python {sys.version.split()[0]}: itofin {v}")'
+          done
       - name: upload the built distributions
         if: steps.tag.outcome != 'failure' && steps.build.outcome == 'success' && steps.attribution.outcome == 'success' && steps.smoke.outcome == 'success'
         uses: actions/upload-artifact@v4
@@ -154,6 +166,7 @@ jobs:
           OPTIONAL: ${{ matrix.optional }}
           OUTCOMES: >-
             checkout=${{ steps.checkout.outcome }}
+            python_min=${{ steps.python_min.outcome }}
             python=${{ steps.python.outcome }}
             tag=${{ steps.tag.outcome }}
             version=${{ steps.version.outcome }}

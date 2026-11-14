@@ -322,8 +322,8 @@ jobs:
           pytest crates/itofin-py/tests example/btc-option-iv/tests -v
 
   python-bindings-required:
-    # Exact name branch protection expects (lowercase; not the matrix
-    # "python bindings (3.10)" / "(3.13)" variants, and not "Python bindings").
+    # Retain the lowercase aggregate check name separately from the
+    # "python bindings (3.12)" / "(3.13)" matrix checks.
     name: python bindings
     needs: python-bindings
     if: ${{ always() && !cancelled() }}

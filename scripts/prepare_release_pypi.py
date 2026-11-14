@@ -44,6 +44,8 @@ def filename_identity(name: str, version: str) -> str:
     wheel = re.fullmatch(r"itofin-([^-]+)-(?:\d[^-]*-)?([\w.]+)-([\w.]+)-([\w.]+)\.whl", name)
     if not wheel or wheel[1] != version:
         raise ValueError(f"distribution filename does not match itofin {version}: {name}")
+    if wheel[2] != "cp312" or wheel[3] != "abi3":
+        raise ValueError(f"wheel must use the cp312-abi3 tag: {name}")
     return platform_identity(wheel[4])
 
 
@@ -51,6 +53,8 @@ def verify_metadata(data: bytes, version: str) -> None:
     metadata = BytesParser().parsebytes(data)
     if metadata.get_all("Name") != ["itofin"] or metadata.get_all("Version") != [version]:
         raise ValueError("distribution metadata does not match the release name and version")
+    if metadata.get_all("Requires-Python") != [">=3.12"]:
+        raise ValueError("distribution must declare Requires-Python: >=3.12")
 
 
 def artifact_identity(path: Path, version: str) -> str:
