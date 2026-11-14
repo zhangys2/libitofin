@@ -23,7 +23,7 @@ cargo add libitofin
 
 ### Python
 
-Requires Python 3.10 or newer.
+Requires Python 3.12 or newer.
 
 ```sh
 pip install itofin

@@ -27,7 +27,7 @@ PLATFORMS = (
 
 
 def write_wheel(directory, platform, *, name="itofin", version=VERSION, filename_version=VERSION, extra_metadata=False):
-    path = directory / f"itofin-{filename_version}-cp310-abi3-{platform}.whl"
+    path = directory / f"itofin-{filename_version}-cp312-abi3-{platform}.whl"
     with zipfile.ZipFile(path, "w") as archive:
         metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
         archive.writestr(f"itofin-{filename_version}.dist-info/METADATA", metadata)
@@ -214,7 +214,7 @@ class PreparationTests(unittest.TestCase):
 
     def test_rebuilt_distribution_filename_conflict_fails_closed(self):
         remote = self.remote()
-        remote["urls"][0]["filename"] = f"itofin-{VERSION}-cp310-abi3-macosx_12_0_arm64.whl"
+        remote["urls"][0]["filename"] = f"itofin-{VERSION}-cp312-abi3-macosx_12_0_arm64.whl"
         self.reject(remote, "different distribution filenames")
 
     def test_wrong_local_name_or_version_is_rejected_before_network(self):
