@@ -146,15 +146,17 @@ Notes: market data defaults to **live** (needs an OPRA subscription). IBKR's
 free delayed bid/ask ticks have receive timestamps, not quote-observation
 timestamps, so delayed IVs are withheld rather than priced at an invented
 time. Fresh live quotes are inverted with Black-76 (discount = 1), using the
-actual IBKR-reported option session close, including early closes; if session
-hours are unavailable, the feed stops rather than guessing. It also stops below
-30 seconds to expiry. The **forward comes from put-call parity**, `F = K + C_mid - P_mid`,
+actual IBKR-reported option session close, including early closes. Expiries with
+missing session hours are skipped; if no later expiry has verified hours, the
+feed fails closed rather than guessing. It also stops below 30 seconds to expiry. The **forward comes from put-call parity**, `F = K + C_mid - P_mid`,
 the median of the tightest (up to five) pairs among the seven strikes nearest
 the money, which are subscribed on both rights. If fewer than two clean pairs
 exist, or the result is more than 2% from spot, it falls back to spot and the
 header says so. Parity mids carry roughly half a bid-ask spread of noise, so
-the forward can jitter by about a point. Only SPXW chains are used, and the
-earliest unexpired expiration is selected.
+the forward can jitter by about a point. The strike-window control uses SPX
+points; for SPY it applies one tenth of that range (the default ±80 becomes ±8).
+Only SPXW chains are used, and the earliest expiry with verified session hours
+is selected.
 The feed has not been exercised against a live gateway in CI.
 
 The filter follows the Rust `KalmanSmileSection` robustness rules: quotes beyond

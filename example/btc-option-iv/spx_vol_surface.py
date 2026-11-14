@@ -154,7 +154,7 @@ def _(mo):
         stop=160,
         step=5,
         value=80,
-        label="Strike Window (±pts)",
+        label="Strike Window (±SPX pts; SPY ÷10)",
     )
     spx_process_rate = mo.ui.slider(
         start=0.01,

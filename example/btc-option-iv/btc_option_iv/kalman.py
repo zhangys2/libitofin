@@ -22,6 +22,7 @@ _KNOT_ARRAY = np.asarray(KNOTS)
 _IDENTITY = np.eye(9)
 _BASIS = CubicSpline(KNOTS, _IDENTITY, bc_type="natural", extrapolate=False)
 MAX_QUOTE_AGE_MS = 10_000
+_MAX_FUTURE_QUOTE_SKEW_MS = 1_000
 MAX_OVERHANG = 0.25
 MAX_END_SLOPE = 0.10
 NIS_ADAPT_CLAMP = (0.1, 10.0)
@@ -453,7 +454,7 @@ class FilterManager:
         groups = {}
         for o in self._quotes.get(expiry, {}).values():
             age = now_ms - o.timestamp_ms
-            if -1000 <= age <= MAX_QUOTE_AGE_MS and o.mid_iv > 0:
+            if -_MAX_FUTURE_QUOTE_SKEW_MS <= age <= MAX_QUOTE_AGE_MS and o.mid_iv > 0:
                 groups.setdefault(o.strike, []).append(o)
         selected = []
         for strike, candidates in sorted(groups.items()):

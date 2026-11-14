@@ -160,6 +160,110 @@ def test_watchdog_expires_during_control_frame_traffic(monkeypatch, tmp_path):
         asyncio.run(capture._session())
 
 
+def test_default_book_snapshot_and_empty_trade_batch_refresh_watchdog_schema():
+    book = {
+        "method": "subscription",
+        "params": {
+            "channel": "book.BTC-PERPETUAL.none.10.100ms",
+            "data": {
+                "timestamp": TS_MS,
+                "instrument_name": "BTC-PERPETUAL",
+                "bids": [[67122.0, 22560.0]],
+                "asks": [[67122.5, 26230.0]],
+            },
+        },
+    }
+    assert capture_run._is_market_data(book)
+    assert capture_run._is_market_data(
+        {"method": "subscription", "params": {"channel": "trades.BTC-PERPETUAL.100ms", "data": []}}
+    )
+
+
+def test_session_routes_default_book_snapshot_and_resets_watchdog(monkeypatch, tmp_path):
+    capture, _ = _prepare_session(monkeypatch, tmp_path)
+    now = _fake_clock(monkeypatch)
+    frame = {
+        "method": "subscription",
+        "params": {
+            "channel": "book.BTC-PERPETUAL.none.10.100ms",
+            "data": {
+                "timestamp": TS_MS,
+                "instrument_name": "BTC-PERPETUAL",
+                "bids": [[67122.0, 22560.0]],
+                "asks": [[67122.5, 26230.0]],
+            },
+        },
+    }
+    receives = iter([json.dumps(frame), None, None, None, None])
+
+    async def receive(awaitable, timeout):
+        awaitable.close()
+        now[0] += 10.0
+        return next(receives)
+
+    monkeypatch.setattr(capture_run.asyncio, "wait_for", receive)
+    monkeypatch.setattr(capture_run, "_log", lambda message: None)
+    with pytest.raises(TimeoutError, match="no market data"):
+        asyncio.run(capture._session())
+    assert capture.router.counts["perp_book"] == 1
+    assert now[0] == 50.0
+
+
+def test_malformed_book_and_control_frames_do_not_refresh_watchdog():
+    triple_book = {
+        "method": "subscription",
+        "params": {
+            "channel": "book.BTC-PERPETUAL.none.10.100ms",
+            "data": {
+                "timestamp": TS_MS,
+                "instrument_name": "BTC-PERPETUAL",
+                "bids": [["new", 67122.0, 22560.0]],
+                "asks": [],
+            },
+        },
+    }
+    assert not capture_run._is_market_data(triple_book)
+    assert not capture_run._is_market_data({"method": "heartbeat", "params": {"type": "heartbeat"}})
+    assert capture_run._rejection_category(triple_book) == "book"
+    assert capture_run._rejection_category({"method": "heartbeat"}) is None
+
+
+def test_session_logs_rejected_market_data_without_resetting_watchdog(monkeypatch, tmp_path):
+    capture, _ = _prepare_session(monkeypatch, tmp_path)
+    now = _fake_clock(monkeypatch)
+    bad = {
+        "method": "subscription",
+        "params": {
+            "channel": "book.BTC-PERPETUAL.none.10.100ms",
+            "data": {"timestamp": TS_MS, "instrument_name": "BTC-PERPETUAL", "bids": [["new", 1, 2]], "asks": []},
+        },
+    }
+    logs = []
+
+    async def receive(awaitable, timeout):
+        awaitable.close()
+        now[0] += 10.0
+        return json.dumps(bad)
+
+    monkeypatch.setattr(capture_run.asyncio, "wait_for", receive)
+    monkeypatch.setattr(capture_run, "_log", logs.append)
+    with pytest.raises(TimeoutError, match="no market data"):
+        asyncio.run(capture._session())
+    assert len(logs) == 4
+    assert all("rejected market-data frames={'book': 1}" in entry for entry in logs)
+
+
+def test_rejection_logging_is_aggregated_and_rate_limited(monkeypatch):
+    messages = []
+    monkeypatch.setattr(capture_run, "_log", messages.append)
+    rejected = {"book": 3, "ticker": 2}
+    assert capture_run._report_rejections(rejected, 9.0, 0.0) == 0.0
+    assert not messages
+    assert capture_run._report_rejections(rejected, 10.0, 0.0) == 10.0
+    assert messages == ["rejected market-data frames={'book': 3, 'ticker': 2}"]
+    assert rejected == {}
+
+
 def test_session_catches_distinct_asyncio_timeout_exception(monkeypatch, tmp_path):
     capture, _ = _prepare_session(monkeypatch, tmp_path)
     now = _fake_clock(monkeypatch)

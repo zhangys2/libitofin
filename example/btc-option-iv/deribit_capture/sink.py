@@ -4,16 +4,21 @@ Layout::
 
     {root}/{table}/date=YYYY-MM-DD/part-{first_ts_ms}-{seq}.parquet
 
-Each flush writes a complete file to a unique temporary name and atomically
-links it into place without replacing an existing part, so readers never see a
-half-written file and a crash loses at most the unflushed buffer.
+Each flush writes a complete file to a unique temporary name and publishes it
+atomically without replacing an existing part. Hard links are used where
+supported, with native no-overwrite renames as a fallback; if neither is
+available, publication fails rather than risk replacing a part. Readers never
+see a half-written file; a crash loses at most the unflushed buffer.
 """
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import os
+import secrets
 import shutil
-import tempfile
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,6 +27,93 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from deribit_capture.schemas import SCHEMAS
+
+_AT_FDCWD = -100
+_RENAME_NOREPLACE = 1
+_RENAME_EXCL = 0x00000004
+
+
+def _create_temp(directory: Path) -> tuple[int, Path]:
+    while True:
+        path = directory / f".tmp-{secrets.token_hex(8)}"
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
+        except FileExistsError:
+            continue
+        return fd, path
+
+
+def _hard_links_unsupported(error: OSError) -> bool:
+    return error.errno in (
+        errno.EPERM,
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "ENOTSUP", None),
+    ) or getattr(error, "winerror", None) in {1, 50}
+
+
+def _rename_no_replace(source: Path, destination: Path) -> None:
+    if os.name == "nt":
+        os.rename(source, destination)
+        return
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise OSError(
+                errno.ENOTSUP,
+                "hard links are unsupported and atomic no-overwrite rename is unavailable; refusing unsafe publication",
+                os.fspath(destination),
+            )
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            _AT_FDCWD,
+            os.fsencode(source),
+            _AT_FDCWD,
+            os.fsencode(destination),
+            _RENAME_NOREPLACE,
+        )
+    elif sys.platform == "darwin":
+        libc = ctypes.CDLL(None, use_errno=True)
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is None:
+            raise OSError(
+                errno.ENOTSUP,
+                "hard links are unsupported and atomic no-overwrite rename is unavailable; refusing unsafe publication",
+                os.fspath(destination),
+            )
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(os.fsencode(source), os.fsencode(destination), _RENAME_EXCL)
+    else:
+        raise OSError(
+            errno.ENOTSUP,
+            "hard links are unsupported and this platform has no atomic no-overwrite rename; refusing unsafe publication",
+            os.fspath(destination),
+        )
+    if result == 0:
+        return
+    error = ctypes.get_errno()
+    if error in (
+        errno.ENOSYS,
+        errno.EINVAL,
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "ENOTSUP", None),
+    ):
+        raise OSError(
+            errno.ENOTSUP,
+            "atomic no-overwrite rename is unavailable; refusing unsafe publication",
+            os.fspath(destination),
+        )
+    raise OSError(error, os.strerror(error), os.fspath(destination))
 
 
 class DiskLow(RuntimeError):
@@ -103,21 +195,25 @@ class ParquetSink:
         table = pa.Table.from_pydict(cols, schema=SCHEMAS[table_name])
         directory = self.root / table_name / f"date={date}"
         directory.mkdir(parents=True, exist_ok=True)
-        temp_fd, temp_name = tempfile.mkstemp(prefix=".tmp-", dir=directory)
-        os.close(temp_fd)
-        temp = Path(temp_name)
+        temp_fd, temp = _create_temp(directory)
         try:
-            pq.write_table(
-                table,
-                temp,
-                compression=self.compression,
-                compression_level=self.compression_level,
-            )
+            with os.fdopen(temp_fd, "w+b") as parquet_file:
+                pq.write_table(
+                    table,
+                    parquet_file,
+                    compression=self.compression,
+                    compression_level=self.compression_level,
+                )
             while True:
                 self._seq += 1
                 final = directory / f"part-{first_ts}-{self._seq:06d}.parquet"
                 try:
-                    os.link(temp, final)
+                    try:
+                        os.link(temp, final)
+                    except OSError as error:
+                        if not _hard_links_unsupported(error):
+                            raise
+                        _rename_no_replace(temp, final)
                     break
                 except FileExistsError:
                     continue

@@ -30,9 +30,10 @@ Prices are in coin (BTC) as Deribit quotes inverse options, IVs in percent.
 
 ## Safety
 
-- Writes are atomic (temp file, then rename); a crash loses at most one flush interval (`--flush-seconds`, default 60).
+- Complete temporary files are published atomically without replacing existing parts; a crash loses at most one flush interval (`--flush-seconds`, default 60). If the filesystem supports neither hard links nor an atomic no-replace rename, the flush fails and retains its buffered rows.
 - The disk guard (`--min-free-gb`) stops the capture instead of filling the disk.
 - Reconnects with backoff and restarts the subscription list; rejected subscription batches are retried. The capture also detects 30 s without market data even when heartbeats or RPC replies continue.
+- Malformed subscription frames are counted by channel family and reported at most once every 10 s; they do not reset the market-data watchdog.
 
 ## Known limits
 
@@ -42,7 +43,9 @@ Prices are in coin (BTC) as Deribit quotes inverse options, IVs in percent.
 ## Option order books (optional)
 
 `--option-book-depth 10` subscribes to the public `book.{option}.none.10.100ms` channel for a selected set of
-options and writes the `option_book` table. Selection is refreshed every `--refresh-seconds` from Deribit's
+options and writes the `option_book` table. This depth-limited channel sends snapshots with `[price, amount]`
+levels; the separate incremental book channel uses `[action, price, amount]` updates and is not subscribed.
+Selection is refreshed every `--refresh-seconds` from Deribit's
 instrument list and `get_book_summary_by_currency`: active options expiring within `--option-book-days`
 (default 35) whose strike is within `--option-book-band` (default 0.15, log distance) of their forward, ranked
 by 24h USD volume, then open interest, then closeness to the money, keeping the first `--option-book-max`

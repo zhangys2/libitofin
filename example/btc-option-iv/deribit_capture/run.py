@@ -26,6 +26,7 @@ REST_SUMMARY = "https://www.deribit.com/api/v2/public/get_book_summary_by_curren
 _DAY_MS = 86_400_000
 _CHUNK = 100
 _SILENCE_S = 30.0
+_REJECT_LOG_S = 10.0
 _SUBSCRIBE_RETRY_S = 5.0
 
 
@@ -57,7 +58,7 @@ def _is_market_data(message: dict) -> bool:
             )
         )
     if channel.startswith("trades."):
-        return isinstance(data, list) and any(
+        return isinstance(data, list) and all(
             isinstance(trade, dict)
             and isinstance(trade.get("timestamp"), int)
             and isinstance(trade.get("instrument_name"), str)
@@ -72,6 +73,25 @@ def _is_market_data(message: dict) -> bool:
             and not isinstance(price, bool)
         )
     return False
+
+
+def _rejection_category(message: dict) -> str | None:
+    if message.get("method") != "subscription":
+        return None
+    params = message.get("params")
+    channel = params.get("channel") if isinstance(params, dict) else None
+    for prefix in ("ticker.", "trades.", "book.", "deribit_price_index."):
+        if isinstance(channel, str) and channel.startswith(prefix):
+            return prefix[:-1]
+    return "other"
+
+
+def _report_rejections(rejected: dict[str, int], now: float, last_log: float) -> float:
+    if rejected and now - last_log >= _REJECT_LOG_S:
+        _log(f"rejected market-data frames={dict(rejected)}")
+        rejected.clear()
+        return now
+    return last_log
 
 
 def _log(message: str) -> None:
@@ -334,6 +354,8 @@ class Capture:
             last_data = time.monotonic()
             last_refresh = time.monotonic()
             last_stats = time.monotonic()
+            last_rejected_log = time.monotonic()
+            rejected: dict[str, int] = {}
             count = 0
             while not self.stop.is_set():
                 try:
@@ -356,6 +378,11 @@ class Capture:
                         last_data = now
                         self.router.handle(message, recv_ns)
                         count += 1
+                    else:
+                        category = _rejection_category(message)
+                        if category is not None:
+                            rejected[category] = rejected.get(category, 0) + 1
+                last_rejected_log = _report_rejections(rejected, now, last_rejected_log)
                 if now - last_data > _SILENCE_S:
                     raise TimeoutError(f"no market data for {_SILENCE_S:.0f}s")
                 self.sink.maybe_flush()

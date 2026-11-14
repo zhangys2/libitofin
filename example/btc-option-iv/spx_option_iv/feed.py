@@ -235,19 +235,34 @@ def select_chain(chains, symbol: str = "SPX"):
 
 
 def select_strikes(strikes, spot: float, radius: float, symbol: str):
-    """Select chain strikes within the displayed point radius of the underlying."""
+    """Select strikes within the displayed SPX-point window (SPY uses one tenth)."""
+    effective_radius = radius / 10 if symbol == "SPY" else radius
     selected = [
         strike
         for strike in sorted(strikes)
-        if abs(strike - spot) <= radius
+        if abs(strike - spot) <= effective_radius
         and (symbol == "SPY" or strike % 5 == 0)
     ]
     return selected or sorted(strikes, key=lambda strike: abs(strike - spot))[:20]
 
 
+def _is_observed_independence_day(day):
+    independence_day = datetime(day.year, 7, 4).date()
+    if independence_day.weekday() == 5:
+        observed = independence_day.replace(day=3)
+    elif independence_day.weekday() == 6:
+        observed = independence_day.replace(day=5)
+    else:
+        observed = independence_day
+    return day == observed
+
+
 def select_live_expiry(expirations, now_ms: int) -> tuple[str, int] | None:
     """Estimate next expiry from recurring calendar rules; live feed uses IB hours."""
     for expiry_str in sorted(expirations):
+        expiry_day = datetime.strptime(expiry_str, "%Y%m%d").date()
+        if expiry_day.weekday() >= 5 or _is_observed_independence_day(expiry_day):
+            continue
         expiry_ms = compute_0dte_expiry_ms(expiry_str)
         if expiry_ms > now_ms:
             return expiry_str, expiry_ms
@@ -256,6 +271,8 @@ def select_live_expiry(expirations, now_ms: int) -> tuple[str, int] | None:
 
 def _is_us_equity_options_half_day(day):
     """Whether US equity options close at 1 PM ET on this session date."""
+    if _is_observed_independence_day(day):
+        return False
     if day.month == 11 and day.weekday() == 4 and 23 <= day.day <= 29:
         return True  # Cboe Thanksgiving early close
     if day.month == 12 and day.day == 24 and day.weekday() < 5:
@@ -269,10 +286,12 @@ def _is_us_equity_options_half_day(day):
 
 
 def compute_0dte_expiry_ms(expiry_str: str) -> int:
-    """Calculate the SPXW/SPY session close timestamp in US Eastern Time."""
+    """Calculate a known SPXW/SPY session close; reject weekends and July 4 closures."""
     from datetime import date
 
     day = date.fromisoformat(f"{expiry_str[:4]}-{expiry_str[4:6]}-{expiry_str[6:8]}")
+    if day.weekday() >= 5 or _is_observed_independence_day(day):
+        raise ValueError(f"{expiry_str} is not a known US equity options trading day")
     dt = datetime(day.year, day.month, day.day)
     hour = 13 if _is_us_equity_options_half_day(day) else 16
     close_dt = dt.replace(hour=hour, tzinfo=ZoneInfo("America/New_York"))
@@ -353,6 +372,7 @@ async def _select_contract_expiry(ib, option_factory, symbol, chain, spot, now_m
     if not chain.strikes:
         raise RuntimeError(f"Cannot determine {symbol} expiry without option strikes")
     strike = min(chain.strikes, key=lambda value: abs(value - spot))
+    unavailable_hours = []
     for expiry_str in expirations:
         contract = option_factory(
             symbol,
@@ -365,19 +385,22 @@ async def _select_contract_expiry(ib, option_factory, symbol, chain, spot, now_m
         await ib.qualifyContractsAsync(contract)
         details = await ib.reqContractDetailsAsync(contract)
         if not details:
-            raise RuntimeError(
-                f"IBKR did not provide authoritative session hours for {symbol} {expiry_str}"
-            )
+            unavailable_hours.append(expiry_str)
+            continue
         complete, expiry_ms = _contract_expiry_close(details[0], expiry_str)
         if not complete:
-            raise RuntimeError(
-                f"IBKR session hours are incomplete for {symbol} {expiry_str}; "
-                "expiry withheld"
-            )
+            unavailable_hours.append(expiry_str)
+            continue
         if expiry_ms is None:
             continue
         if expiry_ms > now_ms:
             return expiry_str, expiry_ms
+    if unavailable_hours:
+        expiry_str = unavailable_hours[0]
+        raise RuntimeError(
+            f"IBKR did not provide complete authoritative session hours for "
+            f"{symbol} {expiry_str}; no verified expiry is available"
+        )
     return None
 
 

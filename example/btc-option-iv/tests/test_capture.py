@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import errno
 import json
+import os
+import stat
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 
+from deribit_capture import sink as sink_module
 from deribit_capture.report import build_report, gaps
 from deribit_capture.router import Router, is_option
 from deribit_capture.run import channels_for
@@ -187,6 +195,90 @@ def test_sink_partitions_by_exchange_date_and_leaves_no_temp_files(tmp_path):
     assert parts == ["date=2026-10-13", "date=2026-10-14"]
     assert not list(tmp_path.rglob(".tmp-*"))
     assert sink.buffered_rows == 0 and sink.rows_written == {"index": 2}
+
+
+def test_sink_uses_atomic_rename_when_hard_links_are_unsupported(tmp_path, monkeypatch):
+    if os.name != "nt" and sys.platform not in {"linux", "darwin"}:
+        pytest.skip("no known atomic no-overwrite rename on this platform")
+
+    def unsupported_link(*args, **kwargs):
+        code = getattr(errno, "EOPNOTSUPP", errno.EPERM)
+        raise OSError(code, "hard links are unsupported")
+
+    monkeypatch.setattr(sink_module.os, "link", unsupported_link)
+    sink = ParquetSink(tmp_path, min_free_gb=0.0)
+    sink.add("index", {"ts_ms": T0, "recv_ns": 1, "index_name": "btc_usd", "price": 1.0})
+
+    assert sink.flush_all() == 1
+    assert read(tmp_path, "index")[0]["price"] == 1.0
+    assert sink.buffered_rows == 0
+
+
+def test_sink_preserves_existing_part_on_collision(tmp_path):
+    directory = tmp_path / "index" / "date=2026-10-14"
+    directory.mkdir(parents=True)
+    existing = directory / f"part-{T0}-000001.parquet"
+    existing.write_bytes(b"keep this existing part")
+    sink = ParquetSink(tmp_path, min_free_gb=0.0)
+    sink.add("index", {"ts_ms": T0, "recv_ns": 1, "index_name": "btc_usd", "price": 1.0})
+
+    assert sink.flush_all() == 1
+    assert existing.read_bytes() == b"keep this existing part"
+    published = directory / f"part-{T0}-000002.parquet"
+    assert pq.read_table(published).to_pylist()[0]["price"] == 1.0
+
+
+def test_sink_concurrent_writers_publish_distinct_complete_parts(tmp_path, monkeypatch):
+    barrier = threading.Barrier(2)
+    write_table = pq.write_table
+
+    def synchronized_write(*args, **kwargs):
+        write_table(*args, **kwargs)
+        barrier.wait(timeout=10)
+
+    monkeypatch.setattr(sink_module.pq, "write_table", synchronized_write)
+    sinks = [ParquetSink(tmp_path, min_free_gb=0.0) for _ in range(2)]
+    for price, current_sink in enumerate(sinks, start=1):
+        current_sink.add(
+            "index",
+            {"ts_ms": T0, "recv_ns": price, "index_name": "btc_usd", "price": float(price)},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(lambda current_sink: current_sink.flush_all(), sinks)) == [1, 1]
+
+    assert sorted(row["price"] for row in read(tmp_path, "index")) == [1.0, 2.0]
+    assert len(list((tmp_path / "index" / "date=2026-10-14").glob("part-*.parquet"))) == 2
+
+
+def test_sink_output_mode_honors_umask_and_is_readable(tmp_path):
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits are unavailable on Windows")
+
+    previous_umask = os.umask(0o027)
+    try:
+        sink = ParquetSink(tmp_path, min_free_gb=0.0)
+        sink.add("index", {"ts_ms": T0, "recv_ns": 1, "index_name": "btc_usd", "price": 1.0})
+        assert sink.flush_all() == 1
+    finally:
+        os.umask(previous_umask)
+
+    part = next((tmp_path / "index" / "date=2026-10-14").glob("part-*.parquet"))
+    assert stat.S_IMODE(part.stat().st_mode) == 0o640
+    assert pq.read_table(part).num_rows == 1
+
+
+def test_sink_keeps_buffer_after_filesystem_io_failure(tmp_path):
+    blocked_root = tmp_path / "not-a-directory"
+    blocked_root.write_text("block directory creation")
+    sink = ParquetSink(blocked_root, min_free_gb=0.0)
+    sink.add("index", {"ts_ms": T0, "recv_ns": 1, "index_name": "btc_usd", "price": 1.0})
+
+    with pytest.raises(FileExistsError):
+        sink.flush_all()
+
+    assert sink.buffered_rows == 1
+    assert sink.rows_written == {}
 
 
 def test_sink_refuses_to_write_below_the_disk_guard_and_keeps_the_buffer(tmp_path):

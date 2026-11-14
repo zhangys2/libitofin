@@ -16,6 +16,7 @@ from spx_option_iv.feed import (
     _subscribe_quote_updates,
     compute_0dte_expiry_ms,
     parity_forward,
+    select_live_expiry,
     select_strikes,
 )
 
@@ -31,10 +32,21 @@ def test_expiry_close_includes_recurring_half_days_and_not_unlisted_dates():
     assert datetime.fromtimestamp(
         compute_0dte_expiry_ms("20261224") / 1000, ny
     ).hour == 18
-    # Cboe's 2026 schedule has no July 2 early close.
-    assert datetime.fromtimestamp(
-        compute_0dte_expiry_ms("20260702") / 1000, ny
-    ).hour == 20
+    # July 2 is an ordinary session; July 3 is the observed Independence Day closure.
+    july_2 = compute_0dte_expiry_ms("20260702")
+    assert datetime.fromtimestamp(july_2 / 1000, ny).hour == 20
+    assert select_live_expiry(["20260702", "20260703"], july_2 - 3_600_000) == (
+        "20260702",
+        july_2,
+    )
+    with pytest.raises(ValueError, match="not a known .* trading day"):
+        compute_0dte_expiry_ms("20260703")
+    # Saturday July 4, 2026 is observed Friday July 3; Sunday July 4, 2027
+    # is observed Monday July 5, while Friday July 2 remains open.
+    with pytest.raises(ValueError, match="not a known .* trading day"):
+        compute_0dte_expiry_ms("20270705")
+    july_2_2027 = compute_0dte_expiry_ms("20270702")
+    assert datetime.fromtimestamp(july_2_2027 / 1000, ny).hour == 20
     assert datetime.fromtimestamp(
         compute_0dte_expiry_ms("20280703") / 1000, ny
     ).hour == 17  # 1 PM EDT
@@ -73,6 +85,49 @@ def test_expiry_uses_authoritative_hours_for_exceptional_early_close():
     assert selected == (expiry, close_ms)
 
 
+def test_expiry_skips_incomplete_early_candidate_for_later_verified_expiry():
+    first, second = "20261116", "20261117"
+    requests = []
+    close_ms = int(
+        datetime(2026, 11, 17, 22, 0, tzinfo=timezone.utc).timestamp() * 1000
+    )
+
+    class IB:
+        async def qualifyContractsAsync(self, contract):
+            pass
+
+        async def reqContractDetailsAsync(self, contract):
+            requests.append(contract.expiry)
+            if contract.expiry == first:
+                return []
+            return [
+                SimpleNamespace(
+                    timeZoneId="US/Eastern",
+                    liquidHours=f"{second}:0930-{second}:1700",
+                )
+            ]
+
+    chain = SimpleNamespace(
+        expirations=[first, second],
+        strikes=[100.0],
+        exchange="SMART",
+        tradingClass="SPXW",
+    )
+    now_ms = int(datetime(2026, 11, 16, 15, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    selected = asyncio.run(
+        _select_contract_expiry(
+            IB(),
+            lambda *args, **kwargs: SimpleNamespace(expiry=args[1]),
+            "SPX",
+            chain,
+            100.0,
+            now_ms,
+        )
+    )
+    assert requests == [first, second]
+    assert selected == (second, close_ms)
+
+
 def test_expiry_fails_closed_when_contract_hours_are_missing():
     class IB:
         async def qualifyContractsAsync(self, contract):
@@ -87,7 +142,7 @@ def test_expiry_fails_closed_when_contract_hours_are_missing():
         exchange="SMART",
         tradingClass="SPXW",
     )
-    with pytest.raises(RuntimeError, match="session hours are incomplete"):
+    with pytest.raises(RuntimeError, match="no verified expiry is available"):
         asyncio.run(
             _select_contract_expiry(
                 IB(),
@@ -243,12 +298,18 @@ def test_changing_strike_window_while_running_restarts_subscription():
     asyncio.run(scenario())
 
 
-def test_strike_window_is_used_in_same_points_for_spy():
+def test_default_spy_window_limits_subscriptions_to_safe_strike_count():
     selected = select_strikes(
         [float(x) for x in range(400, 601)], spot=500.0, radius=80.0, symbol="SPY"
     )
-    assert min(selected) == 420.0
-    assert max(selected) == 580.0
+    assert min(selected) == 492.0
+    assert max(selected) == 508.0
+    parity_strikes = set(sorted(selected, key=lambda strike: abs(strike - 500.0))[:7])
+    contract_count = sum(2 if strike in parity_strikes else 1 for strike in selected)
+    assert contract_count == 24
+    assert select_strikes(
+        [float(x) for x in range(400, 601)], spot=500.0, radius=80.0, symbol="SPX"
+    ) == [float(x) for x in range(420, 581, 5)]
 
 
 class _FeedFakeIB:
@@ -366,7 +427,8 @@ def test_feed_publishes_error_when_authoritative_expiry_hours_are_missing(monkey
     controller, _ = _run_minimal_feed(
         monkeypatch, data_type=1, missing_hours=True
     )
-    assert "session hours are incomplete" in controller.snapshot["status"]
+    assert "complete authoritative session hours" in controller.snapshot["status"]
+    assert "no verified expiry" in controller.snapshot["status"]
     assert controller.snapshot["feed_running"] is False
 
 
