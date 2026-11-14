@@ -3,8 +3,8 @@
 [README](../README.md) | Python | [Rust](rust.md) | [Go](go.md)
 
 The same engine is reachable from Python via [`itofin`](https://pypi.org/project/itofin/)
-(Python 3.10+: 3.13 is the primary tested target, and 3.10-3.12 are supported via
-the abi3 wheel). The API mirrors QuantLib's `ql/` layout: types live in submodules
+(Python 3.12+: 3.12 and 3.13 are tested, with later standard CPython versions
+supported via the abi3 wheel). The API mirrors QuantLib's `ql/` layout: types live in submodules
 (`itofin.time`, `itofin.instruments`, `itofin.processes`, ...), while `Settings`
 and `ItofinError` stay at the top level. Real market data is first-class - yield
 curves (bootstrapped from a deposit/swap strip via `PiecewiseYieldCurve`, or

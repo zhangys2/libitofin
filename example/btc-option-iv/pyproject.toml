@@ -7,7 +7,7 @@ name = "btc-option-iv"
 version = "0.1.0"
 description = "Live Deribit BTC option bid/ask/mid Black implied volatility using itofin."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "itofin",
     "pyarrow>=25.0.1",

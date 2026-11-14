@@ -1,7 +1,7 @@
 //! Python bindings for `libitofin`, published as the `itofin` extension module.
 //!
-//! This crate is the walking skeleton (issue #484): it builds an `abi3-py310`
-//! wheel (CPython 3.10+), imports as `itofin`, and bridges QlError to the
+//! This crate is the walking skeleton (issue #484): it builds an `abi3-py312`
+//! wheel (CPython 3.12+), imports as `itofin`, and bridges QlError to the
 //! Python-visible ItofinError exception. The pricing facades land in follow-up
 //! tickets (#485-#487).
 

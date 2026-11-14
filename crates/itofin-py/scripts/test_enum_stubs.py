@@ -35,7 +35,7 @@ class Other:
             stub = Path(directory) / "choice.pyi"
             stub.write_text(result)
             checked = subprocess.run(
-                [sys.executable, "-m", "pyright", str(stub), "--pythonversion", "3.10", "--outputjson"],
+                [sys.executable, "-m", "pyright", str(stub), "--pythonversion", "3.12", "--outputjson"],
                 capture_output=True, text=True, check=False,
             )
             self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
@@ -117,7 +117,7 @@ class Choice(enum.Enum):
             config = root / "pyrightconfig.json"
             config.write_text(json.dumps({
                 "include": [fixture.name], "extraPaths": [str(gen_stubs.PKG_DIR.parent)],
-                "pythonVersion": "3.10", "typeCheckingMode": "basic",
+                "pythonVersion": "3.12", "typeCheckingMode": "basic",
             }))
             for statements, expect_errors in [(accepted, False), (rejected, True)]:
                 fixture.write_text("\n".join(imports + statements) + "\n")

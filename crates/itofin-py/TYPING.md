@@ -1,6 +1,6 @@
 # Python typing acceptance
 
-Run from the repository root in a Python 3.10+ virtual environment:
+Run from the repository root in a Python 3.12+ virtual environment:
 
 ```sh
 python -m pip install -r crates/itofin-py/typing-requirements.txt
@@ -9,7 +9,7 @@ python crates/itofin-py/scripts/check_typing.py
 ```
 
 CI and prek run the same checks. Pyright 1.1.411 checks all binding tests using
-Python 3.10 semantics and the checkout's stubs, without requiring a native build.
+Python 3.12 semantics and the checkout's stubs, without requiring a native build.
 The pinned pytest and NumPy dependencies make imported types reproducible.
 
 The gate compares diagnostic **multisets in both directions**, including repeated

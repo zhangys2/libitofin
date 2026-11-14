@@ -42,7 +42,7 @@ pip install itofin
 
 ## Python versions
 
-itofin ships a single abi3 wheel that runs on CPython 3.10, 3.11, 3.12, and 3.13+. Python 3.13 is the primary, tested target; 3.10 through 3.12 are supported through the stable ABI.
+itofin ships an abi3 wheel per platform for standard (GIL-enabled) CPython 3.12 and later. CI tests Python 3.12 and 3.13. Python 3.10 and 3.11 are no longer supported; use an earlier release if you need them.
 
 ### Develop from this repository
 

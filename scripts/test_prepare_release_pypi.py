@@ -26,10 +26,15 @@ PLATFORMS = (
 )
 
 
-def write_wheel(directory, platform, *, name="itofin", version=VERSION, filename_version=VERSION, extra_metadata=False):
-    path = directory / f"itofin-{filename_version}-cp310-abi3-{platform}.whl"
+def write_wheel(
+    directory, platform, *, name="itofin", version=VERSION, filename_version=VERSION,
+    extra_metadata=False, requires_python=">=3.12",
+):
+    path = directory / f"itofin-{filename_version}-cp312-abi3-{platform}.whl"
     with zipfile.ZipFile(path, "w") as archive:
         metadata = f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+        if requires_python is not None:
+            metadata += f"Requires-Python: {requires_python}\n"
         archive.writestr(f"itofin-{filename_version}.dist-info/METADATA", metadata)
         if extra_metadata:
             archive.writestr("other.dist-info/METADATA", metadata)
@@ -37,10 +42,13 @@ def write_wheel(directory, platform, *, name="itofin", version=VERSION, filename
     return path
 
 
-def write_sdist(directory, *, name="itofin", version=VERSION):
+def write_sdist(directory, *, name="itofin", version=VERSION, requires_python=">=3.12"):
     path = directory / f"itofin-{VERSION}.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
-        data = f"Name: {name}\nVersion: {version}\n".encode()
+        metadata = f"Name: {name}\nVersion: {version}\n"
+        if requires_python is not None:
+            metadata += f"Requires-Python: {requires_python}\n"
+        data = metadata.encode()
         member = tarfile.TarInfo(f"itofin-{VERSION}/PKG-INFO")
         member.size = len(data)
         archive.addfile(member, io.BytesIO(data))
@@ -214,8 +222,36 @@ class PreparationTests(unittest.TestCase):
 
     def test_rebuilt_distribution_filename_conflict_fails_closed(self):
         remote = self.remote()
-        remote["urls"][0]["filename"] = f"itofin-{VERSION}-cp310-abi3-macosx_12_0_arm64.whl"
+        remote["urls"][0]["filename"] = f"itofin-{VERSION}-cp312-abi3-macosx_12_0_arm64.whl"
         self.reject(remote, "different distribution filenames")
+
+    def test_rejects_unsupported_wheel_tags_before_network(self):
+        wheel = self.dist / f"itofin-{VERSION}-cp312-abi3-{PLATFORMS[0]}.whl"
+        for tag in ("cp310-abi3", "cp313-cp313", "cp312-cp312"):
+            with self.subTest(tag=tag):
+                replacement = wheel.with_name(wheel.name.replace("cp312-abi3", tag))
+                wheel.rename(replacement)
+                try:
+                    self.reject(http_error(404), "cp312-abi3")
+                    self.assertEqual(self.requests, [])
+                finally:
+                    replacement.rename(wheel)
+
+    def test_rejects_unsupported_python_metadata_before_network(self):
+        for kind in ("wheel", "sdist"):
+            for requirement in (None, ">=3.10", ">=3.11", ">=3.13", "==3.12.*",
+                                ">=3.12\nRequires-Python: >=3.10"):
+                with self.subTest(kind=kind, requirement=requirement):
+                    if kind == "wheel":
+                        write_wheel(self.dist, PLATFORMS[0], requires_python=requirement)
+                    else:
+                        write_sdist(self.dist, requires_python=requirement)
+                    self.reject(http_error(404), "Requires-Python")
+                    self.assertEqual(self.requests, [])
+            if kind == "wheel":
+                write_wheel(self.dist, PLATFORMS[0])
+            else:
+                write_sdist(self.dist)
 
     def test_wrong_local_name_or_version_is_rejected_before_network(self):
         for name, version in (("other", VERSION), ("itofin", "0.40.0")):
