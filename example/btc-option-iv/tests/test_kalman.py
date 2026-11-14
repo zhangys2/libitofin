@@ -451,18 +451,18 @@ def test_control_change_accounts_for_elapsed_interval_using_old_process_noise():
     assert manager.snapshots(now=3)[EXPIRY_MS].covariance == pytest.approx(expected)
 
 
-def test_pending_clock_skewed_version_is_consumed_once_when_usable():
+def test_small_future_skew_is_assimilated_once_without_replay():
     manager = FilterManager()
     before = warm(manager)
     row, instrument = quote(0.6, iv=0.301, timestamp=NOW_MS + 100)
     manager.ingest(row, instrument, now_ms=NOW_MS, now=0)
-    assert manager.snapshots(now=0)[EXPIRY_MS].updates == before.updates
+    updated = manager.snapshots(now=0)[EXPIRY_MS]
+    assert updated.updates == before.updates + 1
     manager.tick(now_ms=NOW_MS + 100, now=0.1)
-    assert manager.snapshots(now=0.1)[EXPIRY_MS].updates == before.updates
+    assert manager.snapshots(now=0.1)[EXPIRY_MS].updates == updated.updates
     manager.ingest(row, instrument, now_ms=NOW_MS + 150, now=0.15)
-    assert manager.snapshots(now=0.15)[EXPIRY_MS].updates == before.updates + 1
     manager.ingest(row, instrument, now_ms=NOW_MS + 200, now=0.2)
-    assert manager.snapshots(now=0.2)[EXPIRY_MS].updates == before.updates + 1
+    assert manager.snapshots(now=0.2)[EXPIRY_MS].updates == updated.updates
 
 
 def test_timer_tick_does_not_bootstrap_without_events():

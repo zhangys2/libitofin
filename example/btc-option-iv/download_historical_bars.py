@@ -87,14 +87,12 @@ async def fetch_2y_5m_bars_for_symbol(
         timeout=120,
     )
 
-    if bars_chunk2:
-        c2_first = bars_chunk2[0].date
-        c2_last = bars_chunk2[-1].date
-        print(f"[{sym}] Chunk 2: {len(bars_chunk2):,} bars ({c2_first} to {c2_last})")
-        df2 = util.df(bars_chunk2)
-    else:
-        print(f"[{sym}] [WARN] No bars returned for Chunk 2")
-        df2 = pd.DataFrame()
+    if not bars_chunk2:
+        raise RuntimeError("No bars returned for Chunk 2; existing output was not replaced")
+    c2_first = bars_chunk2[0].date
+    c2_last = bars_chunk2[-1].date
+    print(f"[{sym}] Chunk 2: {len(bars_chunk2):,} bars ({c2_first} to {c2_last})")
+    df2 = util.df(bars_chunk2)
 
     df1 = util.df(bars_chunk1)
 

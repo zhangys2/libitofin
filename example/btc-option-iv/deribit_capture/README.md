@@ -32,7 +32,7 @@ Prices are in coin (BTC) as Deribit quotes inverse options, IVs in percent.
 
 - Writes are atomic (temp file, then rename); a crash loses at most one flush interval (`--flush-seconds`, default 60).
 - The disk guard (`--min-free-gb`) stops the capture instead of filling the disk.
-- Reconnects with backoff and restarts the subscription list; also notices when no market data arrives for 30 s. Heartbeats alone do not reset that timer.
+- Reconnects with backoff and restarts the subscription list; rejected subscription batches are retried. The capture also detects 30 s without market data even when heartbeats or RPC replies continue.
 
 ## Known limits
 

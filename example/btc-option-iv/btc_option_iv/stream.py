@@ -84,7 +84,7 @@ async def subscribe_btc_option_market_data(
                 return
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 return
             payload = json.loads(raw if isinstance(raw, str) else raw.decode())
             if "error" in payload:
@@ -196,6 +196,8 @@ async def run_live_btc_iv_stream(
             raise
         except (
             OSError,
+            ValueError,
+            asyncio.TimeoutError,
             TimeoutError,
             websockets.exceptions.WebSocketException,
             json.JSONDecodeError,

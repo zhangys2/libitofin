@@ -17,7 +17,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import math
+import os
 from pathlib import Path
+import tempfile
 import threading, time
 from typing import Any
 
@@ -85,9 +87,6 @@ class ParquetL1Recorder:
         self.compression = compression
         self.compression_level = compression_level
         self._buffer: dict[tuple[str, str, str], list[dict]] = {}
-        self._active_writers: dict[
-            tuple[str, str, str], tuple[pq.ParquetWriter, int, Path]
-        ] = {}
         self._running = False
         self._flush_task: asyncio.Task | None = None
         self._total_records_written = 0
@@ -144,45 +143,31 @@ class ParquetL1Recorder:
                 self.flush()
 
     def flush(self):
-        """Flush all buffered records into active partition Parquet writers."""
+        """Write buffered records as complete, atomically published Parquet parts."""
         with self._lock:
             if not self._buffer:
                 return
-            pending = self._buffer
+            remaining = self._buffer
             self._buffer = {}
-            remaining = dict(pending)
             try:
-                for partition_key, records in list(remaining.items()):
-                    if not records:
-                        remaining.pop(partition_key)
-                        continue
-                    writer, row_count, _file_path = self._get_or_create_writer(partition_key)
-                    table = pa.Table.from_pylist(records, schema=L1_RECORD_SCHEMA)
-                    writer.write_table(table)
-                    new_count = row_count + len(records)
-                    self._total_records_written += len(records)
-                    if new_count >= self.max_rows_per_file:
-                        writer.close()
-                        del self._active_writers[partition_key]
-                    else:
-                        self._active_writers[partition_key] = (
-                            writer,
-                            new_count,
-                            self._active_writers[partition_key][2],
-                        )
-                    remaining.pop(partition_key)
+                while remaining:
+                    partition_key, records = remaining.popitem()
+                    offset = 0
+                    max_rows = max(1, self.max_rows_per_file)
+                    while offset < len(records):
+                        batch = records[offset : offset + max_rows]
+                        self._write_part(partition_key, batch)
+                        offset += len(batch)
+                        self._total_records_written += len(batch)
             except Exception:
-                for partition_key, records in remaining.items():
-                    self._buffer.setdefault(partition_key, [])
-                    self._buffer[partition_key] = list(records) + self._buffer[partition_key]
+                if offset < len(records):
+                    self._buffer[partition_key] = records[offset:]
+                self._buffer.update(remaining)
                 raise
 
-    def _get_or_create_writer(
-        self, partition_key: tuple[str, str, str]
-    ) -> tuple[pq.ParquetWriter, int, Path]:
-        if partition_key in self._active_writers:
-            return self._active_writers[partition_key]
-
+    def _write_part(
+        self, partition_key: tuple[str, str, str], records: list[dict]
+    ):
         symbol, expiry, date_str = partition_key
         partition_dir = (
             self.output_dir
@@ -191,25 +176,43 @@ class ParquetL1Recorder:
             / f"date={date_str}"
         )
         partition_dir.mkdir(parents=True, exist_ok=True)
-
-        now_ms = int(time.time() * 1000)
-        file_path = partition_dir / f"quotes_{now_ms}.parquet"
-        # Two rotations in the same millisecond must not clobber the previous part.
-        sequence = 1
-        while file_path.exists():
-            file_path = partition_dir / f"quotes_{now_ms}_{sequence}.parquet"
-            sequence += 1
-
-        writer = pq.ParquetWriter(
-            file_path,
-            schema=L1_RECORD_SCHEMA,
-            compression=self.compression,
-            compression_level=self.compression_level,
-            use_dictionary=True,
+        descriptor, temp_name = tempfile.mkstemp(
+            prefix=".quotes-", suffix=".tmp", dir=partition_dir
         )
-        entry = (writer, 0, file_path)
-        self._active_writers[partition_key] = entry
-        return entry
+        os.close(descriptor)
+        temp_path = Path(temp_name)
+        try:
+            table = pa.Table.from_pylist(records, schema=L1_RECORD_SCHEMA)
+            writer = pq.ParquetWriter(
+                temp_path,
+                schema=L1_RECORD_SCHEMA,
+                compression=self.compression,
+                compression_level=self.compression_level,
+                use_dictionary=True,
+            )
+            try:
+                writer.write_table(table)
+            finally:
+                writer.close()
+            self._publish_part(temp_path, partition_dir)
+        finally:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+
+    @staticmethod
+    def _publish_part(temp_path: Path, partition_dir: Path):
+        now_ms = int(time.time() * 1000)
+        sequence = 0
+        while True:
+            suffix = "" if sequence == 0 else f"_{sequence}"
+            file_path = partition_dir / f"quotes_{now_ms}{suffix}.parquet"
+            try:
+                os.link(temp_path, file_path)
+                return
+            except FileExistsError:
+                sequence += 1
 
     async def record_quote_async(
         self,
@@ -251,7 +254,7 @@ class ParquetL1Recorder:
         await asyncio.to_thread(self.flush)
 
     def close(self):
-        """Flush remaining buffer and close all active Parquet files."""
+        """Flush remaining buffered records and stop background flushing."""
         self._running = False
         task = self._flush_task
         if task is not None:
@@ -267,12 +270,6 @@ class ParquetL1Recorder:
             self._flush_task = None
         with self._lock:
             self.flush()
-            for writer, _, _ in self._active_writers.values():
-                try:
-                    writer.close()
-                except Exception:
-                    pass
-            self._active_writers.clear()
 
     async def _flush_loop(self):
         """Background loop to periodically flush micro-batches."""

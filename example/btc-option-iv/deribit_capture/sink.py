@@ -4,15 +4,16 @@ Layout::
 
     {root}/{table}/date=YYYY-MM-DD/part-{first_ts_ms}-{seq}.parquet
 
-Each flush writes a complete file to a temporary name and renames it, so a
-reader never sees a half-written file and a crash loses at most the unflushed
-buffer (one flush interval).
+Each flush writes a complete file to a unique temporary name and atomically
+links it into place without replacing an existing part, so readers never see a
+half-written file and a crash loses at most the unflushed buffer.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,16 +103,26 @@ class ParquetSink:
         table = pa.Table.from_pydict(cols, schema=SCHEMAS[table_name])
         directory = self.root / table_name / f"date={date}"
         directory.mkdir(parents=True, exist_ok=True)
-        self._seq += 1
-        final = directory / f"part-{first_ts}-{self._seq:06d}.parquet"
-        temp = directory / f".tmp-{final.name}"
-        pq.write_table(
-            table,
-            temp,
-            compression=self.compression,
-            compression_level=self.compression_level,
-        )
-        os.replace(temp, final)
+        temp_fd, temp_name = tempfile.mkstemp(prefix=".tmp-", dir=directory)
+        os.close(temp_fd)
+        temp = Path(temp_name)
+        try:
+            pq.write_table(
+                table,
+                temp,
+                compression=self.compression,
+                compression_level=self.compression_level,
+            )
+            while True:
+                self._seq += 1
+                final = directory / f"part-{first_ts}-{self._seq:06d}.parquet"
+                try:
+                    os.link(temp, final)
+                    break
+                except FileExistsError:
+                    continue
+        finally:
+            temp.unlink(missing_ok=True)
         self._cols.pop(key, None)
         self._rows.pop(key, None)
         self._first_ts.pop(key, None)

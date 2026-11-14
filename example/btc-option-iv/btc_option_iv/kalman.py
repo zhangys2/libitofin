@@ -444,13 +444,16 @@ class FilterManager:
             state.warning = f"Rejected quote {name}: {exc}"
             self._refresh(expiry, now_ms=now_ms, now=now, measurements=False)
 
-    def discard(self, name, expiry):
+    def discard(self, name, expiry, *, now_ms, now):
         self._quotes.get(expiry, {}).pop(name, None)
+        if expiry in self._filters:
+            self._refresh(expiry, now_ms=now_ms, now=now, measurements=False)
 
     def _select(self, expiry, now_ms):
         groups = {}
         for o in self._quotes.get(expiry, {}).values():
-            if 0 <= now_ms - o.timestamp_ms <= MAX_QUOTE_AGE_MS:
+            age = now_ms - o.timestamp_ms
+            if -1000 <= age <= MAX_QUOTE_AGE_MS and o.mid_iv > 0:
                 groups.setdefault(o.strike, []).append(o)
         selected = []
         for strike, candidates in sorted(groups.items()):
