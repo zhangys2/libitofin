@@ -154,7 +154,7 @@ def _(mo):
         stop=160,
         step=5,
         value=80,
-        label="Strike Window (±pts)",
+        label="Strike Window (±SPX pts; SPY ÷10)",
     )
     spx_process_rate = mo.ui.slider(
         start=0.01,
@@ -222,7 +222,7 @@ async def _(
     await spx_controller.set_symbol(str(spx_symbol.value))
     spx_controller.set_port(int(spx_port.value))
     spx_controller.set_market_data_type(int(spx_data_type.value))
-    spx_controller.set_strike_radius(float(spx_strike_radius.value))
+    await spx_controller.set_strike_radius(float(spx_strike_radius.value))
     spx_controller.configure(
         FilterConfig(
             process_iv_rate=spx_process_rate.value / 100.0,
@@ -447,7 +447,8 @@ def _(
         spx_status_md = mo.md(
             textwrap.dedent(f"""
             ### ⚡ {sym} 0DTE Volatility Smile (IBKR Socket)
-            **{sym} Spot:** `{spx_analysis["spot_price"]:,.2f}` · **Forward:** `{spx_analysis["forward"]:,.2f}` ({spx_analysis.get("forward_source") or "n/a"}) · **ATM Vol:** `{spx_analysis["atm_vol"]:.2%}` · **0DTE Expiration:** `{spx_analysis["expiry_str"]}` (`{time_left_str}` to 4:00 PM ET close)<br>
+            **Feed Status:** {spx_snapshot.get("status", "Feed status unavailable.")}<br>
+            **{sym} Spot:** `{spx_analysis["spot_price"]:,.2f}` · **Forward:** `{spx_analysis["forward"]:,.2f}` ({spx_analysis.get("forward_source") or "n/a"}) · **ATM Vol:** `{spx_analysis["atm_vol"]:.2%}` · **0DTE Expiration:** `{spx_analysis["expiry_str"]}` (`{time_left_str}` to {spx_snapshot.get("expiry_close_time") or "session close ET"})<br>
             {butterfly_md}
             **Accepted Updates:** `{view.updates}` · **Resets:** `{view.resets}` · **Filter State:** `{view.status}` · **Last Reset Reason:** `{view.reset_reason}`<br>
             _The arbitrage check applies to the dashed reference smile only. The solid Kalman curve is a natural cubic in IV: not arbitrage-free, not a trading signal._
@@ -487,18 +488,33 @@ def _(
             if col in knots_df:
                 knots_df[col] = knots_df[col].apply(fmt_pct)
 
-        spx_tables_ui = mo.ui.tabs(
-            {
-                f"📊 {sym} 0DTE Quotes & Residuals": mo.ui.table(
-                    obs_df, pagination=True, page_size=10
-                ),
-                f"📍 {sym} Kalman Spline Knots (9 Knots)": mo.ui.table(
-                    knots_df, pagination=False
-                ),
-            }
-        )
+        spx_tabs = {
+            f"📊 {sym} 0DTE Quotes & Residuals": mo.ui.table(
+                obs_df, pagination=True, page_size=10
+            ),
+            f"📍 {sym} Kalman Spline Knots (9 Knots)": mo.ui.table(
+                knots_df, pagination=False
+            ),
+        }
+        available_quotes = spx_snapshot.get("available_quotes", {})
+        if available_quotes:
+            spx_tabs[f"{sym} Current Bid/Ask"] = mo.ui.table(
+                pd.DataFrame.from_records(available_quotes.values()),
+                pagination=True,
+                page_size=10,
+            )
+        spx_tables_ui = mo.ui.tabs(spx_tabs)
     else:
-        spx_tables_ui = mo.md(f"_No active {sym} option quotes to display._")
+        available_quotes = spx_snapshot.get("available_quotes", {})
+        if available_quotes:
+            delayed_quotes_df = pd.DataFrame.from_records(
+                available_quotes.values()
+            )
+            spx_tables_ui = mo.ui.table(
+                delayed_quotes_df, pagination=True, page_size=10
+            )
+        else:
+            spx_tables_ui = mo.md(f"_No active {sym} option quotes to display._")
 
     spx_section = mo.vstack(
         [

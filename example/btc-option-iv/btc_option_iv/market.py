@@ -450,7 +450,10 @@ def normalize_deribit_quote(
             name, STALE, "expiry forward is older than the stale window", timestamp
         )
 
-    if event.interest_rate is not None:
+    used_reference_fallback = (
+        event.index_price is None or event.underlying_price is None
+    )
+    if event.interest_rate is not None and not used_reference_fallback:
         if not math.isfinite(event.interest_rate):
             return _reject(
                 name, "invalid_interest_rate", "interest rate must be finite", timestamp
@@ -755,8 +758,8 @@ def _parse_future_ticker(name: str, data: dict) -> FutureQuote | None:
 
 
 def _result_rows(payload: dict) -> list:
-    if not isinstance(payload, dict) or "result" not in payload:
-        raise ValueError("Deribit payload has no result")
+    if not isinstance(payload, dict) or "error" in payload or "result" not in payload:
+        raise ValueError("Deribit payload has no valid result")
     rows = payload["result"]
     if not isinstance(rows, list):
         raise ValueError("Deribit result is not a list")

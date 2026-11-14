@@ -22,6 +22,7 @@ _KNOT_ARRAY = np.asarray(KNOTS)
 _IDENTITY = np.eye(9)
 _BASIS = CubicSpline(KNOTS, _IDENTITY, bc_type="natural", extrapolate=False)
 MAX_QUOTE_AGE_MS = 10_000
+_MAX_FUTURE_QUOTE_SKEW_MS = 1_000
 MAX_OVERHANG = 0.25
 MAX_END_SLOPE = 0.10
 NIS_ADAPT_CLAMP = (0.1, 10.0)
@@ -444,13 +445,16 @@ class FilterManager:
             state.warning = f"Rejected quote {name}: {exc}"
             self._refresh(expiry, now_ms=now_ms, now=now, measurements=False)
 
-    def discard(self, name, expiry):
+    def discard(self, name, expiry, *, now_ms, now):
         self._quotes.get(expiry, {}).pop(name, None)
+        if expiry in self._filters:
+            self._refresh(expiry, now_ms=now_ms, now=now, measurements=False)
 
     def _select(self, expiry, now_ms):
         groups = {}
         for o in self._quotes.get(expiry, {}).values():
-            if 0 <= now_ms - o.timestamp_ms <= MAX_QUOTE_AGE_MS:
+            age = now_ms - o.timestamp_ms
+            if -_MAX_FUTURE_QUOTE_SKEW_MS <= age <= MAX_QUOTE_AGE_MS and o.mid_iv > 0:
                 groups.setdefault(o.strike, []).append(o)
         selected = []
         for strike, candidates in sorted(groups.items()):

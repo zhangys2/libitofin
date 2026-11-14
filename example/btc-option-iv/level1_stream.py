@@ -37,10 +37,39 @@ def _(mo):
 
 @app.cell
 def _(Any, Callable, asyncio, datetime):
-    def _load_ib():
-        from ib_async import ContFuture, Contract, Crypto, IB, Stock
+    from zoneinfo import ZoneInfo
 
-        return IB, ContFuture, Crypto, Stock
+    def _load_ib():
+        from ib_async import Crypto, Future, IB, Stock
+
+        return IB, Future, Crypto, Stock
+
+    async def _front_future(ib, future_type, symbol, exchange):
+        details = await ib.reqContractDetailsAsync(
+            future_type(symbol, exchange=exchange, currency="USD")
+        )
+        today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d")
+        candidates = []
+        for detail in details:
+            contract = detail.contract
+            if contract is None or contract.secType != "FUT":
+                continue
+            last_trade = contract.lastTradeDateOrContractMonth.partition(" ")[0]
+            actual_expiry = detail.realExpirationDate[:8]
+            if len(last_trade) >= 8 and last_trade[:8].isdigit():
+                expiry = last_trade[:8]
+            elif len(actual_expiry) == 8 and actual_expiry.isdigit():
+                expiry = actual_expiry
+            elif len(last_trade) >= 6 and last_trade[:6].isdigit():
+                expiry = last_trade[:6] + "99"
+            else:
+                continue
+            if expiry >= today:
+                candidates.append((expiry, contract.localSymbol, contract.conId, contract))
+        if not candidates:
+            raise RuntimeError(f"No unexpired {symbol} futures returned by IBKR")
+        expiry, _, _, contract = min(candidates, key=lambda item: item[:3])
+        return contract, expiry
 
     class Level1FeedController:
         """Manages live Level 1 streaming subscriptions for Stocks, Cryptos, and Futures."""
@@ -127,13 +156,14 @@ def _(Any, Callable, asyncio, datetime):
             )
 
         async def _run(self):
-            IB, ContFuture, Crypto, Stock = _load_ib()
-            ib = IB()
-            self.ib = ib
+            ib = None
             contracts_info: list[tuple[str, str, Any]] = []
             subscribed_contracts = []
             tickers = {}
             try:
+                IB, Future, Crypto, Stock = _load_ib()
+                ib = IB()
+                self.ib = ib
                 self.publish(
                     {
                         "status": f"Connecting to IB Gateway on {self.host}:{self.port}...",
@@ -168,12 +198,10 @@ def _(Any, Callable, asyncio, datetime):
 
                 ib.reqMarketDataType(self.market_data_type)
 
-                # Build contract list
-                cl = ContFuture("CL", "NYMEX")
-                gc = ContFuture("GC", "COMEX")
-                contracts_info.append(("CL", "Commodity (Crude Oil)", cl))
-                contracts_info.append(("GC", "Commodity (Gold)", gc))
-
+                future_specs = (
+                    ("CL", "Commodity (Crude Oil)", "NYMEX"),
+                    ("GC", "Commodity (Gold)", "COMEX"),
+                )
                 btc = Crypto("BTC", "PAXOS", "USD")
                 eth = Crypto("ETH", "PAXOS", "USD")
                 contracts_info.append(("BTC", "Crypto (Bitcoin)", btc))
@@ -186,6 +214,11 @@ def _(Any, Callable, asyncio, datetime):
 
                 contracts = [contract for _, _, contract in contracts_info]
                 await ib.qualifyContractsAsync(*contracts)
+                futures = {}
+                for symbol, category, exchange in future_specs:
+                    contract, expiry = await _front_future(ib, Future, symbol, exchange)
+                    futures[symbol] = (contract, expiry, category, exchange)
+                    contracts_info.append((symbol, category, contract))
 
                 for symbol, category, contract in contracts_info:
                     ticker = ib.reqMktData(contract)
@@ -205,6 +238,19 @@ def _(Any, Callable, asyncio, datetime):
 
                 while True:
                     await asyncio.sleep(self.refresh_interval)
+                    if not ib.isConnected():
+                        raise ConnectionError("IB Gateway disconnected")
+                    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y%m%d")
+                    for symbol, (contract, expiry, category, exchange) in futures.items():
+                        if today > expiry:
+                            replacement, next_expiry = await _front_future(
+                                ib, Future, symbol, exchange
+                            )
+                            ib.cancelMktData(contract)
+                            subscribed_contracts.remove(contract)
+                            tickers[symbol] = (category, ib.reqMktData(replacement))
+                            subscribed_contracts.append(replacement)
+                            futures[symbol] = (replacement, next_expiry, category, exchange)
                     now_str = datetime.now().strftime("%H:%M:%S")
                     snapshot_data = {}
                     for symbol, (category, ticker) in tickers.items():
@@ -267,18 +313,31 @@ def _(Any, Callable, asyncio, datetime):
                             "total_count": len(tickers),
                         }
                     )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.publish(
+                    {
+                        "status": f"IBKR error: {type(exc).__name__}: {exc}",
+                        "connected": False,
+                        "last_updated": "-",
+                        "instruments": {},
+                        "total_count": 0,
+                    }
+                )
             finally:
-                for contract in subscribed_contracts:
+                if ib is not None:
+                    for contract in subscribed_contracts:
+                        try:
+                            ib.cancelMktData(contract)
+                        except Exception:
+                            pass
                     try:
-                        ib.cancelMktData(contract)
-                    except Exception:
-                        pass
-                try:
-                    if ib.isConnected():
-                        ib.disconnect()
-                finally:
-                    if self.ib is ib:
-                        self.ib = None
+                        if ib.isConnected():
+                            ib.disconnect()
+                    finally:
+                        if self.ib is ib:
+                            self.ib = None
 
     return Level1FeedController, _load_ib
 
@@ -327,7 +386,8 @@ def _(mo):
 
 
 @app.cell
-def _(
+async def _(
+    connect_switch,
     controller,
     market_data_dropdown,
     port_dropdown,
@@ -338,11 +398,6 @@ def _(
         market_data_type=int(market_data_dropdown.value),
         refresh_interval=float(refresh_rate_slider.value),
     )
-    return
-
-
-@app.cell
-async def _(connect_switch, controller):
     await controller.set_enabled(connect_switch.value)
     return
 

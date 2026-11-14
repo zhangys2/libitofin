@@ -122,7 +122,7 @@ def test_level1_cancellation_during_qualification_disconnects_ib(monkeypatch):
 
     ib_async = ModuleType("ib_async")
     ib_async.IB = lambda: fake_ib
-    ib_async.ContFuture = FakeContract
+    ib_async.Future = FakeContract
     ib_async.Crypto = FakeContract
     ib_async.Contract, ib_async.Stock = FakeContract, FakeContract
     monkeypatch.setitem(__import__("sys").modules, "ib_async", ib_async)

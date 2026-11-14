@@ -99,9 +99,72 @@ def _implied_vol(opt_type, strike, forward, expiry, price) -> float | None:
     return iv if math.isfinite(iv) and iv > 0 else None
 
 
-def _two_sided(ticker) -> tuple[float, float] | None:
-    """(bid, ask) when the ticker has a valid two-sided quote, else None."""
-    bid, ask = _finite_positive(ticker.bid), _finite_positive(ticker.ask)
+QUOTE_MAX_AGE_MS = 10_000
+_BID_TICK_TYPES = {1, 66}
+_ASK_TICK_TYPES = {2, 67}
+
+
+def _subscribe_quote_updates(ticker, observation):
+    pending = []
+    observation["pending_ticks"] = pending
+
+    def capture(updated_ticker=None):
+        source = updated_ticker if updated_ticker is not None else ticker
+        pending.extend(tuple(getattr(source, "ticks", ()) or ()))
+
+    event = getattr(ticker, "updateEvent", None)
+    if event is not None:
+        event += capture
+    capture(ticker)
+
+
+def _tick_timestamp_ms(value):
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return int(value.timestamp() * 1000)
+    try:
+        return int(value.timestamp() * 1000)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _observe_quote(ticker, observation, now_ms):
+    """Track fresh bid/ask prices, retaining source timestamps only for live ticks."""
+    pending = observation.get("pending_ticks")
+    ticks = tuple(pending) if pending is not None else tuple(getattr(ticker, "ticks", ()) or ())
+    if pending is not None:
+        pending.clear()
+    for tick in ticks:
+        kind = getattr(tick, "tickType", None)
+        if kind in _BID_TICK_TYPES:
+            side = "bid"
+        elif kind in _ASK_TICK_TYPES:
+            side = "ask"
+        else:
+            continue
+        timestamp_ms = _tick_timestamp_ms(getattr(tick, "time", None))
+        if timestamp_ms is None or timestamp_ms < observation.get(
+            f"{side}_time", -1
+        ):
+            continue
+        value = _finite_positive(getattr(tick, "price", None))
+        observation[side] = value
+        observation[f"{side}_time"] = timestamp_ms
+        observation[f"{side}_source_time"] = (
+            timestamp_ms if kind in {1, 2} else None
+        )
+        if kind in {66, 67}:
+            observation["delayed"] = True
+    bid_time, ask_time = observation.get("bid_time"), observation.get("ask_time")
+    if (
+        bid_time is None
+        or ask_time is None
+        or now_ms - bid_time > QUOTE_MAX_AGE_MS
+        or now_ms - ask_time > QUOTE_MAX_AGE_MS
+    ):
+        return None
+    bid, ask = observation.get("bid"), observation.get("ask")
     return (bid, ask) if bid is not None and ask is not None and ask >= bid else None
 
 
@@ -136,7 +199,7 @@ def parity_forward(
     except Exception:
         return None
 
-    if res is None:
+    if res is None or not res.is_valid:
         return None
     if not math.isfinite(res.forward) or res.forward <= 0:
         return None
@@ -171,21 +234,174 @@ def select_chain(chains, symbol: str = "SPX"):
     return select_spxw_chain(chains)
 
 
+def select_strikes(strikes, spot: float, radius: float, symbol: str):
+    """Select strikes within the displayed SPX-point window (SPY uses one tenth)."""
+    effective_radius = radius / 10 if symbol == "SPY" else radius
+    selected = [
+        strike
+        for strike in sorted(strikes)
+        if abs(strike - spot) <= effective_radius
+        and (symbol == "SPY" or strike % 5 == 0)
+    ]
+    return selected or sorted(strikes, key=lambda strike: abs(strike - spot))[:20]
+
+
+def _is_observed_independence_day(day):
+    independence_day = datetime(day.year, 7, 4).date()
+    if independence_day.weekday() == 5:
+        observed = independence_day.replace(day=3)
+    elif independence_day.weekday() == 6:
+        observed = independence_day.replace(day=5)
+    else:
+        observed = independence_day
+    return day == observed
+
+
 def select_live_expiry(expirations, now_ms: int) -> tuple[str, int] | None:
-    """Earliest expiration whose 4:00 PM ET close is still in the future."""
+    """Estimate next expiry from recurring calendar rules; live feed uses IB hours."""
     for expiry_str in sorted(expirations):
+        expiry_day = datetime.strptime(expiry_str, "%Y%m%d").date()
+        if expiry_day.weekday() >= 5 or _is_observed_independence_day(expiry_day):
+            continue
         expiry_ms = compute_0dte_expiry_ms(expiry_str)
         if expiry_ms > now_ms:
             return expiry_str, expiry_ms
     return None
 
 
+def _is_us_equity_options_half_day(day):
+    """Whether US equity options close at 1 PM ET on this session date."""
+    if _is_observed_independence_day(day):
+        return False
+    if day.month == 11 and day.weekday() == 4 and 23 <= day.day <= 29:
+        return True  # Cboe Thanksgiving early close
+    if day.month == 12 and day.day == 24 and day.weekday() < 5:
+        if datetime(day.year, 12, 25).weekday() == 5:
+            return False  # Christmas observed; Cboe is closed
+        return True  # Cboe Christmas early close
+    if day.month == 7 and day.day == 3:
+        july_fourth_weekday = datetime(day.year, 7, 4).weekday()
+        return day.weekday() < 5 and july_fourth_weekday in {1, 2, 3, 4}
+    return False
+
+
 def compute_0dte_expiry_ms(expiry_str: str) -> int:
-    """Calculate 4:00 PM US Eastern Time market close timestamp for the contract date."""
-    dt = datetime.strptime(expiry_str, "%Y%m%d")
-    ny_tz = ZoneInfo("America/New_York")
-    close_dt = dt.replace(hour=16, minute=0, second=0, microsecond=0, tzinfo=ny_tz)
+    """Calculate a known SPXW/SPY session close; reject weekends and July 4 closures."""
+    from datetime import date
+
+    day = date.fromisoformat(f"{expiry_str[:4]}-{expiry_str[4:6]}-{expiry_str[6:8]}")
+    if day.weekday() >= 5 or _is_observed_independence_day(day):
+        raise ValueError(f"{expiry_str} is not a known US equity options trading day")
+    dt = datetime(day.year, day.month, day.day)
+    hour = 13 if _is_us_equity_options_half_day(day) else 16
+    close_dt = dt.replace(hour=hour, tzinfo=ZoneInfo("America/New_York"))
     return int(close_dt.timestamp() * 1000)
+
+
+def _parse_ib_session_time(value: str, expiry_str: str, tz: ZoneInfo):
+    if ":" in value and len(value.split(":", 1)[0]) == 8:
+        day_str, time_str = value.split(":", 1)
+    else:
+        day_str, time_str = expiry_str, value
+    for fmt in ("%H%M%S", "%H%M", "%H:%M:%S", "%H:%M"):
+        try:
+            parsed_time = datetime.strptime(time_str, fmt).time()
+            day = datetime.strptime(day_str, "%Y%m%d").date()
+            return datetime.combine(day, parsed_time, tzinfo=tz)
+        except ValueError:
+            continue
+    return None
+
+
+def _contract_expiry_close(details, expiry_str: str) -> tuple[bool, int | None]:
+    """Return (metadata_complete, regular expiry close) from IB contract details."""
+    timezone_name = getattr(details, "timeZoneId", None)
+    liquid_hours = getattr(details, "liquidHours", None)
+    last_trade = getattr(details, "lastTradeTime", None)
+    using_trading_hours = not liquid_hours
+    hours = liquid_hours or getattr(details, "tradingHours", None)
+    if not timezone_name or not hours or (using_trading_hours and not last_trade):
+        return False, None
+    try:
+        tz = ZoneInfo(timezone_name)
+    except (KeyError, ValueError):
+        return False, None
+
+    sessions = [
+        session.split(":", 1)
+        for session in hours.split(";")
+        if ":" in session
+    ]
+    expiry_sessions = [session for day, session in sessions if day == expiry_str]
+    if not expiry_sessions:
+        return False, None
+    if all(session.strip().upper() == "CLOSED" for session in expiry_sessions):
+        return True, None
+
+    closes = []
+    for session in expiry_sessions:
+        if session.strip().upper() == "CLOSED":
+            continue
+        for interval in session.split(","):
+            endpoints = interval.split("-")
+            if len(endpoints) != 2:
+                return False, None
+            close_dt = _parse_ib_session_time(endpoints[1], expiry_str, tz)
+            if close_dt is None or close_dt.strftime("%Y%m%d") != expiry_str:
+                continue
+            closes.append(close_dt)
+    if not closes:
+        return False, None
+
+    close_dt = max(closes)
+    if last_trade:
+        last_trade_dt = _parse_ib_session_time(last_trade, expiry_str, tz)
+        if last_trade_dt is None:
+            return False, None
+        close_dt = min(close_dt, last_trade_dt)
+    return True, int(close_dt.timestamp() * 1000)
+
+
+async def _select_contract_expiry(ib, option_factory, symbol, chain, spot, now_ms):
+    now_date = datetime.fromtimestamp(
+        now_ms / 1000, ZoneInfo("America/New_York")
+    ).strftime("%Y%m%d")
+    expirations = [e for e in sorted(chain.expirations) if e >= now_date]
+    if not expirations:
+        return None
+    if not chain.strikes:
+        raise RuntimeError(f"Cannot determine {symbol} expiry without option strikes")
+    strike = min(chain.strikes, key=lambda value: abs(value - spot))
+    unavailable_hours = []
+    for expiry_str in expirations:
+        contract = option_factory(
+            symbol,
+            expiry_str,
+            strike,
+            "C",
+            chain.exchange,
+            tradingClass=chain.tradingClass,
+        )
+        await ib.qualifyContractsAsync(contract)
+        details = await ib.reqContractDetailsAsync(contract)
+        if not details:
+            unavailable_hours.append(expiry_str)
+            continue
+        complete, expiry_ms = _contract_expiry_close(details[0], expiry_str)
+        if not complete:
+            unavailable_hours.append(expiry_str)
+            continue
+        if expiry_ms is None:
+            continue
+        if expiry_ms > now_ms:
+            return expiry_str, expiry_ms
+    if unavailable_hours:
+        expiry_str = unavailable_hours[0]
+        raise RuntimeError(
+            f"IBKR did not provide complete authoritative session hours for "
+            f"{symbol} {expiry_str}; no verified expiry is available"
+        )
+    return None
 
 
 class SpxFeedController:
@@ -219,8 +435,10 @@ class SpxFeedController:
             "spot_price": None,
             "expiry_str": None,
             "expiry_timestamp_ms": None,
+            "expiry_close_time": None,
             "time_to_close_hours": None,
             "latest_quotes": {},
+            "available_quotes": {},
             "kalman_views": {},
             "filter_config": self.filters.config,
             "feed_running": False,
@@ -259,8 +477,8 @@ class SpxFeedController:
                     self.task = None
             self.symbol = sym
             self.strike_radius = 8.0 if sym == "SPY" else 80.0
-            now_ms, now = int(time.time() * 1000), time.monotonic()
-            self.filters.reset_all(now_ms=now_ms, now=now)
+            now_ms = int(time.time() * 1000)
+            self.filters = FilterManager(config=self.filters.config)
             should_restart = was_running and self._desired_enabled
             self.snapshot = {
                 "symbol": self.symbol,
@@ -274,8 +492,10 @@ class SpxFeedController:
                 "spot_price": None,
                 "expiry_str": None,
                 "expiry_timestamp_ms": None,
+                "expiry_close_time": None,
                 "time_to_close_hours": None,
                 "latest_quotes": {},
+                "available_quotes": {},
                 "kalman_views": {},
                 "filter_config": self.filters.config,
                 "feed_running": should_restart,
@@ -295,8 +515,27 @@ class SpxFeedController:
             raise ValueError(f"unknown market data type {market_data_type}")
         self.market_data_type = market_data_type
 
-    def set_strike_radius(self, radius: float):
-        self.strike_radius = radius
+    async def set_strike_radius(self, radius: float):
+        if radius == self.strike_radius:
+            return
+        async with self._lifecycle_lock:
+            if radius == self.strike_radius:
+                return
+            task = self.task
+            was_running = task is not None and not task.done()
+            if was_running:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                if self.task is task:
+                    self.task = None
+            self.strike_radius = radius
+            if was_running and self._desired_enabled:
+                self.task = asyncio.create_task(
+                    self._run(), name=f"{self.symbol.lower()}-0dte-live-feed"
+                )
 
     def set_recorder(self, recorder):
         self.recorder = recorder
@@ -438,36 +677,25 @@ class SpxFeedController:
                 )
                 raise RuntimeError(msg)
 
-            live_expiry = select_live_expiry(chain.expirations, int(time.time() * 1000))
+            live_expiry = await _select_contract_expiry(
+                ib, Option, self.symbol, chain, spot, int(time.time() * 1000)
+            )
             if live_expiry is None:
                 raise RuntimeError(
                     f"No unexpired {self.symbol} expirations (market closed?)"
                 )
             expiry_str, expiry_ms = live_expiry
+            expiry_close_time = datetime.fromtimestamp(
+                expiry_ms / 1000, ZoneInfo("America/New_York")
+            ).strftime("%I:%M %p ET").lstrip("0")
             # Only the subscribed session may own a filter (leftovers from an
             # earlier connection would otherwise show up in the reader).
             self.filters.retire({expiry_ms}, now_ms=int(time.time() * 1000))
 
-            # Select strikes around spot
-            effective_radius = (
-                self.strike_radius
-                if (self.symbol != "SPY" or self.strike_radius <= 25.0)
-                else max(5.0, round(self.strike_radius / 10.0))
+            # Select strikes around spot in the same point units as the UI.
+            strikes = select_strikes(
+                chain.strikes, spot, self.strike_radius, self.symbol
             )
-            if self.symbol == "SPY":
-                strikes = [
-                    s
-                    for s in sorted(chain.strikes)
-                    if abs(s - spot) <= effective_radius
-                ]
-            else:
-                strikes = [
-                    s
-                    for s in sorted(chain.strikes)
-                    if abs(s - spot) <= effective_radius and s % 5 == 0
-                ]
-            if not strikes:
-                strikes = sorted(chain.strikes, key=lambda s: abs(s - spot))[:20]
 
             # Both rights at the strikes nearest the money (for put-call parity
             # and a tighter-spread choice at those strikes); the OTM right
@@ -496,18 +724,22 @@ class SpxFeedController:
             tickers = [
                 ib.reqMktData(c, genericTickList="100,101,106") for c in contracts
             ]
+            quote_observations = [{} for _ in tickers]
+            for ticker, observation in zip(tickers, quote_observations):
+                _subscribe_quote_updates(ticker, observation)
 
             self.snapshot = {
                 **self.snapshot,
                 "symbol": self.symbol,
                 "status": (
                     f"{self._status_prefix()}Subscribed to {len(contracts)} "
-                    f"{self.symbol} 0DTE contracts ({expiry_str})"
+                    f"{self.symbol} 0DTE contracts ({expiry_str}, closes {expiry_close_time})"
                 ),
                 "connected": True,
                 "spot_price": spot,
                 "expiry_str": expiry_str,
                 "expiry_timestamp_ms": expiry_ms,
+                "expiry_close_time": expiry_close_time,
                 "market_data_type": self.market_data_type,
             }
             self.publish(self.snapshot)
@@ -515,6 +747,8 @@ class SpxFeedController:
             # Live polling & calibration loop
             while True:
                 await asyncio.sleep(2.0)
+                if not ib.isConnected():
+                    raise ConnectionError("IBKR disconnected; quote stream stopped")
                 now_ms, now = int(time.time() * 1000), time.monotonic()
                 spot = (
                     _finite_positive(ticker_underlying.marketPrice())
@@ -530,11 +764,12 @@ class SpxFeedController:
                         **self.snapshot,
                         "symbol": self.symbol,
                         "status": (
-                            f"{self.symbol} {expiry_str} session closed (4:00 PM ET) — "
+                            f"{self.symbol} {expiry_str} session closed ({expiry_close_time}) — "
                             "feed stopped, no quotes are being priced."
                         ),
                         "connected": True,
                         "latest_quotes": {},
+                        "available_quotes": {},
                         "kalman_views": {},
                         "time_to_close_hours": 0.0,
                         "published_ms": now_ms,
@@ -550,10 +785,39 @@ class SpxFeedController:
 
                 # Forward from put-call parity on the near-ATM strikes; fall back
                 # to spot (and say so) when there are too few clean pairs.
-                quotes = {
-                    (c.strike, c.right): _two_sided(t)
-                    for c, t in zip(contracts, tickers)
-                }
+                quotes = {}
+                quote_times = {}
+                available_quotes = {}
+                for c, ticker, observation in zip(contracts, tickers, quote_observations):
+                    key = (c.strike, c.right)
+                    quote = _observe_quote(ticker, observation, now_ms)
+                    quotes[key] = quote
+                    strike_label = int(c.strike) if c.strike == int(c.strike) else c.strike
+                    name = f"{self.symbol}_{expiry_str}_{strike_label}_{c.right}"
+                    if quote is not None:
+                        available_quotes[name] = {
+                            "strike": c.strike,
+                            "right": c.right,
+                            "bid": quote[0],
+                            "ask": quote[1],
+                            "received_ms": max(
+                                observation["bid_time"], observation["ask_time"]
+                            ),
+                        }
+                        bid_source_time = observation.get("bid_source_time")
+                        ask_source_time = observation.get("ask_source_time")
+                        if (
+                            self.market_data_type == 1
+                            and bid_source_time is not None
+                            and ask_source_time is not None
+                        ):
+                            quote_times[key] = max(bid_source_time, ask_source_time)
+                        else:
+                            quotes[key] = None
+                    if quotes[key] is None:
+                        self.filters.discard(
+                            name, expiry_ms, now_ms=now_ms, now=now
+                        )
                 parity = parity_forward(_parity_pairs(quotes, atm_strikes), spot)
                 if parity is not None:
                     forward, forward_source = (
@@ -566,34 +830,38 @@ class SpxFeedController:
                 latest_quotes = {}
 
                 for c, t in zip(contracts, tickers):
-                    if quotes[(c.strike, c.right)] is not None:
+                    quote = quotes[(c.strike, c.right)]
+                    if quote is not None:
+                        bid, ask = quote
+                        quote_time_ms = quote_times[(c.strike, c.right)]
+                        quote_years = max((expiry_ms - quote_time_ms) / YEAR_MS, 1e-9)
                         if self.recorder is not None:
                             await self.recorder.record_quote_async(
                                 symbol=self.symbol,
                                 expiry=expiry_str,
                                 strike=c.strike,
                                 right=c.right,
-                                bid=t.bid,
-                                ask=t.ask,
+                                bid=bid,
+                                ask=ask,
                                 bid_size=getattr(t, "bidSize", 0),
                                 ask_size=getattr(t, "askSize", 0),
                                 underlying_spot=spot,
-                                timestamp_ns=now_ms * 1_000_000,
+                                timestamp_ns=quote_time_ms * 1_000_000,
                             )
-                        mid = (t.bid + t.ask) / 2.0
+                        mid = (bid + ask) / 2.0
                         opt_type = OptionType.Put if c.right == "P" else OptionType.Call
                         # Invert bid/ask/mid with Black-76. A quote whose bid or ask
                         # cannot be inverted is skipped, never filled with a
                         # made-up spread (it would set the filter's precision).
                         bid_iv = _implied_vol(
-                            opt_type, c.strike, forward, t_years, t.bid
+                            opt_type, c.strike, forward, quote_years, bid
                         )
                         ask_iv = _implied_vol(
-                            opt_type, c.strike, forward, t_years, t.ask
+                            opt_type, c.strike, forward, quote_years, ask
                         )
                         if bid_iv is None or ask_iv is None:
                             continue
-                        mid_iv = _implied_vol(opt_type, c.strike, forward, t_years, mid)
+                        mid_iv = _implied_vol(opt_type, c.strike, forward, quote_years, mid)
                         if mid_iv is None:
                             mid_iv = (bid_iv + ask_iv) / 2.0
                         if ask_iv < bid_iv:
@@ -612,17 +880,17 @@ class SpxFeedController:
                         )
                         row = SpxIvRow(
                             instrument_name=name,
-                            timestamp_ms=now_ms,
+                            timestamp_ms=quote_time_ms,
                             strike=c.strike,
                             mid_iv=mid_iv,
                             bid_iv=bid_iv,
                             ask_iv=ask_iv,
                             forward=forward,
-                            expiry=t_years,
-                            bid_premium_btc=t.bid,
-                            ask_premium_btc=t.ask,
-                            bid_usd=t.bid,
-                            ask_usd=t.ask,
+                            expiry=quote_years,
+                            bid_premium_btc=bid,
+                            ask_premium_btc=ask,
+                            bid_usd=bid,
+                            ask_usd=ask,
                             right=c.right,
                         )
                         try:
@@ -641,20 +909,31 @@ class SpxFeedController:
                 rejects = (
                     f", {self.ingest_errors} rejected" if self.ingest_errors else ""
                 )
+                stream_status = (
+                    f"{self._status_prefix()}Streaming {self.symbol} 0DTE quotes "
+                    f"({len(latest_quotes)} active strikes{rejects})"
+                )
+                if self.market_data_type != 1:
+                    quote_label = (
+                        "delayed" if self.market_data_type in {3, 4} else "frozen"
+                    )
+                    stream_status += (
+                        f"; {len(available_quotes)} {quote_label} bid/ask quotes available; "
+                        f"IV withheld because {quote_label} TickData.time is local receipt time"
+                    )
                 self.snapshot = {
                     "symbol": self.symbol,
-                    "status": (
-                        f"{self._status_prefix()}Streaming {self.symbol} 0DTE quotes "
-                        f"({len(latest_quotes)} active strikes{rejects})"
-                    ),
+                    "status": stream_status,
                     "connected": True,
                     "spot_price": spot,
                     "forward": forward,
                     "forward_source": forward_source,
                     "expiry_str": expiry_str,
                     "expiry_timestamp_ms": expiry_ms,
+                    "expiry_close_time": expiry_close_time,
                     "time_to_close_hours": hours_left,
                     "latest_quotes": latest_quotes,
+                    "available_quotes": available_quotes,
                     "kalman_views": self.filters.snapshots(now=now),
                     "filter_config": self.filters.config,
                     "market_data_type": self.market_data_type,

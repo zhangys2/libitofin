@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import time
@@ -195,13 +196,20 @@ def test_feed_controller_records_quotes_to_parquet(monkeypatch):
             self._market_price = market_price
             self.bid, self.ask = bid, ask
             self.bidSize, self.askSize = bid_size, ask_size
+            observed_at = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+            self.ticks = [
+                SimpleNamespace(tickType=1, time=observed_at, price=bid),
+                SimpleNamespace(tickType=2, time=observed_at, price=ask),
+            ]
         def marketPrice(self):
             return self._market_price
 
     class _FakeIB:
         def __init__(self):
             self.option_contracts = []
-        async def connectAsync(self, *args, **kwargs): pass
+            self.connected = False
+        async def connectAsync(self, *args, **kwargs):
+            self.connected = True
         def reqMarketDataType(self, kind): pass
         async def qualifyContractsAsync(self, *contracts): pass
         async def reqSecDefOptParamsAsync(self, *args):
@@ -213,12 +221,21 @@ def test_feed_controller_records_quotes_to_parquet(monkeypatch):
                     strikes=[7735.0, 7740.0, 7745.0],
                 )
             ]
+        async def reqContractDetailsAsync(self, contract):
+            return [
+                SimpleNamespace(
+                    timeZoneId="US/Eastern",
+                    lastTradeTime="16:00:00",
+                    liquidHours=f"{contract.expiry}:0930-{contract.expiry}:1600",
+                )
+            ]
         def reqMktData(self, contract, *args, **kwargs):
             if hasattr(contract, "symbol") and contract.symbol == "SPX" and hasattr(contract, "strike"):
                 self.option_contracts.append(contract)
                 return _FakeTicker(market_price=7740.0, bid=15.0, ask=15.5, bid_size=8, ask_size=12)
             return _FakeTicker(market_price=7740.0)
-        def isConnected(self): return False
+        def isConnected(self): return self.connected
+        def disconnect(self): self.connected = False
 
     class _FakeIndex:
         conId = 1
@@ -231,6 +248,7 @@ def test_feed_controller_records_quotes_to_parquet(monkeypatch):
     class _FakeOption:
         def __init__(self, symbol, expiry, strike, right, exchange, tradingClass=None):
             self.symbol = symbol
+            self.expiry = expiry
             self.strike, self.right = float(strike), right
             self.exchange, self.tradingClass = exchange, tradingClass
 

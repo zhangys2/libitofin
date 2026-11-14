@@ -26,6 +26,72 @@ REST_SUMMARY = "https://www.deribit.com/api/v2/public/get_book_summary_by_curren
 _DAY_MS = 86_400_000
 _CHUNK = 100
 _SILENCE_S = 30.0
+_REJECT_LOG_S = 10.0
+_SUBSCRIBE_RETRY_S = 5.0
+
+
+def _is_market_data(message: dict) -> bool:
+    if message.get("method") != "subscription":
+        return False
+    params = message.get("params")
+    if not isinstance(params, dict) or not isinstance(params.get("channel"), str):
+        return False
+    channel = params["channel"]
+    data = params.get("data")
+    if channel.startswith(("ticker.", "book.")):
+        return (
+            isinstance(data, dict)
+            and isinstance(data.get("timestamp"), int)
+            and isinstance(data.get("instrument_name"), str)
+            and (
+                channel.startswith("ticker.")
+                or (
+                    isinstance(data.get("bids"), list)
+                    and isinstance(data.get("asks"), list)
+                    and all(
+                        isinstance(level, list)
+                        and len(level) == 2
+                        and all(isinstance(value, (int, float)) for value in level)
+                        for level in data["bids"] + data["asks"]
+                    )
+                )
+            )
+        )
+    if channel.startswith("trades."):
+        return isinstance(data, list) and all(
+            isinstance(trade, dict)
+            and isinstance(trade.get("timestamp"), int)
+            and isinstance(trade.get("instrument_name"), str)
+            for trade in data
+        )
+    if channel.startswith("deribit_price_index."):
+        price = data.get("price") if isinstance(data, dict) else None
+        return (
+            isinstance(data, dict)
+            and isinstance(data.get("timestamp"), int)
+            and isinstance(price, (int, float))
+            and not isinstance(price, bool)
+        )
+    return False
+
+
+def _rejection_category(message: dict) -> str | None:
+    if message.get("method") != "subscription":
+        return None
+    params = message.get("params")
+    channel = params.get("channel") if isinstance(params, dict) else None
+    for prefix in ("ticker.", "trades.", "book.", "deribit_price_index."):
+        if isinstance(channel, str) and channel.startswith(prefix):
+            return prefix[:-1]
+    return "other"
+
+
+def _report_rejections(rejected: dict[str, int], now: float, last_log: float) -> float:
+    if rejected and now - last_log >= _REJECT_LOG_S:
+        _log(f"rejected market-data frames={dict(rejected)}")
+        rejected.clear()
+        return now
+    return last_log
 
 
 def _log(message: str) -> None:
@@ -169,6 +235,7 @@ class Capture:
         self._ids = 0
         self._subscribed: set[str] = set()
         self._pending_subscribe: dict[int, list[str]] = {}
+        self._subscribe_retry_at: dict[str, float] = {}
         self._saved_names: frozenset[str] = frozenset()
         self._rows: list[dict] = []
         self._book_names: list[str] = []
@@ -237,7 +304,15 @@ class Capture:
         )
 
     async def _subscribe(self, ws, channels: list[str]) -> None:
-        new = [c for c in channels if c not in self._subscribed]
+        pending = {channel for batch in self._pending_subscribe.values() for channel in batch}
+        now = time.monotonic()
+        new = [
+            channel
+            for channel in channels
+            if channel not in self._subscribed
+            and channel not in pending
+            and now >= self._subscribe_retry_at.get(channel, 0.0)
+        ]
         for i in range(0, len(new), _CHUNK):
             chunk = new[i : i + _CHUNK]
             req_id = await self._rpc(ws, "public/subscribe", {"channels": chunk})
@@ -252,8 +327,13 @@ class Capture:
         if "error" in message:
             _log(f"subscribe rejected: {message['error']!r}")
             self._event("rpc_error", repr(message["error"])[:300])
+            retry_at = time.monotonic() + _SUBSCRIBE_RETRY_S
+            for channel in channels:
+                self._subscribe_retry_at[channel] = retry_at
             return True
         self._subscribed.update(channels)
+        for channel in channels:
+            self._subscribe_retry_at.pop(channel, None)
         return True
 
     async def _session(self) -> None:
@@ -263,20 +343,24 @@ class Capture:
         await self._refresh_books()
         self._subscribed.clear()
         self._pending_subscribe.clear()
+        self._subscribe_retry_at.clear()
+        desired_channels = self._channels(names)
         async with websockets.connect(
             WS_URL, ping_interval=20, ping_timeout=20, open_timeout=30, max_size=None
         ) as ws:
             self._event("connect", f"options={len(names)}")
             await self._rpc(ws, "public/set_heartbeat", {"interval": 30})
-            await self._subscribe(ws, self._channels(names))
+            await self._subscribe(ws, desired_channels)
             last_data = time.monotonic()
             last_refresh = time.monotonic()
             last_stats = time.monotonic()
+            last_rejected_log = time.monotonic()
+            rejected: dict[str, int] = {}
             count = 0
             while not self.stop.is_set():
                 try:
                     raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
-                except TimeoutError:
+                except (TimeoutError, asyncio.TimeoutError):
                     raw = None
                 now = time.monotonic()
                 if raw is not None:
@@ -290,19 +374,25 @@ class Capture:
                     elif message.get("method") == "heartbeat":
                         if (message.get("params") or {}).get("type") == "test_request":
                             await self._rpc(ws, "public/test", {})
-                    else:
+                    elif _is_market_data(message):
                         last_data = now
                         self.router.handle(message, recv_ns)
                         count += 1
-                elif now - last_data > _SILENCE_S:
+                    else:
+                        category = _rejection_category(message)
+                        if category is not None:
+                            rejected[category] = rejected.get(category, 0) + 1
+                last_rejected_log = _report_rejections(rejected, now, last_rejected_log)
+                if now - last_data > _SILENCE_S:
                     raise TimeoutError(f"no market data for {_SILENCE_S:.0f}s")
                 self.sink.maybe_flush()
                 if now - last_refresh >= self.args.refresh_seconds:
                     last_refresh = now
-                    fresh = await self._universe()
+                    names = await self._universe()
                     await self._refresh_books()
-                    await self._subscribe(ws, self._channels(fresh))
-                    await self._drop_stale(ws, fresh)
+                    desired_channels = self._channels(names)
+                    await self._drop_stale(ws, names)
+                await self._subscribe(ws, desired_channels)
                 if now - last_stats >= self.args.stats_seconds:
                     elapsed = now - last_stats
                     last_stats = now
@@ -314,7 +404,7 @@ class Capture:
                     count = 0
 
     async def run(self) -> int:
-        import websockets
+        from websockets.exceptions import WebSocketException
 
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -335,9 +425,10 @@ class Capture:
                 except (
                     OSError,
                     TimeoutError,
+                    asyncio.TimeoutError,
                     ValueError,
                     KeyError,
-                    websockets.exceptions.WebSocketException,
+                    WebSocketException,
                 ) as exc:
                     _log(f"disconnect {type(exc).__name__}: {exc}")
                     self._event("disconnect", f"{type(exc).__name__}: {exc}"[:300])
@@ -345,7 +436,7 @@ class Capture:
                         backoff = 1.0
                     try:
                         await asyncio.wait_for(self.stop.wait(), timeout=backoff)
-                    except TimeoutError:
+                    except (TimeoutError, asyncio.TimeoutError):
                         pass
                     backoff = min(backoff * 2.0, 30.0)
                 else:

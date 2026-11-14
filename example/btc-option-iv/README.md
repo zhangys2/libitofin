@@ -142,17 +142,21 @@ the filtered curve is neither arbitrage-free nor a trading signal.
 uv run --group dev --group notebook marimo edit spx_vol_surface.py --host 127.0.0.1 --port 8888 --headless
 ```
 
-Notes: market data defaults to **live** (needs an OPRA subscription); pick
-**Delayed** for the free ~15-minute feed, in which case the status is flagged
-and the data is not live. Quotes are inverted with Black-76 (discount = 1)
-using the real time to the 4:00 PM ET close; below 30 seconds to the close the
-feed stops. The **forward comes from put-call parity**, `F = K + C_mid - P_mid`,
+Notes: market data defaults to **live** (needs an OPRA subscription). IBKR's
+free delayed bid/ask ticks have receive timestamps, not quote-observation
+timestamps, so delayed IVs are withheld rather than priced at an invented
+time. Fresh live quotes are inverted with Black-76 (discount = 1), using the
+actual IBKR-reported option session close, including early closes. Expiries with
+missing session hours are skipped; if no later expiry has verified hours, the
+feed fails closed rather than guessing. It also stops below 30 seconds to expiry. The **forward comes from put-call parity**, `F = K + C_mid - P_mid`,
 the median of the tightest (up to five) pairs among the seven strikes nearest
 the money, which are subscribed on both rights. If fewer than two clean pairs
 exist, or the result is more than 2% from spot, it falls back to spot and the
 header says so. Parity mids carry roughly half a bid-ask spread of noise, so
-the forward can jitter by about a point. Only SPXW chains are used, and the
-earliest unexpired expiration is selected.
+the forward can jitter by about a point. The strike-window control uses SPX
+points; for SPY it applies one tenth of that range (the default ±80 becomes ±8).
+Only SPXW chains are used, and the earliest expiry with verified session hours
+is selected.
 The feed has not been exercised against a live gateway in CI.
 
 The filter follows the Rust `KalmanSmileSection` robustness rules: quotes beyond
@@ -170,6 +174,14 @@ Implementation: `btc_option_iv/kalman.py` (NumPy/SciPy math and expiry manager),
 `live.py` (source events and three-second immutable snapshot publication), and
 `views.py` (pure charts/tables). These optional notebook modules do not change
 the Rust API or the dependency-light streaming CLI.
+
+### Level 1 market watch
+
+Run `uv run --group notebook marimo edit level1_stream.py` to view the IBKR
+Level 1 feed. CL and GC use the nearest unexpired dated futures; changing the
+port or market-data type reconnects the feed. Futures roll after their last
+trading date. `download_historical_bars.py` leaves an existing symbol file
+untouched if either one-year request returns no bars.
 
 ## Offline tests
 

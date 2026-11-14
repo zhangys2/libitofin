@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import time
+from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 import pytest
@@ -157,11 +158,12 @@ def _black76(opt, strike, forward, t, vol):
 
 class _FakeTicker:
     def __init__(
-        self, market_price=float("nan"), close=float("nan"), bid=None, ask=None
+        self, market_price=float("nan"), close=float("nan"), bid=None, ask=None, ticks=()
     ):
         self._market_price = market_price
         self.close = close
         self.bid, self.ask = bid, ask
+        self.ticks = list(ticks)
         self.modelGreeks = None
 
     def marketPrice(self):
@@ -179,10 +181,11 @@ class _FakeIB:
         self.chains = list(chains)
         self.market_data_type = None
         self.option_contracts = []
+        self.connected = False
         _FakeIB.last = self
 
     async def connectAsync(self, *args, **kwargs):
-        pass
+        self.connected = True
 
     def reqMarketDataType(self, kind):
         self.market_data_type = kind
@@ -193,6 +196,16 @@ class _FakeIB:
     async def reqSecDefOptParamsAsync(self, *args):
         return self.chains
 
+    async def reqContractDetailsAsync(self, contract):
+        expiry = contract.expiry
+        return [
+            SimpleNamespace(
+                timeZoneId="US/Eastern",
+                lastTradeTime="16:00:00",
+                liquidHours=f"{expiry}:0930-{expiry}:1600",
+            )
+        ]
+
     def reqMktData(self, contract, *args, **kwargs):
         if isinstance(contract, (_FakeIndex, _FakeStock)):
             return self.spot_ticker
@@ -200,7 +213,10 @@ class _FakeIB:
         return self.option_ticker(contract)
 
     def isConnected(self):
-        return False
+        return self.connected
+
+    def disconnect(self):
+        self.connected = False
 
 
 class _FakeIndex:
@@ -220,6 +236,7 @@ class _FakeStock:
 class _FakeOption:
     def __init__(self, symbol, expiry, strike, right, exchange, tradingClass=None):
         self.symbol = symbol
+        self.expiry = expiry
         self.strike, self.right = float(strike), right
         self.exchange, self.tradingClass = exchange, tradingClass
 
@@ -265,7 +282,13 @@ def _smart_option_ticker(now_ms, forward=7740.0, vol=0.2):
 
     def make(contract):
         px = _black76(contract.right, contract.strike, forward, t, vol)
-        return _FakeTicker(bid=px * 0.99, ask=px * 1.01)
+        bid, ask = px * 0.99, px * 1.01
+        observed_at = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+        ticks = [
+            SimpleNamespace(tickType=1, time=observed_at, price=bid),
+            SimpleNamespace(tickType=2, time=observed_at, price=ask),
+        ]
+        return _FakeTicker(bid=bid, ask=ask, ticks=ticks)
 
     return make
 
@@ -583,9 +606,10 @@ def test_feed_dynamic_symbol_switch(monkeypatch):
         def __init__(self):
             self.option_contracts = []
             self.market_data_type = None
+            self.connected = False
 
         async def connectAsync(self, *args, **kwargs):
-            pass
+            self.connected = True
 
         def reqMarketDataType(self, kind):
             self.market_data_type = kind
@@ -596,6 +620,16 @@ def test_feed_dynamic_symbol_switch(monkeypatch):
         async def reqSecDefOptParamsAsync(self, symbol, *args):
             return [_spy_chain()] if symbol == "SPY" else [_spxw_chain()]
 
+        async def reqContractDetailsAsync(self, contract):
+            expiry = contract.expiry
+            return [
+                SimpleNamespace(
+                    timeZoneId="US/Eastern",
+                    lastTradeTime="16:00:00",
+                    liquidHours=f"{expiry}:0930-{expiry}:1600",
+                )
+            ]
+
         def reqMktData(self, contract, *args, **kwargs):
             if isinstance(contract, _FakeStock):
                 return _FakeTicker(market_price=774.50)
@@ -605,7 +639,10 @@ def test_feed_dynamic_symbol_switch(monkeypatch):
             return _FakeTicker(bid=2.0, ask=2.2)
 
         def isConnected(self):
-            return False
+            return self.connected
+
+        def disconnect(self):
+            self.connected = False
 
     fake = _MultiFakeIB()
     monkeypatch.setattr(

@@ -207,6 +207,13 @@ class LiveFeedController:
                                     MISSING_INDEX,
                                     MISSING_FORWARD,
                                 ):
+                                    rows.pop(name, None)
+                                    self.filters.discard(
+                                        name,
+                                        instrument.expiration_timestamp_ms,
+                                        now_ms=now_ms,
+                                        now=time.monotonic(),
+                                    )
                                     continue
                                 processed[name] = signature
                                 if (
@@ -215,7 +222,10 @@ class LiveFeedController:
                                 ):
                                     rows.pop(name, None)
                                     self.filters.discard(
-                                        name, instrument.expiration_timestamp_ms
+                                        name,
+                                        instrument.expiration_timestamp_ms,
+                                        now_ms=now_ms,
+                                        now=time.monotonic(),
                                     )
                                 else:
                                     rows[name] = outcome
@@ -237,6 +247,8 @@ class LiveFeedController:
                     backoff = 1.0
                 except (
                     OSError,
+                    ValueError,
+                    asyncio.TimeoutError,
                     TimeoutError,
                     WebSocketException,
                     json.JSONDecodeError,
