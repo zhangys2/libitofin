@@ -51,7 +51,7 @@
 //!   same [`NullParameter`]s through the embedded Vasicek's
 //!   [`CalibratedModelHolder`] seam.
 //! - C++ multiply-inherits `Vasicek` and `TermStructureConsistentModel`; here both
-//!   are composed as fields. Unlike Extended CIR, Hull-White *does*
+//!   are composed as fields. Like Extended CIR, Hull-White
 //!   [`register_with_term_structure`], so a relink re-runs `generate_arguments`
 //!   and the cached `r0` tracks the newly linked curve.
 //! - [`HullWhite::new`] returns a [`SharedMut`] because the term-structure

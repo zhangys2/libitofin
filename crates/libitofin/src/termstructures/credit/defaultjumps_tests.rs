@@ -34,7 +34,7 @@ fn curve(jumps: Vec<Handle<dyn Quote>>, dates: Vec<Date>) -> QlResult<FlatHazard
 }
 
 #[test]
-fn survival_uses_strict_boundaries_and_multiplies_only_the_elapsed_prefix() {
+fn survival_uses_strict_boundaries_and_multiplies_every_elapsed_jump() {
     let dates = vec![reference() + 100, reference() + 200];
     let curve = curve(vec![quote(0.9), quote(0.8)], dates.clone()).unwrap();
     assert_eq!(curve.jump_dates(), dates);
@@ -70,7 +70,7 @@ fn survival_uses_strict_boundaries_and_multiplies_only_the_elapsed_prefix() {
     let unsorted = self::curve(vec![quote(0.9), quote(0.8)], vec![dates[1], dates[0]]).unwrap();
     assert!(
         (unsorted.survival_probability(150.0 / 365.0, false).unwrap()
-            - (-0.02_f64 * 150.0 / 365.0).exp())
+            - 0.8 * (-0.02_f64 * 150.0 / 365.0).exp())
         .abs()
             < 1e-15
     );
@@ -91,6 +91,16 @@ fn invalid_jumps_are_checked_only_after_their_boundary() {
         assert!(curve.survival_probability(1.0, false).is_ok());
         assert!(curve.survival_probability(1.01, false).is_err());
     }
+    for date in [reference(), reference() - 30] {
+        let curve = curve(vec![quote(f64::NAN)], vec![date]).unwrap();
+        assert!(curve.survival_probability(1.0, false).is_ok());
+    }
+    let unsorted = curve(
+        vec![quote(0.9), quote(-0.1)],
+        vec![reference() + 365, reference() + 100],
+    )
+    .unwrap();
+    assert!(unsorted.survival_probability(0.5, false).is_err());
     assert!(curve(vec![quote(0.9)], vec![reference(), reference() + 1]).is_err());
     assert!(curve(vec![], vec![reference()]).is_err());
     assert!(curve(vec![quote(0.9)], vec![Date::null()]).is_err());
@@ -143,9 +153,9 @@ fn generated_dates_remain_fixed_while_reference_date_and_jump_times_move() {
         curve.jump_times().unwrap(),
         vec![-2.0 / 365.0, 363.0 / 365.0]
     );
-    assert_eq!(curve.survival_probability(0.0, false).unwrap(), 0.9);
+    assert_eq!(curve.survival_probability(0.0, false).unwrap(), 1.0);
     assert!(
-        (curve.survival_probability(1.0, false).unwrap() - 0.72 * (-0.02_f64).exp()).abs() < 1e-15
+        (curve.survival_probability(1.0, false).unwrap() - 0.8 * (-0.02_f64).exp()).abs() < 1e-15
     );
 }
 
@@ -263,4 +273,54 @@ fn independent_quantlib_jump_oracle() {
         rows += 1;
     }
     assert_eq!(rows, 12);
+}
+
+/// Ports QuantLib v1.44 `defaultprobabilitycurves.cpp` `testJumps` (:533) at
+/// its `BOOST_CHECK_CLOSE` tolerance of 1e-10 percent (1e-12 relative). The
+/// credit side is a stand-in: Rust's `InterpolatedHazardRateCurve` carries no
+/// jumps, so `FlatHazardRate::with_jumps` at the same flat 2% replaces the
+/// C++ `InterpolatedHazardRateCurve<Linear>` and shares the jump factor.
+#[test]
+fn credit_jumps_behave_like_yield_curve_jumps() {
+    use crate::math::interpolations::linear::Linear;
+    use crate::termstructures::yields::ZeroCurve;
+    let today = Date::new(15, Month::June, 2024);
+    let close =
+        |a: f64, b: f64| assert!((a - b).abs() <= 1e-12 * a.abs().max(b.abs()), "{a} != {b}");
+    let ratio = |jumps: Vec<Handle<dyn Quote>>, dates: Vec<Date>, t: f64| {
+        let yield_curve = ZeroCurve::with_jumps(
+            vec![today, today + 10 * 365],
+            vec![0.02, 0.02],
+            Actual365Fixed::new(),
+            None,
+            Linear,
+            jumps.clone(),
+            dates.clone(),
+        )
+        .unwrap();
+        let credit =
+            FlatHazardRate::with_jumps(today, quote(0.02), Actual365Fixed::new(), jumps, dates)
+                .unwrap();
+        let bare = (-0.02 * t).exp();
+        (
+            yield_curve.discount(t, false).unwrap() / bare,
+            credit.survival_probability(t, false).unwrap() / bare,
+        )
+    };
+    let q = quote(0.99);
+    for (jumps, dates, t, expected) in [
+        (vec![q.clone()], vec![today - 30], 1.0, 1.0),
+        (vec![q.clone()], vec![today], 1.0, 1.0),
+        (
+            vec![quote(0.90), quote(0.95)],
+            vec![today + 5 * 365, today + 365],
+            2.0,
+            0.95,
+        ),
+        (vec![q.clone()], vec![today + 180], 1.0, 0.99),
+    ] {
+        let (y, c) = ratio(jumps, dates, t);
+        close(y, expected);
+        close(c, y);
+    }
 }

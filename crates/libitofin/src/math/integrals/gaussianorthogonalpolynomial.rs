@@ -38,6 +38,13 @@ pub trait GaussianOrthogonalPolynomial {
     /// The weight function `w(x)`.
     fn w(&self, x: Real) -> Real;
 
+    /// `ln(w(x))` (QuantLib's `logW`), used by the quadrature weights when
+    /// `w(x)` under- or overflows; families override it with a form that
+    /// stays finite in the tails.
+    fn log_w(&self, x: Real) -> Real {
+        self.w(x).ln()
+    }
+
     /// The value of the monic polynomial `P_n(x)` via the three-term
     /// recurrence (iterative form of QuantLib's recursive `value`).
     fn value(&self, n: Size, x: Real) -> Real {
@@ -242,6 +249,10 @@ impl GaussianOrthogonalPolynomial for GaussLaguerrePolynomial {
     fn w(&self, x: Real) -> Real {
         x.powf(self.s) * (-x).exp()
     }
+
+    fn log_w(&self, x: Real) -> Real {
+        self.s * x.ln() - x
+    }
 }
 
 /// Generalized Gauss-Hermite polynomial, weight
@@ -286,6 +297,10 @@ impl GaussianOrthogonalPolynomial for GaussHermitePolynomial {
     fn w(&self, x: Real) -> Real {
         x.abs().powf(2.0 * self.mu) * (-x * x).exp()
     }
+
+    fn log_w(&self, x: Real) -> Real {
+        2.0 * self.mu * x.abs().ln() - x * x
+    }
 }
 
 /// Gauss hyperbolic polynomial, weight `w(x) = 1/cosh(x)` on the real line.
@@ -313,11 +328,52 @@ impl GaussianOrthogonalPolynomial for GaussHyperbolicPolynomial {
     fn w(&self, x: Real) -> Real {
         1.0 / x.cosh()
     }
+
+    /// Uses `ln(cosh x) = |x| - ln 2 + ln_1p(exp(-2|x|))`, since `cosh`
+    /// overflows above `|x|` of about 710.
+    fn log_w(&self, x: Real) -> Real {
+        let ax = x.abs();
+        -(ax - std::f64::consts::LN_2 + (-2.0 * ax).exp().ln_1p())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The log-space weights (QuantLib v1.44 `logWeight` overrides,
+    /// gaussianorthogonalpolynomial.cpp:74,100,194) must equal `ln(w(x))`
+    /// wherever `w` does not underflow. The v1.44 quadrature oracles only use
+    /// `s = 0` and `mu = 0`, and the far-tail nodes that take the log-space
+    /// path contribute below 1e-15 to any integral, so a `log_w` that dropped
+    /// its `s` or `mu` term would pass them; this pins the terms directly.
+    #[test]
+    fn log_weights_equal_the_log_of_the_weights() {
+        fn check(family: &str, log_w: Real, w: Real, x: Real) {
+            let expected = w.ln();
+            assert!(
+                (log_w - expected).abs() <= 1e-12 * expected.abs().max(1.0),
+                "{family}: log_w({x}) = {log_w}, ln(w({x})) = {expected}"
+            );
+        }
+        let xs = [0.3, 1.0, 2.0, 5.0, 10.0];
+        for s in [0.5, 1.5] {
+            let p = GaussLaguerrePolynomial::new(s).unwrap();
+            for x in xs {
+                check("laguerre", p.log_w(x), p.w(x), x);
+            }
+        }
+        for mu in [0.5, 1.0] {
+            let p = GaussHermitePolynomial::new(mu).unwrap();
+            for x in xs.iter().flat_map(|&x| [x, -x]) {
+                check("hermite", p.log_w(x), p.w(x), x);
+            }
+        }
+        let p = GaussHyperbolicPolynomial;
+        for x in xs.iter().flat_map(|&x| [x, -x]) {
+            check("hyperbolic", p.log_w(x), p.w(x), x);
+        }
+    }
 
     // Monic Legendre recurrence: alpha_k = 0, beta_k = k^2 / (4k^2 - 1),
     // weight w(x) = 1 on [-1, 1], mu_0 = 2.

@@ -1,4 +1,4 @@
-"""Explicit immutable callable risk, QuantLib 1.43 clean-normalized oracle."""
+"""Explicit immutable callable risk, QuantLib 1.44 dirty-normalized oracle."""
 import csv
 import gc
 import math
@@ -33,7 +33,7 @@ def fixture(kind, right="none", redemption=100.0):
 
 
 @pytest.mark.parametrize("row", ROWS)
-def test_quantlib143_clean_normalized_duration_convexity(row):
+def test_quantlib144_dirty_normalized_duration_convexity(row):
     """Preserve original core oracle absolute tolerances, including negative convexity."""
     bond, engine, dc, _, _ = fixture(row["kind"], row["right"])
     comp, freq = {"continuous": (Compounding.Continuous, Frequency.Annual), "compounded": (Compounding.Compounded, Frequency.Semiannual), "simple": (Compounding.Simple, Frequency.Annual)}[row["compounding"]]

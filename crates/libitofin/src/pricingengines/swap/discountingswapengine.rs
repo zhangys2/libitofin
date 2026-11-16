@@ -210,10 +210,11 @@ mod tests {
         BlackIborCouponPricer, FixedRateLeg, FloatingRateCouponPricer, IborLeg, set_coupon_pricer,
     };
     use crate::currency::Currency;
+    use crate::handle::RelinkableHandle;
     use crate::indexes::IborIndex;
     use crate::indexes::ibor::Euribor;
     use crate::instrument::Instrument;
-    use crate::instruments::{Swap, SwapType, VanillaSwap};
+    use crate::instruments::{FixedVsFloatingSwap, Swap, SwapType, VanillaSwap};
     use crate::interestrate::Compounding;
     use crate::shared::{SharedMut, shared, shared_mut};
     use crate::termstructures::volatility::{
@@ -245,8 +246,20 @@ mod tests {
         settings: Shared<Settings<Date>>,
         calendar: Calendar,
         settlement: Date,
-        curve: Handle<dyn YieldTermStructure>,
+        curve: RelinkableHandle<dyn YieldTermStructure>,
         index: Shared<IborIndex>,
+        nominal: Real,
+    }
+
+    /// A flat continuously-compounded Actual365Fixed curve fixed at `reference`.
+    fn flat(reference: Date, rate: Rate) -> Shared<dyn YieldTermStructure> {
+        shared(FlatForward::with_rate(
+            reference,
+            rate,
+            Actual365Fixed::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ))
     }
 
     impl Vars {
@@ -262,21 +275,18 @@ mod tests {
                 BusinessDayConvention::Following,
                 false,
             );
-            let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(FlatForward::with_rate(
-                settlement,
-                0.05,
-                Actual365Fixed::new(),
-                Compounding::Continuous,
-                Frequency::Annual,
-            ))
-                as Shared<dyn YieldTermStructure>);
-            let index = shared(Euribor::six_months(curve.clone(), Shared::clone(&settings)));
+            let curve = RelinkableHandle::new(flat(settlement, 0.05));
+            let index = shared(Euribor::six_months(
+                curve.handle(),
+                Shared::clone(&settings),
+            ));
             Vars {
                 settings,
                 calendar,
                 settlement,
                 curve,
                 index,
+                nominal: NOMINAL,
             }
         }
 
@@ -324,7 +334,7 @@ mod tests {
                 .build();
             let mut swap = VanillaSwap::new(
                 SwapType::Payer,
-                NOMINAL,
+                self.nominal,
                 fixed_schedule,
                 fixed_rate,
                 Thirty360::with_convention(Convention::BondBasis),
@@ -337,7 +347,7 @@ mod tests {
             )
             .unwrap();
             let engine = shared_mut(DiscountingSwapEngine::new(
-                self.curve.clone(),
+                self.curve.handle(),
                 None,
                 None,
                 None,
@@ -608,6 +618,82 @@ mod tests {
             (npv - STORED).abs() <= 1.0,
             "Wrong NPV calculation: expected {STORED}, calculated {npv}"
         );
+    }
+
+    /// `swap.cpp` `testZeroBpsFairRateAndSpread` (:682): on a zero nominal both
+    /// leg BPS are exactly zero, so the fair-value fallback is skipped
+    /// (`fixedvsfloatingswap.cpp:201,206`) and both accessors fail instead of
+    /// answering `0/0`. The leg BPS are read first, so the fair values fail
+    /// because the fallback was skipped and not because a leg accessor left
+    /// them unrecovered (#1456).
+    #[test]
+    fn a_zero_nominal_swap_has_no_fair_values() {
+        let mut vars = Vars::new(Date::new(17, Month::June, 2002), true);
+        vars.nominal = 0.0;
+        let mut swap = vars.make_swap(10, 0.0, 0.0);
+        let base = swap.fixed_vs_floating_mut();
+
+        assert!(!base.is_expired().unwrap());
+        assert_eq!(base.fixed_leg_bps().unwrap(), 0.0);
+        assert_eq!(base.floating_leg_bps().unwrap(), 0.0);
+        assert_eq!(
+            base.fair_rate().unwrap_err().message(),
+            "result not available"
+        );
+        assert_eq!(
+            base.fair_spread().unwrap_err().message(),
+            "result not available"
+        );
+    }
+
+    /// Both fair values, then the four leg values (BPS and NPV per leg).
+    fn readings(swap: &mut VanillaSwap) -> [Real; 6] {
+        let base = swap.fixed_vs_floating_mut();
+        [
+            base.fair_rate().unwrap(),
+            base.fair_spread().unwrap(),
+            base.fixed_leg_bps().unwrap(),
+            base.fixed_leg_npv().unwrap(),
+            base.floating_leg_bps().unwrap(),
+            base.floating_leg_npv().unwrap(),
+        ]
+    }
+
+    /// Reading any leg accessor first leaves every fair value and leg value
+    /// as a fresh swap read fair values first gives (#1456).
+    #[test]
+    fn a_leg_read_first_gives_the_natural_order_numbers() {
+        let vars = Vars::new(Date::new(17, Month::June, 2002), true);
+        let expected = readings(&mut vars.make_swap(10, 0.06, 0.001));
+        let firsts: [fn(&mut FixedVsFloatingSwap) -> QlResult<Real>; 4] = [
+            FixedVsFloatingSwap::fixed_leg_bps,
+            FixedVsFloatingSwap::fixed_leg_npv,
+            FixedVsFloatingSwap::floating_leg_bps,
+            FixedVsFloatingSwap::floating_leg_npv,
+        ];
+        for first in firsts {
+            let mut swap = vars.make_swap(10, 0.06, 0.001);
+            first(swap.fixed_vs_floating_mut()).unwrap();
+            assert_eq!(readings(&mut swap), expected);
+        }
+    }
+
+    /// A leg read after the curve is relinked refreshes the fair values too:
+    /// they move, and match a fresh swap on the new curve, instead of staying
+    /// at the old curve's numbers (#1456).
+    #[test]
+    fn a_leg_read_after_a_relink_refreshes_the_fair_values() {
+        let vars = Vars::new(Date::new(17, Month::June, 2002), true);
+        let mut swap = vars.make_swap(10, 0.06, 0.001);
+        let before = readings(&mut swap);
+
+        vars.curve.link_to(flat(vars.settlement, 0.07));
+        swap.fixed_vs_floating_mut().fixed_leg_bps().unwrap();
+        let after = readings(&mut swap);
+
+        assert_ne!(after[0], before[0]);
+        assert_ne!(after[1], before[1]);
+        assert_eq!(after, readings(&mut vars.make_swap(10, 0.06, 0.001)));
     }
 
     /// An empty discount-curve handle is rejected before any discounting, as the

@@ -619,3 +619,72 @@ fn interpolated_cube_boundary_preserves_node_order_and_quote_updates() {
         assert!((vol - 0.2).abs() < 1e-10);
     }
 }
+
+#[test]
+fn sabr_smile_boundary_serves_the_normal_formula() {
+    use crate::smile_api::*;
+    let mut c = Context::new();
+    let mut id = 0;
+    unsafe {
+        assert_eq!(
+            itofin_sabr_smile_new(
+                &mut c,
+                1.0,
+                100.0,
+                0.2,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1,
+                &mut id,
+                std::ptr::null_mut()
+            ),
+            0
+        );
+    }
+    for (strike, vol, variance) in [
+        (80.0, 17.895804329943733, 320.2598126156329),
+        (100.0, 19.966666666666665, 398.6677777777777),
+        (120.0, 21.902694355512388, 479.72802003099423),
+    ] {
+        for (kind, expected) in [(0, vol), (1, variance)] {
+            let mut out = 0.0;
+            unsafe {
+                assert_eq!(
+                    itofin_sabr_smile_query(
+                        &mut c,
+                        id,
+                        kind,
+                        strike,
+                        &mut out,
+                        std::ptr::null_mut()
+                    ),
+                    0
+                );
+            }
+            assert!(
+                ((out - expected) / expected).abs() <= 1e-14,
+                "kind {kind} strike {strike}: got {out}, expected {expected}"
+            );
+        }
+    }
+    unsafe {
+        assert_eq!(
+            itofin_sabr_smile_new(
+                &mut c,
+                1.0,
+                100.0,
+                0.2,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                2,
+                &mut id,
+                std::ptr::null_mut()
+            ),
+            INVALID_ARGUMENT
+        );
+    }
+}

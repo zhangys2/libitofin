@@ -65,7 +65,7 @@ func TestCreditJumpsQuantLibOracle(t *testing.T) {
 	pricingOK(t, dc.Close())
 	pricingOK(t, settings.Close())
 	pricingNear(t, pricingMust(explicit.SurvivalProbability(2, false)), .72*math.Exp(-.04), 1e-15)
-	pricingNear(t, pricingMust(moving.SurvivalProbability(1, false)), .72*math.Exp(-.02), 1e-15)
+	pricingNear(t, pricingMust(moving.SurvivalProbability(1, false)), .8*math.Exp(-.02), 1e-15)
 }
 
 func TestCreditJumpsInvalidArguments(t *testing.T) {

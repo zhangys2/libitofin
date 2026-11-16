@@ -493,11 +493,11 @@ class CallableFixedRateBond(Bond):
         """
     def effective_duration(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
         r"""
-        Effective conventional-OAS clean-price duration, without changing installed pricing state.
+        Effective conventional-OAS duration over the dirty center price, without changing installed pricing state.
         """
     def effective_convexity(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
         r"""
-        Effective conventional-OAS clean-price convexity, without changing installed pricing state.
+        Effective conventional-OAS convexity over the dirty center price, without changing installed pricing state.
         """
     def callability(self) -> builtins.list[Callability]: ...
     def frequency(self) -> time.Frequency: ...
@@ -531,11 +531,11 @@ class CallableZeroCouponBond(Bond):
         """
     def effective_duration(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
         r"""
-        Effective conventional-OAS clean-price duration, without changing installed pricing state.
+        Effective conventional-OAS duration over the dirty center price, without changing installed pricing state.
         """
     def effective_convexity(self, spread: builtins.float, engine: pricingengines.TreeCallableFixedRateBondEngine, day_counter: time.DayCounter, compounding: time.Compounding, frequency: time.Frequency, *, bump: typing.Optional[builtins.float] = None) -> builtins.float:
         r"""
-        Effective conventional-OAS clean-price convexity, without changing installed pricing state.
+        Effective conventional-OAS convexity over the dirty center price, without changing installed pricing state.
         """
     def callability(self) -> builtins.list[Callability]: ...
     def day_counter(self) -> time.DayCounter: ...

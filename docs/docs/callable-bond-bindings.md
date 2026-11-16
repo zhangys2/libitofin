@@ -249,7 +249,7 @@ discountCurve, settings)`, concrete `SetBlackEngine` and
 `itofin_callable_bond_implied_volatility`; optional control presence bits are
 1, 2, 4 and 8 respectively. Existing session/thread/output contracts apply.
 
-## Effective clean-price risk
+## Effective OAS risk
 
 Both concrete callable products expose pure native duration and convexity:
 
@@ -264,10 +264,11 @@ bond.effective_convexity(spread, engine, day_counter, compounding, frequency, bu
   compounding and frequency determine its contractual-maturity conversion.
 - Omitted `bump` delegates native `None`, exactly `2e-4` (two basis points).
   An explicit bump must be finite, positive and representable around the spread.
-- Results normalize centered conventional-spread bumps by default-settlement
-  **clean price per 100**, not dirty price, currency PV or curve-reference NPV.
-  Negative convexity is valid. A zero center returns zero only after both bumped
-  prices succeed. Conversion, arithmetic and pricing errors remain errors.
+- Results normalize centered clean-price bumps by the default-settlement
+  **dirty center price per 100** (clean plus accrued), as QuantLib 1.44 does,
+  not currency PV or curve-reference NPV. Negative convexity is valid. A zero
+  dirty center returns zero only after both bumped prices succeed. Conversion,
+  arithmetic and pricing errors remain errors and come before the accrued read.
 - Neither success nor failure attaches an engine, prepares the installed engine,
   changes frozen/cache/policy state or mutates model parameters or curve handles.
   No installed engine is required; an explicitly supplied tree may differ from it.
@@ -284,7 +285,7 @@ C exposes `ItofinCallableBondRiskConfig` and
 `itofin_callable_bond_effective_duration` / `itofin_callable_bond_effective_convexity`.
 Config presence bit 1 selects `bump`; an unflagged payload is ignored, including
 NaN. All other flag bits reject. Standard session/thread/type and untouched-output
-on error contracts apply. The 36-row QuantLib 1.43 sensitivity oracle preserves
+on error contracts apply. The 36-row QuantLib 1.44 sensitivity oracle preserves
 core absolute tolerances `2e-9` for duration and `2e-6` for convexity.
 
 ## Scope and evidence

@@ -97,7 +97,7 @@ Sources and fixtures live in [`sdk/go/testdata`](../sdk/go/testdata/):
   also checks the extracted upstream overnight surface against a compounded leg.
 - `credit_completion_oracle.py` and `rates_completion_oracle.py`: QuantLib 1.43;
   CDS prices retain 1e-8 and fair quotes 1e-12; rate discounts retain 1e-12.
-- `credit_jumps_oracle.cpp`: QuantLib 1.43; strict-boundary survival retains 1e-15.
+- `credit_jumps_oracle.cpp`: QuantLib 1.44; strict-boundary survival retains 1e-15.
 - `isda_helpers.csv`: the [core generator](../crates/libitofin/tests/fixtures/isda_helpers/generator.py)
   produces the same 18 binding rows; survival and implied quotes retain 1e-10.
   Binding discount scenarios rebuild the market; Rust additionally checks live

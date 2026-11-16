@@ -16,8 +16,10 @@ use libitofin::termstructures::yields::FlatForward;
 use libitofin::termstructures::yieldtermstructure::YieldTermStructure;
 use libitofin::time::businessdayconvention::BusinessDayConvention;
 use libitofin::time::calendars::nullcalendar::NullCalendar;
+use libitofin::time::calendars::target::Target;
 use libitofin::time::date::{Date, Month};
 use libitofin::time::daycounters::actual365fixed::Actual365Fixed;
+use libitofin::time::daycounters::thirty360::{Convention, Thirty360};
 use libitofin::time::frequency::Frequency;
 use libitofin::time::period::Period;
 use libitofin::time::schedule::MakeSchedule;
@@ -174,5 +176,86 @@ fn five_independent_quantlib_coupon_and_exercise_ordering_cases() {
         close(bond.dirty_price().unwrap(), dirty, 1e-11);
         close(bond.clean_price().unwrap(), clean, 1e-11);
         close(bond.bond().accrued_amount(None).unwrap(), accrued, 1e-14);
+    }
+}
+
+/// Ports QuantLib v1.44 `callablebonds.cpp` `testUnexercisableCallability`
+/// (:673, tolerance 1e-10 at :708) with the `Globals` fixture (:47-90): an
+/// unreachable exercise snapped onto a coupon date moves that coupon ahead of
+/// the exercise, so a real exercise on the coupon date must add it back. The
+/// absolute prices are pinned from a v1.44 C++ build of the same fixture.
+#[test]
+fn unexercisable_callability_snapped_onto_coupon_date_leaves_price_alone() {
+    let calendar = Target::new();
+    let convention = BusinessDayConvention::ModifiedFollowing;
+    let today = Date::new(3, Month::June, 2004);
+    let settings = shared(Settings::new());
+    settings.set_evaluation_date(today);
+    let settlement = calendar.advance(
+        today,
+        3,
+        TimeUnit::Days,
+        BusinessDayConvention::Following,
+        false,
+    );
+    let issue = calendar.adjust(today - 100, BusinessDayConvention::Following);
+    let maturity = calendar.advance(
+        issue,
+        10,
+        TimeUnit::Years,
+        BusinessDayConvention::Following,
+        false,
+    );
+    let curve: Shared<dyn YieldTermStructure> = shared(FlatForward::with_rate(
+        settlement,
+        0.032,
+        Actual365Fixed::new(),
+        Compounding::Continuous,
+        Frequency::Annual,
+    ));
+    let model = HullWhite::new(Handle::new(curve), 0.1, 0.01).unwrap();
+    let schedule = MakeSchedule::new()
+        .from(issue)
+        .to(maturity)
+        .with_calendar(calendar)
+        .with_frequency(Frequency::Semiannual)
+        .with_convention(convention)
+        .backwards()
+        .build();
+    let coupon_date = schedule.date(8);
+    let price = |exercises: Vec<Callability>| {
+        let mut bond = CallableFixedRateBond::new(
+            3,
+            10000.0,
+            schedule.clone(),
+            vec![0.05],
+            Thirty360::with_convention(Convention::BondBasis),
+            convention,
+            100.0,
+            Some(issue),
+            exercises,
+            settings.clone(),
+        )
+        .unwrap();
+        bond.base_mut().set_pricing_engine(shared_mut(
+            TreeCallableFixedRateBondEngine::new(model.clone(), 240, settings.clone()).unwrap(),
+        ));
+        bond.clean_price().unwrap()
+    };
+    assert_eq!(coupon_date, Date::new(25, Month::February, 2008));
+    for (kind, strike, unreachable, quantlib) in [
+        (CallabilityType::Call, 100.0, 200.0, 105.92283572483946),
+        (CallabilityType::Put, 110.0, 0.0, 117.40002838621254),
+    ] {
+        let on_coupon_date = Callability::new(BondPrice::Clean(strike), kind, coupon_date).unwrap();
+        let expected = price(vec![on_coupon_date.clone()]);
+        close(expected, quantlib, 1e-8);
+        for days in 1..=7 {
+            let exercises = vec![
+                Callability::new(BondPrice::Dirty(unreachable), kind, coupon_date - days).unwrap(),
+                on_coupon_date.clone(),
+            ];
+            close(price(exercises), expected, 1e-10);
+        }
     }
 }

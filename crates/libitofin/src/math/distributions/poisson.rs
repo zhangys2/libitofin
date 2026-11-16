@@ -304,4 +304,48 @@ mod tests {
         let median = icp.quantile(Probability::try_from(0.5).unwrap()).unwrap();
         assert!((median - 700.0).abs() < 25.0, "median = {median}");
     }
+
+    /// QuantLib v1.44 `testPoissonInvalidParameters` (`distributions.cpp:701`).
+    /// The out-of-range probabilities fail at the [`Probability`] newtype, the
+    /// only way into [`Quantile::quantile`].
+    #[test]
+    fn v144_poisson_invalid_parameters() {
+        assert!(PoissonDistribution::new(-1.0).is_err());
+        assert!(PoissonDistribution::new(Real::NAN).is_err());
+        assert!(InverseCumulativePoisson::new(0.0).is_err());
+        assert!(InverseCumulativePoisson::new(-1.0).is_err());
+
+        let inverse = InverseCumulativePoisson::new(1.0).unwrap();
+        for p in [-0.1, 1.1, Real::NAN] {
+            assert!(
+                Probability::try_from(p)
+                    .and_then(|p| inverse.quantile(p))
+                    .is_err(),
+                "p = {p}"
+            );
+        }
+    }
+
+    /// QuantLib v1.44 `testInverseCumulativePoisson` (`distributions.cpp:659`),
+    /// the endpoint and monotonicity assertions added at `:689-699`. v1.44
+    /// returns `QL_MAX_REAL` at `p = 1`; we return `+inf`, the support bound, as
+    /// documented on [`InverseCumulativePoisson::quantile`] (the same endpoint
+    /// rule as the Student-t quantile).
+    #[test]
+    fn v144_inverse_cumulative_poisson_endpoints() {
+        let at = |icp: &InverseCumulativePoisson, p: Real| {
+            icp.quantile(Probability::try_from(p).unwrap()).unwrap()
+        };
+        let icp = InverseCumulativePoisson::new(1.0).unwrap();
+        assert_eq!(at(&icp, 0.0), 0.0);
+        assert_eq!(at(&icp, 1.0), Real::INFINITY);
+
+        let icp4 = InverseCumulativePoisson::new(4.0).unwrap();
+        let mut previous = -1.0;
+        for p in [0.1, 0.5, 0.9, 0.99] {
+            let calculated = at(&icp4, p);
+            assert!(calculated > previous, "icp4({p}) = {calculated}");
+            previous = calculated;
+        }
+    }
 }

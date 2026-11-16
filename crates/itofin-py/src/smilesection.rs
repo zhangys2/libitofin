@@ -11,10 +11,9 @@
 //! exercise time from a reference date and a day counter, which a caller can do
 //! with `DayCounter.year_fraction`.
 //!
-//! Deferred (visible): normal (Bachelier) SABR volatility and a non-zero
-//! lognormal shift are rejected by the core constructor, both under #586, so the
-//! arguments are accepted here and the core's error surfaces as an
-//! `ItofinError`.
+//! Deferred (visible): a non-zero lognormal shift is rejected by the core
+//! constructor under #586, so the argument is accepted here and the core's error
+//! surfaces as an `ItofinError`.
 
 use crate::PyQlError;
 use crate::swaptionvol::PyVolatilityType;
@@ -59,13 +58,13 @@ impl PySabrSmileSection {
     ///     rho (float): The SABR rho, whose square must be below 1.
     ///     shift (float): The lognormal shift; a non-zero shift is deferred
     ///         and refused.
-    ///     volatility_type (VolatilityType): The quoting convention; Normal is
-    ///         deferred and refused.
+    ///     volatility_type (VolatilityType): The quoting convention:
+    ///         ShiftedLognormal (Black) or Normal (Bachelier).
     ///
     /// Raises:
-    ///     ItofinError: On a non-zero shift or a Normal volatility_type, both
-    ///         deferred to #586; on a non-positive shifted forward; and on
-    ///         SABR parameters outside their admissible ranges.
+    ///     ItofinError: On a non-zero shift (deferred to #586); on a
+    ///         non-positive shifted forward; and on SABR parameters outside
+    ///         their admissible ranges.
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (exercise_time, forward, alpha, beta, nu, rho, shift = 0.0, volatility_type = PyVolatilityType::ShiftedLognormal))]

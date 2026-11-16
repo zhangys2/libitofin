@@ -3,24 +3,21 @@
 //! Port of `ql/math/distributions/studenttdistribution.{hpp,cpp}`: the standard
 //! (location 0, scale 1) Student-t [`StudentT`] with `ν` degrees of freedom,
 //! providing the density, the cumulative distribution via the regularized
-//! [`incomplete_beta`] function, and the inverse via the Newton iteration that
-//! QuantLib's `InverseCumulativeStudent` uses.
+//! incomplete beta function, and the inverse via Boost's Student-t quantile
+//! that QuantLib v1.44's `InverseCumulativeStudent` calls.
 
 use std::f64::consts::PI;
 
 use super::{Cdf, Density, Probability, Quantile, Support};
 use crate::errors::QlResult;
 use crate::fail;
-use crate::math::beta::incomplete_beta;
+use crate::math::beta::incomplete_beta_xy;
+use crate::math::distributions::normal::CumulativeNormalDistribution;
 use crate::math::gammafunction::log_gamma;
 use crate::require;
 use crate::types::Real;
 
-// Defaults transcribed from QuantLib's InverseCumulativeStudent (accuracy 1e-6,
-// 50 iterations). Kept private until a consumer needs them configurable, rather
-// than introducing a generic solver-options type speculatively.
-const QUANTILE_ACCURACY: Real = 1e-6;
-const QUANTILE_MAX_ITERATIONS: u32 = 50;
+mod inverse;
 
 /// The standard Student-t distribution with `ν` degrees of freedom.
 #[derive(Clone, Copy, Debug)]
@@ -79,16 +76,42 @@ impl Cdf for StudentT {
             return Real::NAN;
         }
         let nu = self.degrees_of_freedom;
-        let z = nu / (nu + x * x);
-        // For any valid StudentT the incomplete-beta arguments are restricted to
-        //   a = ν/2 >= 0.5,  b = 0.5,  z = ν/(ν + x²) in [0, 1],
-        // and the z = 0 (x = ±∞) and z = 1 (x = 0) endpoints short-circuit in
-        // incomplete_beta before its continued fraction runs. Failure to
-        // converge on this domain is a defect in the special function, not a
-        // caller-recoverable condition, so we assert rather than propagate.
-        let tail = 0.5
-            * incomplete_beta(0.5 * nu, 0.5, z)
-                .expect("incomplete beta must converge for valid Student-t parameters");
+        // Beyond 1/eps degrees of freedom the Student-t is the normal to
+        // within an ulp, and Boost's cdf returns the normal cdf there (#1468, a
+        // divergence: QuantLib always takes the incomplete beta). The 1e20 of
+        // the quantile is only where its normal estimate is taken as exact.
+        if nu > 1.0 / Real::EPSILON {
+            return CumulativeNormalDistribution::standard().value(x);
+        }
+        let x2 = x * x;
+        let total = nu + x2;
+        let y = if total.is_finite() { x2 / total } else { 1.0 };
+        let z = nu / total;
+        // Near the centre, where y = x²/(ν + x²) satisfies y·(ν+5) < 3, the
+        // forward I_z(ν/2, 1/2) with z = ν/(ν + x²) rounds towards 1 and
+        // cancels, so the half-mass I_y(1/2, ν/2) is evaluated directly (#1461,
+        // a divergence from QuantLib's single forward form). The switch is
+        // incomplete_beta's own crossover for I_y(1/2, ν/2); y is 1 when ν + x²
+        // overflows (|x| = ∞ included) and falls to the forward form. Either
+        // way the arguments are a, b in {1/2, ν/2} with ν/2 > 0 and an argument
+        // in [0, 1], and the 0 and 1 endpoints short-circuit in incomplete_beta
+        // before its continued fraction runs. Each form passes its exact
+        // complement (z for y, y for z), since 1 - z rounds away the tail for
+        // large ν (#1468). The incomplete beta's iteration limit grows like
+        // sqrt(ν), so it converges on every swept input of this domain (#1463,
+        // tests/incomplete_beta_large_a.rs; empirical, not a proof); a failure
+        // is a defect in the special function, not a caller-recoverable
+        // condition, so we assert rather than propagate. Deferred: the forward
+        // form's continued fraction cancels at z near 1 for large ν (|x| > √3:
+        // about 1e-10 relative at ν = 1e7, 3e-5 at 1e12, 0.1 at 2^52), where
+        // Boost switches to beta_small_b_large_a_series; that port is tracked
+        // as #1476.
+        const CONVERGES: &str = "incomplete beta must converge for valid Student-t parameters";
+        if y * (nu + 5.0) < 3.0 {
+            let half = 0.5 * incomplete_beta_xy(0.5, 0.5 * nu, y, z).expect(CONVERGES);
+            return if x <= 0.0 { 0.5 - half } else { 0.5 + half };
+        }
+        let tail = 0.5 * incomplete_beta_xy(0.5 * nu, 0.5, z, y).expect(CONVERGES);
         if x <= 0.0 { tail } else { 1.0 - tail }
     }
 
@@ -110,24 +133,58 @@ impl Support for StudentT {
     }
 }
 
-impl Quantile for StudentT {
-    fn quantile(&self, p: Probability) -> QlResult<Real> {
-        let p = p.value();
-        // The generalized inverse maps the closed endpoints to the support.
-        if p == 0.0 {
-            return Ok(self.lower_bound());
+impl StudentT {
+    /// One Halley step on the cdf from a lower-tail estimate `t < 0` at
+    /// `u <= 0.5`, as Boost's `fast_students_t_quantile_imp`.
+    ///
+    /// The residual `p0 = cdf(t) - u` is the forward `I_x(ν/2, 1/2) / 2 - u`
+    /// in `x = ν/(ν+t²)` when `y = t²/(ν+t²) >= 3/(ν+5)`, else, near the
+    /// centre where `I_y` is small and the forward form cancels,
+    /// `(0.5 - u) - I_y(1/2, ν/2) / 2`.
+    /// Boost switches at `x < y` and evaluates the complement
+    /// `f0 = 1 - I_y(1/2, ν/2)` to full precision inside its ibeta; this
+    /// incomplete beta has no complemented entry point, so `p0 = f0/2 - u`
+    /// is rearranged to avoid the subtraction and used only where `I_y` is
+    /// small (Boost's switch would cancel in the large-`ν` tails, where
+    /// `t² < ν` but `I_y` is near `1`). Each form passes its exact complement,
+    /// as the cdf does. The pdf stands in for Boost's ibeta derivative.
+    ///
+    /// The step ratio `p0 / pdf(t)` is formed in log space, so it stays
+    /// defined where the density is subnormal (the deep tail); only Boost's
+    /// `x == 0` bail-out returns the estimate unrefined.
+    fn halley_step(&self, t: Real, u: Real) -> QlResult<Real> {
+        let nu = self.degrees_of_freedom;
+        let t2 = t * t;
+        let xb = nu / (nu + t2);
+        if xb == 0.0 {
+            return Ok(t);
         }
-        if p == 1.0 {
-            return Ok(self.upper_bound());
-        }
-        // Newton-Raphson from x = 0 using the density as derivative, exactly as
-        // QuantLib's InverseCumulativeStudent. Genuinely fallible: extreme-tail
-        // probabilities can exhaust the iteration budget.
+        let y = if (nu + t2).is_finite() {
+            t2 / (nu + t2)
+        } else {
+            1.0
+        };
+        let p0 = if y * (nu + 5.0) >= 3.0 {
+            0.5 * incomplete_beta_xy(0.5 * nu, 0.5, xb, y)? - u
+        } else {
+            (0.5 - u) - 0.5 * incomplete_beta_xy(0.5, 0.5 * nu, y, xb)?
+        };
+        let r = p0.signum() * (p0.abs().ln() - self.ln_pdf(t)).exp();
+        let p2 = t * (nu + 1.0) / (t2 + nu);
+        Ok(-(t.abs() + r / (1.0 + r * p2 / 2.0)))
+    }
+
+    /// Newton-Raphson from `x = 0` with QuantLib v1.43's defaults (accuracy
+    /// `1e-6`, 50 iterations), kept for non-integer `ν < 2` until #1452 ports
+    /// Boost's inverse incomplete beta for that domain.
+    fn newton_quantile(&self, p: Real) -> QlResult<Real> {
+        const ACCURACY: Real = 1e-6;
+        const MAX_ITERATIONS: u32 = 50;
         let mut x = 0.0;
-        for _ in 0..QUANTILE_MAX_ITERATIONS {
+        for _ in 0..MAX_ITERATIONS {
             let diff = (self.cdf(x) - p) / self.pdf(x);
             x -= diff;
-            if diff.abs() <= QUANTILE_ACCURACY {
+            if diff.abs() <= ACCURACY {
                 return Ok(x);
             }
         }
@@ -138,9 +195,53 @@ impl Quantile for StudentT {
     }
 }
 
+impl Quantile for StudentT {
+    /// The quantile by Boost's `students_t` quantile, which QuantLib v1.44's
+    /// `InverseCumulativeStudent` calls: the `inverse_students_t` estimate for the lower
+    /// tail `u = min(p, 1 - p)`, refined by one Halley step unless the estimate
+    /// is exact, and reflected for `p > 0.5`.
+    ///
+    /// `quantile(0)` is `-∞` and `quantile(1)` is `+∞`, a deliberate divergence
+    /// from v1.44's `QL_MIN_REAL` / `QL_MAX_REAL`: the generalized inverse maps
+    /// the closed endpoints to the support. `quantile(0.5)` is `0`, as in
+    /// v1.44's `InverseCumulativeStudent`. Non-integer `ν < 2` keeps the
+    /// v1.43 Newton iteration (tracked as #1452).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the incomplete beta of the Halley step does not
+    /// converge, or if the non-integer `ν < 2` Newton iteration exhausts its
+    /// budget.
+    fn quantile(&self, p: Probability) -> QlResult<Real> {
+        let p = p.value();
+        if p == 0.0 {
+            return Ok(self.lower_bound());
+        }
+        if p == 1.0 {
+            return Ok(self.upper_bound());
+        }
+        if p == 0.5 {
+            return Ok(0.0);
+        }
+        let nu = self.degrees_of_freedom;
+        if nu < 2.0 && nu.floor() != nu {
+            return self.newton_quantile(p);
+        }
+        let (u, invert) = if p > 0.5 { (1.0 - p, true) } else { (p, false) };
+        let (estimate, exact) = inverse::inverse_students_t(nu, self.ln_normalization, u)?;
+        let t = if exact || estimate == 0.0 {
+            estimate
+        } else {
+            self.halley_step(estimate, u)?
+        };
+        Ok(if invert { -t } else { t })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::check_close;
 
     const TOL: Real = 1e-12;
 
@@ -291,7 +392,9 @@ mod tests {
     // VI. Inverse: endpoints, the symmetric centre, round trips, a known value.
     #[test]
     fn quantile_endpoints_are_support_bounds() {
-        let dist = StudentT::new(5.0).unwrap();
+        let dist = StudentT::new(4.0).unwrap();
+        assert!(Probability::try_from(-0.1).is_err());
+        assert!(Probability::try_from(1.1).is_err());
         assert_eq!(
             dist.quantile(Probability::try_from(0.0).unwrap()).unwrap(),
             Real::NEG_INFINITY
@@ -330,6 +433,161 @@ mod tests {
         assert_close(x, 1.0, 1e-6);
     }
 
+    fn q(dist: &StudentT, p: Real) -> Real {
+        dist.quantile(Probability::try_from(p).unwrap()).unwrap()
+    }
+
+    const ORACLE_PROBABILITIES: [Real; 17] = [
+        1.0e-12,
+        1.0e-9,
+        1.0e-6,
+        1.0e-4,
+        0.001,
+        0.01,
+        0.10,
+        0.25,
+        0.50,
+        0.75,
+        0.90,
+        0.99,
+        0.999,
+        1.0 - 1.0e-4,
+        1.0 - 1.0e-6,
+        1.0 - 1.0e-9,
+        1.0 - 1.0e-12,
+    ];
+
+    #[test]
+    fn inverse_cumulative_cauchy_matches_closed_form() {
+        let dist = StudentT::new(1.0).unwrap();
+        for p in ORACLE_PROBABILITIES {
+            let expected = if p < 0.5 {
+                -1.0 / (PI * p).tan()
+            } else if p > 0.5 {
+                1.0 / (PI * (1.0 - p)).tan()
+            } else {
+                0.0
+            };
+            let calculated = q(&dist, p);
+            let tolerance = 1.0e-10 * expected.abs().max(1.0);
+            assert!(
+                (calculated - expected).abs() <= tolerance,
+                "p={p}: calculated {calculated}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverse_cumulative_student2_matches_closed_form() {
+        let dist = StudentT::new(2.0).unwrap();
+        for p in ORACLE_PROBABILITIES {
+            let expected = (2.0 * p - 1.0) / (2.0 * p * (1.0 - p)).sqrt();
+            let calculated = q(&dist, p);
+            let tolerance = 1.0e-12 * expected.abs().max(1.0);
+            assert!(
+                (calculated - expected).abs() <= tolerance,
+                "p={p}: calculated {calculated}, expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn inverse_cumulative_student_round_trips_monotone_and_symmetric() {
+        let round_trip = [
+            1.0e-10,
+            1.0e-8,
+            1.0e-6,
+            1.0e-4,
+            0.001,
+            0.01,
+            0.10,
+            0.25,
+            0.50,
+            0.75,
+            0.90,
+            0.99,
+            0.999,
+            1.0 - 1.0e-4,
+            1.0 - 1.0e-6,
+            1.0 - 1.0e-8,
+            1.0 - 1.0e-10,
+        ];
+        let symmetry = [1.0e-8, 1.0e-6, 1.0e-4, 0.001, 0.01, 0.10, 0.25];
+        for n in [3.0, 4.0, 5.0, 10.0, 30.0, 100.0] {
+            let dist = StudentT::new(n).unwrap();
+            let mut previous = Real::MIN;
+            for p in round_trip {
+                let x = q(&dist, p);
+                assert!(x > previous, "n={n}, p={p}: {x} <= {previous}");
+                previous = x;
+                assert_close(dist.cdf(x), p, 1.0e-8);
+            }
+            for p in symmetry {
+                let lower = q(&dist, p);
+                let upper = q(&dist, 1.0 - p);
+                let tolerance = 1.0e-8 * lower.abs().max(upper.abs()).max(1.0);
+                assert!(
+                    (lower + upper).abs() <= tolerance,
+                    "n={n}, p={p}: {lower} vs {upper}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn deep_tail_quantiles_stay_finite_when_the_density_underflows() {
+        for nu in [2.5, 3.0, 5.0, 10.0, 30.0] {
+            let dist = StudentT::new(nu).unwrap();
+            for p in [1.0e-250, 1.0e-300, 5.0e-324] {
+                let x = q(&dist, p);
+                assert!(x.is_finite() && x < 0.0, "nu={nu}, p={p}: {x}");
+                if p >= 1.0e-300 {
+                    assert_close(dist.cdf(x) / p, 1.0, 1.0e-6);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn deep_tail_quantiles_are_strictly_increasing_across_the_old_guard() {
+        let (lo, hi) = (1.0e-320_f64.ln(), 1.0e-200_f64.ln());
+        for nu in [3.0, 5.0, 10.0, 30.0, 100.0, 1000.0] {
+            let dist = StudentT::new(nu).unwrap();
+            let mut previous = Real::NEG_INFINITY;
+            for k in 0..200 {
+                let p = (lo + (hi - lo) * Real::from(k) / 199.0).exp();
+                let x = q(&dist, p);
+                assert!(x.is_finite() && x < 0.0, "nu={nu}, p={p}: {x}");
+                assert!(x > previous, "nu={nu}, p={p}: {x} <= {previous}");
+                previous = x;
+            }
+        }
+    }
+
+    #[test]
+    fn huge_dof_normal_quantile_holds_the_acklam_bound() {
+        let dist = StudentT::new(1.0e20).unwrap();
+        for (p, expected) in [
+            (1.0e-10, -6.361_340_902_404_057),
+            (0.01, -2.326_347_874_040_841),
+            (0.3, -0.524_400_512_708_040_8),
+        ] {
+            let x = q(&dist, p);
+            assert!(
+                ((x - expected) / expected).abs() <= 1.15e-9,
+                "p={p}: {x} vs {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_integer_dof_below_two_keeps_newton() {
+        let dist = StudentT::new(1.5).unwrap();
+        for p in [0.05, 0.25, 0.75, 0.95] {
+            assert_close(dist.cdf(q(&dist, p)), p, 1.0e-6);
+        }
+    }
+
     // VII. Construction validation.
     #[test]
     fn new_rejects_nonpositive_nan_and_infinite_dof() {
@@ -339,5 +597,22 @@ mod tests {
         // Non-finite dof would make ln_normalization NaN and panic cdf's expect.
         assert!(StudentT::new(Real::INFINITY).is_err());
         assert!(StudentT::new(Real::NEG_INFINITY).is_err());
+    }
+
+    /// QuantLib v1.44 `testStudentDistribution` (`distributions.cpp:839`):
+    /// `StudentDistribution` and `CumulativeStudentDistribution` are both
+    /// [`StudentT`].
+    #[test]
+    fn v144_student_distribution() {
+        let cauchy = StudentT::new(1.0).unwrap();
+        check_close(cauchy.pdf(0.0), 1.0 / PI, 1.0e-10);
+        check_close(cauchy.pdf(1.0), 0.5 / PI, 1.0e-10);
+
+        let student = StudentT::new(5.0).unwrap();
+        check_close(student.pdf(-1.0), student.pdf(1.0), 1.0e-12);
+        check_close(student.cdf(0.0), 0.5, 1.0e-12);
+        check_close(student.cdf(-1.0), 1.0 - student.cdf(1.0), 1.0e-12);
+
+        assert!(StudentT::new(0.0).is_err());
     }
 }

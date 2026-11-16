@@ -178,9 +178,9 @@ impl OvernightIndexFuture {
             if today < self.maturity_date
                 && let Some(rate) = self.index.past_fixing(today)?
             {
-                let tomorrow = self.next_date(today)?;
-                product *= 1.0 + rate * dc.year_fraction(today, tomorrow);
-                forward_start = tomorrow;
+                let accrual_end = self.next_date(today)?.min(self.maturity_date);
+                product *= 1.0 + rate * dc.year_fraction(today, accrual_end);
+                forward_start = accrual_end;
             }
         }
         let curve = self.index.forwarding_term_structure().current_link()?;

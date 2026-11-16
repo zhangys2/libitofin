@@ -14,7 +14,7 @@
 //! observer of its term-structure handle so a relink re-runs
 //! [`generate_arguments`](CalibratedModelHolder::generate_arguments) and then
 //! re-broadcasts. It is opt-in per model, matching C++, where Hull-White / G2
-//! `registerWith(termStructure)` but ExtendedCoxIngersollRoss does not.
+//! and (since QuantLib v1.44) ExtendedCoxIngersollRoss `registerWith(termStructure)`.
 //!
 //! ## Divergences from QuantLib
 //!
@@ -285,10 +285,9 @@ pub type CalibrationRollback<M> = Box<dyn FnOnce(&mut M) -> QlResult<()>>;
 /// C++'s class is `public virtual Observable`; here it is a plain holder. A
 /// concrete fitted model embeds both this and a [`CalibratedModel`] (C++
 /// multiply-inherits them). Whether the model *observes* the handle is a
-/// per-model choice made in the concrete constructor: Hull-White / G2 / GSR
-/// `registerWith(termStructure)`, but ExtendedCoxIngersollRoss (the affine
-/// fitting oracle) deliberately does not, because its fitting law reads the
-/// handle live on every evaluation.
+/// per-model choice made in the concrete constructor: Hull-White / G2 / GSR and
+/// ExtendedCoxIngersollRoss `registerWith(termStructure)`
+/// (`extendedcoxingersollross.cpp:35`, QuantLib v1.44).
 pub struct TermStructureConsistentModel {
     term_structure: Handle<dyn YieldTermStructure>,
 }
@@ -316,11 +315,9 @@ impl TermStructureConsistentModel {
 /// `generate_arguments` (handle clones share one link), or the model would
 /// regenerate off a stale curve.
 ///
-/// Opt-in per model, matching C++: a term-structure-consistent model that reads
-/// its curve live on every evaluation (`ExtendedCoxIngersollRoss`, which does
-/// not `registerWith` the curve) never calls this, so a relink does not
-/// regenerate; a model caching curve-derived scalars (Hull-White's `r0`/`phi`)
-/// does.
+/// Opt-in per model, matching C++: every model whose C++ constructor
+/// `registerWith`s its curve calls this (Hull-White, which caches `r0`/`phi`,
+/// and ExtendedCoxIngersollRoss, whose observers must hear a relink).
 ///
 /// Returns the observer, which the model must keep alive: the handle holds only
 /// a weak back-reference to it, and it holds only a weak reference to the model,

@@ -39,10 +39,9 @@
 //! - A non-zero lognormal `shift` needs `shiftedSabrVolatility`, which #582
 //!   deferred to #586. A non-zero shift is rejected in the constructor rather than
 //!   silently accepted.
-//! - [`VolatilityType::Normal`] needs the Normal/Bachelier SABR formula, also
-//!   deferred to #586, and is likewise rejected in the constructor.
 
 use crate::errors::QlResult;
+use crate::require;
 use crate::termstructures::volatility::smilesection::{SmileSection, SmileSectionBase};
 use crate::termstructures::volatility::{
     VolatilityType, unsafe_sabr_volatility, validate_sabr_parameters,
@@ -51,7 +50,6 @@ use crate::time::date::Date;
 use crate::time::daycounter::DayCounter;
 use crate::time::daycounters::actual365fixed::Actual365Fixed;
 use crate::types::{Rate, Real, Time, Volatility};
-use crate::{fail, require};
 
 /// A [`SmileSection`] whose volatility is the Hagan SABR formula at fixed
 /// parameters.
@@ -70,8 +68,7 @@ impl SabrSmileSection {
     ///
     /// # Errors
     ///
-    /// Returns `Err` when `shift` is non-zero or `volatility_type` is
-    /// [`VolatilityType::Normal`] (both deferred to #586), when
+    /// Returns `Err` when `shift` is non-zero (deferred to #586), when
     /// `forward + shift <= 0`, or when the SABR parameters are invalid.
     #[allow(clippy::too_many_arguments)]
     pub fn with_exercise_time(
@@ -84,7 +81,7 @@ impl SabrSmileSection {
         shift: Rate,
         volatility_type: VolatilityType,
     ) -> QlResult<SabrSmileSection> {
-        Self::initialise(forward, alpha, beta, nu, rho, shift, volatility_type)?;
+        Self::initialise(forward, alpha, beta, nu, rho, shift)?;
         let base = SmileSectionBase::with_exercise_time(
             exercise_time,
             Actual365Fixed::new(),
@@ -123,7 +120,7 @@ impl SabrSmileSection {
         shift: Rate,
         volatility_type: VolatilityType,
     ) -> QlResult<SabrSmileSection> {
-        Self::initialise(forward, alpha, beta, nu, rho, shift, volatility_type)?;
+        Self::initialise(forward, alpha, beta, nu, rho, shift)?;
         let base = SmileSectionBase::with_reference_date(
             exercise_date,
             day_counter,
@@ -142,8 +139,8 @@ impl SabrSmileSection {
     }
 
     /// Shared constructor guards, mirroring C++'s `initialise`: reject the
-    /// deferred displaced and Normal paths, then require a positive shifted
-    /// forward, then validate the SABR parameters once.
+    /// deferred displaced path, then require a positive shifted forward, then
+    /// validate the SABR parameters once.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
     fn initialise(
         forward: Rate,
@@ -152,18 +149,11 @@ impl SabrSmileSection {
         nu: Real,
         rho: Real,
         shift: Rate,
-        volatility_type: VolatilityType,
     ) -> QlResult<()> {
         require!(
             shift == 0.0,
             "a non-zero lognormal shift ({shift}) needs shiftedSabrVolatility, deferred to #586"
         );
-        match volatility_type {
-            VolatilityType::ShiftedLognormal => {}
-            VolatilityType::Normal => {
-                fail!("normal (Bachelier) SABR volatility is not yet ported (deferred to #586)")
-            }
-        }
         require!(
             forward + shift > 0.0,
             "at the money forward rate + shift must be positive: {forward} with shift {shift} \
@@ -344,9 +334,11 @@ mod tests {
         assert!(err.message().contains("#586"), "{}", err.message());
     }
 
+    /// A Normal section serves the Normal SABR formula (#1449), not the
+    /// lognormal one, at each strike.
     #[test]
-    fn normal_volatility_type_is_deferred_to_586() {
-        let err = SabrSmileSection::with_exercise_time(
+    fn normal_volatility_type_serves_the_normal_formula() {
+        let section = SabrSmileSection::with_exercise_time(
             EXPIRY,
             FORWARD,
             ALPHA,
@@ -356,8 +348,22 @@ mod tests {
             0.0,
             VolatilityType::Normal,
         )
-        .unwrap_err();
-        assert!(err.message().contains("#586"), "{}", err.message());
+        .unwrap();
+        assert_eq!(section.volatility_type(), VolatilityType::Normal);
+        for strike in [0.02, FORWARD, 0.06] {
+            let expected = sabr_volatility(
+                strike,
+                FORWARD,
+                EXPIRY,
+                ALPHA,
+                BETA,
+                NU,
+                RHO,
+                VolatilityType::Normal,
+            )
+            .unwrap();
+            assert_eq!(section.volatility(strike).unwrap(), expected);
+        }
     }
 
     #[test]
