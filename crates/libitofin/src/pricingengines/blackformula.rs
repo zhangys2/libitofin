@@ -1218,9 +1218,10 @@ mod tests {
         }
     }
 
-    /// Zero-vol branch is QL's moneyness quirk (`max((F-K)·sign, 0)`), not 0/1.
+    /// Zero-vol branch is QuantLib v1.44's indicator: 1 when
+    /// `sign * (forward - strike) > 0`, otherwise 0. ATM is 0, not one half.
     #[test]
-    fn bachelier_asset_itm_probability_zero_vol_is_moneyness() {
+    fn bachelier_asset_itm_probability_zero_vol_is_the_indicator() {
         let itm_call =
             bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.06, 0.0)
                 .expect("zero std dev");
@@ -1229,14 +1230,14 @@ mod tests {
                 .expect("zero std dev");
         let atm = bachelier_black_formula_asset_itm_probability(OptionType::Call, 0.05, 0.05, 0.0)
             .expect("zero std dev");
-        assert_eq!(itm_call, (0.06_f64 - 0.05).max(0.0));
+        assert_eq!(itm_call, 1.0);
         assert_eq!(otm_call, 0.0);
         assert_eq!(atm, 0.0);
 
         let itm_put =
             bachelier_black_formula_asset_itm_probability(OptionType::Put, 0.06, 0.05, 0.0)
                 .expect("zero std dev");
-        assert_eq!(itm_put, (0.06_f64 - 0.05).max(0.0));
+        assert_eq!(itm_put, 1.0);
     }
 
     #[test]

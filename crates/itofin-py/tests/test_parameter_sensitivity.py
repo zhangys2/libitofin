@@ -87,7 +87,7 @@ def test_non_finite_shifts_and_reference_values_are_errors(bad):
 
 def test_invalid_inputs_are_errors_that_leave_the_quote():
     quote, parameters = _fixture()
-    with pytest.raises(ItofinError, match="zero shift not allowed"):
+    with pytest.raises(ItofinError, match="shift must be finite and non-zero"):
         parameter_sensitivity(quote, parameters, shift=0.0)
     with pytest.raises(ItofinError, match="empty parameters vector"):
         parameter_sensitivity(quote, [], shift=H)

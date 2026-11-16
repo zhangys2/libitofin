@@ -119,7 +119,7 @@ func TestParameterSensitivityErrorsLeaveTheQuote(t *testing.T) {
 		{"zero shift", func() error {
 			_, e := s.ParameterSensitivity(q, parameters, nil, 0, Centered)
 			return e
-		}, "zero shift not allowed"},
+		}, "shift must be finite and non-zero"},
 		{"no parameters", func() error {
 			_, e := s.ParameterSensitivity(q, nil, nil, parameterH, Centered)
 			return e
