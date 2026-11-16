@@ -1,11 +1,11 @@
-"""Emit the adopted QuantLib 1.43 callable clean-price sensitivity profile."""
+"""Emit the adopted QuantLib 1.44 callable dirty-normalized sensitivity profile."""
 import csv
 import io
 import sys
 
 import QuantLib as ql
 
-assert ql.__version__ == "1.43"
+assert ql.__version__ == "1.44"
 reference, issue, maturity = ql.Date(12, 10, 2026), ql.Date(7, 7, 2026), ql.Date(7, 7, 2031)
 ql.Settings.instance().evaluationDate = reference
 dc, cal = ql.Actual365Fixed(), ql.NullCalendar()

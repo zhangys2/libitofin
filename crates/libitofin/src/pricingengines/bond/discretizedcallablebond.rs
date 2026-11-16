@@ -13,6 +13,7 @@ use crate::interestrate::Compounding;
 use crate::math::array::Array;
 use crate::pricingengine::Arguments;
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
+use crate::time::date::Date;
 use crate::time::frequency::Frequency;
 use crate::types::{Real, Size, Time};
 use crate::{fail, require};
@@ -34,17 +35,34 @@ pub struct DiscretizedCallableFixedRateBond {
 }
 
 impl DiscretizedCallableFixedRateBond {
-    /// Builds the discretized bond from the engine arguments and the discount
-    /// curve (`discretizedcallablefixedratebond.cpp:35-100`).
+    /// Builds the discretized bond with a zero spread; see [`Self::with_spread`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::with_spread`].
+    pub fn new(
+        args: &CallableBondArguments,
+        curve: &dyn YieldTermStructure,
+    ) -> QlResult<DiscretizedCallableFixedRateBond> {
+        Self::with_spread(args, curve, 0.0)
+    }
+
+    /// Builds the discretized bond from the engine arguments, the discount
+    /// curve and the continuous short-rate `spread` the lattice is priced with
+    /// (`discretizedcallablefixedratebond.cpp:35-109`, v1.44). A call snapped
+    /// to a coupon is rescaled by the ratio of `exp(-(z + spread) t)` discount
+    /// factors to the call and coupon dates, `z` the continuous zero rate. An
+    /// exercise dated on a coupon that a snapped neighbour moved ahead adds
+    /// that coupon to its price.
     ///
     /// # Errors
     ///
     /// Rejects invalid argument shapes/values, curve lookups, nonfinite times
     /// and exercise-price adjustment overflow.
-    pub fn new(
+    pub fn with_spread(
         args: &CallableBondArguments,
         curve: &dyn YieldTermStructure,
-        model_spread: Real,
+        spread: Real,
     ) -> QlResult<DiscretizedCallableFixedRateBond> {
         args.validate()?;
         let reference_date = curve.reference_date()?;
@@ -73,22 +91,18 @@ impl DiscretizedCallableFixedRateBond {
                 {
                     call_time = coupon_time;
                     coupon_adjustments[j] = CouponAdjustment::Pre;
-                    let spread = model_spread;
-                    let df_incl_spread = |date| -> QlResult<Real> {
-                        let t = curve.time_from_reference(date)?;
-                        let z = curve
-                            .zero_rate_date(
-                                date,
-                                curve.require_day_counter()?,
-                                Compounding::Continuous,
-                                Frequency::NoFrequency,
-                                true,
-                            )?
-                            .rate();
-                        Ok((-(z + spread) * t).exp())
+                    let discount = |date: Date| -> QlResult<Real> {
+                        let rate = curve.zero_rate_date(
+                            date,
+                            day_counter.clone(),
+                            Compounding::Continuous,
+                            Frequency::NoFrequency,
+                            false,
+                        )?;
+                        Ok((-(rate.rate() + spread) * curve.time_from_reference(date)?).exp())
                     };
-                    let df_call = df_incl_spread(call_date)?;
-                    let df_coupon = df_incl_spread(coupon_date)?;
+                    let df_call = discount(call_date)?;
+                    let df_coupon = discount(coupon_date)?;
                     require!(
                         df_call.is_finite()
                             && df_call > 0.0
@@ -103,6 +117,15 @@ impl DiscretizedCallableFixedRateBond {
             adjusted[i] *= args.face_amount / 100.0;
             require!(adjusted[i].is_finite(), "exercise amount overflow");
             callability_times.push(call_time);
+        }
+
+        for (i, call_date) in args.callability_dates.iter().enumerate() {
+            for (j, coupon_date) in args.coupon_dates.iter().enumerate() {
+                if coupon_adjustments[j] == CouponAdjustment::Pre && call_date == coupon_date {
+                    adjusted[i] += args.coupon_amounts[j];
+                    require!(adjusted[i].is_finite(), "exercise amount overflow");
+                }
+            }
         }
 
         require!(

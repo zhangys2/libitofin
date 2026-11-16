@@ -64,7 +64,7 @@ fn fixture(
 }
 
 #[test]
-fn native_quantlib143_risk_fixtures_and_direct_core_identity() {
+fn native_quantlib144_risk_fixtures_and_direct_core_identity() {
     let rows = include_str!("../../../sdk/go/testdata/callable_risk_native.tsv");
     assert_eq!(rows.lines().count(), 37);
     for row in rows.lines().skip(1) {

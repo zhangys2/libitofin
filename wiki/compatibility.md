@@ -11,6 +11,7 @@ oversight) and is documented at the point of divergence in the source.
 
 - [Time and calendars](#time--calendars-epic-2)
 - [Core state](#core-epic-0)
+- [Math](#math-l1)
 - [Cash flows](#cash-flows-epic-7)
 - [Term structures](#term-structures-epic-4)
 - [Indexes](#indexes-epic-6)
@@ -97,6 +98,51 @@ oversight) and is documented at the point of divergence in the source.
   where QuantLib notifies and then throws. The `enforces_todays_historic_fixings`
   flag's today's-fixing rule is applied by the index layer that reads the store,
   as `InterestRateIndex::fixing` does in C++, not by the store itself.
+
+## Math (L1)
+
+- **The incomplete beta function converges for large parameters where
+  QuantLib throws.** QuantLib's `incompleteBetaFunction` (`beta.hpp`) stops its
+  continued fraction at 100 iterations with a `1e-16` accuracy, which is below
+  half an ulp of 1, so it exits only on an exactly unit step. Near the branch
+  crossover the fraction needs a number of iterations growing like
+  `sqrt(max(a, b))`, so QuantLib throws "a or b too big" at isolated inputs of
+  the Student-t cdf at `ν = 1000` and `10000` near `t = -1.73`, and of the
+  Binomial cdf at `n = 100000`. Here the limit is
+  `min(max(100, ceil(10·sqrt(max(a, b)))), 10^8)`, at the same accuracy: every
+  input that converges within 100 iterations exits at the same iteration with
+  the same result, and the inputs QuantLib rejects return values matching
+  mpmath (`math/beta.rs`, #1463). This keeps the Student-t and Binomial cdfs,
+  which are infallible, from panicking. The `10^8` cap, far above the worst
+  iterations-to-limit ratio seen over the swept Student-t and Binomial
+  domains, bounds the work for absurd parameters, which return `Err`; past
+  iteration 100 a `NaN` running product returns a distinct `Err` at once.
+  QuantLib's prefactor `exp(lgamma(a+b) - lgamma(a) - lgamma(b) + a ln x +
+  b ln(1-x))` cancels for very large parameters (the Binomial cdf at
+  `n = 1e16` returned only 0 or 1); here it is Boost's `ibeta_power_terms`
+  with the `lanczos13m53` sums (#1468). Near the saddle the continued fraction
+  still cancels beyond about `1e11`: the Binomial cdf at `p = 1/2` and
+  `n = 1e12, 1e14, 1e16` is within `5e-10`, `1e-8`, `5e-7` of mpmath (Boost
+  1.92 itself is within `7e-11`, `3e-10`, `8e-9`), deferred to a
+  large-parameter asymptotic (#1475).
+- **The Student-t cdf evaluates the centre directly.** QuantLib's
+  `CumulativeStudentDistribution` (`studenttdistribution.cpp`) always forms
+  `I_x(ν/2, 1/2) / 2` with `x = ν/(ν + t²)`; near `t = 0` that `x` rounds
+  towards 1 and the result cancels (`ν = 1000, t = ±1e-7` gives exactly `0.5`).
+  Here, when `y = t²/(ν + t²)` satisfies `y·(ν + 5) < 3` (the incomplete beta's
+  own crossover for `I_y(1/2, ν/2)`), the cdf is `1/2 ∓ I_y(1/2, ν/2) / 2`,
+  within `1e-14` relative of mpmath at `t = ±1e-3, ±1e-5, ±1e-7` for
+  `ν = 3, 30, 1000` (`math/distributions/studentt.rs`, #1461). Elsewhere, and
+  where `t²` overflows, the forward form is unchanged. Boost's own switch,
+  `ν > 2t²` with the complemented `ibetac`, is not used: without a complemented
+  incomplete beta it cancels the large-`ν` tails to 0.
+- **The Student-t cdf is the normal cdf beyond `ν = 1/eps`.** QuantLib always
+  takes the incomplete beta; here, as in Boost's `students_t` cdf, `ν > 2^52`
+  returns the normal cdf, and below it both forms pass their exact complement
+  (`y` or `z`) to the incomplete beta rather than `1 - z` (#1468). Deferred:
+  for `|t| > √3` the forward form's continued fraction cancels at large `ν`
+  (about `1e-10` relative at `ν = 1e7`, `3e-5` at `1e12`, `0.1` at `2^52`),
+  where Boost uses `beta_small_b_large_a_series` (#1476).
 
 ## Cash flows (EPIC-7)
 

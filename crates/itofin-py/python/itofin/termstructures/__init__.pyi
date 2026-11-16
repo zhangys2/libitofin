@@ -3718,13 +3718,13 @@ class SabrSmileSection:
             rho (float): The SABR rho, whose square must be below 1.
             shift (float): The lognormal shift; a non-zero shift is deferred
                 and refused.
-            volatility_type (VolatilityType): The quoting convention; Normal is
-                deferred and refused.
+            volatility_type (VolatilityType): The quoting convention:
+                ShiftedLognormal (Black) or Normal (Bachelier).
 
         Raises:
-            ItofinError: On a non-zero shift or a Normal volatility_type, both
-                deferred to #586; on a non-positive shifted forward; and on
-                SABR parameters outside their admissible ranges.
+            ItofinError: On a non-zero shift (deferred to #586); on a
+                non-positive shifted forward; and on SABR parameters outside
+                their admissible ranges.
         """
     def volatility(self, strike: builtins.float) -> builtins.float:
         r"""

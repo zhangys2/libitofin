@@ -31,6 +31,6 @@ func main() {
 		ZeroCouponBondConfig: itofin.ZeroCouponBondConfig{BondConfig: itofin.BondConfig{SettlementDays: 2, FaceAmount: 1000, Calendar: cal, Settings: settings}, MaturityDate: must(itofin.NewDate(7, 7, 2031))},
 		DayCounter:           dc, Callability: itofin.CallabilitySchedule{call},
 	}))
-	fmt.Printf("Effective clean-price duration: %.8f\n", must(bond.EffectiveDuration(.0075, engine, dc, itofin.Continuous, itofin.Annual, nil)))
-	fmt.Printf("Effective clean-price convexity: %.8f\n", must(bond.EffectiveConvexity(.0075, engine, dc, itofin.Continuous, itofin.Annual, nil)))
+	fmt.Printf("Effective duration (dirty-price denominator): %.8f\n", must(bond.EffectiveDuration(.0075, engine, dc, itofin.Continuous, itofin.Annual, nil)))
+	fmt.Printf("Effective convexity (dirty-price denominator): %.8f\n", must(bond.EffectiveConvexity(.0075, engine, dc, itofin.Continuous, itofin.Annual, nil)))
 }

@@ -3432,7 +3432,7 @@ int32_t itofin_callable_bond_oas(struct ItofinContext *ctx,
                                  struct ItofinError *error);
 
 /**
- * Effective clean-price duration from the explicit immutable tree, without installed-engine changes.
+ * Effective dirty-normalized duration from the explicit immutable tree, without installed-engine changes.
  * # Safety
  * Pointers and thread ownership must satisfy the crate-level C caller contract.
  */
@@ -3444,7 +3444,7 @@ int32_t itofin_callable_bond_effective_duration(struct ItofinContext *ctx,
                                                 struct ItofinError *error);
 
 /**
- * Effective clean-price convexity from the explicit immutable tree, without installed-engine changes.
+ * Effective dirty-normalized convexity from the explicit immutable tree, without installed-engine changes.
  * # Safety
  * Pointers and thread ownership must satisfy the crate-level C caller contract.
  */

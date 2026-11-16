@@ -3,7 +3,11 @@ mod support;
 use libitofin::indexes::Index;
 use libitofin::indexes::inflationindex::CpiInterpolationType;
 use libitofin::instrument::Instrument;
-use libitofin::instruments::SwapType;
+use libitofin::instruments::{CpiSwap, SwapType};
+use libitofin::time::businessdayconvention::BusinessDayConvention;
+use libitofin::time::daycounters::actual365fixed::Actual365Fixed;
+use libitofin::time::period::Period;
+use libitofin::time::timeunit::TimeUnit;
 
 fn close(value: f64, expected: f64, tolerance: f64) {
     assert!(
@@ -113,4 +117,39 @@ fn terminal_float_nominal_threshold_and_indexed_principal_dependency() {
     let principal = swap.cpi_leg().last().unwrap();
     assert!(principal.as_coupon().is_none());
     assert!(principal.amount().is_err());
+}
+
+/// `inflationcpiswap.cpp` `testZeroBpsFairRateAndSpread` (:489) cannot be built
+/// here: `CpiSwap::new` rejects a zero nominal (`cpiswap.rs:67-72`), and the
+/// test's single-date schedules are also outside this slice, so the zero-BPS
+/// state it reaches is unreachable. `fair_spread` separately rejects a zero
+/// sensitivity with "null or non-finite spread sensitivity", not the C++
+/// "result not available". `fairRate` is not ported (#1450).
+#[test]
+fn a_zero_nominal_is_rejected_before_any_zero_bps_state() {
+    let m = support::Market::new();
+    let swap = CpiSwap::new(
+        SwapType::Payer,
+        0.0,
+        0.0,
+        true,
+        0.0,
+        Actual365Fixed::new(),
+        support::schedule(),
+        BusinessDayConvention::Unadjusted,
+        m.floating.clone(),
+        0.1,
+        100.0,
+        Actual365Fixed::new(),
+        support::schedule(),
+        BusinessDayConvention::Unadjusted,
+        Period::new(2, TimeUnit::Months),
+        m.index.clone(),
+        CpiInterpolationType::Flat,
+        m.settings.clone(),
+    );
+    assert_eq!(
+        swap.err().unwrap().message(),
+        "nominals must be finite and positive"
+    );
 }

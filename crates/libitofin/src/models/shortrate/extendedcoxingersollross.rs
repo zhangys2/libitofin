@@ -39,9 +39,11 @@
 //!   reads the curve's fallible `forward_rate` and collapses the `Result` with a
 //!   documented `expect` (the crate's eval-infallible convention).
 //! - C++ multiply-inherits `CoxIngersollRoss` and `TermStructureConsistentModel`;
-//!   here both are composed as fields. Per the base model, this class does *not*
-//!   `registerWith(termStructure)` (unlike Hull-White / G2): the fitting law
-//!   reads the handle live on every evaluation.
+//!   here both are composed as fields. As in QuantLib v1.44
+//!   (`extendedcoxingersollross.cpp:35`), the model observes its curve handle
+//!   through [`register_with_term_structure`], so a relink regenerates `phi_`
+//!   and notifies the model's observers. [`ExtendedCoxIngersollRoss::new`]
+//!   therefore returns a [`SharedMut`], like [`HullWhite::new`](super::HullWhite::new).
 
 use std::rc::Rc;
 
@@ -49,12 +51,17 @@ use crate::errors::QlResult;
 use crate::handle::Handle;
 use crate::interestrate::Compounding;
 use crate::math::array::Array;
-use crate::models::model::{CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel};
+use crate::models::model::{
+    CalibratedModel, CalibratedModelHolder, TermStructureConsistentModel,
+    register_with_term_structure,
+};
 use crate::models::parameter::{
     NullParameter, Parameter, ParameterValue, TermStructureFittingParameter,
 };
 use crate::models::shortrate::coxingersollross::CoxIngersollRoss;
 use crate::models::shortrate::onefactormodel::OneFactorAffineModel;
+use crate::patterns::observable::Observer;
+use crate::shared::{SharedMut, shared_mut};
 use crate::termstructures::yieldtermstructure::YieldTermStructure;
 use crate::time::frequency::Frequency;
 use crate::types::{Rate, Real, Time};
@@ -97,6 +104,9 @@ pub struct ExtendedCoxIngersollRoss {
     base: CoxIngersollRoss,
     ts_model: TermStructureConsistentModel,
     phi: Parameter,
+    /// Keeps the term-structure observer alive: the handle holds only a weak
+    /// back-reference to it (see [`register_with_term_structure`]).
+    ts_observer: Option<SharedMut<dyn Observer>>,
 }
 
 impl ExtendedCoxIngersollRoss {
@@ -104,7 +114,11 @@ impl ExtendedCoxIngersollRoss {
     /// Real k, Real sigma, Real x0, bool withFellerConstraint)`
     /// (`extendedcoxingersollross.cpp:27`): chains the base as
     /// `CoxIngersollRoss(x0, theta, k, sigma, withFellerConstraint)` (base `r0`
-    /// is `x0`), then builds `phi_` via `generateArguments()`.
+    /// is `x0`), then builds `phi_` via `generateArguments()` and registers the
+    /// model as an observer of `term_structure` (`:35`).
+    ///
+    /// Returns a [`SharedMut`] so the observer, which holds a weak reference back
+    /// to the model, can regenerate it on a relink.
     ///
     /// # Errors
     ///
@@ -117,16 +131,21 @@ impl ExtendedCoxIngersollRoss {
         sigma: Real,
         x0: Rate,
         with_feller_constraint: bool,
-    ) -> QlResult<ExtendedCoxIngersollRoss> {
+    ) -> QlResult<SharedMut<ExtendedCoxIngersollRoss>> {
         let base = CoxIngersollRoss::new(x0, theta, k, sigma, with_feller_constraint)?;
-        let ts_model = TermStructureConsistentModel::new(term_structure);
+        let ts_model = TermStructureConsistentModel::new(term_structure.clone());
         let mut model = ExtendedCoxIngersollRoss {
             base,
             ts_model,
             phi: NullParameter::new(),
+            ts_observer: None,
         };
         model.generate_arguments();
-        Ok(model)
+
+        let shared = shared_mut(model);
+        let observer = register_with_term_structure(&shared, &term_structure);
+        shared.borrow_mut().ts_observer = Some(observer);
+        Ok(shared)
     }
 }
 
@@ -190,10 +209,13 @@ impl OneFactorAffineModel for ExtendedCoxIngersollRoss {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::handle::RelinkableHandle;
     use crate::math::array::Array;
     use crate::math::interpolations::linear::Linear;
+    use crate::patterns::observable::AsObservable;
     use crate::shared::{Shared, shared};
     use crate::termstructures::yields::{FlatForward, ZeroCurve};
+    use crate::test_support::{Flag, as_observer};
     use crate::time::date::{Date, Month};
     use crate::time::daycounters::actual365fixed::Actual365Fixed;
 
@@ -237,7 +259,7 @@ mod tests {
 
         let curve = handle.current_link().unwrap();
         let expected = curve.discount(2.5, false).unwrap() / curve.discount(1.5, false).unwrap();
-        let calculated = model.discount_bond(1.5, 2.5, rate);
+        let calculated = model.borrow().discount_bond(1.5, 2.5, rate);
 
         assert!((expected - calculated).abs() < 1e-6);
     }
@@ -287,7 +309,7 @@ mod tests {
             // Fixture-parity guard: the Rust curve must be the C++ curve.
             assert!((curve.discount(t, false).unwrap() - p_cpp).abs() < 1e-14);
             // Oracle: the fitted model reprices the curve.
-            assert!((model.discount_bond(0.0, t, f0) - p_cpp).abs() < 1e-8);
+            assert!((model.borrow().discount_bond(0.0, t, f0) - p_cpp).abs() < 1e-8);
             // A base-CIR mis-wire would land here instead - O(1e-2) off.
             assert!((base.discount_bond(0.0, t, f0) - p_cpp).abs() > 1e-3);
         }
@@ -295,7 +317,7 @@ mod tests {
         // A t>0 point pins the phi(t) term-structure interaction that a t=0-only
         // reprice leaves free. C++ discountBond(0.5, 2.5, f0).
         let ext_t_cpp = 0.903_817_675_549_668_5;
-        assert!((model.discount_bond(0.5, 2.5, f0) - ext_t_cpp).abs() < 1e-8);
+        assert!((model.borrow().discount_bond(0.5, 2.5, f0) - ext_t_cpp).abs() < 1e-8);
         assert!((base.discount_bond(0.5, 2.5, f0) - ext_t_cpp).abs() > 1e-3);
     }
 
@@ -312,7 +334,7 @@ mod tests {
         let base = CoxIngersollRoss::new(0.05, 0.04, 0.3, 0.02, true).unwrap();
 
         let p2 = handle.current_link().unwrap().discount(2.0, false).unwrap();
-        let extended_db = extended.discount_bond(0.0, 2.0, rate);
+        let extended_db = extended.borrow().discount_bond(0.0, 2.0, rate);
         let base_db = base.discount_bond(0.0, 2.0, rate);
 
         assert!((extended_db - p2).abs() < 1e-9);
@@ -325,16 +347,57 @@ mod tests {
         // from the new arguments; the repriced discount bond therefore moves.
         let rate = 0.08;
         let handle = flat_curve(rate);
-        let mut model =
+        let model =
             ExtendedCoxIngersollRoss::new(handle.clone(), 0.04, 0.3, 0.02, 0.05, true).unwrap();
-        let before = model.discount_bond(1.5, 2.5, rate);
+        let before = model.borrow().discount_bond(1.5, 2.5, rate);
 
         // arguments are (theta, k, sigma, r0); bump k and r0 so phi_ shifts.
         model
+            .borrow_mut()
             .set_params(&Array::from([0.04, 0.6, 0.02, 0.07]))
             .unwrap();
-        let after = model.discount_bond(1.5, 2.5, rate);
+        let after = model.borrow().discount_bond(1.5, 2.5, rate);
 
         assert!((before - after).abs() > 1e-6);
+    }
+
+    /// `shortratemodels.cpp`
+    /// `testExtendedCoxIngersollRossUpdatesWhenTermStructureRelinks` (:82): a
+    /// relink of the model's curve handle notifies the model's observers. The
+    /// observer `Flag` is what proves the fix: `phi` reads the handle live, so
+    /// the repriced bond would move after a relink even without the
+    /// registration, and that check only guards against a stale curve.
+    #[test]
+    fn the_model_is_notified_when_its_curve_relinks() {
+        let today = Date::new(19, Month::May, 2026);
+        let flat = |rate: Rate| {
+            shared(FlatForward::with_rate(
+                today,
+                rate,
+                Actual365Fixed::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>
+        };
+        let curve: RelinkableHandle<dyn YieldTermStructure> = RelinkableHandle::new(flat(0.02));
+        let model =
+            ExtendedCoxIngersollRoss::new(curve.handle(), 0.02, 1.0, 1e-4, 0.02, true).unwrap();
+        let flag = Flag::new();
+        model
+            .borrow()
+            .calibrated_model()
+            .observable()
+            .register_observer(&as_observer(&flag));
+
+        curve.link_to(flat(0.05));
+
+        assert!(Flag::is_up(&flag));
+        let expected = curve
+            .handle()
+            .current_link()
+            .unwrap()
+            .discount(2.0, false)
+            .unwrap();
+        assert!((model.borrow().discount_bond(0.0, 2.0, 0.05) - expected).abs() < 1e-9);
     }
 }

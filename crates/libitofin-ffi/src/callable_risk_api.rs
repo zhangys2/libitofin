@@ -1,4 +1,4 @@
-//! Immutable conventional-OAS clean-price sensitivities.
+//! Immutable conventional-OAS sensitivities over the dirty center price.
 use crate::bond_analytics_api::compounding;
 use crate::bond_api::NativeBond;
 use crate::bond_backing::BondBacking;
@@ -82,7 +82,7 @@ fn risk(
 }
 
 #[unsafe(no_mangle)]
-/// Effective clean-price duration from the explicit immutable tree, without installed-engine changes.
+/// Effective dirty-normalized duration from the explicit immutable tree, without installed-engine changes.
 /// # Safety
 /// Pointers and thread ownership must satisfy the crate-level C caller contract.
 pub unsafe extern "C" fn itofin_callable_bond_effective_duration(
@@ -102,7 +102,7 @@ pub unsafe extern "C" fn itofin_callable_bond_effective_duration(
 }
 
 #[unsafe(no_mangle)]
-/// Effective clean-price convexity from the explicit immutable tree, without installed-engine changes.
+/// Effective dirty-normalized convexity from the explicit immutable tree, without installed-engine changes.
 /// # Safety
 /// Pointers and thread ownership must satisfy the crate-level C caller contract.
 pub unsafe extern "C" fn itofin_callable_bond_effective_convexity(

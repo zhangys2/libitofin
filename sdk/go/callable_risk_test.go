@@ -47,7 +47,7 @@ func callableRiskFixture(t *testing.T, s *Session, kind, right string) (*Bond, *
 	return bond, engine, dc, settings
 }
 
-func TestCallableRiskQuantLib143NativeCleanNormalization(t *testing.T) {
+func TestCallableRiskQuantLib144NativeDirtyNormalization(t *testing.T) {
 	file := pricingMust(os.Open("testdata/callable_risk_native.tsv"))
 	defer file.Close()
 	reader := csv.NewReader(file)

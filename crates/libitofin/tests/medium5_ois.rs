@@ -234,3 +234,47 @@ fn empty_engine_curve_errors_and_recovery_are_the_same_for_both_sides() {
         market.discount.reset();
     }
 }
+fn readings(swap: &mut OvernightIndexedSwap) -> [f64; 6] {
+    let base = swap.fixed_vs_floating_mut();
+    let fair = [base.fair_rate().unwrap(), base.fair_spread().unwrap()];
+    let fixed = [base.fixed_leg_bps().unwrap(), base.fixed_leg_npv().unwrap()];
+    [
+        fair[0],
+        fair[1],
+        fixed[0],
+        fixed[1],
+        swap.overnight_leg_bps().unwrap(),
+        swap.overnight_leg_npv().unwrap(),
+    ]
+}
+#[test]
+fn a_leg_read_first_gives_the_natural_order_numbers() {
+    let market = Market::new();
+    let expected = readings(&mut market.build(SwapType::Payer, Some(0.034)).unwrap());
+    let firsts: [fn(&mut OvernightIndexedSwap) -> QlResult<f64>; 4] = [
+        |swap| swap.fixed_vs_floating_mut().fixed_leg_bps(),
+        |swap| swap.fixed_vs_floating_mut().fixed_leg_npv(),
+        OvernightIndexedSwap::overnight_leg_bps,
+        OvernightIndexedSwap::overnight_leg_npv,
+    ];
+    for first in firsts {
+        let mut swap = market.build(SwapType::Payer, Some(0.034)).unwrap();
+        first(&mut swap).unwrap();
+        assert_eq!(readings(&mut swap), expected);
+    }
+}
+#[test]
+fn a_leg_read_after_a_relink_refreshes_the_fair_values() {
+    let market = Market::new();
+    let mut swap = market.build(SwapType::Payer, Some(0.034)).unwrap();
+    let before = readings(&mut swap);
+    market.forward.link_to(curve([1.0, 0.98, 0.94, 0.88, 0.78]));
+    swap.overnight_leg_npv().unwrap();
+    let after = readings(&mut swap);
+    assert_ne!(after[0], before[0]);
+    assert_ne!(after[1], before[1]);
+    assert_eq!(
+        after,
+        readings(&mut market.build(SwapType::Payer, Some(0.034)).unwrap())
+    );
+}

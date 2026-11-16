@@ -1,9 +1,9 @@
 //! Closed-form Hagan SABR implied-volatility formula.
 //!
 //! Port of the free functions in `ql/termstructures/volatility/sabr.{hpp,cpp}`:
-//! the shift-zero lognormal SABR implied volatility ([`sabr_volatility`]), its
-//! unvalidated core ([`unsafe_sabr_volatility`]), and the parameter validator
-//! ([`validate_sabr_parameters`]). These are stateless functions; calibration
+//! the shift-zero lognormal and Normal (Bachelier) SABR implied volatilities
+//! ([`sabr_volatility`]), their unvalidated core ([`unsafe_sabr_volatility`]),
+//! and the parameter validator ([`validate_sabr_parameters`]). These are stateless functions; calibration
 //! and the smile-section layer that consume them land in later tickets.
 //!
 //! "Unsafe" in [`unsafe_sabr_volatility`] means *unvalidated inputs*, not
@@ -22,10 +22,6 @@
 //!
 //! ## Deferred to #586 (visible, no stubs)
 //!
-//! - `unsafeSabrNormalVolatility` (`sabr.cpp:94`): the Normal/Bachelier SABR is
-//!   a distinct formula (different time factor, an `E_1/E_2` ratio, and a
-//!   `forward*strike` leading term), not a shared code path. Passing
-//!   [`VolatilityType::Normal`] therefore returns an `Err` naming #586.
 //! - `shiftedSabrVolatility` (`sabr.hpp:84`), the displaced (shift != 0)
 //!   variant.
 //! - `sabrFlochKennedyVolatility` (`sabr.hpp:94`).
@@ -33,9 +29,9 @@
 
 use crate::errors::QlResult;
 use crate::math::comparison::close;
+use crate::require;
 use crate::termstructures::volatility::VolatilityType;
 use crate::types::{Rate, Real, Time};
-use crate::{fail, require};
 
 /// Lognormal Hagan SABR implied volatility at shift zero.
 ///
@@ -80,6 +76,54 @@ fn unsafe_sabr_lognormal_volatility(
     (alpha / denominator) * multiplier * time_factor
 }
 
+/// Normal (Bachelier) Hagan SABR implied volatility at shift zero.
+///
+/// Verbatim port of `unsafeSabrNormalVolatility` (`sabr.cpp:94-132`). Assumes
+/// its inputs are already valid; [`sabr_volatility`] performs the guards.
+fn unsafe_sabr_normal_volatility(
+    strike: Rate,
+    forward: Rate,
+    expiry_time: Time,
+    alpha: Real,
+    beta: Real,
+    nu: Real,
+    rho: Real,
+) -> Real {
+    let one_minus_beta = 1.0 - beta;
+    let minus_beta = -beta;
+    let a = (forward * strike).powf(one_minus_beta);
+    let sqrt_a = a.sqrt();
+    let log_m = if !close(forward, strike) {
+        (forward / strike).ln()
+    } else {
+        let epsilon = (forward - strike) / strike;
+        epsilon - 0.5 * epsilon * epsilon
+    };
+    let z = (nu / alpha) * sqrt_a * log_m;
+    let b = 1.0 - 2.0 * rho * z + z * z;
+    let c = one_minus_beta * one_minus_beta * log_m * log_m;
+    let d = log_m * log_m;
+    let tmp = (b.sqrt() + z - rho) / (1.0 - rho);
+    let xx = tmp.ln();
+    let e_1 = 1.0 + d / 24.0 + d * d / 1920.0;
+    let e_2 = 1.0 + c / 24.0 + c * c / 1920.0;
+    let e = e_1 / e_2;
+    let time_factor = 1.0
+        + expiry_time
+            * (minus_beta * (2.0 - beta) * alpha * alpha / (24.0 * a)
+                + 0.25 * rho * beta * nu * alpha / sqrt_a
+                + (2.0 - 3.0 * rho * rho) * (nu * nu / 24.0));
+
+    const M: Real = 10.0;
+    let multiplier = if (z * z).abs() > Real::EPSILON * M {
+        z / xx
+    } else {
+        1.0 - 0.5 * rho * z - (3.0 * rho * rho - 2.0) * z * z / 12.0
+    };
+    let f = alpha * (forward * strike).powf(beta / 2.0);
+    f * e * multiplier * time_factor
+}
+
 /// SABR implied volatility without the input or parameter guards.
 ///
 /// Port of `unsafeSabrVolatility` (`sabr.cpp:134`). "Unsafe" here means the
@@ -87,8 +131,8 @@ fn unsafe_sabr_lognormal_volatility(
 /// have already validated (for instance a smile section repricing a strike row)
 /// use this to avoid re-running [`validate_sabr_parameters`] per strike.
 ///
-/// The [`VolatilityType::Normal`] branch is deferred to #586 (see the module
-/// docs) and returns an `Err`.
+/// Both branches are infallible today; the `QlResult` return is kept so the
+/// public signature does not change.
 #[allow(clippy::too_many_arguments)]
 pub fn unsafe_sabr_volatility(
     strike: Rate,
@@ -110,9 +154,15 @@ pub fn unsafe_sabr_volatility(
             nu,
             rho,
         )),
-        VolatilityType::Normal => {
-            fail!("normal (Bachelier) SABR volatility is not yet ported (deferred to #586)")
-        }
+        VolatilityType::Normal => Ok(unsafe_sabr_normal_volatility(
+            strike,
+            forward,
+            expiry_time,
+            alpha,
+            beta,
+            nu,
+            rho,
+        )),
     }
 }
 
@@ -139,8 +189,8 @@ pub fn validate_sabr_parameters(alpha: Real, beta: Real, nu: Real, rho: Real) ->
 ///
 /// Port of `sabrVolatility` (`sabr.cpp:163`): guards `strike > 0`,
 /// `forward > 0`, `expiry_time >= 0`, then [`validate_sabr_parameters`], then
-/// the unvalidated core. `volatility_type` selects the model; only
-/// [`VolatilityType::ShiftedLognormal`] is ported (Normal is deferred to #586).
+/// the unvalidated core. `volatility_type` selects the lognormal or the Normal
+/// (Bachelier) formula.
 #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
 pub fn sabr_volatility(
     strike: Rate,
@@ -334,23 +384,76 @@ mod tests {
         }
     }
 
+    /// Oracle: QuantLib-Python 1.44 `sabrVolatility(..., ql.Normal)`
+    /// (`tests/fixtures/sabr_normal/generate.py`). Rows 6-7 hit the
+    /// `close(forward, strike)` branch (`sabr.cpp:101-106`), rows 8-9 the
+    /// `z * z <= 10 eps` expansion (`:124-128`) at a non-zero `z`, and row 10 a
+    /// zero expiry. Every row is within one ulp of QuantLib except row 4
+    /// (`beta = 1`, `rho = -0.5`), where `sqrt(B) + z - rho` cancels and the
+    /// result lands 24 ulps (4.4e-15 rel) away on macOS arm64; that row's
+    /// `pow`/`log` chain is libm- and contraction-dependent, so it is held to
+    /// 1e-12 and the rest to 1e-14.
     #[test]
-    fn normal_volatility_type_is_deferred_to_586() {
-        let err = sabr_volatility(
-            0.04,
-            FORWARD,
-            EXPIRY,
-            ALPHA,
-            BETA,
-            NU,
-            RHO,
-            VolatilityType::Normal,
-        )
-        .unwrap_err();
-        assert!(
-            err.message().contains("#586"),
-            "deferral error should name #586: {}",
-            err.message()
-        );
+    fn normal_volatility_matches_quantlib_python() {
+        let rows: [[Real; 8]; 10] = [
+            [0.03, 0.04, 1.0, 0.02, 0.5, 0.4, -0.2, 0.004623798467824781],
+            [0.05, 0.04, 2.5, 0.02, 0.5, 0.4, -0.2, 0.004551741184353164],
+            [0.01, 0.035, 5.0, 0.01, 0.0, 0.3, 0.3, 0.010076137974416257],
+            [
+                0.06,
+                0.035,
+                0.5,
+                0.05,
+                1.0,
+                0.6,
+                -0.5,
+                0.0047552190399932385,
+            ],
+            [
+                0.025,
+                0.03,
+                10.0,
+                0.015,
+                0.3,
+                0.25,
+                0.1,
+                0.005330869164134957,
+            ],
+            [0.04, 0.04, 1.0, 0.02, 0.5, 0.4, -0.2, 0.004044883333333333],
+            [0.035, 0.035, 3.0, 0.01, 0.0, 0.3, 0.3, 0.010194624999999999],
+            [
+                0.03,
+                0.04,
+                1.0,
+                0.02,
+                0.5,
+                1e-10,
+                -0.2,
+                0.003730704113398029,
+            ],
+            [0.045, 0.04, 2.0, 0.02, 0.7, 1e-9, 0.4, 0.002190362796104491],
+            [0.05, 0.04, 0.0, 0.02, 0.5, 0.4, -0.2, 0.0044266002735856656],
+        ];
+        for (row, [strike, forward, expiry, alpha, beta, nu, rho, expected]) in
+            rows.into_iter().enumerate()
+        {
+            let tolerance = if row == 3 { 1e-12 } else { 1e-14 };
+            let vol = sabr_volatility(
+                strike,
+                forward,
+                expiry,
+                alpha,
+                beta,
+                nu,
+                rho,
+                VolatilityType::Normal,
+            )
+            .unwrap();
+            let rel = ((vol - expected) / expected).abs();
+            assert!(
+                rel <= tolerance,
+                "strike {strike}, forward {forward}: expected {expected}, got {vol}, rel {rel:e}"
+            );
+        }
     }
 }

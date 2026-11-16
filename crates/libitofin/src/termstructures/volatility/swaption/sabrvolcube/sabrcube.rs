@@ -129,6 +129,7 @@ pub struct SabrSwaptionVolatilityCube {
     parameters_guess_quotes: Vec<Vec<Handle<dyn Quote>>>,
     parameters_guess: RefCell<Cube>,
     market_vol_cube: RefCell<Cube>,
+    vol_cube_atm_calibrated: RefCell<Cube>,
     sparse_parameters: RefCell<Cube>,
     dense_parameters: RefCell<Cube>,
     is_parameter_fixed: [bool; N_SABR_PARAMS],
@@ -249,6 +250,7 @@ impl SabrSwaptionVolatilityCube {
         let parameters_guess_cube =
             build_guess_cube(&cube, &parameters_guess, backward_flat, n_options, n_swaps)?;
         let market_vol_cube = zero_cube(&cube, n_strikes, false)?;
+        let vol_cube_atm_calibrated = zero_cube(&cube, n_strikes, false)?;
         let sparse_parameters = zero_cube(&cube, N_SABR_PARAMS + N_METADATA_LAYERS, backward_flat)?;
         let dense_parameters = zero_cube(&cube, N_SABR_PARAMS + N_METADATA_LAYERS, backward_flat)?;
 
@@ -271,6 +273,7 @@ impl SabrSwaptionVolatilityCube {
             parameters_guess_quotes: parameters_guess,
             parameters_guess: RefCell::new(parameters_guess_cube),
             market_vol_cube: RefCell::new(market_vol_cube),
+            vol_cube_atm_calibrated: RefCell::new(vol_cube_atm_calibrated),
             sparse_parameters: RefCell::new(sparse_parameters),
             dense_parameters: RefCell::new(dense_parameters),
             is_parameter_fixed,
@@ -327,15 +330,16 @@ impl SabrSwaptionVolatilityCube {
         let market = self.build_market_vol_cube(n_options, n_swaps)?;
         let sparse = self.sabr_calibration(&market)?;
 
+        let mut vol_cube_atm_calibrated = self.build_market_vol_cube(n_options, n_swaps)?;
         if self.is_atm_calibrated {
             let sparse_smiles = self.create_sparse_smiles(&sparse)?;
-            let mut vol_cube_atm_calibrated = self.build_market_vol_cube(n_options, n_swaps)?;
             self.fill_volatility_cube(&mut vol_cube_atm_calibrated, &sparse, &sparse_smiles)?;
             *self.dense_parameters.borrow_mut() =
                 self.sabr_calibration(&vol_cube_atm_calibrated)?;
         }
 
         *self.market_vol_cube.borrow_mut() = market;
+        *self.vol_cube_atm_calibrated.borrow_mut() = vol_cube_atm_calibrated;
         *self.sparse_parameters.borrow_mut() = sparse;
         Ok(())
     }
@@ -507,9 +511,10 @@ impl SabrSwaptionVolatilityCube {
     /// Interpolates the per-strike vol spreads onto an ATM node
     /// (`spreadVolInterpolation`, hpp:737-857). It brackets the ATM node between
     /// the four surrounding sparse nodes (a `lower_bound` then step back on each
-    /// axis, clamped at 0), then for each strike spread: rescales the strike to
-    /// each corner's forward through the shared moneyness, reads the corner smile
-    /// vol minus that corner's ATM vol, and bilinearly blends the four corner
+    /// axis, clamped at 0), then for each strike spread: maps the strike to each
+    /// corner's forward (a Normal cube keeps the strike spread, `F_ij + K - F`,
+    /// v1.44 hpp:976-977; otherwise the shared shifted moneyness, hpp:979-980), reads the
+    /// corner smile vol minus that corner's ATM vol, and bilinearly blends the four corner
     /// spreads in `(optionTime, swapLength)` via a local one-layer [`Cube`]. The
     /// local cube takes the C++ ctor default `backwardFlat = false` (hpp:852), as
     /// does `marketVolCube_` (hpp:371), whatever the cube-level flag. This
@@ -594,8 +599,11 @@ impl SabrSwaptionVolatilityCube {
             let mut spread_vols = Matrix::with_size(2, 2);
             for i in 0..2 {
                 for j in 0..2 {
-                    let node_strike =
-                        (atm_forwards[i][j] + atm_shifts[i][j]) / moneyness - atm_shifts[i][j];
+                    let node_strike = if self.volatility_type == VolatilityType::Normal {
+                        atm_forwards[i][j] + strike - atm_forward
+                    } else {
+                        (atm_forwards[i][j] + atm_shifts[i][j]) / moneyness - atm_shifts[i][j]
+                    };
                     spread_vols[(i, j)] = smiles[i][j].volatility(node_strike)? - atm_vols[i][j];
                 }
             }
@@ -834,6 +842,28 @@ impl SabrSwaptionVolatilityCube {
             .borrow()
             .value(option_time, swap_length)
     }
+
+    /// The ATM-calibrated market vol cube at `(option_time, swap_length)`: one
+    /// vol per strike spread (`volCubeAtmCalibrated()`, hpp:1055-1058). It starts
+    /// as the market cube (ATM vol plus vol-spread quote at each sparse node,
+    /// hpp:409), so on a cube that is not `is_atm_calibrated` it equals the market
+    /// cube; when `is_atm_calibrated` it is widened over the ATM grid with the
+    /// interpolated spreads (`fillVolatilityCube`). At a grid node it returns that
+    /// node's vols exactly.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the calibration (including the #586 shift deferral).
+    pub fn vol_cube_atm_calibrated_values(
+        &self,
+        option_time: Time,
+        swap_length: Time,
+    ) -> QlResult<Vec<Real>> {
+        self.calculate()?;
+        self.vol_cube_atm_calibrated
+            .borrow()
+            .value(option_time, swap_length)
+    }
 }
 
 /// The sorted-unique union of two finite time axes (C++'s concat + `std::sort` +
@@ -1055,6 +1085,7 @@ mod tests {
     use crate::currency::Currency;
     use crate::indexes::{Euribor, IborIndex, Index, SwapIndex};
     use crate::interestrate::Compounding;
+    use crate::math::interpolations::linear::Linear;
     use crate::patterns::observable::AsObservable;
     use crate::quotes::SimpleQuote;
     use crate::shared::{shared, shared_mut};
@@ -1062,7 +1093,7 @@ mod tests {
     use crate::termstructures::volatility::swaption::{
         SwaptionCubeSmileSection, SwaptionVolatilityMatrix,
     };
-    use crate::termstructures::yields::FlatForward;
+    use crate::termstructures::yields::{FlatForward, ZeroCurve};
     use crate::termstructures::yieldtermstructure::YieldTermStructure;
     use crate::time::calendars::target::Target;
     use crate::time::date::Month;
@@ -2012,7 +2043,10 @@ mod tests {
     /// The moving 6x4 ATM surface (C++'s floating-reference
     /// `SwaptionVolatilityMatrix`), so the cube grid and the ATM grid share the
     /// moving reference date.
-    fn common_atm_matrix(settings: &Shared<Settings<Date>>) -> Shared<SwaptionVolatilityMatrix> {
+    fn common_atm_matrix(
+        settings: &Shared<Settings<Date>>,
+        volatility_type: VolatilityType,
+    ) -> Shared<SwaptionVolatilityMatrix> {
         let vols = atm_vols();
         let vols_handle: Vec<Vec<Handle<dyn Quote>>> = (0..6)
             .map(|i| {
@@ -2029,7 +2063,7 @@ mod tests {
                 atm_swap_tenors(),
                 vols_handle,
                 Actual365Fixed::new(),
-                VolatilityType::ShiftedLognormal,
+                volatility_type,
                 Vec::new(),
                 Shared::clone(settings),
             )
@@ -2106,7 +2140,13 @@ mod tests {
         is_atm_calibrated: bool,
         backward_flat: bool,
     ) -> SabrSwaptionVolatilityCube {
-        build_common_sabr_cube_with_quote(settings, is_atm_calibrated, backward_flat, None)
+        build_common_sabr_cube_with_quote(
+            settings,
+            is_atm_calibrated,
+            backward_flat,
+            None,
+            VolatilityType::ShiftedLognormal,
+        )
     }
 
     fn build_common_sabr_cube_with_quote(
@@ -2114,6 +2154,7 @@ mod tests {
         is_atm_calibrated: bool,
         backward_flat: bool,
         live_spread: Option<&Shared<SimpleQuote>>,
+        volatility_type: VolatilityType,
     ) -> SabrSwaptionVolatilityCube {
         let euribor6m = shared(Euribor::six_months(
             flat_curve(0.05),
@@ -2122,7 +2163,8 @@ mod tests {
         let long = isda_swap_index(&euribor6m, settings, Period::new(2, TimeUnit::Years));
         let short = isda_swap_index(&euribor6m, settings, Period::new(1, TimeUnit::Years));
         let atm =
-            Handle::new(common_atm_matrix(settings) as Shared<dyn SwaptionVolatilityStructure>);
+            Handle::new(common_atm_matrix(settings, volatility_type)
+                as Shared<dyn SwaptionVolatilityStructure>);
 
         let spreads = common_vol_spreads();
         let vol_spreads: Vec<Vec<Handle<dyn Quote>>> = (0..9)
@@ -2213,6 +2255,253 @@ mod tests {
         assert!(
             worst_spread < 12.0e-4,
             "recovery of smile vol spreads worst error {worst_spread} (tolerance 12e-4)"
+        );
+    }
+
+    /// Port of `testSabrNormalVolatility` (`swaptionvolatilitycube.cpp:149-170`):
+    /// the CommonVars cube built on a Normal ATM matrix holding the lognormal
+    /// matrix's numbers, ATM-calibrated, recovers those ATM vols to 7e-4 through
+    /// the `hpp:976` strike-spread corner map.
+    #[test]
+    fn testsabrnormalvolatility_recovers_atm_vols() {
+        let settings = settings_today();
+        let cube =
+            build_common_sabr_cube_with_quote(&settings, true, false, None, VolatilityType::Normal);
+        assert_eq!(cube.volatility_type(), VolatilityType::Normal);
+        let lognormal = common_atm_matrix(&settings, VolatilityType::ShiftedLognormal);
+
+        let mut worst_atm = 0.0_f64;
+        for &o in atm_option_tenors().iter() {
+            for &s in atm_swap_tenors().iter() {
+                let strike = cube.cube().atm_strike_from_tenor(o, s).unwrap();
+                let exp = lognormal.volatility_tenors(o, s, strike, true).unwrap();
+                let act = cube.volatility_tenors(o, s, strike, true).unwrap();
+                worst_atm = worst_atm.max((exp - act).abs());
+            }
+        }
+        assert!(
+            worst_atm < 7.0e-4,
+            "recovery of atm vols worst error {worst_atm} (tolerance 7e-4)"
+        );
+    }
+
+    /// `volCubeAtmCalibrated()` (hpp:409, 1055-1058): at every sparse node it is
+    /// the market cube, ATM vol plus each vol-spread quote, on both a sparse-only
+    /// and an ATM-calibrated cube. Only the ATM-calibrated cube carries the
+    /// widened 5Y x 5Y node, so there the two differ.
+    #[test]
+    fn vol_cube_atm_calibrated_starts_as_the_market_cube() {
+        let settings = settings_today();
+        let sparse_only = build_common_sabr_cube(&settings, false, false);
+        let calibrated = build_common_sabr_cube(&settings, true, false);
+        let atm = sparse_only.cube().atm_vol().current_link().unwrap();
+        let spreads = common_vol_spreads();
+
+        for (n, (date, tenor, time, length)) in node_info(&sparse_only).into_iter().enumerate() {
+            let forward = sparse_only.cube().atm_strike(date, tenor).unwrap();
+            let atm_vol = atm.volatility(date, length, forward, false).unwrap();
+            let expected: Vec<Real> = spreads[n].iter().map(|s| atm_vol + s).collect();
+            for cube in [&sparse_only, &calibrated] {
+                assert_eq!(
+                    cube.vol_cube_atm_calibrated_values(time, length).unwrap(),
+                    expected
+                );
+            }
+        }
+
+        let option_time = sparse_only
+            .time_from_reference(
+                sparse_only
+                    .option_date_from_tenor(Period::new(5, TimeUnit::Years))
+                    .unwrap(),
+            )
+            .unwrap();
+        let swap_length = 5.0;
+        let interpolated = sparse_only
+            .vol_cube_atm_calibrated_values(option_time, swap_length)
+            .unwrap();
+        let widened = calibrated
+            .vol_cube_atm_calibrated_values(option_time, swap_length)
+            .unwrap();
+        assert!((interpolated[4] - widened[4]).abs() > 1.0e-6);
+    }
+
+    /// Port of `testSabrNormalTwoPassUsesStrikeSpreadMoneyness`
+    /// (`swaptionvolatilitycube.cpp:194-313`): on a two-pass Normal cube the dense
+    /// 5Y x 5Y node of `volCubeAtmCalibrated` at the +2% spread equals its ATM vol
+    /// plus the bilinear blend of the four sparse corner spreads read at
+    /// `F_ij + 2%` (hpp:976-977), and differs from the ratio-moneyness
+    /// `F_ij * K / F` blend.
+    #[test]
+    fn testsabrnormaltwopass_uses_strike_spread_moneyness() {
+        let settings = settings_today();
+        let calendar = Target::new();
+        let dates: Vec<Date> = [0, 1, 5, 15, 70]
+            .iter()
+            .map(|&y| {
+                calendar.advance_by_period(
+                    today(),
+                    Period::new(y, TimeUnit::Years),
+                    BusinessDayConvention::Following,
+                    false,
+                )
+            })
+            .collect();
+        let curve: Handle<dyn YieldTermStructure> = Handle::new(shared(
+            ZeroCurve::new(
+                dates,
+                vec![0.01, 0.015, 0.025, 0.035, 0.045],
+                Actual365Fixed::new(),
+                Linear,
+            )
+            .unwrap(),
+        )
+            as Shared<dyn YieldTermStructure>);
+        let euribor6m = shared(Euribor::six_months(curve, Shared::clone(&settings)));
+        let long = isda_swap_index(&euribor6m, &settings, Period::new(2, TimeUnit::Years));
+        let short = isda_swap_index(&euribor6m, &settings, Period::new(1, TimeUnit::Years));
+
+        let vols = atm_vols();
+        let vols_handle: Vec<Vec<Handle<dyn Quote>>> = (0..6)
+            .map(|i| {
+                (0..4)
+                        .map(|j| {
+                            Handle::new(
+                                shared(SimpleQuote::new(0.05 * vols[i][j])) as Shared<dyn Quote>
+                            )
+                        })
+                        .collect()
+            })
+            .collect();
+        let normal_atm = shared(
+            SwaptionVolatilityMatrix::moving(
+                Target::new(),
+                BDC,
+                atm_option_tenors(),
+                atm_swap_tenors(),
+                vols_handle,
+                Actual365Fixed::new(),
+                VolatilityType::Normal,
+                Vec::new(),
+                Shared::clone(&settings),
+            )
+            .unwrap(),
+        );
+        let spreads = common_vol_spreads();
+        let vol_spreads: Vec<Vec<Handle<dyn Quote>>> = (0..9)
+            .map(|n| {
+                (0..5)
+                    .map(|k| {
+                        Handle::new(
+                            shared(SimpleQuote::new(0.03 * spreads[n][k])) as Shared<dyn Quote>
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let parameters_guess: Vec<Vec<Handle<dyn Quote>>> = (0..9)
+            .map(|_| {
+                [0.05, 0.5, 0.4, 0.0]
+                    .iter()
+                    .map(|&v| Handle::new(shared(SimpleQuote::new(v)) as Shared<dyn Quote>))
+                    .collect()
+            })
+            .collect();
+        let cube = SabrSwaptionVolatilityCube::new(
+            Handle::new(Shared::clone(&normal_atm) as Shared<dyn SwaptionVolatilityStructure>),
+            common_cube_option_tenors(),
+            common_cube_swap_tenors(),
+            common_strike_spreads(),
+            vol_spreads,
+            long,
+            short,
+            false,
+            parameters_guess,
+            [false, true, false, false],
+            true,
+            None,
+            None,
+            None,
+            None,
+            false,
+            50,
+            false,
+            0.0001,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+
+        let years = |n| Period::new(n, TimeUnit::Years);
+        let option_time = |n| {
+            normal_atm
+                .time_from_reference(normal_atm.option_date_from_tenor(years(n)).unwrap())
+                .unwrap()
+        };
+        let target_time = option_time(5);
+        let target_length = normal_atm.swap_length_tenor(years(5)).unwrap();
+        let target_forward = cube
+            .cube()
+            .atm_strike_from_tenor(years(5), years(5))
+            .unwrap();
+        let target_strike_spread = 0.02;
+        let target_strike = target_forward + target_strike_spread;
+        let option_nodes = [option_time(1), option_time(10)];
+        let swap_nodes = [2.0, 10.0];
+
+        let interpolated_spread = |ratio_moneyness: bool| {
+            let mut corner = [[0.0; 2]; 2];
+            for i in 0..2 {
+                for j in 0..2 {
+                    let p = cube
+                        .sparse_parameter_values(option_nodes[i], swap_nodes[j])
+                        .unwrap();
+                    let source_forward = p[N_SABR_PARAMS];
+                    let smile = SabrSmileSection::with_exercise_time(
+                        option_nodes[i],
+                        source_forward,
+                        p[0],
+                        p[1],
+                        p[2],
+                        p[3],
+                        0.0,
+                        VolatilityType::Normal,
+                    )
+                    .unwrap();
+                    let source_strike = if ratio_moneyness {
+                        source_forward * target_strike / target_forward
+                    } else {
+                        source_forward + target_strike_spread
+                    };
+                    let source_atm = normal_atm
+                        .volatility_time(option_nodes[i], swap_nodes[j], source_forward, true)
+                        .unwrap();
+                    corner[i][j] = smile.volatility(source_strike).unwrap() - source_atm;
+                }
+            }
+            let ow = (target_time - option_nodes[0]) / (option_nodes[1] - option_nodes[0]);
+            let sw = (target_length - swap_nodes[0]) / (swap_nodes[1] - swap_nodes[0]);
+            (1.0 - ow) * ((1.0 - sw) * corner[0][0] + sw * corner[0][1])
+                + ow * ((1.0 - sw) * corner[1][0] + sw * corner[1][1])
+        };
+
+        let target_atm = normal_atm
+            .volatility_time(target_time, target_length, target_forward, true)
+            .unwrap();
+        let actual = cube
+            .vol_cube_atm_calibrated_values(target_time, target_length)
+            .unwrap()[4];
+        let expected = target_atm + interpolated_spread(false);
+        let old_ratio_result = target_atm + interpolated_spread(true);
+
+        assert!(
+            (actual - expected).abs() < 1.0e-12,
+            "actual {actual} expected {expected} diff {}",
+            actual - expected
+        );
+        assert!(
+            (actual - old_ratio_result).abs() > 1.0e-8,
+            "actual {actual} ratio {old_ratio_result} diff {}",
+            actual - old_ratio_result
         );
     }
 
@@ -2340,6 +2629,7 @@ mod tests {
                     is_atm_calibrated,
                     backward_flat,
                     Some(&quote),
+                    VolatilityType::ShiftedLognormal,
                 )
             };
             let value = |cube: &SabrSwaptionVolatilityCube| {

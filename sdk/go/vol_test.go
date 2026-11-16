@@ -172,8 +172,21 @@ func TestSABRLognormalLimitAndParameters(t *testing.T) {
 	if _, e = s.SabrSmileSection(SabrSmileConfig{ExerciseTime: 1, Forward: 100, Alpha: -1, Beta: 1}); e == nil {
 		t.Fatal("invalid SABR alpha accepted")
 	}
-	if _, e = s.SabrSmileSection(SabrSmileConfig{ExerciseTime: 1, Forward: 100, Alpha: .2, Beta: 1, VolatilityType: Normal}); e == nil {
-		t.Fatal("unsupported normal SABR accepted")
+	n, e := s.SabrSmileSection(SabrSmileConfig{ExerciseTime: 1, Forward: 100, Alpha: .2, Beta: 1, VolatilityType: Normal})
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, tt := range []struct{ strike, vol, variance float64 }{
+		{80, 17.895804329943733, 320.2598126156329},
+		{100, 19.966666666666665, 398.6677777777777},
+		{120, 21.902694355512388, 479.72802003099423},
+	} {
+		x, e := n.Volatility(tt.strike)
+		volNear(t, x, tt.vol, e)
+		x, e = n.Variance(tt.strike)
+		if e != nil || math.Abs(x-tt.variance) > 1e-9 {
+			t.Fatalf("normal SABR variance at %g: got %.15g want %.15g: %v", tt.strike, x, tt.variance, e)
+		}
 	}
 }
 func TestBlackLinearVarianceExtrapolation(t *testing.T) {

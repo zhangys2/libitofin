@@ -1,3 +1,11 @@
+use std::cell::Cell;
+
+use libitofin::indexes::InterestRateIndex;
+use libitofin::math::interpolations::loglinear::LogLinear;
+use libitofin::patterns::observable::{AsObservable, Observer};
+use libitofin::shared::{SharedMut, shared_mut};
+use libitofin::time::daycounters::actual360::Actual360;
+
 use super::*;
 
 #[test]
@@ -201,4 +209,80 @@ fn live_inputs_recalibrate_and_failed_inputs_recover() {
     near(today_fixed, fresh.discount_date(end, false).unwrap(), 1e-12);
     settings.set_evaluation_date(today);
     near(curve.discount_date(end, false).unwrap(), adjusted, 1e-12);
+}
+
+#[test]
+fn compounded_rate_with_holiday_maturity_caps_todays_accrual() {
+    let today = Date::new(18, Month::June, 2024);
+    let value_date = Date::new(17, Month::June, 2024);
+    let maturity_date = Date::new(19, Month::June, 2024);
+    let (previous, todays) = (0.03, 0.09);
+    for flat in [0.0, 0.05] {
+        let settings = settings(today);
+        let curve = shared(FlatForward::with_rate(
+            today,
+            flat,
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        ));
+        let index = shared(Sofr::new(
+            Handle::new(curve as Shared<dyn YieldTermStructure>),
+            settings,
+        ));
+        index.add_fixing(value_date, previous).unwrap();
+        index.add_fixing(today, todays).unwrap();
+        let dc = index.day_counter();
+        let factor = (1.0 + previous * dc.year_fraction(value_date, today))
+            * (1.0 + todays * dc.year_fraction(today, maturity_date));
+        let rate = (factor - 1.0) / dc.year_fraction(value_date, maturity_date);
+        let mut future = OvernightIndexFuture::new(
+            index,
+            value_date,
+            maturity_date,
+            Handle::empty(),
+            RateAveraging::Compound,
+        )
+        .unwrap();
+        near(future.npv().unwrap(), 100.0 * (1.0 - rate), 1e-12);
+    }
+}
+
+struct Notifications(Shared<Cell<usize>>);
+
+impl Observer for Notifications {
+    fn update(&mut self) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+#[test]
+fn rate_helper_is_not_notified_during_bootstrap() {
+    let today = Date::new(26, Month::October, 2018);
+    let settings = settings(today);
+    let price = shared(SimpleQuote::new(97.52));
+    let helper = OvernightIndexFutureRateHelper::new(
+        Handle::new(price.clone() as Shared<dyn Quote>),
+        Date::new(20, Month::March, 2019),
+        Date::new(19, Month::June, 2019),
+        &shared(Sofr::new(Handle::empty(), settings)),
+        Handle::empty(),
+        RateAveraging::Compound,
+        Pillar::LastRelevantDate,
+    )
+    .unwrap();
+    let curve = PiecewiseYieldCurve::<Discount, LogLinear>::new(
+        today,
+        vec![helper.clone() as Shared<dyn RateHelper>],
+        Actual360::new(),
+        LogLinear,
+    )
+    .unwrap();
+    let count = shared(Cell::new(0));
+    let observer = shared_mut(Notifications(count.clone())) as SharedMut<dyn Observer>;
+    helper.observable().register_observer(&observer);
+    curve.nodes().unwrap();
+    assert_eq!(count.get(), 0);
+    price.set_value(97.0);
+    assert!(count.get() > 0);
 }

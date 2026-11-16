@@ -42,9 +42,9 @@ use crate::{fail, require};
 
 /// Observable multiplicative survival jumps shared by credit curves.
 ///
-/// This implements `defaulttermstructure.cpp:64-100`. Quote validation is lazy:
-/// only the consecutive jumps strictly before the requested time are read.
-/// Input order is preserved, including QuantLib's prefix traversal semantics.
+/// This implements `defaulttermstructure.cpp:64-103` (v1.44). Quote validation
+/// is lazy: every jump whose time is strictly inside `(0, t)` is read, in input
+/// order, so jumps on or before the reference date never apply.
 /// The owning curve must expose this state through its `jumps()` hook.
 pub struct DefaultProbabilityJumps {
     quotes: Vec<Handle<dyn Quote>>,
@@ -120,14 +120,14 @@ impl DefaultProbabilityJumps {
     fn factor<T: TermStructure + ?Sized>(&self, curve: &T, t: Time) -> QlResult<Probability> {
         let mut factor = 1.0;
         for (date, handle) in self.dates.iter().zip(&self.quotes) {
-            if curve.time_from_reference(*date)? >= t {
-                break;
+            let jump_time = curve.time_from_reference(*date)?;
+            if jump_time > 0.0 && jump_time < t {
+                let quote = handle.current_link()?;
+                require!(quote.is_valid(), "invalid jump quote");
+                let value = quote.value()?;
+                require!(value > 0.0 && value <= 1.0, "invalid jump value: {value}");
+                factor *= value;
             }
-            let quote = handle.current_link()?;
-            require!(quote.is_valid(), "invalid jump quote");
-            let value = quote.value()?;
-            require!(value > 0.0 && value <= 1.0, "invalid jump value: {value}");
-            factor *= value;
         }
         Ok(factor)
     }

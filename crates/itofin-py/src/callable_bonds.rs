@@ -362,7 +362,7 @@ impl PyCallableFixedRateBond {
             max_vol,
         )
     }
-    /// Effective conventional-OAS clean-price duration, without changing installed pricing state.
+    /// Effective conventional-OAS duration over the dirty center price, without changing installed pricing state.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature=(spread, engine, day_counter, compounding, frequency, *, bump=None))]
     fn effective_duration(
@@ -397,7 +397,7 @@ impl PyCallableFixedRateBond {
                 .map_err(PyQlError::from)?,
         )
     }
-    /// Effective conventional-OAS clean-price convexity, without changing installed pricing state.
+    /// Effective conventional-OAS convexity over the dirty center price, without changing installed pricing state.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature=(spread, engine, day_counter, compounding, frequency, *, bump=None))]
     fn effective_convexity(
@@ -625,7 +625,7 @@ impl PyCallableZeroCouponBond {
             max_vol,
         )
     }
-    /// Effective conventional-OAS clean-price duration, without changing installed pricing state.
+    /// Effective conventional-OAS duration over the dirty center price, without changing installed pricing state.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature=(spread, engine, day_counter, compounding, frequency, *, bump=None))]
     fn effective_duration(
@@ -660,7 +660,7 @@ impl PyCallableZeroCouponBond {
                 .map_err(PyQlError::from)?,
         )
     }
-    /// Effective conventional-OAS clean-price convexity, without changing installed pricing state.
+    /// Effective conventional-OAS convexity over the dirty center price, without changing installed pricing state.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature=(spread, engine, day_counter, compounding, frequency, *, bump=None))]
     fn effective_convexity(

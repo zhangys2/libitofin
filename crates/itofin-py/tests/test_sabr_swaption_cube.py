@@ -27,9 +27,10 @@ B. Vol-spread recovery over the 3x3 cube nodes x 5 strike spreads (C++
    must be the input spread quote. This is the arm that pins the row-major
    ordering of both the vol-spread grid and the per-node parameter guesses.
 C. ``SabrSmileSection`` on its own: a smile at known parameters is finite and
-   positive at the forward, and the two paths deferred to core #586 (a normal
-   volatility type, a non-zero shift) and an out-of-range beta are rejected at
-   construction rather than silently accepted.
+   positive at the forward, a Normal smile serves QuantLib-Python 1.44's Normal
+   SABR values (#1449), and the path deferred to core #586 (a non-zero shift)
+   and an out-of-range beta are rejected at construction rather than silently
+   accepted.
 D. Engine integration - the flagship. The same swaption struck 50bp above the
    money, priced through ``BlackSwaptionEngine`` reading the calibrated cube and
    then the bare ATM matrix. The engine reads the vol at the swaption's own
@@ -215,22 +216,32 @@ def test_a_sabr_smile_section_is_queryable_at_known_parameters():
 
 
 def test_a_sabr_smile_section_rejects_the_deferred_and_invalid_inputs():
-    """The two #586 deferrals (normal volatility, non-zero shift) and an
-    out-of-range parameter are rejected at construction, not on query."""
+    """The #586 deferral (non-zero shift) and an out-of-range parameter are
+    rejected at construction, not on query."""
     with pytest.raises(ItofinError, match="beta must be in"):
         SabrSmileSection(1.0, 0.039, 0.3, 2.0, 0.02, 0.01)
     with pytest.raises(ItofinError, match="#586"):
         SabrSmileSection(1.0, 0.039, 0.3, 0.6, 0.02, 0.01, shift=0.01)
-    with pytest.raises(ItofinError, match="#586"):
-        SabrSmileSection(
-            1.0,
-            0.039,
-            0.3,
-            0.6,
-            0.02,
-            0.01,
-            volatility_type=VolatilityType.Normal,
-        )
+
+
+def test_a_normal_sabr_smile_section_matches_quantlib_python():
+    """QuantLib-Python 1.44 ``SabrSmileSection(1, 0.039, [0.3, 0.6, 0.02, 0.01],
+    0, ql.Normal)`` volatility and variance at two strikes (#1449)."""
+    smile = SabrSmileSection(
+        1.0,
+        0.039,
+        0.3,
+        0.6,
+        0.02,
+        0.01,
+        volatility_type=VolatilityType.Normal,
+    )
+    for strike, vol, variance in [
+        (0.039, 0.04102593145393848, 0.0016831270516632587),
+        (0.05, 0.04448218466938993, 0.001978664752961709),
+    ]:
+        assert smile.volatility(strike) == pytest.approx(vol, rel=1e-14, abs=0)
+        assert smile.variance(strike) == pytest.approx(variance, rel=1e-14, abs=0)
 
 
 def _npv_on(surface, curve, strike):

@@ -19,8 +19,8 @@
 //! - Shift-zero only: `addParams`/`shift` are 0, so [`sabr_guess`]'s
 //!   `pow(forward + shift, ...)` becomes `pow(forward, ...)`. Displaced SABR
 //!   follows with the shifted vol formula (deferred to #586).
-//! - `VolatilityType::ShiftedLognormal` only; the Normal arm is deferred to
-//!   #586 in [`unsafe_sabr_volatility`].
+//! - A [`VolatilityType::Normal`] fit evaluates the Normal SABR formula but
+//!   keeps the Black vega weight, as `sabrinterpolation.hpp:131-135` does.
 //! - `useMaxError` (ranking restarts by max rather than RMS error) is deferred
 //!   to #586; the RMS arm is used.
 //! - `HaltonRsg::new` is the deterministic (`randomStart=false`) arm (#587), so
@@ -39,9 +39,9 @@ use crate::math::optimization::problem::Problem;
 use crate::math::optimization::projectedcostfunction::ProjectedCostFunction;
 use crate::math::randomnumbers::haltonrsg::HaltonRsg;
 use crate::pricingengines::blackformula::black_formula_std_dev_derivative;
+use crate::require;
 use crate::termstructures::volatility::{VolatilityType, unsafe_sabr_volatility};
 use crate::types::{Rate, Real, Time};
-use crate::{fail, require};
 
 const EPS1: Real = 1.0e-7;
 const EPS2: Real = 0.9999;
@@ -131,8 +131,7 @@ pub(crate) fn sabr_guess(values: &mut Array, param_is_fixed: &[bool], forward: R
 /// parameters `[alpha, beta, nu, rho]`.
 ///
 /// The `expect` holds because [`sabr_direct`]'s image is always a valid SABR
-/// point and the shifted-lognormal branch of [`unsafe_sabr_volatility`] is
-/// infallible (only the deferred Normal branch returns `Err`).
+/// point and both branches of [`unsafe_sabr_volatility`] are infallible.
 pub(crate) fn model_vol(
     params: &Array,
     strike: Rate,
@@ -150,7 +149,7 @@ pub(crate) fn model_vol(
         params[3],
         volatility_type,
     )
-    .expect("shifted-lognormal SABR volatility is infallible")
+    .expect("SABR volatility is infallible")
 }
 
 /// Least-squares vol-error cost over the SABR parameters.
@@ -283,8 +282,7 @@ impl SABRInterpolation {
     /// # Errors
     ///
     /// Fails if `strikes`/`vols` differ in length or are empty, if `expiry_time`
-    /// or `forward` is not positive, or if `volatility_type` is
-    /// [`VolatilityType::Normal`] (deferred to #586).
+    /// or `forward` is not positive.
     #[allow(clippy::too_many_arguments, clippy::neg_cmp_op_on_partial_ord)]
     pub fn new(
         strikes: Vec<Real>,
@@ -318,9 +316,6 @@ impl SABRInterpolation {
             forward > 0.0,
             "forward must be positive: {forward} not allowed"
         );
-        if volatility_type == VolatilityType::Normal {
-            fail!("normal (Bachelier) SABR calibration is not yet ported (deferred to #586)");
-        }
         Ok(SABRInterpolation {
             strikes,
             vols,
