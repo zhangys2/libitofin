@@ -239,6 +239,36 @@ impl QdPlusAmericanEngine {
         }
     }
 
+    /// Chebyshev interpolant of the squared log exercise boundary, the
+    /// starting guess `QdFpAmericanEngine` refines.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the boundary root finder fails or the upper
+    /// boundary is empty.
+    pub fn exercise_boundary(
+        &self,
+        spot: Real,
+        strike: Real,
+        r: Rate,
+        q: Rate,
+        vol: Volatility,
+        maturity: Time,
+    ) -> QlResult<ChebyshevInterpolation> {
+        let xmax = Self::x_max(strike, r, q)?;
+        require!(xmax > 0.0, "QD+ put exercise boundary is empty");
+        ChebyshevInterpolation::from_function(
+            self.interpolation_points,
+            ChebyshevKind::Second,
+            |z| {
+                let tau = 0.25 * maturity * (1.0 + z) * (1.0 + z);
+                let (_, exercise) =
+                    self.put_exercise_boundary_at_tau(spot, strike, r, q, vol, maturity, tau)?;
+                Ok((exercise / xmax).ln().powi(2))
+            },
+        )
+    }
+
     fn calculate_put(
         &self,
         spot: Real,
@@ -253,16 +283,7 @@ impl QdPlusAmericanEngine {
         }
         let xmax = Self::x_max(strike, r, q)?;
         require!(xmax > 0.0, "QD+ put exercise boundary is empty");
-        let boundary = ChebyshevInterpolation::from_function(
-            self.interpolation_points,
-            ChebyshevKind::Second,
-            |z| {
-                let tau = 0.25 * maturity * (1.0 + z) * (1.0 + z);
-                let (_, exercise) =
-                    self.put_exercise_boundary_at_tau(spot, strike, r, q, vol, maturity, tau)?;
-                Ok((exercise / xmax).ln().powi(2))
-            },
-        )?;
+        let boundary = self.exercise_boundary(spot, strike, r, q, vol, maturity)?;
         // QuantLib prefers Boost tanh-sinh and otherwise uses
         // `GaussLobattoIntegral(100000, QL_MAX_REAL, 0.1 * eps)`. The port's
         // tanh-sinh does not reach `eps = 1e-10` on this integrand; Lobatto
@@ -338,7 +359,7 @@ fn european_put(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn add_on_integrand(
+pub(crate) fn add_on_integrand(
     z: Real,
     maturity: Time,
     spot: Real,

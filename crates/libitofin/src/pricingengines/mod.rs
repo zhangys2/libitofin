@@ -138,9 +138,9 @@ pub use swaption::{
 pub use vanilla::{
     AnalyticDigitalAmericanEngine, AnalyticDigitalAmericanKOEngine, AnalyticEuropeanEngine,
     BaroneAdesiWhaleyApproximationEngine, BjerksundStenslandApproximationEngine, CashDividendModel,
-    FdBlackScholesVanillaEngine, FdHestonVanillaEngine, FdSimpleBSSwingEngine,
-    JuQuadraticApproximationEngine, JumpDiffusionEngine, QdPlusAmericanEngine, QdPlusSolverType,
-    QuantoEuropeanEngine, set_fd_simple_bs_swing_engine,
+    FdBlackScholesVanillaEngine, FdHestonVanillaEngine, FdSimpleBSSwingEngine, FixedPointEquation,
+    JuQuadraticApproximationEngine, JumpDiffusionEngine, QdFpAmericanEngine, QdFpScheme,
+    QdPlusAmericanEngine, QdPlusSolverType, QuantoEuropeanEngine, set_fd_simple_bs_swing_engine,
 };
 
 pub use blackformula::{

@@ -43,6 +43,7 @@ pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
 pub mod mcslvjumptodefaultvanillaengine;
 pub mod mcvanillaengine;
+pub mod qdfpamericanengine;
 pub mod qdplusamericanengine;
 pub mod quantoengine;
 
@@ -71,6 +72,7 @@ pub use mceuropeanhestonengine::{
 };
 pub use mcslvjumptodefaultvanillaengine::McSlvJumpToDefaultVanillaEngine;
 pub use mcvanillaengine::McVanillaEngineBase;
+pub use qdfpamericanengine::{FixedPointEquation, QdFpAmericanEngine, QdFpScheme};
 pub use qdplusamericanengine::{QdPlusAmericanEngine, SolverType as QdPlusSolverType};
 pub use quantoengine::QuantoEuropeanEngine;
 
