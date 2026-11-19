@@ -6,9 +6,12 @@
 //! (Andersen–Lake put-call symmetry). The double-boundary case `q < r < 0`
 //! is rejected, as in QuantLib 1.43.
 //!
-//! Divergence: a non-positive year fraction returns intrinsic. QuantLib
+//! Divergence: a non-positive year fraction returns intrinsic. QuantLib 1.43
 //! divides the zero log-discount by that year fraction; the option is already
 //! expired in the instrument layer, so the suite never reaches the division.
+//! The price is then floored at immediate exercise, matching QuantLib 1.44.
+//! An exercise that pays at expiry is rejected, as on the other American
+//! approximations in this crate.
 
 use std::cell::Cell;
 
@@ -614,6 +617,7 @@ impl PricingEngine for QdPlusAmericanEngine {
             exercise.exercise_type() == ExerciseType::American,
             "not an American option"
         );
+        require!(!exercise.payoff_at_expiry(), "payoff at expiry not handled");
         let Some(payoff) = args.payoff.as_ref() else {
             fail!("non-striked payoff given");
         };
@@ -659,6 +663,7 @@ impl PricingEngine for QdPlusAmericanEngine {
                 }
             }
         };
+        let value = value.max(payoff.value(spot));
         self.base.results_mut().instrument.value = Some(value);
         Ok(())
     }
@@ -1229,5 +1234,86 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn qd_plus_is_not_below_exercise() {
+        use crate::time::period::Period;
+        use crate::time::timeunit::TimeUnit;
+
+        let today = Date::new(15, Month::August, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let spot = shared(SimpleQuote::new(100.0));
+        let q_rate = shared(SimpleQuote::new(0.0));
+        let r_rate = shared(SimpleQuote::new(0.0));
+        let vol = shared(SimpleQuote::new(0.2));
+        let quote = |q: &Shared<SimpleQuote>| Handle::new(Shared::clone(q) as Shared<dyn Quote>);
+        let flat = |q: &Shared<SimpleQuote>| {
+            Handle::new(shared(FlatForward::new(
+                today,
+                quote(q),
+                Actual365Fixed::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let process = shared(BlackScholesMertonProcess::new(
+            quote(&spot),
+            flat(&q_rate),
+            flat(&r_rate),
+            Handle::new(shared(BlackConstantVol::with_quote(
+                today,
+                None,
+                quote(&vol),
+                Actual365Fixed::new(),
+            )) as Shared<dyn BlackVolTermStructure>),
+        ));
+        let maturity = today + Period::new(10, TimeUnit::Years);
+        let cases = [
+            (Call, 60.0, -0.10, 0.06, 0.40, 40.0),
+            (Call, 80.0, -0.05, 0.06, 0.20, 20.0),
+            (Put, 140.0, 0.06, 0.0, 0.20, 40.0),
+        ];
+        for (kind, strike, r, q, sigma, intrinsic) in cases {
+            spot.set_value(100.0);
+            r_rate.set_value(r);
+            q_rate.set_value(q);
+            vol.set_value(sigma);
+            let exercise = shared(AmericanExercise::over(today, maturity).unwrap());
+            let payoff = shared(PlainVanillaPayoff::new(kind, strike));
+            let mut option = VanillaOption::new(payoff, exercise, Shared::clone(&settings));
+            option
+                .base_mut()
+                .set_pricing_engine(
+                    shared_mut(QdPlusAmericanEngine::new(Shared::clone(&process)))
+                        as SharedMut<dyn PricingEngine>,
+                );
+            let calculated = option.npv().unwrap();
+            assert!(
+                calculated + 1e-12 >= intrinsic,
+                "{kind:?} K={strike}: {calculated} below exercise {intrinsic}"
+            );
+        }
+    }
+
+    #[test]
+    fn qd_plus_payoff_at_expiry_is_rejected() {
+        let market = Market::new();
+        market.set(100.0, 0.03, 0.10, 0.25);
+        let exercise = shared(AmericanExercise::new(today(), today() + 365, true).unwrap());
+        let payoff = shared(PlainVanillaPayoff::new(Put, 100.0));
+        let mut option = VanillaOption::new(payoff, exercise, Shared::clone(&market.settings));
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(QdPlusAmericanEngine::new(Shared::clone(
+                &market.process,
+            ))) as SharedMut<dyn PricingEngine>);
+        let err = option.npv().unwrap_err();
+        assert!(
+            err.message().contains("payoff at expiry not handled"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 }
