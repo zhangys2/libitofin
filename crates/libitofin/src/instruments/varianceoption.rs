@@ -28,6 +28,8 @@ pub struct VarianceOptionArguments {
     pub start_date: Option<Date>,
     /// Realized-variance horizon.
     pub maturity_date: Option<Date>,
+    /// Explicit evaluation date. The integral uses this date, not the curve reference.
+    pub settings: Option<Shared<Settings<Date>>>,
 }
 
 impl Arguments for VarianceOptionArguments {
@@ -37,8 +39,14 @@ impl Arguments for VarianceOptionArguments {
             fail!("no notional given");
         };
         require!(notional > 0.0, "negative or null notional given");
-        require!(self.start_date.is_some(), "null start date given");
-        require!(self.maturity_date.is_some(), "null maturity date given");
+        let Some((start, maturity)) = self.start_date.zip(self.maturity_date) else {
+            fail!("null start or maturity date given");
+        };
+        require!(
+            start != Date::null() && maturity != Date::null() && start <= maturity,
+            "variance option requires a start on or before maturity"
+        );
+        require!(self.settings.is_some(), "variance option settings missing");
         Ok(())
     }
 }
@@ -75,6 +83,7 @@ impl VarianceOption {
             notional: Some(notional),
             start_date: Some(start_date),
             maturity_date: Some(maturity_date),
+            settings: Some(Shared::clone(&settings)),
         };
         arguments.validate()?;
         let base = InstrumentBase::new();
@@ -128,6 +137,7 @@ impl Instrument for VarianceOption {
             notional: Some(self.notional),
             start_date: Some(self.start_date),
             maturity_date: Some(self.maturity_date),
+            settings: Some(Shared::clone(&self.settings)),
         };
         Ok(())
     }

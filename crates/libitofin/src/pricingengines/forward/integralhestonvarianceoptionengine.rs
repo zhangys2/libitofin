@@ -66,7 +66,7 @@ impl PricingEngine for IntegralHestonVarianceOptionEngine {
             self.process.dividend_yield().is_empty(),
             "this engine does not manage dividend yields"
         );
-        let (payoff, notional, maturity) = {
+        let (payoff, notional, maturity, settings) = {
             let args = self.base.arguments();
             args.validate()?;
             let Some(payoff) = args.payoff.as_ref() else {
@@ -78,11 +78,26 @@ impl PricingEngine for IntegralHestonVarianceOptionEngine {
             let Some(maturity) = args.maturity_date else {
                 fail!("null maturity date given");
             };
-            (Shared::clone(payoff), notional, maturity)
+            let Some(settings) = args.settings.as_ref() else {
+                fail!("variance option settings missing");
+            };
+            (
+                Shared::clone(payoff),
+                notional,
+                maturity,
+                Shared::clone(settings),
+            )
+        };
+        let Some(evaluation) = settings.evaluation_date() else {
+            fail!("no evaluation date set");
         };
         let risk_free = self.process.risk_free_rate().current_link()?;
         let day_counter = risk_free.require_day_counter()?;
-        let tau = day_counter.year_fraction(risk_free.reference_date()?, maturity);
+        let tau = day_counter.year_fraction(evaluation, maturity);
+        require!(
+            tau > 0.0,
+            "variance option maturity must be after the evaluation date"
+        );
         let r = risk_free
             .zero_rate_date(
                 maturity,
@@ -126,12 +141,15 @@ fn ivop_one_dim(
     rtax: Real,
 ) -> QlResult<Real> {
     let s = 2.0 * chi * theta / (eps * eps) - 1.0;
-    require!(s > 0.0, "this parameter must be greater than zero-> {s}");
+    require!(
+        eps > 0.0 && s.is_finite() && s > 0.0,
+        "this parameter must be greater than zero-> {s}"
+    );
     let ss = s + 1.0;
     let pi2 = 2.0 * std::f64::consts::PI;
     let dstep = 256.0;
     let nris = pi2.sqrt() / dstep;
-    let mm = (pi2 / (nris * nris)) as i32;
+    let mm = (dstep * dstep) as i32;
     let ui = Complex::new(0.0, 1.0);
     let mut ff = vec![Complex::new(0.0, 0.0); mm as usize];
     for j in 0..mm {
@@ -167,10 +185,12 @@ fn ivop_one_dim(
     csum += vero;
     let impart = csum.im;
     require!(
-        impart <= 1e-12,
+        impart.abs() <= 1e-12,
         "imaginary part option (must be zero) = {impart}"
     );
-    Ok((-rtax * tau).exp() * csum.re)
+    let price = (-rtax * tau).exp() * csum.re;
+    require!(price.is_finite(), "variance option price must be finite");
+    Ok(price)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -185,12 +205,15 @@ fn ivop_two_dim(
     payoff: impl Fn(Real) -> Real,
 ) -> QlResult<Real> {
     let s = 2.0 * chi * theta / (eps * eps) - 1.0;
-    require!(s > 0.0, "this parameter must be greater than zero-> {s}");
+    require!(
+        eps > 0.0 && s.is_finite() && s > 0.0,
+        "this parameter must be greater than zero-> {s}"
+    );
     let ss = s + 1.0;
     let pi2 = 2.0 * std::f64::consts::PI;
     let dstep = 64.0;
     let nris = pi2.sqrt() / dstep;
-    let mm = (pi2 / (nris * nris)) as i32;
+    let mm = (dstep * dstep) as i32;
     let ui = Complex::new(0.0, 1.0);
     let mut xiv = vec![0.0; mm as usize];
     let mut ivet = vec![0.0; mm as usize];
@@ -225,7 +248,9 @@ fn ivop_two_dim(
         sumr += payoff_val * csum.re;
     }
     sumr *= nris;
-    Ok((-rtax * tau).exp() * sumr)
+    let price = (-rtax * tau).exp() * sumr;
+    require!(price.is_finite(), "variance option price must be finite");
+    Ok(price)
 }
 
 #[cfg(test)]
@@ -293,5 +318,49 @@ mod tests {
         );
         let put = price(Put, 0.7, 1.0, 1.5);
         assert!((put - 0.0466796).abs() <= 1.0e-7, "put {put} vs 0.0466796");
+    }
+
+    #[test]
+    fn evaluation_date_shortens_the_horizon() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let r_ts = shared(FlatForward::new(
+            today,
+            Handle::new(shared(SimpleQuote::new(0.0)) as Shared<dyn Quote>),
+            Actual360::new(),
+            Compounding::Continuous,
+            Frequency::Annual,
+        )) as Shared<dyn YieldTermStructure>;
+        let process = shared(HestonProcess::new(
+            Handle::new(r_ts),
+            Handle::<dyn YieldTermStructure>::empty(),
+            Handle::new(shared(SimpleQuote::new(1.0)) as Shared<dyn Quote>),
+            2.0,
+            2.0,
+            0.01,
+            0.1,
+            -0.5,
+        ));
+        let mut option = VarianceOption::new(
+            shared(PlainVanillaPayoff::new(Call, 0.05)),
+            1.0,
+            today,
+            today + 540,
+            Shared::clone(&settings),
+        )
+        .unwrap();
+        option
+            .base_mut()
+            .set_pricing_engine(shared_mut(IntegralHestonVarianceOptionEngine::new(process))
+                as SharedMut<dyn PricingEngine>);
+        let at_inception = option.npv().unwrap();
+        assert!((at_inception - 0.9104619).abs() <= 1.0e-7);
+        settings.set_evaluation_date(today + 180);
+        let rolled = option.npv().unwrap();
+        assert!(
+            (rolled - 0.8203413932).abs() <= 1.0e-6,
+            "rolled horizon {rolled}"
+        );
     }
 }
