@@ -726,7 +726,12 @@ impl PricingEngine for QdFpAmericanEngine {
                 self.calculate_put(s, k, rr, qq, v, t)
             })?
         };
-        let value = value.max(payoff.value(spot));
+        let exercise_value = payoff.value(spot);
+        let value = if value < exercise_value {
+            exercise_value
+        } else {
+            value
+        };
         self.base.results_mut().instrument.value = Some(value);
         Ok(())
     }
@@ -786,7 +791,7 @@ mod tests {
     use crate::interestrate::Compounding;
     use crate::math::distributions::normal::NormalDistribution;
     use crate::math::statistics::{IncrementalStatistics, MeanStdDev, Statistics};
-    use crate::option::OptionType::Put;
+    use crate::option::OptionType::{Call, Put};
     use crate::pricingengine::PricingEngine;
     use crate::pricingengines::vanilla::AnalyticEuropeanEngine;
     use crate::processes::BlackScholesMertonProcess;
@@ -1023,34 +1028,158 @@ mod tests {
     }
 
     #[test]
-    fn qd_fp_high_precision_matches_lobatto() {
+    fn qd_fp_high_precision_lobatto_values() {
         let today = Date::new(5, Month::November, 2022);
         let market = Market::new(today);
         let maturity = today + Period::new(2, TimeUnit::Years);
         market.set(36.0, 0.01, 0.075, 0.40);
-        for equation in [FixedPointEquation::A, FixedPointEquation::B] {
-            let high = shared_mut(QdFpAmericanEngine::with_scheme(
+        // Absolute pins of `QdFpScheme::high_precision`, which is the
+        // Gauss-Lobatto fallback of QuantLib's high-precision scheme
+        // (`m = 10`, `n = 30`, `eps = 1e-10`) on both integrals.
+        #[allow(clippy::excessive_precision)]
+        let cases = [
+            (FixedPointEquation::A, 36.0, 8.3056758313065568),
+            (FixedPointEquation::A, 40.0 - 1e-8, 6.7239529014628463),
+            (FixedPointEquation::A, 40.0, 6.7239528979424747),
+            (FixedPointEquation::A, 40.0 + 1e-8, 6.7239528944221076),
+            (FixedPointEquation::A, 50.0, 4.0279588413068819),
+            (FixedPointEquation::B, 36.0, 8.3056758768222210),
+            (FixedPointEquation::B, 40.0 - 1e-8, 6.7239529327592509),
+            (FixedPointEquation::B, 40.0, 6.7239529292388802),
+            (FixedPointEquation::B, 40.0 + 1e-8, 6.7239529257185122),
+            (FixedPointEquation::B, 50.0, 4.0279588541583262),
+        ];
+        for (equation, spot, expected) in cases {
+            market.spot.set_value(spot);
+            let mut option = market.american(Put, 40.0, maturity);
+            let engine = shared_mut(QdFpAmericanEngine::with_scheme(
                 Shared::clone(&market.process),
                 QdFpScheme::high_precision(),
                 equation,
             ));
-            let lobatto = shared_mut(QdFpAmericanEngine::with_scheme(
-                Shared::clone(&market.process),
-                QdFpScheme::tanh_sinh(10, 30, 1e-10).unwrap(),
-                equation,
-            ));
-            for spot in [36.0, 40.0 - 1e-8, 40.0, 40.0 + 1e-8, 50.0] {
-                market.spot.set_value(spot);
-                let mut option = market.american(Put, 40.0, maturity);
-                let high_npv = price(&mut option, SharedMut::clone(&high));
-                let lobatto_npv = price(&mut option, SharedMut::clone(&lobatto));
-                let diff = (high_npv - lobatto_npv).abs();
+            let npv = price(&mut option, engine);
+            let diff = (npv - expected).abs();
+            assert!(
+                diff <= 1e-12,
+                "{equation:?} S={spot}: {npv} vs {expected} (diff={diff})"
+            );
+        }
+    }
+
+    #[test]
+    fn qd_fp_is_not_below_exercise() {
+        let today = Date::new(15, Month::August, 2026);
+        let market = Market::new(today);
+        let maturity = today + Period::new(10, TimeUnit::Years);
+        #[allow(clippy::excessive_precision)]
+        let cases = [
+            (Call, 100.0, 60.0, -0.10, 0.06, 0.40, 40.001904191016706),
+            (Call, 100.0, 80.0, -0.05, 0.06, 0.20, 20.0),
+            (Put, 100.0, 140.0, 0.06, 0.0, 0.20, 40.00124358810336),
+            (Call, 80.0, 80.0, -0.05, 0.06, 0.20, 5.212035950654076),
+        ];
+        for (kind, spot, strike, r, q, vol, expected) in cases {
+            market.set(spot, q, r, vol);
+            let mut option = market.american(kind, strike, maturity);
+            let npv = price(
+                &mut option,
+                shared_mut(QdFpAmericanEngine::new(Shared::clone(&market.process))),
+            );
+            let intrinsic = match kind {
+                Call => (spot - strike).max(0.0),
+                Put => (strike - spot).max(0.0),
+            };
+            assert!(
+                npv.is_finite(),
+                "{kind:?} K={strike} S={spot} is not finite"
+            );
+            assert!(
+                npv + 1e-12 >= intrinsic,
+                "{kind:?} K={strike} S={spot}: {npv} below {intrinsic}"
+            );
+            assert!(
+                (npv - expected).abs() <= 1e-12,
+                "{kind:?} K={strike} S={spot}: {npv} vs {expected}"
+            );
+            if intrinsic == 0.0 {
                 assert!(
-                    diff <= 1e-11 && lobatto_npv.is_finite(),
-                    "{equation:?} S={spot}: {high_npv} vs {lobatto_npv} (diff={diff})"
+                    npv > intrinsic,
+                    "OTM call should be strictly above intrinsic"
                 );
             }
         }
+    }
+
+    #[test]
+    fn qd_fp_put_call_symmetry_on_the_standard_example() {
+        let today = Date::new(1, Month::June, 2022);
+        let market = Market::new(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        for equation in [FixedPointEquation::A, FixedPointEquation::B] {
+            let scheme = QdFpScheme::legendre(32, 2, 15, 48).unwrap();
+            market.set(100.0, 0.05, 0.075, 0.25);
+            let mut put = market.american(Put, 95.0, maturity);
+            let put_npv = price(
+                &mut put,
+                shared_mut(QdFpAmericanEngine::with_scheme(
+                    Shared::clone(&market.process),
+                    scheme,
+                    equation,
+                )),
+            );
+            market.set(95.0, 0.075, 0.05, 0.25);
+            let mut call = market.american(Call, 100.0, maturity);
+            let call_npv = price(
+                &mut call,
+                shared_mut(QdFpAmericanEngine::with_scheme(
+                    Shared::clone(&market.process),
+                    scheme,
+                    equation,
+                )),
+            );
+            assert!(
+                (put_npv - call_npv).abs() <= 1e-12,
+                "{equation:?}: put {put_npv} vs call {call_npv}"
+            );
+        }
+    }
+
+    #[test]
+    fn qd_fp_rejects_double_boundary_and_payoff_at_expiry() {
+        let today = Date::new(5, Month::November, 2022);
+        let market = Market::new(today);
+        let maturity = today + Period::new(1, TimeUnit::Years);
+        market.set(100.0, -0.10, -0.05, 0.25);
+        let mut option = market.american(Put, 100.0, maturity);
+        option
+            .base_mut()
+            .set_pricing_engine(
+                shared_mut(QdFpAmericanEngine::new(Shared::clone(&market.process)))
+                    as SharedMut<dyn PricingEngine>,
+            );
+        let err = option.npv().unwrap_err();
+        assert!(
+            err.message().contains("double-boundary"),
+            "unexpected error: {}",
+            err.message()
+        );
+
+        let exercise = shared(AmericanExercise::new(today, maturity, true).unwrap());
+        let payoff = shared(PlainVanillaPayoff::new(Put, 100.0));
+        let mut deferred = VanillaOption::new(payoff, exercise, Shared::clone(&market.settings));
+        market.set(100.0, 0.01, 0.075, 0.25);
+        deferred
+            .base_mut()
+            .set_pricing_engine(
+                shared_mut(QdFpAmericanEngine::new(Shared::clone(&market.process)))
+                    as SharedMut<dyn PricingEngine>,
+            );
+        let err = deferred.npv().unwrap_err();
+        assert!(
+            err.message().contains("payoff at expiry not handled"),
+            "unexpected error: {}",
+            err.message()
+        );
     }
 
     #[test]
