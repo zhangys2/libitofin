@@ -86,6 +86,25 @@ impl ChebyshevInterpolation {
         Ok(ChebyshevInterpolation { x, y, lambda })
     }
 
+    /// The Chebyshev nodes this interpolant was built on.
+    pub fn interpolation_nodes(&self) -> &[Real] {
+        &self.x
+    }
+
+    /// Replaces the sampled values. The nodes and barycentric weights stay.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `y` has a different length from the node grid.
+    pub fn update_y(&mut self, y: &[Real]) -> QlResult<()> {
+        require!(
+            y.len() == self.y.len(),
+            "interpolation override has the wrong length"
+        );
+        self.y.copy_from_slice(y);
+        Ok(())
+    }
+
     /// The interpolant at `x`, extrapolating outside the nodes.
     ///
     /// A node within `10 ε |x|` is returned exactly, matching Lagrange's
