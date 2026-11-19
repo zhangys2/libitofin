@@ -11,7 +11,8 @@ use std::any::Any;
 use crate::errors::QlResult;
 use crate::fail;
 use crate::instruments::{
-    PlainVanillaPayoff, StrikedTypePayoff, TypePayoff, VarianceOptionArguments, VarianceOptionEngine,
+    PlainVanillaPayoff, StrikedTypePayoff, TypePayoff, VarianceOptionArguments,
+    VarianceOptionEngine,
 };
 use crate::interestrate::Compounding;
 use crate::option::OptionType;
@@ -156,7 +157,8 @@ fn ivop_one_dim(
     }
     let mut csum = Complex::new(0.0, 0.0);
     for j in 0..mm {
-        let caux2 = -2.0 * std::f64::consts::PI * f64::from(mm) * f64::from(j) * 0.5 / f64::from(mm);
+        let caux2 =
+            -2.0 * std::f64::consts::PI * f64::from(mm) * f64::from(j) * 0.5 / f64::from(mm);
         csum += ff[j as usize] * alt_sign(j) * (ui * caux2).exp();
     }
     let sign_mm = Complex::new(alt_sign(mm), 0.0).sqrt();
