@@ -102,9 +102,9 @@ pub use exotic::{
 pub use forward::{
     AnalyticForwardPerformanceVanillaEngine, AnalyticForwardVanillaEngine,
     AnalyticHestonForwardEuropeanEngine, BinomialForwardVanillaEngine, ForwardEuropeanBsPathPricer,
-    ForwardEuropeanHestonPathPricer, MAX_VARIANCE_SWAP_STRIKES, MCVarianceSwapEngine,
-    MakeMcForwardEuropeanBsEngine, MakeMcForwardEuropeanHestonEngine, McForwardEuropeanBsEngine,
-    McForwardEuropeanHestonEngine, QuantoForwardEuropeanEngine,
+    ForwardEuropeanHestonPathPricer, IntegralHestonVarianceOptionEngine, MAX_VARIANCE_SWAP_STRIKES,
+    MCVarianceSwapEngine, MakeMcForwardEuropeanBsEngine, MakeMcForwardEuropeanHestonEngine,
+    McForwardEuropeanBsEngine, McForwardEuropeanHestonEngine, QuantoForwardEuropeanEngine,
     QuantoForwardPerformanceEuropeanEngine, ReplicatingVarianceSwapEngine,
     set_analytic_forward_performance_vanilla_engine, set_analytic_forward_vanilla_engine,
     set_mc_forward_european_bs_engine, set_quanto_forward_european_engine,

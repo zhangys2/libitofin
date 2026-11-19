@@ -6,6 +6,7 @@
 mod analyticforwardperformancevanillaengine;
 mod analyticforwardvanillaengine;
 mod analytichestonforwardeuropeanengine;
+mod integralhestonvarianceoptionengine;
 mod mcforwardeuropeanbsengine;
 mod mcforwardeuropeanhestonengine;
 mod mcvarianceswapengine;
@@ -21,6 +22,7 @@ pub use analyticforwardvanillaengine::{
     AnalyticForwardVanillaEngine, BinomialForwardVanillaEngine, set_analytic_forward_vanilla_engine,
 };
 pub use analytichestonforwardeuropeanengine::AnalyticHestonForwardEuropeanEngine;
+pub use integralhestonvarianceoptionengine::IntegralHestonVarianceOptionEngine;
 pub use mcforwardeuropeanbsengine::{
     ForwardEuropeanBsPathPricer, MakeMcForwardEuropeanBsEngine, McForwardEuropeanBsEngine,
     set_mc_forward_european_bs_engine,
