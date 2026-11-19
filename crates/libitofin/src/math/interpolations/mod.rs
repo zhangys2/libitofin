@@ -3,6 +3,7 @@
 pub mod backwardflatlinear;
 pub mod bicubic;
 pub mod bilinear;
+pub mod chebyshev;
 pub mod convexmonotone;
 pub mod cubic;
 pub mod flat;

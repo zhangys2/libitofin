@@ -43,6 +43,7 @@ pub mod mceuropeanengine;
 pub mod mceuropeanhestonengine;
 pub mod mcslvjumptodefaultvanillaengine;
 pub mod mcvanillaengine;
+pub mod qdplusamericanengine;
 pub mod quantoengine;
 
 pub use analyticdigitalamericanengine::{
@@ -70,6 +71,7 @@ pub use mceuropeanhestonengine::{
 };
 pub use mcslvjumptodefaultvanillaengine::McSlvJumpToDefaultVanillaEngine;
 pub use mcvanillaengine::McVanillaEngineBase;
+pub use qdplusamericanengine::{QdPlusAmericanEngine, SolverType as QdPlusSolverType};
 pub use quantoengine::QuantoEuropeanEngine;
 
 use std::any::Any;
