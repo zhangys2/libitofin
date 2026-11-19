@@ -89,11 +89,18 @@ impl ChebyshevInterpolation {
     /// The interpolant at `x`, extrapolating outside the nodes.
     ///
     /// A node within `10 ε |x|` is returned exactly, matching Lagrange's
-    /// `lower_bound` snap (`lagrangeinterpolation.hpp`).
+    /// `lower_bound` snap (`lagrangeinterpolation.hpp`). An exact node,
+    /// including the origin on an odd second-kind grid, is also returned as
+    /// stored: the tolerance is zero at `x = 0`, so the Lagrange test would
+    /// divide by zero there. A non-finite `x` is `NaN`.
     pub fn value(&self, x: Real) -> Real {
+        if !x.is_finite() {
+            return Real::NAN;
+        }
         let eps = 10.0 * Real::EPSILON * x.abs();
         let idx = self.x.partition_point(|&node| node < x - eps);
-        if idx < self.x.len() && self.x[idx] - x < eps {
+        #[allow(clippy::float_cmp)]
+        if idx < self.x.len() && (self.x[idx] == x || self.x[idx] - x < eps) {
             return self.y[idx];
         }
         let mut numerator = 0.0;
@@ -135,6 +142,24 @@ mod tests {
         assert!((nodes[0] + 1.0).abs() <= 1e-15);
         assert!(nodes[2].abs() <= 1e-15);
         assert!((nodes[4] - 1.0).abs() <= 1e-15);
+    }
+
+    #[test]
+    fn exact_node_is_returned_when_the_snap_tolerance_is_zero() {
+        let nodes = ChebyshevInterpolation::nodes(5, ChebyshevKind::Second).unwrap();
+        let origin = nodes
+            .iter()
+            .copied()
+            .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+            .unwrap();
+        let interpolation = ChebyshevInterpolation::from_function(5, ChebyshevKind::Second, |x| {
+            #[allow(clippy::float_cmp)]
+            Ok(if x == origin { 7.0 } else { 0.0 })
+        })
+        .unwrap();
+        assert_eq!(interpolation.value(origin), 7.0);
+        assert!(interpolation.value(0.0).is_finite());
+        assert!(interpolation.value(Real::NAN).is_nan());
     }
 
     #[test]
