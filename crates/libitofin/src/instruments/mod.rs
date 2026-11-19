@@ -53,6 +53,7 @@ mod twoassetbarrieroption;
 mod twoassetcorrelationoption;
 mod vanillaswap;
 mod vanillaswingoption;
+mod varianceoption;
 mod varianceswap;
 mod writerextensibleoption;
 mod xccybasisswap;
@@ -173,6 +174,7 @@ pub use vanillaswingoption::{
     SwingExercise, VanillaForwardPayoff, VanillaSwingArguments, VanillaSwingOption,
     VanillaSwingResults,
 };
+pub use varianceoption::{VarianceOption, VarianceOptionArguments, VarianceOptionEngine};
 pub use varianceswap::{
     VarianceSwap, VarianceSwapArguments, VarianceSwapEngine, VarianceSwapOptionWeight,
     VarianceSwapResults,
