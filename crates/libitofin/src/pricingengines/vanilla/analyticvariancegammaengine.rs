@@ -129,7 +129,16 @@ impl PricingEngine for VarianceGammaEngine {
         let target = self.abs_err * 1.0e-4;
         let mut tail = integrand.at(infinity);
         let mut expansions = 0usize;
-        while tail.abs() > target {
+        loop {
+            if tail.is_nan() {
+                if let Some(message) = integrand.take_error() {
+                    fail!("{message}");
+                }
+                fail!("non-finite variance-gamma tail");
+            }
+            if tail.abs() <= target {
+                break;
+            }
             require!(expansions < 40, "variance-gamma tail did not decay");
             infinity *= 1.5;
             tail = integrand.at(infinity);
@@ -143,11 +152,11 @@ impl PricingEngine for VarianceGammaEngine {
             "non-finite variance-gamma tail"
         );
 
-        let near = GaussKronrodNonAdaptive::new(self.abs_err, 0.0)?.integrate(
-            |x| integrand.at(x),
-            0.0,
-            0.1,
-        )?;
+        // QuantLib returns the 87-point value even when the error estimate
+        // misses `absErr`. The strict integrator still fails for every other caller.
+        let near = GaussKronrodNonAdaptive::new(self.abs_err, 0.0)?
+            .allowing_excess_error()
+            .integrate(|x| integrand.at(x), 0.0, 0.1)?;
         let far = GaussLobattoIntegral::new(2000, self.abs_err)?.integrate(
             |x| integrand.at(x),
             0.1,
@@ -173,7 +182,8 @@ struct Integrand {
     nu: Real,
     theta: Real,
     omega: Real,
-    gamma_denom: Real,
+    shape: Real,
+    log_gamma: Real,
     error: RefCell<Option<String>>,
 }
 
@@ -195,9 +205,9 @@ impl Integrand {
             "variance-gamma compensator must be positive"
         );
         let shape = time / nu;
-        let gamma_denom = log_gamma(shape)?.exp() * nu.powf(shape);
+        let log_gamma = log_gamma(shape)?;
         require!(
-            gamma_denom.is_finite() && gamma_denom > 0.0,
+            shape.is_finite() && log_gamma.is_finite() && nu.ln().is_finite(),
             "variance-gamma density is not representable"
         );
         Ok(Self {
@@ -210,7 +220,8 @@ impl Integrand {
             nu,
             theta,
             omega: compensator.ln() / nu,
-            gamma_denom,
+            shape,
+            log_gamma,
             error: RefCell::new(None),
         })
     }
@@ -254,8 +265,15 @@ impl Integrand {
             vol_adj,
             self.risk_free_discount,
         )?;
-        let density = (x.powf(self.time / self.nu - 1.0) * (-x / self.nu).exp()) / self.gamma_denom;
-        Ok(black.value() * density)
+        // Log-space gamma density. `exp(lgamma) * nu^(t/nu)` overflows for a
+        // small `nu` even when the density itself is moderate.
+        require!(
+            x > 0.0,
+            "variance-gamma density evaluated at a non-positive time"
+        );
+        let log_density =
+            (self.shape - 1.0) * x.ln() - x / self.nu - self.log_gamma - self.shape * self.nu.ln();
+        Ok(black.value() * log_density.exp())
     }
 }
 
@@ -363,7 +381,9 @@ mod tests {
         }
     }
 
-    /// `testSingularityAtZero`: the short-dated call must finish with a finite price.
+    /// `testSingularityAtZero`: nine 30/360 days and `nu = 0.2` give `t/nu < 1`,
+    /// so the density is singular at zero. Kronrod samples the open interval
+    /// `(0, 0.1)` and Lobatto starts at `0.1`. The call must finish finite.
     #[test]
     fn short_dated_call_integrates_through_the_origin() {
         let today = Date::new(1, Month::January, 2017);
@@ -388,6 +408,39 @@ mod tests {
         let mut option = EuropeanOption::new(
             shared(PlainVanillaPayoff::new(Call, 98.0)) as Shared<dyn StrikedTypePayoff>,
             shared(EuropeanExercise::new(maturity)),
+            settings,
+        );
+        option.base_mut().set_pricing_engine(
+            shared_mut(VarianceGammaEngine::new(process)) as SharedMut<dyn PricingEngine>
+        );
+        let npv = option.npv().unwrap();
+        assert!(npv.is_finite() && npv > 0.0, "{npv}");
+    }
+
+    /// `nu = 0.001` used to overflow `exp(lgamma) * nu^(t/nu)` before the density
+    /// was formed. The log-space density must still produce a finite call.
+    #[test]
+    fn small_nu_call_stays_representable() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let quote = |rate: Real| Handle::new(shared(SimpleQuote::new(rate)) as Shared<dyn Quote>);
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::new(
+                today,
+                quote(rate),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let process = shared(
+            VarianceGammaProcess::new(quote(6000.0), flat(0.0), flat(0.05), 0.20, 0.001, -0.50)
+                .unwrap(),
+        );
+        let mut option = EuropeanOption::new(
+            shared(PlainVanillaPayoff::new(Call, 6000.0)) as Shared<dyn StrikedTypePayoff>,
+            shared(EuropeanExercise::new(today + 360)),
             settings,
         );
         option.base_mut().set_pricing_engine(
