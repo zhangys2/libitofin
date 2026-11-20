@@ -25,6 +25,7 @@ mod mfstateprocess;
 mod ornsteinuhlenbeckprocess;
 mod slvjumptodefaultprocess;
 mod stochasticprocessarray;
+mod variancegammaprocess;
 
 pub use batesprocess::BatesProcess;
 pub use blackscholesprocess::{
@@ -50,3 +51,4 @@ pub use mfstateprocess::MfStateProcess;
 pub use ornsteinuhlenbeckprocess::OrnsteinUhlenbeckProcess;
 pub use slvjumptodefaultprocess::SlvJumpToDefaultProcess;
 pub use stochasticprocessarray::StochasticProcessArray;
+pub use variancegammaprocess::VarianceGammaProcess;

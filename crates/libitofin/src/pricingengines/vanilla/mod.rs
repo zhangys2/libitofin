@@ -20,6 +20,7 @@
 pub mod analyticdigitalamericanengine;
 pub mod analyticdividendeuropeanengine;
 pub mod analytichestonengine;
+pub mod analyticvariancegammaengine;
 pub mod baroneadesiwhaleyengine;
 pub mod batesengine;
 pub mod binomialvanillaengine;
@@ -52,6 +53,7 @@ pub use analyticdigitalamericanengine::{
 };
 pub use analyticdividendeuropeanengine::AnalyticDividendEuropeanEngine;
 pub use analytichestonengine::HestonChf;
+pub use analyticvariancegammaengine::VarianceGammaEngine;
 pub use baroneadesiwhaleyengine::BaroneAdesiWhaleyApproximationEngine;
 pub use batesengine::BatesEngine;
 pub use binomialvanillaengine::BinomialVanillaEngine;

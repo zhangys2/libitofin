@@ -329,8 +329,9 @@ fn rescale_error(err: Real, result_abs: Real, result_asc: Real) -> Real {
 ///
 /// Unlike QuantLib this carries no `maxEvaluations`: the rule sequence is fixed
 /// (at most 87 points), so that bound was only ever read by the post-hoc
-/// `integrationSuccess()` inspector this port drops. If the 87-point rule still
-/// misses the accuracy, `integrate` returns an error.
+/// `integrationSuccess()` inspector this port drops. As in
+/// `kronrodintegral.cpp`, the 87-point value is returned even when its error
+/// estimate misses the tolerance.
 pub struct GaussKronrodNonAdaptive {
     absolute_accuracy: Real,
     relative_accuracy: Real,
@@ -440,12 +441,7 @@ impl Integrator for GaussKronrodNonAdaptive {
             res87 += W87B[k] * (f(center + abscissa) + f(center - abscissa));
         }
         result = res87 * half_length;
-        err = rescale_error((res87 - res43) * half_length, res_abs, resasc);
-        if self.converged(err, result) {
-            Ok(result)
-        } else {
-            fail!("non-adaptive Gauss-Kronrod integration did not converge (error estimate {err})")
-        }
+        Ok(result)
     }
 }
 
