@@ -8,6 +8,7 @@ mod analyticdiscretegeometricaveragestrikeasianengine;
 mod choiasianengine;
 mod continuousarithmeticasianlevyengine;
 mod continuousarithmeticasianvecerengine;
+mod fdblackscholesasianengine;
 mod mcdiscretearithmeticaveragepriceasianengine;
 mod mcdiscretearithmeticaveragepriceasianhestonengine;
 mod mcdiscretearithmeticaveragestrikeasianengine;
@@ -42,6 +43,7 @@ pub use continuousarithmeticasianlevyengine::{
 pub use continuousarithmeticasianvecerengine::{
     ContinuousArithmeticAsianVecerEngine, set_continuous_arithmetic_asian_vecer_engine,
 };
+pub use fdblackscholesasianengine::FdBlackScholesAsianEngine;
 pub use mcdiscretearithmeticaveragepriceasianengine::{
     ArithmeticApoPathPricer, MCDiscreteArithmeticAveragePriceAsianEngine,
     MakeMcDiscreteArithmeticApEngine, set_mc_discrete_arithmetic_average_price_asian_engine,
