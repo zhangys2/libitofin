@@ -141,7 +141,8 @@ pub use vanilla::{
     BaroneAdesiWhaleyApproximationEngine, BjerksundStenslandApproximationEngine, CashDividendModel,
     FdBlackScholesVanillaEngine, FdHestonVanillaEngine, FdSimpleBSSwingEngine, FixedPointEquation,
     JuQuadraticApproximationEngine, JumpDiffusionEngine, QdFpAmericanEngine, QdFpScheme,
-    QdPlusAmericanEngine, QdPlusSolverType, QuantoEuropeanEngine, set_fd_simple_bs_swing_engine,
+    QdPlusAmericanEngine, QdPlusSolverType, QuantoEuropeanEngine, VarianceGammaEngine,
+    set_fd_simple_bs_swing_engine,
 };
 
 pub use blackformula::{

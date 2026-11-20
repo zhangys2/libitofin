@@ -330,10 +330,12 @@ fn rescale_error(err: Real, result_abs: Real, result_asc: Real) -> Real {
 /// Unlike QuantLib this carries no `maxEvaluations`: the rule sequence is fixed
 /// (at most 87 points), so that bound was only ever read by the post-hoc
 /// `integrationSuccess()` inspector this port drops. If the 87-point rule still
-/// misses the accuracy, `integrate` returns an error.
+/// misses the accuracy, `integrate` returns an error. [`Self::allowing_excess_error`]
+/// returns that value instead, which is what `kronrodintegral.cpp` does.
 pub struct GaussKronrodNonAdaptive {
     absolute_accuracy: Real,
     relative_accuracy: Real,
+    allow_excess_error: bool,
 }
 
 impl GaussKronrodNonAdaptive {
@@ -347,7 +349,17 @@ impl GaussKronrodNonAdaptive {
         Ok(GaussKronrodNonAdaptive {
             absolute_accuracy,
             relative_accuracy,
+            allow_excess_error: false,
         })
+    }
+
+    /// Return the 87-point value when its error estimate misses the tolerance.
+    ///
+    /// QuantLib's `GaussKronrodNonAdaptive::integrate` does this. The default
+    /// [`Integrator::integrate`] still fails, so other callers keep the error.
+    pub fn allowing_excess_error(mut self) -> Self {
+        self.allow_excess_error = true;
+        self
     }
 
     /// Whether the error estimate meets either the absolute or relative target.
@@ -441,7 +453,7 @@ impl Integrator for GaussKronrodNonAdaptive {
         }
         result = res87 * half_length;
         err = rescale_error((res87 - res43) * half_length, res_abs, resasc);
-        if self.converged(err, result) {
+        if self.converged(err, result) || self.allow_excess_error {
             Ok(result)
         } else {
             fail!("non-adaptive Gauss-Kronrod integration did not converge (error estimate {err})")
@@ -577,5 +589,21 @@ mod tests {
                 "rel accuracy={rel}"
             );
         }
+    }
+
+    /// `x^(-1/2)` on `(0, 1]` is singular at the origin. The strict integrator
+    /// reports the missed tolerance. The QuantLib-compatible variant still
+    /// returns the 87-point value, which is the integral 2.
+    #[test]
+    fn non_adaptive_excess_error_is_opt_in() {
+        let singular = |x: Real| x.powf(-0.5);
+        let strict = GaussKronrodNonAdaptive::new(1.0e-8, 0.0).unwrap();
+        assert!(strict.integrate(singular, 0.0, 1.0).is_err());
+        let value = GaussKronrodNonAdaptive::new(1.0e-8, 0.0)
+            .unwrap()
+            .allowing_excess_error()
+            .integrate(singular, 0.0, 1.0)
+            .unwrap();
+        assert!((value - 2.0).abs() < 1.0e-2, "{value}");
     }
 }
