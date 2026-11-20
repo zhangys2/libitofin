@@ -4,8 +4,11 @@
 //! the arithmetic-average step condition it uses. European exercise and
 //! arithmetic averaging only.
 
+use std::cell::RefCell;
+
 use crate::errors::QlResult;
 use crate::exercise::ExerciseType;
+use crate::fail;
 use crate::instruments::{
     AverageType, DiscreteAveragingAsianArguments, DiscreteAveragingAsianResults, Greeks,
     StrikedTypePayoff,
@@ -142,6 +145,7 @@ impl PricingEngine for FdBlackScholesAsianEngine {
         } else {
             running / past_fixings as Real
         };
+        require!(avg > 0.0, "negative or null running average given");
         let norm_inv_eps = InverseCumulativeNormal::standard_value(1.0 - 0.0001)?;
         let sigma_sqrt_t = self
             .process
@@ -152,6 +156,17 @@ impl PricingEngine for FdBlackScholesAsianEngine {
         let radius = sigma_sqrt_t * norm_inv_eps;
         let x_min = (avg.ln() - 0.25 * radius).min(spot.ln() - 1.5 * radius);
         let x_max = (avg.ln() + 0.25 * radius).max(spot.ln() + 1.5 * radius);
+        require!(
+            maturity.is_finite()
+                && strike.is_finite()
+                && spot.is_finite()
+                && avg.is_finite()
+                && radius.is_finite()
+                && x_min.is_finite()
+                && x_max.is_finite()
+                && x_max > x_min,
+            "non-finite asian finite-difference inputs"
+        );
         let average = fdm_black_scholes_mesher(
             self.a_grid,
             &self.process,
@@ -181,7 +196,7 @@ impl PricingEngine for FdBlackScholesAsianEngine {
         )?);
         let conditions = shared(FdmStepConditionComposite::new(
             &[average_times],
-            vec![condition as Shared<dyn StepCondition>],
+            vec![Shared::clone(&condition) as Shared<dyn StepCondition>],
         ));
         let calculator = shared(fdm_log_inner_value(
             shared(payoff) as Shared<dyn Payoff>,
@@ -210,6 +225,13 @@ impl PricingEngine for FdBlackScholesAsianEngine {
         let eps = spot * 0.01;
         let up = solver.interpolate_at((spot + eps).ln(), avg.ln())?;
         let down = solver.interpolate_at((spot - eps).ln(), avg.ln())?;
+        if let Some(message) = condition.take_error() {
+            fail!("{message}");
+        }
+        require!(
+            value.is_finite() && up.is_finite() && down.is_finite(),
+            "non-finite asian finite-difference price"
+        );
         let results = self.base.results_mut();
         results.instrument.value = Some(value);
         results.greeks = Greeks {
@@ -228,6 +250,9 @@ struct FdmArithmeticAverageCondition {
     past_fixings: Size,
     mesher: Shared<dyn FdmMesher>,
     equity_direction: Size,
+    /// `StepCondition::apply_to` cannot return a `Result`. A spline or query
+    /// failure is stored here and `calculate` reports it after the rollback.
+    error: RefCell<Option<String>>,
 }
 
 impl FdmArithmeticAverageCondition {
@@ -258,6 +283,18 @@ impl FdmArithmeticAverageCondition {
         for i in 0..a_count {
             a.push(a_locations[i * a_spacing].exp());
         }
+        require!(
+            strictly_positive_increasing(&x),
+            "equity grid must be finite, positive, and strictly increasing"
+        );
+        require!(
+            strictly_positive_increasing(&a),
+            "average grid must be finite, positive, and strictly increasing"
+        );
+        require!(
+            average_times.iter().all(|time| time.is_finite()),
+            "fixing times must be finite"
+        );
         Ok(Self {
             x,
             a,
@@ -265,8 +302,27 @@ impl FdmArithmeticAverageCondition {
             past_fixings,
             mesher,
             equity_direction,
+            error: RefCell::new(None),
         })
     }
+
+    fn take_error(&self) -> Option<String> {
+        self.error.borrow_mut().take()
+    }
+
+    fn record(&self, message: impl Into<String>) {
+        let mut slot = self.error.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(message.into());
+        }
+    }
+}
+
+fn strictly_positive_increasing(values: &[Real]) -> bool {
+    values.len() >= 2
+        && values.windows(2).all(|pair| {
+            pair[0].is_finite() && pair[1].is_finite() && pair[0] > 0.0 && pair[0] < pair[1]
+        })
 }
 
 impl StepCondition for FdmArithmeticAverageCondition {
@@ -281,27 +337,56 @@ impl StepCondition for FdmArithmeticAverageCondition {
         if hits.is_empty() {
             return;
         }
-        let n_times = hits.len();
-        let i_t = hits[0] + 1 + self.past_fixings;
+        if values.len() != self.mesher.layout().size() {
+            self.record("inconsistent array dimensions");
+            return;
+        }
+        // QuantLib takes the first matching index (`std::find`) plus one plus
+        // `pastFixings`, then `(iT - nTimes) / iT`. The arithmetic is floating
+        // point so a repeated fixing with `nTimes > iT` does not wrap.
+        let n_times = hits.len() as Real;
+        let i_t = (hits[0] + 1 + self.past_fixings) as Real;
         let average_direction = if self.equity_direction == 0 { 1 } else { 0 };
         let x_spacing = self.mesher.layout().spacing()[self.equity_direction];
         let a_spacing = self.mesher.layout().spacing()[average_direction];
         let copy = values.clone();
-        let weight_old = (i_t - n_times) as Real / i_t as Real;
-        let weight_new = n_times as Real / i_t as Real;
+        let weight_old = (i_t - n_times) / i_t;
+        let weight_new = n_times / i_t;
         for (i, &equity) in self.x.iter().enumerate() {
             let mut column = Vec::with_capacity(self.a.len());
             for j in 0..self.a.len() {
-                column.push(copy[i * x_spacing + j * a_spacing]);
+                let index = i * x_spacing + j * a_spacing;
+                if index >= copy.len() {
+                    self.record("inconsistent array dimensions");
+                    return;
+                }
+                column.push(copy[index]);
             }
-            let Ok(interp) = MonotonicCubicNaturalSpline::new(self.a.clone(), column) else {
-                continue;
+            let interp = match MonotonicCubicNaturalSpline::new(self.a.clone(), column) {
+                Ok(interp) => interp.with_extrapolation(true),
+                Err(err) => {
+                    self.record(err.message());
+                    return;
+                }
             };
-            let interp = interp.with_extrapolation(true);
             for j in 0..self.a.len() {
                 let query = weight_old * self.a[j] + weight_new * equity;
-                if let Ok(updated) = interp.value(query) {
-                    values[i * x_spacing + j * a_spacing] = updated;
+                if !query.is_finite() {
+                    self.record("non-finite arithmetic-average query");
+                    return;
+                }
+                match interp.value(query) {
+                    Ok(updated) if updated.is_finite() => {
+                        values[i * x_spacing + j * a_spacing] = updated;
+                    }
+                    Ok(_) => {
+                        self.record("non-finite arithmetic-average update");
+                        return;
+                    }
+                    Err(err) => {
+                        self.record(err.message());
+                        return;
+                    }
                 }
             }
         }
@@ -310,13 +395,16 @@ impl StepCondition for FdmArithmeticAverageCondition {
 
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use super::*;
-    use crate::exercise::EuropeanExercise;
+    use crate::exercise::{AmericanExercise, EuropeanExercise};
     use crate::handle::Handle;
     use crate::instrument::Instrument;
     use crate::instruments::{DiscreteAveragingAsianOption, PlainVanillaPayoff};
     use crate::interestrate::Compounding;
-    use crate::option::OptionType::Put;
+    use crate::methods::finitedifferences::meshers::uniform_1d_mesher;
+    use crate::option::OptionType::{Call, Put};
     use crate::pricingengine::PricingEngine;
     use crate::processes::BlackScholesMertonProcess;
     use crate::quotes::{Quote, SimpleQuote};
@@ -421,5 +509,191 @@ mod tests {
                 "first={first} n={fixings}: {calculated} vs {expected} (err={err})"
             );
         }
+    }
+
+    struct Fixture {
+        today: Date,
+        settings: Shared<Settings<Date>>,
+        spot: Shared<SimpleQuote>,
+        process: Shared<GeneralizedBlackScholesProcess>,
+    }
+
+    fn fixture() -> Fixture {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let spot = shared(SimpleQuote::new(90.0));
+        let q_rate = shared(SimpleQuote::new(0.06));
+        let r_rate = shared(SimpleQuote::new(0.025));
+        let vol = shared(SimpleQuote::new(0.13));
+        let quote = |q: &Shared<SimpleQuote>| Handle::new(Shared::clone(q) as Shared<dyn Quote>);
+        let flat = |q: &Shared<SimpleQuote>| {
+            Handle::new(shared(FlatForward::new(
+                today,
+                quote(q),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let process = shared(BlackScholesMertonProcess::new(
+            quote(&spot),
+            flat(&q_rate),
+            flat(&r_rate),
+            Handle::new(shared(BlackConstantVol::with_quote(
+                today,
+                None,
+                quote(&vol),
+                Actual360::new(),
+            )) as Shared<dyn BlackVolTermStructure>),
+        ));
+        Fixture {
+            today,
+            settings,
+            spot,
+            process,
+        }
+    }
+
+    fn two_fixings(today: Date) -> Vec<Date> {
+        let length: Real = 11.0 / 12.0;
+        vec![today, today + (length * 360.0).round() as i32]
+    }
+
+    /// A repeated stored time updates the grid. A different time does not, and
+    /// `nTimes > iT` does not wrap the unsigned weight.
+    #[test]
+    fn fd_asian_condition_fires_only_on_the_stored_time() {
+        let equity = uniform_1d_mesher(0.0, 1.0, 4).unwrap();
+        let average = uniform_1d_mesher(0.0, 1.0, 4).unwrap();
+        let mesher =
+            shared(FdmMesherComposite::new(vec![equity, average])) as Shared<dyn FdmMesher>;
+        let condition =
+            FdmArithmeticAverageCondition::new(vec![0.5, 0.5, 1.0], 0, Shared::clone(&mesher), 0)
+                .unwrap();
+        let mut values = Array::from_iter((0..mesher.layout().size()).map(|i| i as Real));
+        let before = values.clone();
+        condition.apply_to(&mut values, 0.6);
+        assert_eq!(values, before);
+        assert!(condition.take_error().is_none());
+        condition.apply_to(&mut values, 0.5);
+        assert!(condition.take_error().is_none());
+        assert_ne!(values, before);
+    }
+
+    #[test]
+    fn fd_asian_rejects_geometric_american_and_empty_past() {
+        let market = fixture();
+        let mut engine =
+            FdBlackScholesAsianEngine::with_grid(Shared::clone(&market.process), 8, 8, 8);
+        let fill = |engine: &mut FdBlackScholesAsianEngine,
+                    average: AverageType,
+                    running: Real,
+                    past: Size,
+                    exercise: Shared<dyn crate::exercise::Exercise>| {
+            let args = (engine.arguments_mut() as &mut dyn Any)
+                .downcast_mut::<DiscreteAveragingAsianArguments>()
+                .unwrap();
+            args.average_type = Some(average);
+            args.running_accumulator = Some(running);
+            args.past_fixings = Some(past);
+            args.payoff = Some(PlainVanillaPayoff::new(Put, 87.0));
+            args.exercise = Some(exercise);
+            args.fixing_dates = vec![market.today + 330];
+        };
+        fill(
+            &mut engine,
+            AverageType::Geometric,
+            1.0,
+            0,
+            shared(EuropeanExercise::new(market.today + 330)),
+        );
+        let err = PricingEngine::calculate(&mut engine).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Arithmetic averaging supported only")
+        );
+        fill(
+            &mut engine,
+            AverageType::Arithmetic,
+            0.0,
+            0,
+            shared(AmericanExercise::new(market.today, market.today + 330, false).unwrap())
+                as Shared<dyn crate::exercise::Exercise>,
+        );
+        let err = PricingEngine::calculate(&mut engine).unwrap_err();
+        assert!(err.message().contains("European exercise supported only"));
+        fill(
+            &mut engine,
+            AverageType::Arithmetic,
+            10.0,
+            0,
+            shared(EuropeanExercise::new(market.today + 330)),
+        );
+        let err = PricingEngine::calculate(&mut engine).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Running average requires at least one past fixing")
+        );
+    }
+
+    #[test]
+    fn fd_asian_seasoned_put_differs_and_greeks_match_a_spot_bump() {
+        let market = fixture();
+        let dates = two_fixings(market.today);
+        let engine = shared_mut(FdBlackScholesAsianEngine::with_grid(
+            Shared::clone(&market.process),
+            40,
+            40,
+            40,
+        ));
+        let price = |running: Real, past: Size, kind| {
+            let mut option = DiscreteAveragingAsianOption::new(
+                AverageType::Arithmetic,
+                running,
+                past,
+                dates.clone(),
+                PlainVanillaPayoff::new(kind, 87.0),
+                shared(EuropeanExercise::new(*dates.last().unwrap())),
+                Shared::clone(&market.settings),
+            )
+            .unwrap();
+            option
+                .base_mut()
+                .set_pricing_engine(SharedMut::clone(&engine) as SharedMut<dyn PricingEngine>);
+            option
+        };
+        let mut fresh = price(0.0, 0, Put);
+        let mut seasoned = price(200.0, 2, Put);
+        let fresh_npv = fresh.npv().unwrap();
+        let seasoned_npv = seasoned.npv().unwrap();
+        assert!(fresh_npv.is_finite() && seasoned_npv.is_finite());
+        assert!(
+            (fresh_npv - seasoned_npv).abs() > 1.0e-2,
+            "seasoned {seasoned_npv} collapsed onto the fresh price {fresh_npv}"
+        );
+        let delta = fresh.delta().unwrap();
+        let gamma = fresh.gamma().unwrap();
+        assert!(delta < 0.0, "put delta {delta}");
+        assert!(gamma > 0.0, "put gamma {gamma}");
+        let eps = 90.0 * 0.01;
+        market.spot.set_value(90.0 + eps);
+        let up = fresh.npv().unwrap();
+        market.spot.set_value(90.0 - eps);
+        let down = fresh.npv().unwrap();
+        market.spot.set_value(90.0);
+        let bump_delta = (up - down) / (2.0 * eps);
+        let bump_gamma = (up + down - 2.0 * fresh_npv) / (eps * eps);
+        assert!(
+            (delta - bump_delta).abs() < 0.05,
+            "delta {delta} vs bump {bump_delta}"
+        );
+        assert!(
+            (gamma - bump_gamma).abs() < 0.02,
+            "gamma {gamma} vs bump {bump_gamma}"
+        );
+        let mut call = price(0.0, 0, Call);
+        assert!(call.npv().unwrap() > 0.0);
+        assert!(call.delta().unwrap() > 0.0);
     }
 }
