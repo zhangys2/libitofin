@@ -32,9 +32,10 @@ impl VarianceGammaProcess {
     ///
     /// # Errors
     ///
-    /// Rejects a non-positive volatility or gamma variance rate, a non-finite
-    /// drift, or a compensator `1 - θν - σ²ν/2` that is not strictly positive.
-    /// Those are the inputs for which the analytic integrand is not a real price.
+    /// Rejects a non-finite or negative volatility, a non-positive gamma variance
+    /// rate, a non-finite drift, or a compensator `1 - θν - σ²ν/2` that is not
+    /// strictly positive. Zero Brownian volatility is the gamma mixture of
+    /// zero-vol intrinsics and is accepted. `nu = 0` still divides the density.
     pub fn new(
         spot: Handle<dyn Quote>,
         dividend_yield: Handle<dyn YieldTermStructure>,
@@ -44,8 +45,8 @@ impl VarianceGammaProcess {
         theta: Real,
     ) -> QlResult<Self> {
         require!(
-            sigma.is_finite() && sigma > 0.0,
-            "variance-gamma sigma must be finite and positive"
+            sigma.is_finite() && sigma >= 0.0,
+            "variance-gamma sigma must be finite and non-negative"
         );
         require!(
             nu.is_finite() && nu > 0.0,

@@ -414,7 +414,39 @@ mod tests {
             shared_mut(VarianceGammaEngine::new(process)) as SharedMut<dyn PricingEngine>
         );
         let npv = option.npv().unwrap();
-        assert!(npv.is_finite() && npv > 0.0, "{npv}");
+        // Locks the 87-point Kronrod piece plus Lobatto. The C++ case does not
+        // publish a price; `absoluteError` does not bound this singular integral.
+        assert!((npv - 1.80574454).abs() <= 1.0e-6, "{npv}");
+    }
+
+    #[test]
+    fn zero_brownian_volatility_is_a_finite_mixture() {
+        let today = Date::new(15, Month::June, 2026);
+        let settings = shared(Settings::new());
+        settings.set_evaluation_date(today);
+        let quote = |rate: Real| Handle::new(shared(SimpleQuote::new(rate)) as Shared<dyn Quote>);
+        let flat = |rate: Real| {
+            Handle::new(shared(FlatForward::new(
+                today,
+                quote(rate),
+                Actual360::new(),
+                Compounding::Continuous,
+                Frequency::Annual,
+            )) as Shared<dyn YieldTermStructure>)
+        };
+        let process = shared(
+            VarianceGammaProcess::new(quote(100.0), flat(0.0), flat(0.05), 0.0, 0.2, -0.1).unwrap(),
+        );
+        let mut option = EuropeanOption::new(
+            shared(PlainVanillaPayoff::new(Call, 100.0)) as Shared<dyn StrikedTypePayoff>,
+            shared(EuropeanExercise::new(today + 360)),
+            settings,
+        );
+        option.base_mut().set_pricing_engine(
+            shared_mut(VarianceGammaEngine::new(process)) as SharedMut<dyn PricingEngine>
+        );
+        let npv = option.npv().unwrap();
+        assert!(npv.is_finite() && npv >= 0.0, "{npv}");
     }
 
     /// `nu = 0.001` used to overflow `exp(lgamma) * nu^(t/nu)` before the density
